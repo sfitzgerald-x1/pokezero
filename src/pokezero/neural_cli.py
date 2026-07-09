@@ -59,10 +59,12 @@ from .neural_policy import (
     TransformerTrainingConfig,
     TransformerTrainingResult,
     collect_categorical_ids,
+    distributed_training_context,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
     feature_masks_from_model_config,
+    initialize_distributed_training,
     load_transformer_checkpoint,
     load_transformer_model_config,
     load_transformer_policy,
@@ -623,6 +625,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["bf16"],
         default=None,
         help="Mixed-precision autocast for forward/loss (WS-A1). 'bf16' keeps fp32 master weights/grads (no GradScaler). Default fp32.",
+    )
+    train.add_argument(
+        "--training-seed",
+        type=int,
+        default=0,
+        help="Base torch seed. Under torchrun, rank r uses base_seed + r for its dropout stream.",
     )
     train.add_argument(
         "--freeze-non-value-parameters",
@@ -2224,16 +2232,21 @@ def _train(args: argparse.Namespace) -> int:
     command_started = time.perf_counter()
     # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
     require_torch()
+    distributed_context_value = initialize_distributed_training(args.device)
+    resolved_device = require_torch().device(resolve_torch_device(args.device))
+    if distributed_context_value.enabled and resolved_device.type == "cuda":
+        resolved_device = require_torch().device("cuda", distributed_context_value.local_rank)
+    is_primary_rank = distributed_context_value.is_primary
     if args.value_calibration_out is not None and not args.value_calibration_data:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
     refutation_cache_paths = _validate_refutation_cache_args(args)
-    cache_lifecycle = _training_cache_lifecycle(args)
-    input_data_bytes = _input_data_paths_byte_size(args.data) if args.summary_out is not None else None
+    cache_lifecycle = _training_cache_lifecycle(args) if is_primary_rank else _TrainingCacheLifecycle()
+    input_data_bytes = _input_data_paths_byte_size(args.data) if args.summary_out is not None and is_primary_rank else None
     refutation_cache_bytes = (
         _input_data_paths_byte_size(refutation_cache_paths)
-        if args.summary_out is not None and refutation_cache_paths
+        if args.summary_out is not None and refutation_cache_paths and is_primary_rank
         else None
     )
     initial_model = None
@@ -2241,7 +2254,7 @@ def _train(args: argparse.Namespace) -> int:
     if args.initial_checkpoint is not None:
         initial_model, initial_training_result = load_transformer_checkpoint(
             args.initial_checkpoint,
-            map_location=resolve_torch_device(args.device),
+            map_location=str(resolved_device),
         )
     shaping_weights_json = _resolved_training_shaping_json(args, initial_training_result)
     training_config = TransformerTrainingConfig(
@@ -2270,7 +2283,7 @@ def _train(args: argparse.Namespace) -> int:
         action_family_loss_weight=args.action_family_loss_weight,
         switch_target_loss_weight=args.switch_target_loss_weight,
         max_batches=args.max_batches,
-        device=args.device,
+        device=str(resolved_device),
         objective=args.objective,
         clip_epsilon=args.clip_epsilon,
         entropy_coef=args.entropy_coef,
@@ -2279,6 +2292,7 @@ def _train(args: argparse.Namespace) -> int:
         gae_lambda=args.gae_lambda,
         max_grad_norm=args.max_grad_norm,
         amp=args.amp,
+        random_seed=args.training_seed,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
         shaping_weights=shaping_weights_json,
     )
@@ -2393,6 +2407,8 @@ def _train(args: argparse.Namespace) -> int:
         if refutation_cache_paths:
             train_kwargs["auxiliary_paths"] = refutation_cache_paths
             train_kwargs["auxiliary_max_fraction"] = args.refutation_max_fraction
+        if distributed_context_value.enabled:
+            train_kwargs["distributed_context_override"] = distributed_context_value
         model, result = train_transformer_policy(
             args.data,
             model_config=model_config,
@@ -2401,6 +2417,11 @@ def _train(args: argparse.Namespace) -> int:
             **train_kwargs,
         )
     train_elapsed_seconds = time.perf_counter() - train_started
+    if not is_primary_rank:
+        # ``train_transformer_policy`` synchronizes after the final optimizer
+        # step. Only rank 0 may create/delete artifacts or write human-readable
+        # summaries, so non-primary torchrun processes can now finish cleanly.
+        return 0
     provenance_hashes = distinct_belief_set_source_hashes(training_data_paths)
     if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
         result = replace(result, belief_set_source_hash=provenance_hashes[0])
@@ -2537,6 +2558,7 @@ def _train_summary_payload(
             "category_oov_buckets": model_config.category_oov_buckets,
         },
         "training_config": training_config.to_dict(),
+        "distributed_training": distributed_training_context().to_dict(base_seed=training_config.random_seed),
         "epochs": [metrics.to_dict() for metrics in result.epochs],
         "final_metrics": final_metrics.to_dict(),
         "value_selection": value_selection_payload,
