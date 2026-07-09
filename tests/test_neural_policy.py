@@ -34,6 +34,7 @@ from pokezero.neural_cli import (
 )
 from pokezero.neural_policy import (
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
+    CONSTANT_LEARNING_RATE_SCHEDULE,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
     NEURAL_INSTALL_MESSAGE,
     EntityTokenTransformerPolicy,
@@ -1771,6 +1772,60 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 progress=0.5,
                 warmup_progress=1.5,
             )
+        with self.assertRaises(ValueError):
+            learning_rate_for_progress(
+                base_learning_rate=5.9e-5,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.5,
+                warmup_progress=float("nan"),
+            )
+
+    def test_learning_rate_warmup_ramps_under_constant_schedule(self) -> None:
+        # Under the constant schedule the ramp target is base itself; past warmup the LR is flat base.
+        base = 4.2e-5
+        warmup = 0.2
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=CONSTANT_LEARNING_RATE_SCHEDULE,
+                progress=warmup / 4.0,
+                warmup_progress=warmup,
+            ),
+            base * 0.25,
+        )
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=CONSTANT_LEARNING_RATE_SCHEDULE,
+                progress=0.9,
+                warmup_progress=warmup,
+            ),
+            base,
+        )
+
+    def test_learning_rate_for_epoch_applies_configured_warmup(self) -> None:
+        from pokezero.neural_policy import _learning_rate_for_epoch
+
+        base = 5.9e-5
+        # A single-epoch config pinned at progress 0 with warmup on -> the epoch LR is the ramp start (0).
+        config = TransformerTrainingConfig(
+            learning_rate=base,
+            learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+            epochs=1,
+            learning_rate_progress_start=0.0,
+            learning_rate_progress_end=0.0,
+            learning_rate_warmup_progress=0.1,
+        )
+        self.assertAlmostEqual(_learning_rate_for_epoch(config, epoch=1), 0.0)
+        # Same config without warmup returns the undecayed base at progress 0 (proves the field is threaded).
+        no_warmup = TransformerTrainingConfig(
+            learning_rate=base,
+            learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+            epochs=1,
+            learning_rate_progress_start=0.0,
+            learning_rate_progress_end=0.0,
+        )
+        self.assertAlmostEqual(_learning_rate_for_epoch(no_warmup, epoch=1), base)
 
     def test_ppo_epoch_metrics_reports_zero_valid_coverage(self) -> None:
         from pokezero.neural_policy import _TorchMetricTotals

@@ -513,7 +513,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Linear LR warmup fraction of global progress, in [0, 1]. Below this progress the LR ramps "
-        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale.",
+        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale. "
+        "Compares against absolute global progress, so on a resumed run whose progress already starts "
+        "past this fraction it never fires.",
     )
     train.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
@@ -1305,7 +1307,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Linear LR warmup fraction of global progress, in [0, 1]. Below this progress the LR ramps "
-        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale.",
+        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale. "
+        "Compares against absolute global progress, so on a resumed run whose progress already starts "
+        "past this fraction it never fires.",
     )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
