@@ -864,6 +864,60 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_inference_server_hot_swap_reload(self) -> None:
+        # WS-L1 hot-swap: POST /reload swaps the served checkpoint atomically. /config must report
+        # the new policy_id and the served forward must change to the new weights — this is how the
+        # pipeline points the server at each iteration's checkpoint.
+        if not torch_available():
+            self.skipTest("requires torch")
+        import json as _json
+        import random as _random
+        import threading
+        from urllib.request import Request, urlopen
+
+        from pokezero.collection import policy_from_spec
+        from pokezero.inference_service import serve_inference
+
+        def _make_ckpt(temp_dir, name, epochs):
+            data_path = Path(temp_dir) / f"{name}.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            cfg = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id=name,
+                window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
+                numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
+                attention_heads=4, feedforward_dim=32, dropout=0.0)
+            model, result = train_transformer_policy(
+                data_path, model_config=cfg,
+                training_config=TransformerTrainingConfig(batch_size=2, epochs=epochs, window_size=2, device="cpu"))
+            ckpt = Path(temp_dir) / f"{name}.pt"
+            save_transformer_checkpoint(ckpt, model, result=result)
+            return ckpt
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ckpt_a = _make_ckpt(temp_dir, "swapA", 1)
+            ckpt_b = _make_ckpt(temp_dir, "swapB", 5)
+            server = serve_inference(str(ckpt_a), host="127.0.0.1", port=0, device="cpu")
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{port}"
+                self.assertEqual(_json.loads(urlopen(f"{base}/config", timeout=10).read())["policy_id"], "swapA")
+                remote = policy_from_spec(f"remote:{base}")
+                d_a = remote.select_action(observation(1), rng=_random.Random(1))
+                # reload to B
+                req = Request(f"{base}/reload", data=_json.dumps({"checkpoint_path": str(ckpt_b)}).encode(),
+                              headers={"Content-Type": "application/json"})
+                self.assertEqual(urlopen(req, timeout=30).status, 200)
+                self.assertEqual(_json.loads(urlopen(f"{base}/config", timeout=10).read())["policy_id"], "swapB")
+                remote.reset()
+                d_b = remote.select_action(observation(1), rng=_random.Random(1))
+                # served forward changed to B's weights (A had 1 epoch, B had 5 → different value head)
+                self.assertNotEqual(d_a.value_estimate, d_b.value_estimate)
+            finally:
+                server.shutdown()
+
     def test_inference_request_codec_round_trips(self) -> None:
         # WS-L1 raw-bytes wire: encode_forward_request -> decode_forward_request must reproduce the
         # tensors exactly (lossless), incl. dtypes/shapes, for the 5 window tensors.
