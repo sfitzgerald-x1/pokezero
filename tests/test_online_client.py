@@ -28,10 +28,12 @@ class _FirstLegalPolicy:
         return PolicyDecision(action_index=action_index, policy_id=self.policy_id, action_probability=1.0)
 
 
-def _agent(our_name: str = "PokeZeroBot") -> OnlineBattleAgent:
+def _agent(our_name: str = "PokeZeroBot", **kwargs) -> OnlineBattleAgent:
     # dex=None keeps type/stat slots padding; a tiny vocab is fine (unknown tokens go to OOV).
     vocab = build_category_vocabulary(["species:Charizard", "move:flamethrower"], oov_buckets=16)
-    return OnlineBattleAgent(policy=_FirstLegalPolicy(), vocab=vocab, dex=None, our_name=our_name)
+    return OnlineBattleAgent(
+        policy=_FirstLegalPolicy(), vocab=vocab, dex=None, our_name=our_name, **kwargs
+    )
 
 
 class SplitServerMessageTest(unittest.TestCase):
@@ -80,7 +82,14 @@ class RequestAssertionTest(unittest.TestCase):
 class OnlineBattleAgentTest(unittest.TestCase):
     def test_chooses_a_legal_action_from_live_protocol(self) -> None:
         # The fixture is a real p2 move-request log — the same line format a live room streams.
-        choice = _agent().choose(_fixture_lines("p2_seat_replay.txt"), "battle-gen3randombattle-1")
+        # Pinned to the v2.1 spec this battery was written against (the toy vocab has no
+        # turn-merged families; the v2.2 default path is covered by
+        # TurnMergedNormalizeThreadingTest).
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
+
+        choice = _agent(spec=V2_1_REPLAY_OBSERVATION_SPEC).choose(
+            _fixture_lines("p2_seat_replay.txt"), "battle-gen3randombattle-1"
+        )
         self.assertIsNotNone(choice)
         self.assertRegex(choice, r"^(move|switch) [1-9]$")
 
@@ -135,8 +144,9 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
             "v2.2 agent must call normalize_for_player(include_turn_merged=True)",
         )
 
-    def test_default_schema_agent_does_not_request_turn_merged(self) -> None:
-        # A default (non-v2.2) spec must not force turn-merged normalization.
+    def test_default_schema_agent_requests_turn_merged(self) -> None:
+        # The default spec IS v2.2 since the 2026-07-08 promotion, so an unpinned agent
+        # must request turn-merged normalization.
         captured: dict = {}
 
         def fake_normalize(*args, **kwargs):
@@ -145,9 +155,31 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
 
         with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
             self.assertIsNone(_agent().choose(["|player|p1|PokeZeroBot|1"], "room"))
+        self.assertTrue(
+            captured.get("include_turn_merged"),
+            "default-schema (v2.2) agent must request turn-merged tokens",
+        )
+
+    def test_explicit_v2_1_agent_does_not_request_turn_merged(self) -> None:
+        # The v2.1 path stays covered post-flip: an explicitly v2.1-pinned agent must not
+        # force turn-merged normalization.
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
+
+        captured: dict = {}
+
+        def fake_normalize(*args, **kwargs):
+            captured.update(kwargs)
+            raise ValueError("stop after capture")
+
+        with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
+            self.assertIsNone(
+                _agent(spec=V2_1_REPLAY_OBSERVATION_SPEC).choose(
+                    ["|player|p1|PokeZeroBot|1"], "room"
+                )
+            )
         self.assertFalse(
             captured.get("include_turn_merged", False),
-            "default-schema agent must not request turn-merged tokens",
+            "explicit v2.1 agent must not request turn-merged tokens",
         )
 
 

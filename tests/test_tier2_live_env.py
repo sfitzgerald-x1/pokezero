@@ -24,6 +24,7 @@ from pokezero.showdown import (
     NUMERIC_TT_RESIDUAL,
     NUMERIC_TT_RESIDUAL_VALID,
     TRANSITION_TOKEN_OFFSET,
+    V2_1_REPLAY_OBSERVATION_SPEC,
     parse_showdown_replay,
 )
 
@@ -71,9 +72,15 @@ class LiveResidualPopulationTest(unittest.TestCase):
     def _env(self, masks: ObservationFeatureMasks):
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
+        # Pinned to v2.1: these batteries assert PER-ACTION transition-row alignment
+        # (token index -> row index) and strip exactly the v2.1 residual columns; the
+        # post-flip default (v2.2) merges rows per turn and adds TM2 twin columns.
         return LocalShowdownEnv(
             LocalShowdownConfig(
-                showdown_root=self.root, set_belief_source=True, feature_masks=masks
+                showdown_root=self.root,
+                set_belief_source=True,
+                feature_masks=masks,
+                observation_spec=V2_1_REPLAY_OBSERVATION_SPEC,
             )
         )
 

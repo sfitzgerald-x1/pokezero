@@ -71,15 +71,16 @@ SHOWDOWN_ROOT = Path(
 
 
 class SchemaTableTest(unittest.TestCase):
-    def test_v2_2_is_a_supported_schema_entry_but_not_the_default(self) -> None:
+    def test_v2_2_is_a_supported_schema_entry_and_the_default(self) -> None:
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
         self.assertIs(
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2),
             V2_2_REPLAY_OBSERVATION_SPEC,
         )
-        # Turn-merged is the batch-3 ablation arm, not the new default.
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_1)
+        # Turn-merged earned the fresh-selection default (2026-07-08 schedule-uncompressed
+        # reads); v2.1 stays a supported, checkpoint-latched schema.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
 
     def test_v2_2_widths_extend_the_v2_1_census(self) -> None:
         self.assertEqual(

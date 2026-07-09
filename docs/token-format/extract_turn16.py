@@ -45,6 +45,7 @@ from pokezero.belief import PublicBattleBeliefEngine  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     ACTION_CANDIDATE_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION,
     FIELD_TOKEN_COUNT,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
@@ -623,10 +624,14 @@ masks_section = {
         ),
     },
     "dual_schema_story": {
-        "current_default": "pokezero.observation.v2.1 (v2.2 is the batch-3 ablation arm, deliberately not the default)",
+        "current_default": (
+            f"{OBSERVATION_SCHEMA_VERSION} (fresh-selection default, derived from "
+            "pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time; "
+            "v2.2 holds the slot since 2026-07-08 after the schedule-uncompressed reads)"
+        ),
         "v2": "151 tokens x 121 numeric x 39 categorical; per-action transition tokens; accepts pre-#509 checkpoints and stays byte-identical to the pre-v2.1 encoder (119-column relic family floors lower by design)",
         "v2.1": "151 tokens x 140 numeric x 39 categorical; adds defender identity on move transition rows, per-bucket revealed-move PP-validity bits, substitute HP fraction, per-mon pinned Tier-2 CB/investment surface",
-        "v2.2": "151 tokens x 153 numeric x 51 categorical; every v2.1 block carried forward; transition surface swapped to turn-merged tokens (this dump)",
+        "v2.2": "151 tokens x 155 numeric x 51 categorical; every v2.1 block carried forward; transition surface swapped to turn-merged tokens (this dump)",
         "resolution": (
             "which schema an env/harness encodes resolves from the loaded checkpoint's "
             "stamped model_config (feature_masks_from_model_config / "

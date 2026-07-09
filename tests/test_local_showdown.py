@@ -19,7 +19,12 @@ from pokezero.local_showdown import (
 from pokezero.env import BattleStartOverride
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
-from pokezero.showdown import normalize_for_player, parse_showdown_replay, showdown_choice_for_action
+from pokezero.showdown import (
+    V2_1_REPLAY_OBSERVATION_SPEC,
+    normalize_for_player,
+    parse_showdown_replay,
+    showdown_choice_for_action,
+)
 from pokezero.showdown_fixture import DEFAULT_GEN3_CUSTOM_FORMAT, FixturePokemon, pack_team
 
 
@@ -87,7 +92,15 @@ def integration_config() -> LocalShowdownConfig | None:
         return None
     if shutil.which("node") is None:
         return None
-    return LocalShowdownConfig(showdown_root=root, read_timeout_seconds=10.0)
+    # Pinned to v2.1: these are env-mechanics batteries (custom-game injection,
+    # snapshot/restore, reseed) written pre-flip; under the v2.2 default their off-pool
+    # fixture species would pollute the shared (cached) turn-merged vocabulary's OOV
+    # ledger, which the turn-merged tests and the doc extractor assert stays clean.
+    return LocalShowdownConfig(
+        showdown_root=root,
+        read_timeout_seconds=10.0,
+        observation_spec=V2_1_REPLAY_OBSERVATION_SPEC,
+    )
 
 
 def _without_timestamp_lines(lines: tuple[str, ...]) -> tuple[str, ...]:

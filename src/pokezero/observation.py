@@ -34,9 +34,10 @@ OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
 OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
-# v2.2 is deliberately NOT the default: turn-merged is the batch-3 ablation arm until it earns
-# the slot; flipping the default is a one-line change after those reads.
-OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_1
+# v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
+# turn-merged arm matched or beat v2.1/v2 on every yardstick and holds the current bests;
+# v2.1/v2 artifacts remain first-class via the checkpoint-driven latch.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,

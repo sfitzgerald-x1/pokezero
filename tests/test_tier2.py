@@ -994,6 +994,7 @@ class ObservationWiringTest(unittest.TestCase):
             NUMERIC_TT_RESIDUAL,
             NUMERIC_TT_RESIDUAL_VALID,
             TRANSITION_TOKEN_OFFSET,
+            V2_1_REPLAY_OBSERVATION_SPEC,
             normalize_for_player,
             observation_from_player_state,
         )
@@ -1024,14 +1025,17 @@ class ObservationWiringTest(unittest.TestCase):
         )
         row_index = TRANSITION_TOKEN_OFFSET + strike.token_index
 
-        observation = observation_from_player_state(wired, category_vocab=vocab)
+        observation = observation_from_player_state(
+            wired, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         row = observation.numeric_features[row_index]
         self.assertAlmostEqual(row[NUMERIC_TT_RESIDUAL], max(-1.0, min(1.0, strike.residual)))
         self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 1.0)
 
         # The tier2_residuals mask darkens the channel without touching anything else.
         masked = observation_from_player_state(
-            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False)
+            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         self.assertEqual(masked.numeric_features[row_index][NUMERIC_TT_RESIDUAL], 0.0)
         self.assertEqual(masked.numeric_features[row_index][NUMERIC_TT_RESIDUAL_VALID], 0.0)
@@ -1041,7 +1045,9 @@ class ObservationWiringTest(unittest.TestCase):
         )
 
         # Plain-extraction tokens carry no residuals: the slots stay zero.
-        plain = observation_from_player_state(state, category_vocab=vocab)
+        plain = observation_from_player_state(
+            state, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL], 0.0)
         self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL_VALID], 0.0)
 
@@ -1059,6 +1065,7 @@ class ObservationWiringTest(unittest.TestCase):
             NUMERIC_TIER2_CB_PINNED,
             NUMERIC_TIER2_INVESTMENT_PINNED,
             OPPONENT_POKEMON_TOKEN_OFFSET,
+            V2_1_REPLAY_OBSERVATION_SPEC,
             normalize_for_player,
             observation_from_player_state,
         )
@@ -1092,13 +1099,16 @@ class ObservationWiringTest(unittest.TestCase):
         snorlax_index = next(
             index for index, mon in enumerate(state.opponent_team) if mon.species == "Snorlax"
         )
-        observation = observation_from_player_state(wired, category_vocab=vocab)
+        observation = observation_from_player_state(
+            wired, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + snorlax_index]
         self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 1.0)
         self.assertEqual(row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
 
         masked = observation_from_player_state(
-            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False)
+            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         self.assertEqual(
             masked.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + snorlax_index][

@@ -20,6 +20,7 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    V2_1_REPLAY_OBSERVATION_SPEC,
     NUMERIC_ACTUAL_HP,
     NUMERIC_ACTUAL_SPE,
     NUMERIC_EFFECT_CHANCE,
@@ -242,9 +243,11 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
 
-        observation.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+        observation.validate(V2_1_REPLAY_OBSERVATION_SPEC)
         self.assertEqual(observation.perspective.showdown_slot, "p2")
         self.assertEqual(observation.perspective.opponent_showdown_slot, "p1")
         self.assertEqual(observation.legal_action_mask, state.legal_action_mask)
@@ -333,7 +336,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(xatu.revealed_moves, ("Psychic",))
         self.assertEqual(xatu.possible_moves, ())  # no set source wired in this path
 
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
         xatu_row = observation.categorical_ids[opponent_offset + 1]
         self.assertEqual(
@@ -367,7 +372,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         ]
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
         state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
-        obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+        obs = observation_from_player_state(
+            state, category_vocab=vocab, dex=dex, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
 
         opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
         ditto = next(
@@ -412,7 +419,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         def opponent_tokens(lines):
             replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
             state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
-            obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+            obs = observation_from_player_state(
+                state, category_vocab=vocab, dex=dex, spec=V2_1_REPLAY_OBSERVATION_SPEC
+            )
             return [obs.numeric_features[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], \
                    [obs.categorical_ids[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], obs
 
@@ -454,7 +463,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
 
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
 
         self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
         self.assertEqual(state.opponent_side_conditions, ())
@@ -477,7 +488,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
 
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
 
         self.assertEqual(state.self_side_conditions, ("reflect", "spikes"))
         self.assertEqual(state.opponent_side_conditions, ("spikes",))
@@ -490,7 +503,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self_offset = FIELD_TOKEN_COUNT
         opponent_offset = self_offset + SELF_POKEMON_TOKEN_COUNT
         action_offset = opponent_offset + OPPONENT_POKEMON_TOKEN_COUNT
@@ -555,7 +570,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             set_source=FakeSetSource(),
         )
 
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
         xatu_offset = opponent_offset + 1
 
@@ -584,7 +601,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             format_id="gen3randombattle",
             set_source=ReorderedFakeSetSource(),
         )
-        reordered = observation_from_player_state(reordered_state, category_vocab=_TEST_VOCAB)
+        reordered = observation_from_player_state(
+            reordered_state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertEqual(
             observation.categorical_ids[xatu_offset],
             reordered.categorical_ids[xatu_offset],
@@ -652,7 +671,8 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_level_and_base_stats_on_active_self_mon(self) -> None:
         state = self._replay_with([])
         observation = observation_from_player_state(
-            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex(),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_LEVEL], 0.78)
@@ -665,7 +685,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
 
     def test_level_present_without_dex_but_base_stats_padding(self) -> None:
         state = self._replay_with([])
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_LEVEL], 0.78)  # parsed from details, no dex needed
         self.assertEqual(numeric[NUMERIC_BASE_SPA], 0.0)  # base stats need the dex
@@ -673,7 +695,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_weather_parsed_and_encoded_on_field_token(self) -> None:
         state = self._replay_with(["|-weather|RainDance"])
         self.assertEqual(state.weather, "raindance")
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertEqual(
             observation.categorical_ids[FIELD_TOKEN_OFFSET][CATEGORY_SECONDARY],
             stable_category_id("weather:raindance"),
@@ -693,7 +717,8 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"atk": 3, "spe": -1})
         observation = observation_from_player_state(
-            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex(),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_BOOST_ATK], 3 / 6)
@@ -775,7 +800,8 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_move_effect_type_chance_and_hp_cost(self) -> None:
         state = self._replay_with([])
         observation = observation_from_player_state(
-            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex(),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         move_token = self.ACTION_OFFSET  # first move action token (Flamethrower).
         self.assertEqual(
@@ -815,7 +841,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_move_pp_fraction_defaults_full_without_request_pp(self) -> None:
         # The fixture request omits pp/maxpp, so the encoded fraction defaults to full (1.0).
         state = self._replay_with([])
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertAlmostEqual(
             observation.numeric_features[self.ACTION_OFFSET][NUMERIC_MOVE_PP_FRACTION], 1.0
         )
@@ -831,7 +859,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.opponent_future_sight_turns, 2)
         self.assertEqual(state.self_future_sight_turns, 0)
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         numeric = observation.numeric_features[FIELD_TOKEN_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_OPP_FUTURE_SIGHT], 1.0)  # 2 turns / 2
         self.assertAlmostEqual(numeric[NUMERIC_SELF_FUTURE_SIGHT], 0.0)
@@ -852,7 +882,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
         # tox escalates each turn (1 on apply, +1 per turn); both sides are tracked the same way.
         state = self._replay_with(["|-status|p2a: Charizard|tox", "|turn|6", "|turn|7"])
         self.assertEqual(state.self_toxic_stage, 3)
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertAlmostEqual(
             observation.numeric_features[self.SELF_ACTIVE_OFFSET][NUMERIC_TOXIC_STAGE], 3 / 15
         )
@@ -880,7 +912,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_turn_count_on_field_token(self) -> None:
         state = self._replay_with(["|turn|7"])
         self.assertEqual(state.turn_number, 7)
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertAlmostEqual(
             observation.numeric_features[FIELD_TOKEN_OFFSET][NUMERIC_TURN_COUNT], 7 / 1000
         )
@@ -893,7 +927,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
             ]
         )
         self.assertEqual(state.self_active_volatiles, ("confusion", "leechseed"))
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         volatile_cols = observation.categorical_ids[self.SELF_ACTIVE_OFFSET][
             CATEGORY_VOLATILE_OFFSET : CATEGORY_VOLATILE_OFFSET + 6
         ]
@@ -1011,7 +1047,9 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|-sidestart|p2: PokeZeroBot|Light Screen",
             ]
         )
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         numeric = observation.numeric_features[FIELD_TOKEN_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_OPP_HAZARDS], 1.0)  # 3 spikes / 3
         self.assertAlmostEqual(numeric[NUMERIC_SELF_HAZARDS], 0.0)
@@ -1061,7 +1099,9 @@ class PlayerActualStatsTest(unittest.TestCase):
         ]
         replay = parse_showdown_replay(lines, battle_id="b")
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
-        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
 
         self_active = FIELD_TOKEN_COUNT  # token 1: active Charizard
         self_bench = FIELD_TOKEN_COUNT + 1  # token 2: Snorlax

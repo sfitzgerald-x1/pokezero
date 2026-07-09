@@ -164,8 +164,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("v2.1", "v2.2"),
         default=None,
         help=(
-            "Observation schema for a FRESH (checkpoint-less) collect: v2.1 (default) or "
-            "v2.2 (turn-merged transition tokens; also flips the schema-derived vocabulary). "
+            "Observation schema for a FRESH (checkpoint-less) collect: v2.1 or "
+            "v2.2 (default; turn-merged transition tokens; also flips the schema-derived vocabulary). "
             "With a neural: policy the checkpoint's stamped schema wins and an explicitly "
             "disagreeing flag hard-fails (mask-conflict semantics). Recorded in cache "
             "metadata for the train-side cross-check."
