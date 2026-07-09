@@ -25,6 +25,7 @@ import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 from urllib.parse import urlsplit
@@ -173,6 +174,11 @@ class _BatchingForwarder:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
+    def set_policy(self, policy: TransformerSoftmaxPolicy) -> None:
+        # Atomic reference swap (GIL): in-flight batches finish on the old policy; the next batch
+        # picks up the new one. This is the checkpoint hot-swap at the iteration boundary.
+        self._policy = policy
+
     def submit(self, payload: Mapping[str, Any], *, timeout: float = 60.0) -> dict[str, Any]:
         slot: dict[str, Any] = {}
         event = threading.Event()
@@ -291,9 +297,12 @@ def remote_inference_policy(base_url: str, **policy_options: Any) -> Transformer
     )
 
 
-def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_BatchingForwarder"):
+def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_BatchingForwarder", *, device: Any = None):
     window_size = int(policy.result.model_config.window_size)
-    policy_id = str(policy.policy_id)
+    # Mutable so /config reflects the current checkpoint after a hot-swap. reload_lock serializes
+    # concurrent /reload calls (the controller issues one per iteration boundary).
+    state = {"policy_id": str(policy.policy_id)}
+    reload_lock = threading.Lock()
 
     class _Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"  # keep-alive so the persistent RemoteForward reuses the socket
@@ -315,29 +324,52 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.rstrip("/") == "/config":
-                self._send(200, {"window_size": window_size, "policy_id": policy_id, "action_count": ACTION_COUNT})
+                self._send(200, {"window_size": window_size, "policy_id": state["policy_id"], "action_count": ACTION_COUNT})
             elif self.path.rstrip("/") in ("/health", "/healthz"):
                 self._send(200, {"status": "ok"})
             else:
                 self._send(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path.rstrip("/") != "/forward":
+            path = self.path.rstrip("/")
+            if path == "/forward":
+                # Submit to the batcher (one bad item returns a diagnosable error, never hangs the
+                # collector or takes down the batch).
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = decode_forward_request(self.rfile.read(length))
+                    result = forwarder.submit(payload)
+                except TimeoutError as exc:  # server overload, not a client error
+                    self._send(504, {"error": f"TimeoutError: {exc}"})
+                    return
+                except Exception as exc:  # noqa: BLE001 — malformed/bad-shape body is a client error
+                    self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
+                    return
+                self._send(200, result)
+            elif path == "/reload":
+                # Hot-swap the served checkpoint (controller calls this at each iteration boundary).
+                # Load the new policy WITHOUT holding the batcher — forwards keep hitting the old
+                # policy until the atomic set_policy swap, so there's no serving gap.
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    req = json.loads(self.rfile.read(length).decode("utf-8"))
+                    checkpoint = str(req["checkpoint_path"])
+                    with reload_lock:
+                        new_policy = load_transformer_policy(Path(checkpoint), device=device)
+                        new_window = int(new_policy.result.model_config.window_size)
+                        if new_window != window_size:
+                            raise ValueError(
+                                f"reload window_size {new_window} != served {window_size}; "
+                                "collectors tensorize at the served window — refusing arch-mismatched swap."
+                            )
+                        forwarder.set_policy(new_policy)
+                        state["policy_id"] = str(new_policy.policy_id)
+                except Exception as exc:  # noqa: BLE001
+                    self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
+                    return
+                self._send(200, {"reloaded": checkpoint, "policy_id": state["policy_id"]})
+            else:
                 self._send(404, {"error": "not found"})
-                return
-            # Submit to the batcher (one bad item returns a diagnosable error, never hangs the
-            # collector or takes down the batch).
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = decode_forward_request(self.rfile.read(length))
-                result = forwarder.submit(payload)
-            except TimeoutError as exc:  # server overload, not a client error
-                self._send(504, {"error": f"TimeoutError: {exc}"})
-                return
-            except Exception as exc:  # noqa: BLE001 — malformed/bad-shape body is a client error
-                self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
-                return
-            self._send(200, result)
 
     return _Handler
 
@@ -354,13 +386,11 @@ def serve_inference(
 ) -> ThreadingHTTPServer:
     """Load a checkpoint and start a threaded, dynamically-batched HTTP inference server. Returns
     the server (call .serve_forever() to block, or use in a thread for tests)."""
-    from pathlib import Path
-
     policy = load_transformer_policy(Path(checkpoint_path), device=device)
     forwarder = _BatchingForwarder(
         policy, device=device, amp=amp, max_batch=max_batch, max_delay_s=batch_window_ms / 1000.0
     )
-    handler = build_request_handler(policy, forwarder)
+    handler = build_request_handler(policy, forwarder, device=device)
 
     class _BatchedHTTPServer(ThreadingHTTPServer):
         # 64+ collectors connect near-simultaneously; the default listen backlog of 5 overflows
