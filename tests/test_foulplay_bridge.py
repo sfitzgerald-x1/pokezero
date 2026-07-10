@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
+from pokezero.collection import read_rollout_records
 from pokezero.foulplay_bridge import (
     ControlledFoulPlayBenchmarkResult,
     ControlledFoulPlayComparisonResult,
@@ -26,6 +27,7 @@ from pokezero.foulplay_bridge import (
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
     _observation_with_search_metadata,
+    _player_state,
     _root_puct_prior_action_change_details,
     _requested_legal_action_masks_for_context,
     _is_terminal_protocol_line,
@@ -36,15 +38,195 @@ from pokezero.foulplay_bridge import (
     async_main,
     build_arg_parser,
     build_comparison_arg_parser,
+    capture_controlled_foulplay_rollouts,
     run_controlled_foulplay_comparison,
     run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
+from pokezero.foulplay_capture import async_main as async_capture_main
+from pokezero.foulplay_capture import build_capture_arg_parser
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
+    def test_capture_parser_forces_raw_policy_mode(self) -> None:
+        parser = build_capture_arg_parser()
+        args = parser.parse_args(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"])
+
+        self.assertEqual(args.policy_mode, "raw")
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                ["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl", "--policy-mode", "root-puct"]
+            )
+
+    def test_capture_cli_requires_showdown_root(self) -> None:
+        with self.assertRaises(SystemExit):
+            asyncio.run(async_capture_main(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"]))
+
+    def test_player_state_can_request_turn_merged_transitions(self) -> None:
+        state = _ControlledBattleState(
+            battle_id="battle-gen3randombattle-controlled-1",
+            seed=7,
+            format_id="gen3randombattle",
+        )
+        expected = object()
+
+        with (
+            patch("pokezero.foulplay_bridge.parse_showdown_replay", return_value=object()),
+            patch("pokezero.foulplay_bridge.normalize_for_player", return_value=expected) as normalize,
+        ):
+            actual = _player_state(state, "p1", set_source="source", include_turn_merged=True)
+
+        self.assertIs(actual, expected)
+        self.assertEqual(
+            normalize.call_args.kwargs,
+            {
+                "player_id": "p1",
+                "configured_showdown_slot": "p1",
+                "format_id": "gen3randombattle",
+                "set_source": "source",
+                "include_turn_merged": True,
+            },
+        )
+
+    def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
+        observation = PokeZeroObservationV0(
+            categorical_ids=(),
+            numeric_features=(),
+            token_type_ids=(),
+            attention_mask=(),
+            legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
+        )
+        trajectory = BattleTrajectory(battle_id="capture-1", format_id="gen3randombattle", seed=17)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation,
+                legal_action_mask=observation.legal_action_mask,
+                action_index=0,
+                metadata={},
+            )
+        )
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=observation,
+                legal_action_mask=observation.legal_action_mask,
+                action_index=0,
+                metadata={},
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=1, capped=False))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint = Path(tmp_dir) / "checkpoint.pt"
+            checkpoint.write_bytes(b"capture-checkpoint")
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=Path("/showdown"),
+                policy_mode="raw",
+                belief_set_source=False,
+            )
+
+            async def fake_benchmark(*_args, **kwargs):
+                kwargs["trajectory_callback"](trajectory)
+                return ControlledFoulPlayBenchmarkResult(config=config, policy_id="raw", games=())
+
+            out_path = Path(tmp_dir) / "pool.jsonl"
+            with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+                result = asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path, pool_id="step0"))
+
+            records = list(read_rollout_records(out_path))
+            self.assertEqual(len(records), 1)
+            self.assertEqual([step.player_id for step in records[0].trajectory.steps], ["p1"])
+            self.assertEqual(records[0].trajectory.metadata["capture"], "controlled-foulplay/raw")
+            self.assertEqual(records[0].trajectory.metadata["pool"], "step0")
+            self.assertEqual(result.captured_games, 1)
+            self.assertEqual(result.skipped_capped_games, 0)
+            self.assertTrue(result.checkpoint_sha256)
+
+            with self.assertRaises(FileExistsError):
+                asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path, pool_id="step0"))
+
+    def test_capture_does_not_create_an_output_file_before_the_first_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint = Path(tmp_dir) / "checkpoint.pt"
+            checkpoint.write_bytes(b"capture-checkpoint")
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=Path("/showdown"),
+                policy_mode="raw",
+                belief_set_source=False,
+            )
+            out_path = Path(tmp_dir) / "pool.jsonl"
+
+            async def failing_benchmark(*_args, **_kwargs):
+                raise RuntimeError("foul-play failed before the first completed game")
+
+            with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=failing_benchmark):
+                with self.assertRaisesRegex(RuntimeError, "before the first"):
+                    asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path))
+
+            self.assertFalse(out_path.exists())
+
+    def test_capture_excludes_capped_games_from_value_labels(self) -> None:
+        observation = PokeZeroObservationV0(
+            categorical_ids=(),
+            numeric_features=(),
+            token_type_ids=(),
+            attention_mask=(),
+            legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
+        )
+        trajectory = BattleTrajectory(battle_id="capped-1", format_id="gen3randombattle", seed=19)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation,
+                legal_action_mask=observation.legal_action_mask,
+                action_index=0,
+                metadata={},
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner=None, turn_count=250, capped=True))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint = Path(tmp_dir) / "checkpoint.pt"
+            checkpoint.write_bytes(b"capture-checkpoint")
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=Path("/showdown"),
+                policy_mode="raw",
+                belief_set_source=False,
+            )
+            out_path = Path(tmp_dir) / "pool.jsonl"
+
+            async def fake_benchmark(*_args, **kwargs):
+                kwargs["trajectory_callback"](trajectory)
+                return ControlledFoulPlayBenchmarkResult(config=config, policy_id="raw", games=())
+
+            with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+                result = asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path))
+
+            self.assertEqual(result.captured_games, 0)
+            self.assertEqual(result.skipped_capped_games, 1)
+            self.assertFalse(out_path.exists())
+
+    def test_capture_rejects_search_policy_mode(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="root-puct",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(ValueError, "policy_mode='raw'"):
+                asyncio.run(
+                    capture_controlled_foulplay_rollouts(config, out_path=Path(tmp_dir) / "pool.jsonl")
+                )
+
     def test_split_outgoing_showdown_message_handles_room_and_global(self) -> None:
         self.assertEqual(
             _split_outgoing_showdown_message("battle-gen3randombattle-1|/choose move surf|7"),

@@ -33,6 +33,7 @@ pokezero-replay-import = "pokezero.replay_import_cli:main"
 pokezero-refutation = "pokezero.refutation_cli:main"
 pokezero-engine = "pokezero.engine_cli:main"
 pokezero-foulplay-compare = "pokezero.foulplay_bridge:comparison_main"
+pokezero-foulplay-capture = "pokezero.foulplay_capture:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
