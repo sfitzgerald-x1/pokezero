@@ -6,7 +6,8 @@ from dataclasses import dataclass, replace
 import hashlib
 import math
 from time import perf_counter
-from typing import Any, Callable, Mapping
+from time import perf_counter as _timing_perf_counter
+from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv, TerminalState
@@ -17,7 +18,6 @@ from .replay_branching import (
     ReplayBranchResult,
     ReplayBranchRolloutResult,
     ReplayPrefixResult,
-    replay_trajectory_branch,
     replay_trajectory_branch_rollout,
     replay_trajectory_prefix,
 )
@@ -70,6 +70,128 @@ class RootPUCTVisitBudgetContext:
             "policy_entropy": self.policy_entropy,
             "value_margin": self.value_margin,
         }
+
+
+@dataclass(frozen=True)
+class RootPUCTSearchTiming:
+    """Non-overlapping wall-clock components for one root-PUCT decision."""
+
+    prefix_replay_seconds: float = 0.0
+    prefix_replay_count: int = 0
+    branch_simulator_step_seconds: float = 0.0
+    branch_simulator_step_count: int = 0
+    policy_evaluation_seconds: float = 0.0
+    policy_evaluation_count: int = 0
+    value_evaluation_seconds: float = 0.0
+    value_evaluation_count: int = 0
+    rollout_tail_seconds: float = 0.0
+    rollout_tail_count: int = 0
+    total_seconds: float = 0.0
+
+    @property
+    def policy_value_evaluation_seconds(self) -> float:
+        return self.policy_evaluation_seconds + self.value_evaluation_seconds
+
+    @property
+    def policy_value_evaluation_count(self) -> int:
+        return self.policy_evaluation_count + self.value_evaluation_count
+
+    @property
+    def residual_seconds(self) -> float:
+        measured_components = (
+            self.prefix_replay_seconds
+            + self.branch_simulator_step_seconds
+            + self.policy_value_evaluation_seconds
+            + self.rollout_tail_seconds
+        )
+        return max(0.0, self.total_seconds - measured_components)
+
+    def with_policy_evaluation(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
+        return replace(
+            self,
+            policy_evaluation_seconds=self.policy_evaluation_seconds + elapsed_seconds,
+            policy_evaluation_count=self.policy_evaluation_count + 1,
+        )
+
+    def with_total(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
+        return replace(self, total_seconds=elapsed_seconds)
+
+    @classmethod
+    def aggregate(cls, timings: Sequence["RootPUCTSearchTiming"]) -> "RootPUCTSearchTiming":
+        return cls(
+            prefix_replay_seconds=sum(timing.prefix_replay_seconds for timing in timings),
+            prefix_replay_count=sum(timing.prefix_replay_count for timing in timings),
+            branch_simulator_step_seconds=sum(
+                timing.branch_simulator_step_seconds for timing in timings
+            ),
+            branch_simulator_step_count=sum(timing.branch_simulator_step_count for timing in timings),
+            policy_evaluation_seconds=sum(timing.policy_evaluation_seconds for timing in timings),
+            policy_evaluation_count=sum(timing.policy_evaluation_count for timing in timings),
+            value_evaluation_seconds=sum(timing.value_evaluation_seconds for timing in timings),
+            value_evaluation_count=sum(timing.value_evaluation_count for timing in timings),
+            rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
+            rollout_tail_count=sum(timing.rollout_tail_count for timing in timings),
+            total_seconds=sum(timing.total_seconds for timing in timings),
+        )
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "prefix_replay_seconds": self.prefix_replay_seconds,
+            "prefix_replay_count": self.prefix_replay_count,
+            "branch_simulator_step_seconds": self.branch_simulator_step_seconds,
+            "branch_simulator_step_count": self.branch_simulator_step_count,
+            "policy_evaluation_seconds": self.policy_evaluation_seconds,
+            "policy_evaluation_count": self.policy_evaluation_count,
+            "value_evaluation_seconds": self.value_evaluation_seconds,
+            "value_evaluation_count": self.value_evaluation_count,
+            "policy_value_evaluation_seconds": self.policy_value_evaluation_seconds,
+            "policy_value_evaluation_count": self.policy_value_evaluation_count,
+            "rollout_tail_seconds": self.rollout_tail_seconds,
+            "rollout_tail_count": self.rollout_tail_count,
+            "residual_seconds": self.residual_seconds,
+            "total_seconds": self.total_seconds,
+        }
+
+
+@dataclass
+class _RootPUCTSearchTimingAccumulator:
+    prefix_replay_seconds: float = 0.0
+    prefix_replay_count: int = 0
+    branch_simulator_step_seconds: float = 0.0
+    branch_simulator_step_count: int = 0
+    value_evaluation_seconds: float = 0.0
+    value_evaluation_count: int = 0
+    rollout_tail_seconds: float = 0.0
+    rollout_tail_count: int = 0
+
+    def add_prefix_replay(self, elapsed_seconds: float) -> None:
+        self.prefix_replay_seconds += elapsed_seconds
+        self.prefix_replay_count += 1
+
+    def add_branch_simulator_step(self, elapsed_seconds: float) -> None:
+        self.branch_simulator_step_seconds += elapsed_seconds
+        self.branch_simulator_step_count += 1
+
+    def add_value_evaluation(self, elapsed_seconds: float) -> None:
+        self.value_evaluation_seconds += elapsed_seconds
+        self.value_evaluation_count += 1
+
+    def add_rollout_tail(self, elapsed_seconds: float) -> None:
+        self.rollout_tail_seconds += elapsed_seconds
+        self.rollout_tail_count += 1
+
+    def finish(self, total_seconds: float) -> RootPUCTSearchTiming:
+        return RootPUCTSearchTiming(
+            prefix_replay_seconds=self.prefix_replay_seconds,
+            prefix_replay_count=self.prefix_replay_count,
+            branch_simulator_step_seconds=self.branch_simulator_step_seconds,
+            branch_simulator_step_count=self.branch_simulator_step_count,
+            value_evaluation_seconds=self.value_evaluation_seconds,
+            value_evaluation_count=self.value_evaluation_count,
+            rollout_tail_seconds=self.rollout_tail_seconds,
+            rollout_tail_count=self.rollout_tail_count,
+            total_seconds=total_seconds,
+        )
 
 
 @dataclass(frozen=True)
@@ -198,6 +320,7 @@ class PUCTBranchSearchResult:
     visit_budget_context: RootPUCTVisitBudgetContext | None = None
     root_time_budget_seconds: float | None = None
     time_budget_exhausted: bool = False
+    timing: RootPUCTSearchTiming = RootPUCTSearchTiming()
 
     @property
     def best_candidate(self) -> PUCTBranchSearchCandidate:
@@ -224,6 +347,7 @@ class PUCTBranchSearchResult:
             ),
             "root_time_budget_seconds": self.root_time_budget_seconds,
             "time_budget_exhausted": self.time_budget_exhausted,
+            "timing": self.timing.to_dict(),
             "selected_action_index": best.action_index,
             "selected_value": best.value,
             "selected_score": best.score,
@@ -309,6 +433,7 @@ def _value_branch_search_with_prefix(
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
+    timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> tuple[ValueBranchSearchResult, _RestorablePrefix | None]:
     """Enumerate legal root actions and score branch leaves.
 
@@ -351,6 +476,7 @@ def _value_branch_search_with_prefix(
         start_override=start_override,
         expected_current_observation=expected_current_observation,
         replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        timing=timing,
     )
     candidates: list[ValueBranchSearchCandidate] = []
     for action_index in candidate_indices:
@@ -369,6 +495,7 @@ def _value_branch_search_with_prefix(
                 expected_current_observation=expected_current_observation,
                 restorable_prefix=restorable_prefix,
                 replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+                timing=timing,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -395,6 +522,7 @@ def _value_branch_search_with_prefix(
                     action_index=action_index,
                     visit_index=0,
                 ),
+                timing=timing,
             )
         )
 
@@ -453,6 +581,8 @@ def puct_branch_search(
     if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
         raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
     time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
+    timing_started_at = _timing_perf_counter()
+    timing = _RootPUCTSearchTimingAccumulator()
     value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
         trajectory=trajectory,
@@ -467,6 +597,7 @@ def puct_branch_search(
         start_override=start_override,
         expected_current_observation=expected_current_observation,
         replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        timing=timing,
     )
     legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
     if (
@@ -545,6 +676,7 @@ def puct_branch_search(
             expected_current_observation=expected_current_observation,
             restorable_prefix=restorable_prefix,
             replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            timing=timing,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -566,6 +698,7 @@ def puct_branch_search(
                 action_index=action_index,
                 visit_index=accumulators[action_index].visits,
             ),
+            timing=timing,
         )
         accumulator = accumulators[action_index]
         accumulators[action_index] = replace(
@@ -600,6 +733,7 @@ def puct_branch_search(
         visit_budget_context=visit_budget_context,
         root_time_budget_seconds=root_time_budget_seconds,
         time_budget_exhausted=time_budget_exhausted,
+        timing=timing.finish(_timing_perf_counter() - timing_started_at),
     )
 
 
@@ -708,6 +842,7 @@ def _value_branch_candidate(
     leaf_rollout_config: RolloutConfig | None,
     leaf_rollout_decision_rounds: int,
     leaf_rollout_seed: int,
+    timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> ValueBranchSearchCandidate:
     terminal = branch.step_result.terminal
     if terminal is not None:
@@ -731,7 +866,7 @@ def _value_branch_candidate(
     if leaf_rollout_decision_rounds <= 0:
         return ValueBranchSearchCandidate(
             action_index=action_index,
-            value=_finite_value(value_fn(post_branch_history)),
+            value=_timed_value_evaluation(value_fn, post_branch_history, timing=timing),
             terminal=None,
             branch=branch,
             evaluated_history_length=len(post_branch_history),
@@ -748,7 +883,7 @@ def _value_branch_candidate(
     if leaf_max_decision_rounds <= prefix_decision_round_count + 1:
         return ValueBranchSearchCandidate(
             action_index=action_index,
-            value=_finite_value(value_fn(post_branch_history)),
+            value=_timed_value_evaluation(value_fn, post_branch_history, timing=timing),
             terminal=None,
             branch=branch,
             evaluated_history_length=len(post_branch_history),
@@ -756,6 +891,7 @@ def _value_branch_candidate(
             leaf_rollout_decision_round_count=0,
         )
 
+    rollout_tail_started_at = _timing_perf_counter() if timing is not None else None
     continuation = continue_rollout_from_current_state(
         env=env,
         policies=leaf_rollout_policies,
@@ -769,6 +905,9 @@ def _value_branch_candidate(
         available_observations=branch.step_result.observations,
         reset_policies=True,
     )
+    if timing is not None:
+        assert rollout_tail_started_at is not None
+        timing.add_rollout_tail(_timing_perf_counter() - rollout_tail_started_at)
     continuation_observations = tuple(
         step.observation
         for step in continuation.trajectory.steps
@@ -783,7 +922,7 @@ def _value_branch_candidate(
         value = terminal_value_for_player(terminal, player_id=player_id)
         leaf_evaluation = "rollout_terminal"
     else:
-        value = _finite_value(value_fn(evaluated_history))
+        value = _timed_value_evaluation(value_fn, evaluated_history, timing=timing)
         leaf_evaluation = "rollout_value_fn"
     return ValueBranchSearchCandidate(
         action_index=action_index,
@@ -814,6 +953,7 @@ def _restorable_prefix_snapshot(
     start_override: StartOverrideSource,
     expected_current_observation: PokeZeroObservationV0 | None,
     replay_hp_fraction_tolerance: float,
+    timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> _RestorablePrefix | None:
     snapshotter = getattr(env, "snapshot", None)
     restorer = getattr(env, "restore", None)
@@ -821,6 +961,7 @@ def _restorable_prefix_snapshot(
         return None
     if callable(start_override):
         return None
+    prefix_replay_started_at = _timing_perf_counter() if timing is not None else None
     prefix = replay_trajectory_prefix(
         env,
         trajectory,
@@ -833,6 +974,9 @@ def _restorable_prefix_snapshot(
         check_prefix_observations=False,
         hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
+    if timing is not None:
+        assert prefix_replay_started_at is not None
+        timing.add_prefix_replay(_timing_perf_counter() - prefix_replay_started_at)
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
     return _RestorablePrefix(prefix=prefix, snapshot=snapshotter())
@@ -849,13 +993,14 @@ def _branch_from_replay_prefix(
     expected_current_observation: PokeZeroObservationV0 | None,
     restorable_prefix: _RestorablePrefix | None,
     replay_hp_fraction_tolerance: float,
+    timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> ReplayBranchResult:
     if restorable_prefix is None:
-        return replay_trajectory_branch(
+        prefix_replay_started_at = _timing_perf_counter() if timing is not None else None
+        prefix = replay_trajectory_prefix(
             env,
             trajectory,
-            prefix_decision_round_count=prefix_decision_round_count,
-            branch_actions=branch_actions,
+            decision_round_count=prefix_decision_round_count,
             start_override=_materialize_start_override(start_override),
             consistency_player_id=player_id,
             expected_current_observation=expected_current_observation,
@@ -864,6 +1009,30 @@ def _branch_from_replay_prefix(
             # branch-point observation check below.
             check_prefix_observations=False,
             hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        )
+        if timing is not None:
+            assert prefix_replay_started_at is not None
+            timing.add_prefix_replay(_timing_perf_counter() - prefix_replay_started_at)
+        if prefix.terminal is not None:
+            raise ValueError("cannot branch from a terminal replay prefix.")
+        branch_round = ReplayActionRound(
+            turn_index=prefix_decision_round_count,
+            actions=branch_actions,
+        )
+        _require_exact_requested_players(
+            branch_actions=branch_round.actions,
+            requested_players=prefix.requested_players,
+            turn_index=prefix_decision_round_count,
+        )
+        branch_step_started_at = _timing_perf_counter() if timing is not None else None
+        step_result = env.step(branch_round.actions)
+        if timing is not None:
+            assert branch_step_started_at is not None
+            timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
+        return ReplayBranchResult(
+            prefix=prefix,
+            branch_round=branch_round,
+            step_result=step_result,
         )
     restorer = getattr(env, "restore", None)
     if not callable(restorer):
@@ -878,7 +1047,11 @@ def _branch_from_replay_prefix(
         requested_players=restorable_prefix.prefix.requested_players,
         turn_index=prefix_decision_round_count,
     )
+    branch_step_started_at = _timing_perf_counter() if timing is not None else None
     step_result = env.step(branch_round.actions)
+    if timing is not None:
+        assert branch_step_started_at is not None
+        timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
     return ReplayBranchResult(
         prefix=restorable_prefix.prefix,
         branch_round=branch_round,
@@ -979,6 +1152,20 @@ def _finite_value(value: float) -> float:
     if not math.isfinite(result):
         raise ValueError("value_fn returned a non-finite branch value.")
     return result
+
+
+def _timed_value_evaluation(
+    value_fn: ObservationValueFunction,
+    history: tuple[PokeZeroObservationV0, ...],
+    *,
+    timing: _RootPUCTSearchTimingAccumulator | None,
+) -> float:
+    if timing is None:
+        return _finite_value(value_fn(history))
+    started_at = _timing_perf_counter()
+    value = _finite_value(value_fn(history))
+    timing.add_value_evaluation(_timing_perf_counter() - started_at)
+    return value
 
 
 def _is_candidate_illegal_action_error(exc: ValueError, *, player_id: PlayerId, action_index: int) -> bool:

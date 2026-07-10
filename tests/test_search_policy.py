@@ -478,6 +478,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_prior_action_visits"], 1)
         self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
         self.assertTrue(metadata["root_puct_opponent_actions_legality_checked"])
+        timing = metadata["root_puct_timing"]
+        self.assertEqual(timing["policy_evaluation_count"], 1)
+        self.assertEqual(timing["value_evaluation_count"], 0)
+        self.assertEqual(timing["rollout_tail_count"], 0)
+        self.assertEqual(timing["policy_value_evaluation_count"], 1)
+        self.assertEqual(timing["value_evaluation_seconds"], 0.0)
+        self.assertEqual(timing["rollout_tail_seconds"], 0.0)
         self.assertEqual(live_env.step_calls, [{"p1": 1, "p2": 0}])
         self.assertEqual(len(branch_envs), 1)
         self.assertTrue(branch_envs[0].closed)
@@ -2686,6 +2693,12 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_leaf_actual_rollout_rounds"], {"1": 2})
         self.assertEqual(decision.metadata["root_puct_leaf_evaluations"], {"rollout_terminal": 2})
         self.assertEqual(decision.metadata["root_puct_candidate_count"], 2)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["policy_evaluation_count"], 1)
+        self.assertEqual(timing["branch_simulator_step_count"], 2)
+        self.assertEqual(timing["value_evaluation_count"], 0)
+        self.assertEqual(timing["rollout_tail_count"], 2)
+        self.assertEqual(timing["policy_value_evaluation_count"], 1)
         self.assertEqual(len(branch_envs), 1)
         self.assertTrue(branch_envs[0].closed)
         self.assertEqual(

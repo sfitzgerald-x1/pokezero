@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
+from time import perf_counter as _timing_perf_counter
 from typing import Callable, Mapping
 
 from .env import PlayerId, PokeZeroEnv
@@ -15,6 +16,7 @@ from .rollout import RolloutConfig, RolloutDriver
 from .search import (
     ActionPriorVector,
     ObservationValueFunction,
+    RootPUCTSearchTiming,
     player_observation_history,
     puct_branch_search,
     terminal_value_for_player,
@@ -43,6 +45,7 @@ class RootPUCTSearchDecision:
     selected_score: float
     candidate_count: int
     elapsed_seconds: float
+    timing: RootPUCTSearchTiming
 
     @property
     def changed_action(self) -> bool:
@@ -61,6 +64,7 @@ class RootPUCTSearchDecision:
             "selected_score": self.selected_score,
             "candidate_count": self.candidate_count,
             "elapsed_seconds": self.elapsed_seconds,
+            "timing": self.timing.to_dict(),
         }
 
 
@@ -105,6 +109,10 @@ class RootPUCTSearchBenchmarkReport:
     def average_source_decision_rounds(self) -> float:
         return sum(self.source_decision_rounds) / len(self.source_decision_rounds) if self.source_decision_rounds else 0.0
 
+    @property
+    def timing(self) -> RootPUCTSearchTiming:
+        return RootPUCTSearchTiming.aggregate(tuple(decision.timing for decision in self.decisions))
+
     def to_dict(self) -> dict[str, object]:
         return {
             "format_id": self.format_id,
@@ -123,6 +131,7 @@ class RootPUCTSearchBenchmarkReport:
             "total_elapsed_seconds": self.total_elapsed_seconds,
             "average_elapsed_seconds": self.average_elapsed_seconds,
             "average_candidate_count": self.average_candidate_count,
+            "timing": self.timing.to_dict(),
             "decisions": [decision.to_dict() for decision in self.decisions],
         }
 
@@ -148,6 +157,7 @@ class RootPUCTCounterfactualDecision:
     recorded_capped: bool
     selected_capped: bool
     rollout_elapsed_seconds: float
+    search_timing: RootPUCTSearchTiming
 
     @property
     def changed_action(self) -> bool:
@@ -180,6 +190,7 @@ class RootPUCTCounterfactualDecision:
             "recorded_capped": self.recorded_capped,
             "selected_capped": self.selected_capped,
             "rollout_elapsed_seconds": self.rollout_elapsed_seconds,
+            "search_timing": self.search_timing.to_dict(),
         }
 
 
@@ -269,6 +280,10 @@ class RootPUCTCounterfactualBenchmarkReport:
     def average_source_decision_rounds(self) -> float:
         return sum(self.source_decision_rounds) / len(self.source_decision_rounds) if self.source_decision_rounds else 0.0
 
+    @property
+    def search_timing(self) -> RootPUCTSearchTiming:
+        return RootPUCTSearchTiming.aggregate(tuple(decision.search_timing for decision in self.decisions))
+
     def to_dict(self) -> dict[str, object]:
         return {
             "format_id": self.format_id,
@@ -296,6 +311,7 @@ class RootPUCTCounterfactualBenchmarkReport:
             "total_rollout_elapsed_seconds": self.total_rollout_elapsed_seconds,
             "average_rollout_elapsed_seconds": self.average_rollout_elapsed_seconds,
             "average_candidate_count": self.average_candidate_count,
+            "search_timing": self.search_timing.to_dict(),
             "decisions": [decision.to_dict() for decision in self.decisions],
         }
 
@@ -352,7 +368,10 @@ def benchmark_root_puct_search(
                     player_id=search_player,
                     through_decision_round=prefix_decision_round_count,
                 )
+                timing_started_at = _timing_perf_counter()
+                policy_evaluation_started_at = _timing_perf_counter()
                 priors = prior_fn(history)
+                policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
                 start = perf_counter()
                 search = puct_branch_search(
                     env=env,
@@ -366,6 +385,9 @@ def benchmark_root_puct_search(
                     cpuct=cpuct,
                 )
                 elapsed = perf_counter() - start
+                timing = search.timing.with_policy_evaluation(policy_evaluation_seconds).with_total(
+                    _timing_perf_counter() - timing_started_at
+                )
                 decisions.append(
                     RootPUCTSearchDecision(
                         seed=seed,
@@ -378,6 +400,7 @@ def benchmark_root_puct_search(
                         selected_score=search.best_candidate.score,
                         candidate_count=len(search.candidates),
                         elapsed_seconds=elapsed,
+                        timing=timing,
                     )
                 )
     finally:
@@ -457,7 +480,10 @@ def benchmark_root_puct_counterfactual_rollouts(
                     player_id=search_player,
                     through_decision_round=prefix_decision_round_count,
                 )
+                search_timing_started_at = _timing_perf_counter()
+                policy_evaluation_started_at = _timing_perf_counter()
                 priors = prior_fn(history)
+                policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
                 search_start = perf_counter()
                 search = puct_branch_search(
                     env=env,
@@ -471,6 +497,9 @@ def benchmark_root_puct_counterfactual_rollouts(
                     cpuct=cpuct,
                 )
                 search_elapsed = perf_counter() - search_start
+                search_timing = search.timing.with_policy_evaluation(policy_evaluation_seconds).with_total(
+                    _timing_perf_counter() - search_timing_started_at
+                )
                 rollout_start = perf_counter()
                 recorded = _branch_rollout_value(
                     env=env,
@@ -519,6 +548,7 @@ def benchmark_root_puct_counterfactual_rollouts(
                         recorded_capped=recorded.capped,
                         selected_capped=selected.capped,
                         rollout_elapsed_seconds=rollout_elapsed,
+                        search_timing=search_timing,
                     )
                 )
     finally:

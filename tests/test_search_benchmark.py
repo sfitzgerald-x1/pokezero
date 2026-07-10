@@ -156,7 +156,32 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual([decision.recorded_action_index for decision in report.decisions], [0, 0])
         self.assertEqual([decision.selected_action_index for decision in report.decisions], [1, 0])
         self.assertEqual([decision.candidate_count for decision in report.decisions], [2, 2])
-        self.assertEqual(report.to_dict()["evaluated_prefixes"], 2)
+        payload = report.to_dict()
+        self.assertEqual(payload["evaluated_prefixes"], 2)
+        timing = payload["timing"]
+        decision_timings = [decision["timing"] for decision in payload["decisions"]]
+        for key in (
+            "prefix_replay_count",
+            "branch_simulator_step_count",
+            "policy_evaluation_count",
+            "value_evaluation_count",
+            "policy_value_evaluation_count",
+            "rollout_tail_count",
+        ):
+            self.assertEqual(timing[key], sum(decision_timing[key] for decision_timing in decision_timings))
+        for key in (
+            "prefix_replay_seconds",
+            "branch_simulator_step_seconds",
+            "policy_evaluation_seconds",
+            "value_evaluation_seconds",
+            "policy_value_evaluation_seconds",
+            "rollout_tail_seconds",
+            "residual_seconds",
+            "total_seconds",
+        ):
+            self.assertAlmostEqual(timing[key], sum(decision_timing[key] for decision_timing in decision_timings))
+        self.assertEqual(timing["rollout_tail_count"], 0)
+        self.assertEqual(timing["rollout_tail_seconds"], 0.0)
         self.assertTrue(envs[0].closed)
 
     def test_benchmark_root_puct_counterfactual_rollouts_compares_recorded_and_selected_outcomes(self) -> None:

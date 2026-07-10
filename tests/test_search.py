@@ -498,6 +498,23 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(result.candidates[0].prior, 0.9)
         self.assertGreater(result.candidates[0].score, result.candidates[1].score)
         self.assertEqual(result.to_dict()["selected_action_index"], 0)
+        timing = result.timing.to_dict()
+        self.assertEqual(timing["prefix_replay_count"], 2)
+        self.assertEqual(timing["branch_simulator_step_count"], 2)
+        self.assertEqual(timing["policy_evaluation_count"], 0)
+        self.assertEqual(timing["value_evaluation_count"], 2)
+        self.assertEqual(timing["policy_value_evaluation_count"], 2)
+        self.assertEqual(timing["rollout_tail_count"], 0)
+        self.assertEqual(timing["policy_evaluation_seconds"], 0.0)
+        self.assertEqual(timing["rollout_tail_seconds"], 0.0)
+        self.assertAlmostEqual(
+            timing["total_seconds"],
+            timing["prefix_replay_seconds"]
+            + timing["branch_simulator_step_seconds"]
+            + timing["policy_value_evaluation_seconds"]
+            + timing["rollout_tail_seconds"]
+            + timing["residual_seconds"],
+        )
 
     def test_puct_branch_search_accumulates_root_visit_budget(self) -> None:
         env = ValueBranchEnv()
