@@ -32,22 +32,22 @@ def build_capture_arg_parser() -> argparse.ArgumentParser:
 
 
 async def async_main(argv: Sequence[str] | None = None) -> int:
-    args = build_capture_arg_parser().parse_args(argv)
+    parser = build_capture_arg_parser()
+    args = parser.parse_args(argv)
+    if args.showdown_root is None:
+        parser.error("--showdown-root is required unless POKEZERO_SHOWDOWN_ROOT is set.")
     config = _config_from_args(args, policy_mode="raw")
+    def capture_progress(payload: dict) -> None:
+        if args.summary_out is not None:
+            _write_json(args.summary_out, payload)
+
     result = await capture_controlled_foulplay_rollouts(
         config,
         out_path=args.out,
         pool_id=args.pool_id,
+        capture_progress_callback=capture_progress,
     )
-    payload = {
-        **result.to_dict(),
-        "capture": {
-            "out": str(args.out),
-            "pool_id": args.pool_id,
-            "sides": "p1-only",
-            "policy_mode": "raw",
-        },
-    }
+    payload = result.to_dict()
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
         print(f"controlled_foulplay_capture_summary: {args.summary_out}")
@@ -55,7 +55,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
-            f"captured {result.completed_games}/{config.games} games to {args.out} "
+            f"captured {result.captured_games}/{config.games} labeled games to {args.out} "
             f"(pool={args.pool_id}, policy=raw)"
         )
     return 0

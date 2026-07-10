@@ -38,7 +38,8 @@ says so).
   this v2.2/155-column capstone checkpoint, so they are explicitly ineligible. The controlled
   foul-play harness now normalizes turn-merged history for v2.2 and exposes
   `capture_controlled_foulplay_rollouts` for raw-policy, p1-only external-opponent capture; it
-  writes each terminal game immediately and stamps belief-source provenance. Before Step 0, freeze
+  writes each labeled terminal game immediately, excludes capped/tied outcomes, and stamps
+  belief-source provenance. Before Step 0, freeze
   a v2.2 capture seed band plus a disjoint calibration-fit band, record both hashes and the capture
   checkpoint/config, and re-derive the E1 Pearson floor on that compatible corpus. A one-game
   v2.2 capture smoke validates plumbing only; it is not a gate result.

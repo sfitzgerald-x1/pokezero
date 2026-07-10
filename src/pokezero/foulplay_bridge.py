@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -21,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import random
 import sys
+import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -82,6 +84,7 @@ _MIN_STRENGTH_SAMPLE_GAMES = 300
 ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
 ControlledFoulPlayComparisonProgressCallback = Callable[["ControlledFoulPlayComparisonResult"], None]
 ControlledFoulPlayTrajectoryCallback = Callable[[BattleTrajectory], None]
+ControlledFoulPlayCaptureProgressCallback = Callable[[Mapping[str, Any]], None]
 _COMPARISON_MODES = {"per-seed", "per-arm"}
 
 
@@ -634,6 +637,40 @@ class ControlledFoulPlayComparisonResult:
                 opponent_crashes=self.opponent_crashes,
             ),
         }
+
+
+@dataclass(frozen=True)
+class ControlledFoulPlayCaptureResult:
+    """Persisted external-opponent capture plus the benchmark that generated it."""
+
+    benchmark: ControlledFoulPlayBenchmarkResult
+    output_path: Path
+    pool_id: str
+    checkpoint_sha256: str
+    belief_set_source_hash: str | None
+    observation_schema_version: str | None
+    numeric_feature_count: int | None
+    captured_games: int
+    skipped_capped_games: int
+    skipped_tied_games: int
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = self.benchmark.to_dict()
+        payload["capture"] = {
+            "out": str(self.output_path),
+            "pool_id": self.pool_id,
+            "sides": "p1-only",
+            "policy_mode": "raw",
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "belief_set_source_hash": self.belief_set_source_hash,
+            "observation_schema_version": self.observation_schema_version,
+            "numeric_feature_count": self.numeric_feature_count,
+            "captured_games": self.captured_games,
+            "skipped_capped_games": self.skipped_capped_games,
+            "skipped_tied_games": self.skipped_tied_games,
+            "foulplay_search_time_ms": self.benchmark.config.search_time_ms,
+        }
+        return payload
 
 
 def _comparison_readout(
@@ -1218,7 +1255,8 @@ async def capture_controlled_foulplay_rollouts(
     out_path: Path,
     pool_id: str = "controlled-foulplay",
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
-) -> ControlledFoulPlayBenchmarkResult:
+    capture_progress_callback: ControlledFoulPlayCaptureProgressCallback | None = None,
+) -> ControlledFoulPlayCaptureResult:
     """Capture raw-policy p1 trajectories from a deterministic foul-play seed band.
 
     Each completed game is appended and flushed before the next seed begins, so
@@ -1236,30 +1274,108 @@ async def capture_controlled_foulplay_rollouts(
 
     source = _resolved_belief_set_source(config)
     belief_set_source_hash = source.metadata.source_hash if source is not None else None
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("x", encoding="utf-8") as handle:
-        def capture(trajectory: BattleTrajectory) -> None:
-            p1_trajectory = _p1_capture_trajectory(trajectory, pool_id=pool_id)
-            record = RolloutRecord(
-                battle_id=p1_trajectory.battle_id,
-                seed=p1_trajectory.seed,
-                format_id=p1_trajectory.format_id,
-                policy_ids={"p1": f"neural:{config.checkpoint}", "p2": "foul-play"},
-                decision_round_count=len(p1_trajectory.steps),
-                elapsed_seconds=0.0,
-                terminal=p1_trajectory.terminal,
-                trajectory=p1_trajectory,
-                belief_set_source_hash=belief_set_source_hash,
-            )
-            write_rollout_record(handle, record)
-            handle.flush()
-            os.fsync(handle.fileno())
+    checkpoint_sha256 = _sha256_file(config.checkpoint)
+    handle = None
+    captured_games = 0
+    skipped_capped_games = 0
+    skipped_tied_games = 0
+    observation_schema_version: str | None = None
+    numeric_feature_count: int | None = None
+    previous_capture_time = time.monotonic()
 
-        return await run_controlled_foulplay_benchmark(
+    def progress_payload(*, status: str) -> dict[str, Any]:
+        return {
+            "status": status,
+            "capture": {
+                "out": str(out_path),
+                "pool_id": pool_id,
+                "sides": "p1-only",
+                "policy_mode": "raw",
+                "checkpoint_sha256": checkpoint_sha256,
+                "belief_set_source_hash": belief_set_source_hash,
+                "observation_schema_version": observation_schema_version,
+                "numeric_feature_count": numeric_feature_count,
+                "captured_games": captured_games,
+                "skipped_capped_games": skipped_capped_games,
+                "skipped_tied_games": skipped_tied_games,
+                "foulplay_search_time_ms": config.search_time_ms,
+            },
+        }
+
+    def emit_progress() -> None:
+        if capture_progress_callback is not None:
+            capture_progress_callback(progress_payload(status="running"))
+
+    def capture(trajectory: BattleTrajectory) -> None:
+        nonlocal handle, captured_games, skipped_capped_games, skipped_tied_games
+        nonlocal observation_schema_version, numeric_feature_count, previous_capture_time
+        if trajectory.terminal is None:
+            raise RuntimeError("controlled foul-play capture requires a terminal trajectory")
+        if trajectory.terminal.winner is None:
+            if trajectory.terminal.capped:
+                skipped_capped_games += 1
+            else:
+                skipped_tied_games += 1
+            emit_progress()
+            return
+        p1_trajectory = _p1_capture_trajectory(trajectory, pool_id=pool_id)
+        if not p1_trajectory.steps:
+            raise RuntimeError("controlled foul-play capture produced no p1 decision steps")
+        observation = p1_trajectory.steps[0].observation
+        if observation_schema_version is None:
+            observation_schema_version = observation.schema_version
+            numeric_feature_count = len(observation.numeric_features[0]) if observation.numeric_features else 0
+        elif observation.schema_version != observation_schema_version or (
+            observation.numeric_features
+            and len(observation.numeric_features[0]) != numeric_feature_count
+        ):
+            raise RuntimeError("controlled foul-play capture observation schema drifted within one pool")
+        if handle is None:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = out_path.open("x", encoding="utf-8")
+        now = time.monotonic()
+        record = RolloutRecord(
+            battle_id=p1_trajectory.battle_id,
+            seed=p1_trajectory.seed,
+            format_id=p1_trajectory.format_id,
+            policy_ids={"p1": f"neural:{config.checkpoint}", "p2": "foul-play"},
+            decision_round_count=len(p1_trajectory.steps),
+            elapsed_seconds=now - previous_capture_time,
+            terminal=p1_trajectory.terminal,
+            trajectory=p1_trajectory,
+            belief_set_source_hash=belief_set_source_hash,
+        )
+        write_rollout_record(handle, record)
+        handle.flush()
+        os.fsync(handle.fileno())
+        previous_capture_time = now
+        captured_games += 1
+        emit_progress()
+
+    try:
+        benchmark = await run_controlled_foulplay_benchmark(
             config,
             progress_callback=progress_callback,
             trajectory_callback=capture,
         )
+    finally:
+        if handle is not None:
+            handle.close()
+    result = ControlledFoulPlayCaptureResult(
+        benchmark=benchmark,
+        output_path=out_path,
+        pool_id=pool_id,
+        checkpoint_sha256=checkpoint_sha256,
+        belief_set_source_hash=belief_set_source_hash,
+        observation_schema_version=observation_schema_version,
+        numeric_feature_count=numeric_feature_count,
+        captured_games=captured_games,
+        skipped_capped_games=skipped_capped_games,
+        skipped_tied_games=skipped_tied_games,
+    )
+    if capture_progress_callback is not None:
+        capture_progress_callback({"status": "complete", **result.to_dict()})
+    return result
 
 
 def _p1_capture_trajectory(trajectory: BattleTrajectory, *, pool_id: str) -> BattleTrajectory:
@@ -2491,6 +2607,14 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     tmp.replace(path)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
