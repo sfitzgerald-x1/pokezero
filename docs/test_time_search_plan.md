@@ -24,16 +24,59 @@ Exists and works today:
 
 Does not exist: a multi-ply tree (no internal nodes/backup), in-tree chance
 nodes, batched/served NN evaluation for search, tree reuse across moves.
+**Also not wired (review findings, 2026-07-10, verified in code)**: the
+`root-puct-play-benchmark` surface does not expose a `start_override_planner`
+(belief determinization exists as a module but is NOT reachable from the play
+path); no root Dirichlet noise exists anywhere; the visit budget is fixed
+per-policy (no per-decision budget hook); and the checkpoint scenario planner's
+requested-legal-mask path is a **privileged** benchmark guard (its own comment
+says so).
+
+## Prerequisite implementations (small, test-gated; required before the steps that cite them)
+
+- **P-1 Belief-world wiring (required by Steps 2–4)**: expose
+  `start_override_planner` + world-sample count through the play/benchmark
+  surface; define **K by belief uncertainty, not policy uncertainty** (e.g., a
+  function of the belief engine's candidate-set entropy for unrevealed slots,
+  with a pre-registered mapping and a cap). **Anti-leakage gate (test)**: the
+  sampled-world distribution must be a function of PUBLIC evidence only —
+  matched games that differ only in the true hidden set must induce the same
+  world distribution; assert in a fixture test, and log a per-game leakage
+  checksum in benchmarks.
+- **P-2 Root Dirichlet noise (required by Step 3)**: alpha/mixture/seed
+  semantics specified up front (per-decision seeded for reproducibility;
+  diagnostics record the noise draw). **Audit-only by default**: primary
+  evaluation arms run deterministic priors; noise arms are separate, labeled
+  rows. Noise never silently enters a strength row.
+- **P-3 Per-decision budget hook (required by Step 4 arm 4)**: the visit budget
+  becomes a callable of the decision context (entropy/value-margin gates from
+  Step 2); fixed-budget behavior preserved as the default; unit tests for both.
 
 ## Assumptions under test
 
 | id | assumption | validated in |
 |---|---|---|
+| H0 | the chosen checkpoint's VALUE HEAD is a valid leaf evaluator (held-out ranking + calibration), independent of its policy strength | Step 0 |
 | H1 | root-only search adds measurable strength on a strong checkpoint ("MCTS is a topper") | Step 4 |
 | H2 | search value concentrates at contested decisions (high policy entropy / small value margin) → adaptive budgets beat flat budgets | Steps 2, 4 |
 | H3 | prior-guided search inherits systematic blind spots (near-zero prior ⇒ branch never visited at any budget) — root noise is load-bearing, not hygiene | Step 3 |
 | H4 | per-simulation cost is dominated by NN eval (not sim stepping) at 10M+, and grows with model scale — the eval path, not the simulator, is the bottleneck | Step 1 |
 | H5 | the sims→strength curve flattens quickly under a strong prior (few, well-aimed sims suffice) — bounding whether a fast simulator backend is ever required | Step 4 |
+
+## Step 0 — Value-head readiness gate for the capstone checkpoint (H0)
+
+The 1M checkpoint was chosen for policy strength; nothing yet certifies its
+VALUE head as a leaf evaluator — and project precedent (the E1 value-readiness
+line) treats that as the prerequisite it is. On the frozen held-out corpus
+(the pool-fp-v1 pooled-eval machinery): held-out value **ranking**
+(Pearson vs realized outcomes) and **calibration** (ECE + sign agreement) for
+iteration-0312 specifically, with checkpoint/data provenance recorded.
+Pre-registered thresholds: Pearson ≥ the E1 bar re-derived on pool-fp-v1;
+sign agreement ≥ 0.75; ECE ≤ 0.10 (raw) — if raw calibration fails but ranking
+passes, a **calibrated copy** (temperature/isotonic fit on held-out data, never
+on capstone games) MAY be used as the leaf evaluator and must be labeled as
+such in every capstone row. If ranking fails, the capstone is re-pointed at the
+best value-ready checkpoint and the plan's title claim changes accordingly.
 
 ## Step 1 — Mechanics + cost profile (hours; no new code)
 
@@ -56,7 +99,10 @@ Over a ≥2,000-decision corpus from recorded games: per-decision policy entropy
 top-1/top-2 prior mass, and value margin between the two best candidates.
 
 Deliverable: the "contested-decision fraction" — what share of moves have
-entropy > τ or value margin < δ (sweep τ, δ). This is the load factor for
+entropy > τ or value margin < δ (sweep τ, δ). **Also measured (P-1's input):
+belief-candidate uncertainty per decision** (candidate-set entropy over
+unrevealed opponent slots) — policy uncertainty gates the SIM budget; belief
+uncertainty gates K, and the two are distinct populations by hypothesis. This is the load factor for
 adaptive budgets (H2's precondition) and the ladder wall-clock model
 (budget ≈ contested-fraction × per-search cost). Also stratify by game phase:
 the hypothesis says lategame/endgame decisions are the contested ones.
@@ -64,7 +110,7 @@ the hypothesis says lategame/endgame decisions are the contested ones.
 Gate: none (descriptive), but the number feeds Step 4's adaptive arm and the
 ladder-budget arithmetic.
 
-## Step 3 — Blind-spot entrenchment audit (half day)
+## Step 3 — Blind-spot entrenchment audit (half day; requires P-2)
 
 From the hazard-probe state corpus (states where hazard/spin actions are
 available and the ΔV work showed mispricing): measure the prior mass the 1M net
@@ -86,20 +132,39 @@ worth knowing either way.
 uncertainty gating); root Dirichlet noise per Step 3; seeds fixed and shared
 across arms.
 
-**Arms** (each vs max-damage n=600 and foul-play @100 ms n≥600 — fp at n=300 is
-±5 pts and ungateable):
-1. Raw net (baseline — no search).
-2. Net + search, **value-head leaves** (AlphaZero-style, no tails), flat budgets
-   {8, 32, 128} sims/move.
-3. Net + search, **rollout-tail leaves**, budget matched by wall-clock to arm 2's
-   32-sim point (tails cost more per sim; match seconds, not sims).
-4. Net + search, **adaptive budget** (search only contested decisions per
-   Step 2's τ/δ; 128-sim cap) — H2's direct test.
+**Honest hidden-information mode (pre-registered, primary)**: no real opponent
+action, no requested-opponent legal mask, no privileged fallback — opponent
+legality is inferred from public state / belief only. Games where the engine
+falls back to a privileged path are LOGGED and excluded from primary rows
+(reported as a stratified "privileged-fallback" column, never blended).
 
-**Metrics**: win-rate deltas ±95% CI; per-move wall (mean + p95); sims→strength
-curve from arm 2 (H5); arm-2-vs-arm-3 delta (is the value head search-ready, or
-do tails still carry it?); arm-4 vs arm-2 at matched wall (does adaptivity buy
-the same strength cheaper?).
+**Arms** (each vs max-damage n=600 and foul-play @100 ms n≥600 — fp at n=300 is
+±5 pts and ungateable). Budgets are defined RELATIVE to the mandatory initial
+sweep — `puct_branch_search` must visit every legal root action once, and a
+healthy gen3 position exposes up to 9, so absolute low budgets silently fall
+back to raw play. Budgets = **legal_actions + {0, 24, 120}** extra visits, and
+every comparison row requires a **zero fallback rate** to count:
+1. Raw net (baseline — no search).
+2. Net + search, **value-head leaves** (AlphaZero-style, no tails), budgets
+   legal+{0, 24, 120}.
+3. Net + search, **rollout-tail leaves**, budget matched by wall-clock to arm 2's
+   legal+24 point (tails cost more per sim; match seconds, not sims).
+4. Net + search, **adaptive budget** (requires P-3; search only contested
+   decisions per Step 2's τ/δ; legal+120 cap) — H2's direct test.
+
+**Statistical protocol (paired, pre-registered)**: shared seed set across all
+arms; **mirrored seats** (every seed played from both seats); two disjoint seed
+bands (order effects / band agreement reported); paired analysis on per-seed
+outcome deltas (paired bootstrap CIs; McNemar-style check on flip counts);
+ties/round-capped games counted as 0.5 and reported separately. Decision
+criteria bind on the CI, not the point estimate: **go requires the 95% CI lower
+bound of the delta > 0 AND the point estimate ≥ the threshold** (+3 md / +5 fp).
+
+**Metrics**: paired win-rate deltas ±95% CI; per-move wall (mean + p95);
+sims→strength curve from arm 2 (H5); arm-2-vs-arm-3 delta (is the value head
+search-ready, or do tails still carry it?); arm-4 vs arm-2 at matched wall
+(does adaptivity buy the same strength cheaper?); fallback and
+privileged-fallback rates per row (must be zero in primary rows).
 
 **Pre-registered decision rules**:
 - **Fund the next phase** (batched-eval service integration + ladder pilot at
@@ -111,9 +176,11 @@ the same strength cheaper?).
   head is not search-ready on the axes that matter → the finding feeds the
   value-repair program (reanalyze targets / refutation retraining) before more
   search infrastructure is built.
-- H5 read: if 32→128 sims buys <1 pt, the strong-prior regime is confirmed —
-  flat evidence **against ever funding a fast-simulator backend**; adaptive
-  small budgets + batched evals are the end-state architecture.
+- H5 read: the legal+24 → legal+120 delta, WITH its CI — conclude "flat"
+  only if the CI upper bound of that delta is < +2 pts (an unbounded "<1 pt
+  point estimate" claim is not a conclusion). Flat ⇒ the strong-prior regime is
+  confirmed — evidence **against ever funding a fast-simulator backend**;
+  adaptive small budgets + batched evals are the end-state architecture.
 
 ## Gated follow-ons (not funded until the capstone reports)
 
