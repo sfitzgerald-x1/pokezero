@@ -88,6 +88,7 @@ from .search_benchmark import (
     benchmark_root_puct_search,
 )
 from .search_policy import (
+    EntropyMarginVisitBudgetSelector,
     RootPUCTSearchPolicy,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
@@ -874,6 +875,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Root visits per accepted opponent-action scenario; defaults to 16. "
             "With multiple accepted scenarios, total decision visits scale by searched scenario count."
         ),
+    )
+    root_puct_play.add_argument(
+        "--adaptive-root-contested-extra-visits",
+        type=int,
+        default=None,
+        help=(
+            "Enable adaptive root budgeting and add this many visits beyond the mandatory legal-action "
+            "sweep when the entropy or initial value-margin threshold marks a decision contested."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--adaptive-root-uncontested-extra-visits",
+        type=int,
+        default=0,
+        help="Additional visits beyond the mandatory sweep for non-contested decisions when adaptive budgeting is enabled.",
+    )
+    root_puct_play.add_argument(
+        "--adaptive-root-policy-entropy-threshold",
+        type=float,
+        default=None,
+        help="Mark a decision contested when normalized legal-action policy entropy is at least this value.",
+    )
+    root_puct_play.add_argument(
+        "--adaptive-root-value-margin-threshold",
+        type=float,
+        default=None,
+        help="Mark a decision contested when the mandatory-sweep top-two leaf-value margin is at most this value.",
     )
     root_puct_play.add_argument(
         "--min-value-improvement",
@@ -3162,6 +3190,27 @@ def _policy_id_alias(value: str, *, label: str) -> str:
     return alias
 
 
+def _adaptive_root_visit_budget_selector(args: argparse.Namespace) -> EntropyMarginVisitBudgetSelector | None:
+    configured = args.adaptive_root_contested_extra_visits is not None
+    threshold_configured = (
+        args.adaptive_root_policy_entropy_threshold is not None
+        or args.adaptive_root_value_margin_threshold is not None
+    )
+    if not configured:
+        if threshold_configured or args.adaptive_root_uncontested_extra_visits != 0:
+            raise ValueError(
+                "adaptive root thresholds and uncontested extra visits require "
+                "--adaptive-root-contested-extra-visits."
+            )
+        return None
+    return EntropyMarginVisitBudgetSelector(
+        contested_extra_visits=args.adaptive_root_contested_extra_visits,
+        uncontested_extra_visits=args.adaptive_root_uncontested_extra_visits,
+        minimum_policy_entropy=args.adaptive_root_policy_entropy_threshold,
+        maximum_value_margin=args.adaptive_root_value_margin_threshold,
+    )
+
+
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if not args.allow_legacy_checkpoints:
@@ -3193,6 +3242,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "root opponent action candidate scenarios above one require "
             "--root-opponent-action-policy checkpoint."
         )
+    adaptive_root_visit_budget_selector = _adaptive_root_visit_budget_selector(args)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -3239,6 +3289,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         root_puct_id = f"{raw_policy_id}+root-puct"
         if tag_leaf_policy_ids:
             root_puct_id = f"{root_puct_id}-leaf{leaf_rollout_rounds}"
+        if adaptive_root_visit_budget_selector is not None:
+            root_puct_id = f"{root_puct_id}+adaptive-budget"
         if dirichlet_enabled:
             root_puct_id = f"{root_puct_id}+dirichlet"
         return root_puct_id
@@ -3351,6 +3403,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
             root_visit_budget=args.root_visit_budget,
+            root_visit_budget_selector=adaptive_root_visit_budget_selector,
             root_prior_temperature=(
                 args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
             ),
@@ -3442,6 +3495,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             if root_dirichlet_enabled
             else None
         ),
+        adaptive_root_visit_budget_config=(
+            adaptive_root_visit_budget_selector.to_dict()
+            if adaptive_root_visit_budget_selector is not None
+            else None
+        ),
     )
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
@@ -3486,6 +3544,7 @@ def _root_puct_play_payload(
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
     root_dirichlet_config: Mapping[str, object] | None = None,
+    adaptive_root_visit_budget_config: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     payload = dict(report.to_dict())
     comparisons = _root_puct_play_comparisons(
@@ -3497,6 +3556,8 @@ def _root_puct_play_payload(
         payload["root_puct_play_comparisons"] = comparisons
     if root_dirichlet_config is not None:
         payload["root_dirichlet"] = dict(root_dirichlet_config)
+    if adaptive_root_visit_budget_config is not None:
+        payload["adaptive_root_visit_budget"] = dict(adaptive_root_visit_budget_config)
     return payload
 
 

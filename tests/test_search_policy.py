@@ -9,6 +9,7 @@ from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
 from pokezero.search import puct_branch_search
 from pokezero.search_policy import (
+    EntropyMarginVisitBudgetSelector,
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
@@ -2195,6 +2196,118 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.action_index, 0)
         self.assertEqual(step.metadata["root_puct_selection_mode"], "visits")
         self.assertEqual(step.metadata["root_puct_total_visits"], 5)
+        self.assertNotIn("root_puct_root_visit_budget_mode", step.metadata)
+
+    def test_root_puct_policy_resolves_adaptive_visit_budget_after_mandatory_sweep(self) -> None:
+        selector_calls = []
+
+        def selector(context: PolicyContext, budget_context) -> int:
+            selector_calls.append((context, budget_context))
+            return 5
+
+        selector.selector_id = "test-adaptive"  # type: ignore[attr-defined]
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=2.0,
+            root_visit_budget=2,
+            root_visit_budget_selector=selector,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=96, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(len(selector_calls), 1)
+        selector_context, budget_context = selector_calls[0]
+        self.assertEqual(selector_context.player_id, "p1")
+        self.assertEqual(budget_context.configured_root_visit_budget, 2)
+        self.assertEqual(budget_context.action_priors, ((0, 0.9), (1, 0.1)))
+        self.assertEqual(budget_context.initial_values, ((0, -1.0), (1, 1.0)))
+        self.assertAlmostEqual(budget_context.value_margin or 0.0, 2.0)
+        self.assertAlmostEqual(budget_context.policy_entropy, 0.4689955935892812)
+        self.assertEqual(step.metadata["root_puct_total_visits"], 5)
+        self.assertEqual(step.metadata["root_puct_root_visit_budget_mode"], "adaptive")
+        self.assertEqual(step.metadata["root_puct_root_visit_budget_selector"], "test-adaptive")
+        self.assertEqual(step.metadata["root_puct_configured_root_visit_budget"], 2)
+        self.assertEqual(step.metadata["root_puct_effective_root_visit_budgets"], (5,))
+        self.assertEqual(step.metadata["root_puct_visit_budget_contexts"][0]["value_margin"], 2.0)
+
+        entropy_selector = EntropyMarginVisitBudgetSelector(
+            contested_extra_visits=3,
+            minimum_policy_entropy=0.2,
+        )
+        margin_selector = EntropyMarginVisitBudgetSelector(
+            contested_extra_visits=3,
+            maximum_value_margin=2.0,
+        )
+        self.assertEqual(entropy_selector(selector_context, budget_context), 5)
+        self.assertEqual(margin_selector(selector_context, budget_context), 5)
+
+    def test_puct_visit_budget_resolver_rejects_budgets_below_mandatory_sweep(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_visit_budget_resolver.*legal root actions"):
+            puct_branch_search(
+                env=ImmediateOutcomeEnv(label="branch"),
+                trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=_mask(0, 1),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_visit_budget=2,
+                root_visit_budget_resolver=lambda budget_context: 1,
+            )
+
+    def test_puct_visit_budget_resolver_can_stop_after_sweep_with_base_priors(self) -> None:
+        budget_contexts = []
+
+        def resolver(budget_context):
+            budget_contexts.append(budget_context)
+            return None
+
+        search = puct_branch_search(
+            env=ImmediateOutcomeEnv(label="branch"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0, 1),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.1, 0.9) + (0.0,) * (ACTION_COUNT - 2),
+            budget_action_priors=(0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            root_visit_budget=1,
+            root_visit_budget_resolver=resolver,
+        )
+
+        self.assertEqual(search.total_visits, 2)
+        self.assertIsNone(search.root_visit_budget)
+        self.assertEqual(search.configured_root_visit_budget, 1)
+        self.assertEqual(len(budget_contexts), 1)
+        self.assertEqual(budget_contexts[0].action_priors, ((0, 0.9), (1, 0.1)))
+
+    def test_puct_visit_budget_context_has_zero_entropy_for_one_legal_action(self) -> None:
+        budget_contexts = []
+        puct_branch_search(
+            env=ImmediateOutcomeEnv(label="branch"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            root_visit_budget_resolver=lambda budget_context: budget_contexts.append(budget_context) or None,
+        )
+
+        self.assertEqual(len(budget_contexts), 1)
+        self.assertEqual(budget_contexts[0].policy_entropy, 0.0)
 
     def test_root_puct_policy_visits_selection_tie_prefers_prior(self) -> None:
         policy = RootPUCTSearchPolicy(

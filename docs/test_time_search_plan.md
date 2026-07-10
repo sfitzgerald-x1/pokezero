@@ -61,9 +61,11 @@ says so).
   primary evaluation arms run deterministic priors; `--root-dirichlet-alpha`
   creates a separately labeled `+dirichlet` row. Noise never silently enters a
   strength row.
-- **P-3 Per-decision budget hook (required by Step 4 arm 4)**: the visit budget
-  becomes a callable of the decision context (entropy/value-margin gates from
-  Step 2); fixed-budget behavior preserved as the default; unit tests for both.
+- **P-3 Per-decision budget hook (implemented; required by Step 4 arm 4)**:
+  after the mandatory legal-action sweep, `EntropyMarginVisitBudgetSelector`
+  can add visits only when normalized policy entropy and/or the initial top-two
+  leaf-value margin crosses configured thresholds. The CLI records and labels
+  adaptive-budget rows separately; fixed-budget behavior remains the default.
 
 ## Assumptions under test
 

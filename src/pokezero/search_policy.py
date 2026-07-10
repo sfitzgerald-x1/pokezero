@@ -30,6 +30,8 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    RootPUCTVisitBudgetContext,
+    RootVisitBudgetResolver,
     START_OVERRIDE_MISSING_WORLD_MESSAGE,
     StartOverrideSource,
     _materialize_start_override,
@@ -44,6 +46,61 @@ OpponentActionScenarioPlanner = Callable[[PolicyContext, random.Random], Sequenc
 ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 OpponentActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
+RootVisitBudgetSelector = Callable[[PolicyContext, RootPUCTVisitBudgetContext], int | None]
+
+
+@dataclass(frozen=True)
+class EntropyMarginVisitBudgetSelector:
+    """Spend additional root visits only at policy- or value-contested decisions."""
+
+    contested_extra_visits: int
+    uncontested_extra_visits: int = 0
+    minimum_policy_entropy: float | None = None
+    maximum_value_margin: float | None = None
+    selector_id: str = "entropy-or-value-margin"
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("contested_extra_visits", self.contested_extra_visits),
+            ("uncontested_extra_visits", self.uncontested_extra_visits),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer.")
+        if self.minimum_policy_entropy is None and self.maximum_value_margin is None:
+            raise ValueError("an entropy or value-margin threshold is required for adaptive visit budgeting.")
+        for name, value in (
+            ("minimum_policy_entropy", self.minimum_policy_entropy),
+            ("maximum_value_margin", self.maximum_value_margin),
+        ):
+            if value is not None and (value < 0.0 or not math.isfinite(value)):
+                raise ValueError(f"{name} must be a finite non-negative value when set.")
+
+    def __call__(self, context: PolicyContext, budget_context: RootPUCTVisitBudgetContext) -> int:
+        del context
+        entropy_contested = (
+            self.minimum_policy_entropy is not None
+            and budget_context.policy_entropy >= self.minimum_policy_entropy
+        )
+        margin_contested = (
+            self.maximum_value_margin is not None
+            and budget_context.value_margin is not None
+            and budget_context.value_margin <= self.maximum_value_margin
+        )
+        extra_visits = (
+            self.contested_extra_visits
+            if entropy_contested or margin_contested
+            else self.uncontested_extra_visits
+        )
+        return len(budget_context.action_priors) + extra_visits
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "selector_id": self.selector_id,
+            "contested_extra_visits": self.contested_extra_visits,
+            "uncontested_extra_visits": self.uncontested_extra_visits,
+            "minimum_policy_entropy": self.minimum_policy_entropy,
+            "maximum_value_margin": self.maximum_value_margin,
+        }
 
 
 def no_opponent_action_planner(context: PolicyContext, rng: random.Random) -> Mapping[PlayerId, int]:
@@ -256,6 +313,7 @@ class RootPUCTSearchPolicy:
     minimum_score_improvement: float | None = None
     selection_mode: str = "visits"
     root_visit_budget: int | None = ACTION_COUNT + 7
+    root_visit_budget_selector: RootVisitBudgetSelector | None = None
     root_time_budget_seconds: float | None = None
     root_prior_temperature: float = 1.0
     # Disabled unless alpha is set. Search evaluation defaults to deterministic priors;
@@ -291,6 +349,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("minimum_score_improvement must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
+        if self.root_visit_budget_selector is not None and not callable(self.root_visit_budget_selector):
+            raise ValueError("root_visit_budget_selector must be callable when set.")
         if self.root_time_budget_seconds is not None and (
             self.root_time_budget_seconds <= 0.0 or not math.isfinite(self.root_time_budget_seconds)
         ):
@@ -412,12 +472,12 @@ class RootPUCTSearchPolicy:
             player_id=context.player_id,
             through_decision_round=context.decision_round_index,
         )
-        priors = _temperature_scale_action_priors(
+        base_priors = _temperature_scale_action_priors(
             self.prior_fn(history),
             temperature=self.root_prior_temperature,
         )
         priors, root_dirichlet_metadata = _root_dirichlet_action_priors(
-            priors,
+            base_priors,
             context=context,
             legal_action_mask=context.observation.legal_action_mask,
             alpha=self.root_dirichlet_alpha,
@@ -508,6 +568,14 @@ class RootPUCTSearchPolicy:
                                 total_budget_seconds=self.root_time_budget_seconds,
                                 started_at=start,
                             )
+                            visit_budget_resolver: RootVisitBudgetResolver | None = None
+                            if self.root_visit_budget_selector is not None:
+
+                                def visit_budget_resolver(
+                                    budget_context: RootPUCTVisitBudgetContext,
+                                ) -> int | None:
+                                    return self.root_visit_budget_selector(context, budget_context)
+
                             try:
                                 search = puct_branch_search(
                                     env=env,
@@ -523,6 +591,8 @@ class RootPUCTSearchPolicy:
                                     leaf_rollout_config=self.rollout_config,
                                     leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
                                     root_visit_budget=self.root_visit_budget,
+                                    root_visit_budget_resolver=visit_budget_resolver,
+                                    budget_action_priors=base_priors,
                                     root_time_budget_seconds=scenario_root_time_budget_seconds,
                                     start_override=start_override,
                                     expected_current_observation=context.observation,
@@ -691,11 +761,41 @@ class RootPUCTSearchPolicy:
             visit_metadata["root_puct_effective_total_visits"] = search.total_visits
         budget_metadata: dict[str, object] = {}
         if self.root_time_budget_seconds is not None:
-            budget_metadata = {
-                "root_puct_root_time_budget_seconds": self.root_time_budget_seconds,
-                "root_puct_root_scenario_time_budget_seconds": scenario_searches[0].root_time_budget_seconds,
-                "root_puct_time_budget_exhausted": any(search.time_budget_exhausted for search in scenario_searches),
-            }
+            budget_metadata.update(
+                {
+                    "root_puct_root_time_budget_seconds": self.root_time_budget_seconds,
+                    "root_puct_root_scenario_time_budget_seconds": scenario_searches[0].root_time_budget_seconds,
+                    "root_puct_time_budget_exhausted": any(
+                        search.time_budget_exhausted for search in scenario_searches
+                    ),
+                }
+            )
+        if self.root_visit_budget_selector is not None:
+            budget_contexts = tuple(
+                search.visit_budget_context
+                for search in scenario_searches
+                if search.visit_budget_context is not None
+            )
+            budget_metadata.update(
+                {
+                    "root_puct_root_visit_budget_mode": "adaptive",
+                    "root_puct_root_visit_budget_selector": getattr(
+                        self.root_visit_budget_selector,
+                        "selector_id",
+                        "custom",
+                    ),
+                    "root_puct_configured_root_visit_budget": self.root_visit_budget,
+                    "root_puct_effective_root_visit_budgets": tuple(
+                        search.root_visit_budget for search in scenario_searches
+                    ),
+                    "root_puct_visit_budget_contexts": tuple(
+                        budget_context.to_dict() for budget_context in budget_contexts
+                    ),
+                    "root_puct_root_visit_budget_selector_config": _root_visit_budget_selector_config(
+                        self.root_visit_budget_selector
+                    ),
+                }
+            )
         start_override_metadata = (
             {
                 "root_puct_start_override_sources_used": start_override_sources_used,
@@ -1221,9 +1321,20 @@ def _aggregate_scenario_searches(
         candidates=tuple(aggregated_candidates),
         value_search=first.value_search,
         root_visit_budget=first.root_visit_budget,
+        configured_root_visit_budget=first.configured_root_visit_budget,
+        visit_budget_context=first.visit_budget_context,
         root_time_budget_seconds=first.root_time_budget_seconds,
         time_budget_exhausted=any(search.time_budget_exhausted for search in scenario_searches),
     )
+
+
+def _root_visit_budget_selector_config(selector: RootVisitBudgetSelector) -> Mapping[str, object]:
+    to_dict = getattr(selector, "to_dict", None)
+    if callable(to_dict):
+        payload = to_dict()
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    return {"selector_id": str(getattr(selector, "selector_id", "custom"))}
 
 
 def _opponent_action_scenario_payload(scenario: OpponentActionScenario) -> dict[str, object]:
