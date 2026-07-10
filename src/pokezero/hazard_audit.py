@@ -52,6 +52,15 @@ _PRIVATE_PAYLOAD_KEYS = frozenset(
         "requested_legal_action_masks",
         "opponent_legal_action_mask",
         "opponent_legal_mask",
+        "opponent_actions",
+        "opponent_action_index",
+        "opponent_observation",
+        "true_opponent_observation",
+        "requested_opponent_observation",
+        "start_override",
+        "start_overrides",
+        "true_opponent_request",
+        "true_opponent_legal_mask",
     }
 )
 
@@ -329,8 +338,8 @@ class PublicBeliefWorldProvider:
     """
 
     env_factory: Callable[[], PokeZeroEnv]
-    action_priors: ActionPriorFunction
     set_source: Gen3RandbatSource
+    sampled_world_opponent_policy: Policy
     world_sample_cap: int = 4
 
     def __call__(self, decision: HazardAuditDecision) -> tuple[AuditWorld, ...]:
@@ -354,7 +363,6 @@ class PublicBeliefWorldProvider:
             world_sample_cap=self.world_sample_cap,
         )
         worlds: list[AuditWorld] = []
-        raw_priors = _validated_priors(self.action_priors(decision.actor_history))
         for world_index in range(profile.sample_count):
             world_id = f"{decision.state_id}-world-{world_index}"
             rng = random.Random(_stable_seed(decision.state_id, "belief-world", world_index))
@@ -386,7 +394,8 @@ class PublicBeliefWorldProvider:
                         env=env,
                         actor=decision.player_id,
                         requested_players=prefix.requested_players,
-                        actor_priors=raw_priors,
+                        policy=self.sampled_world_opponent_policy,
+                        seed=_stable_seed(decision.state_id, "sampled-world-opponent-policy", world_index),
                     )
                 finally:
                     if env is not None:
@@ -398,7 +407,11 @@ class PublicBeliefWorldProvider:
                         opponent_actions={},
                         available=False,
                         rejection_code="public_world_replay_rejected",
-                        metadata=_public_profile_metadata(profile, world_index),
+                        metadata=_public_profile_metadata(
+                            profile,
+                            world_index,
+                            opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                        ),
                     )
                 )
                 continue
@@ -407,7 +420,11 @@ class PublicBeliefWorldProvider:
                     world_id=world_id,
                     opponent_actions=opponent_actions,
                     start_override=start_override,
-                    metadata=_public_profile_metadata(profile, world_index),
+                    metadata=_public_profile_metadata(
+                        profile,
+                        world_index,
+                        opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                    ),
                 )
             )
         return tuple(worlds)
@@ -573,7 +590,7 @@ def run_hazard_blind_spot_audit(
     corpus_hash = canonical_hash(corpus_states)
     provenance_payload = dict(provenance or {})
     _assert_public_payload(provenance_payload)
-    return {
+    payload = {
         "schema_version": HAZARD_AUDIT_SCHEMA_VERSION,
         "provenance": provenance_payload,
         "config": config_payload,
@@ -590,6 +607,10 @@ def run_hazard_blind_spot_audit(
         "records": records,
         "aggregate": aggregate,
     }
+    # AuditWorld holds the sampled override and action map in memory, but the
+    # persisted artifact must never carry either private simulation input.
+    _assert_public_payload(payload)
+    return payload
 
 
 def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict[str, object]:
@@ -631,23 +652,48 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
 
     choice_delta: dict[str, dict[str, object]] = {}
     for budget in DEFAULT_EXTRA_VISITS:
-        paired: dict[tuple[str, str], dict[str, bool]] = defaultdict(dict)
+        paired: dict[tuple[str, str], dict[str, Mapping[str, Any]]] = defaultdict(dict)
         for row in rows:
             if int(row.get("extra_visits", -1)) != budget or row.get("status") != "searched":
+                continue
+            if not bool(row.get("low_prior")):
                 continue
             arm = str(row.get("arm"))
             if arm not in {"deterministic", "dirichlet_audit_only"}:
                 continue
-            paired[(str(row["state_id"]), str(row["world_id"]))][arm] = bool(row["target_selected"])
+            paired[(str(row["state_id"]), str(row["world_id"]))][arm] = row
         complete = [arms for arms in paired.values() if set(arms) == {"deterministic", "dirichlet_audit_only"}]
-        off_rate = _rate(sum(arms["deterministic"] for arms in complete), len(complete))
-        on_rate = _rate(sum(arms["dirichlet_audit_only"] for arms in complete), len(complete))
+        off_rate = _rate(sum(bool(arms["deterministic"]["target_selected"]) for arms in complete), len(complete))
+        on_rate = _rate(sum(bool(arms["dirichlet_audit_only"]["target_selected"]) for arms in complete), len(complete))
+        toward_target = sum(
+            not bool(arms["deterministic"]["target_selected"])
+            and bool(arms["dirichlet_audit_only"]["target_selected"])
+            for arms in complete
+        )
+        away_from_target = sum(
+            bool(arms["deterministic"]["target_selected"])
+            and not bool(arms["dirichlet_audit_only"]["target_selected"])
+            for arms in complete
+        )
+        any_choice_changed = sum(
+            arms["deterministic"].get("selected_action_index")
+            != arms["dirichlet_audit_only"].get("selected_action_index")
+            for arms in complete
+        )
         choice_delta[str(budget)] = {
-            "paired_worlds": len(complete),
+            "paired_low_prior_target_lines": len(complete),
+            "toward_low_prior_target_lines": toward_target,
+            "away_from_low_prior_target_lines": away_from_target,
             "choice_rate_off": off_rate,
             "choice_rate_on": on_rate,
-            "delta_choice_on": None if off_rate is None or on_rate is None else round(on_rate - off_rate, 8),
-            "definition": "Dirichlet-on target-choice rate minus deterministic target-choice rate over paired valid belief worlds",
+            "delta_choice_on": _rate(toward_target - away_from_target, len(complete)),
+            "supplementary_any_action_change_rate": _rate(any_choice_changed, len(complete)),
+            "interpretation": (
+                "noise_only_choice_sensitivity"
+                if budget == 0
+                else "search_choice_change_toward_low_prior_target"
+            ),
+            "definition": "paired changes toward minus away from the low-prior hazard/spin target; this is a choice metric, not a rescue metric",
         }
 
     searched = [row for row in rows if row.get("status") == "searched"]
@@ -655,7 +701,7 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
         "definitions": {
             "E": "share of unique legal hazard/spin target lines with normalized legal prior at or below low_prior_threshold",
             "R_off": "deterministic rescue rate; a rescue is at least one re-visit, not merely the mandatory initial visit",
-            "DeltaChoice_on": "paired Dirichlet-on minus deterministic target-choice rate",
+            "DeltaChoice_on": "paired changes toward minus away from the low-prior hazard/spin target; budget 0 is noise-only sensitivity, never rescue",
             "entrenchment": "target_revisits == 0. Each legal target receives one mandatory initial-sweep visit per valid world, so entrenchment is never defined as target_visits == 0.",
         },
         "E": {
@@ -726,8 +772,8 @@ def _run_record(
     value_fn: ObservationValueFunction,
     config: AuditConfig,
 ) -> dict[str, object]:
-    legal_count = sum(bool(value) for value in decision.observation.legal_action_mask)
-    root_visit_budget = legal_count + extra_visits
+    configured_legal_action_count = sum(bool(value) for value in decision.observation.legal_action_mask)
+    root_visit_budget = configured_legal_action_count + extra_visits
     base = {
         "state_id": decision.state_id,
         "public_state_hash": canonical_hash(decision.public_payload()),
@@ -744,8 +790,10 @@ def _run_record(
         "arm": arm,
         "dirichlet_audit_only": arm == "dirichlet_audit_only",
         "extra_visits": extra_visits,
-        "mandatory_legal_visits": legal_count,
-        "root_visit_budget": root_visit_budget,
+        "configured_legal_action_count": configured_legal_action_count,
+        "requested_root_visit_budget": root_visit_budget,
+        "mandatory_sweep_candidate_count": None,
+        "expected_total_visits": None,
         "noise": dict(noise_metadata),
     }
     if not world.available:
@@ -771,14 +819,40 @@ def _run_record(
     finally:
         _close_env(env)
     target = next((candidate for candidate in result.candidates if candidate.action_index == decision.target_action_index), None)
+    candidate_count = len(result.candidates)
+    expected_total_visits = candidate_count + extra_visits
+    visit_accounting = {
+        "mandatory_sweep_candidate_count": candidate_count,
+        "expected_total_visits": expected_total_visits,
+        "total_visits": result.total_visits,
+    }
+    if result.total_visits != expected_total_visits:
+        return {
+            **base,
+            **visit_accounting,
+            "status": "search_invalid",
+            "invalid_reason": "mandatory_sweep_visit_mismatch",
+            "target_visits": None,
+            "target_revisits": None,
+            "entrenched": None,
+            "target_selected": None,
+        }
     if target is None:
-        return {**base, "status": "target_branch_unavailable", "target_visits": None, "target_revisits": None, "entrenched": None, "target_selected": None}
+        return {
+            **base,
+            **visit_accounting,
+            "status": "target_branch_unavailable",
+            "target_visits": None,
+            "target_revisits": None,
+            "entrenched": None,
+            "target_selected": None,
+        }
     candidate_visits = {str(candidate.action_index): candidate.visits for candidate in result.candidates}
     revisits = max(0, target.visits - 1)
     return {
         **base,
+        **visit_accounting,
         "status": "searched",
-        "total_visits": result.total_visits,
         "selected_action_index": result.action_index,
         "target_selected": result.action_index == decision.target_action_index,
         "target_visits": target.visits,
@@ -973,25 +1047,43 @@ def _sampled_world_opponent_actions(
     env: PokeZeroEnv,
     actor: PlayerId,
     requested_players: Sequence[PlayerId],
-    actor_priors: ActionPriorVector,
+    policy: Policy,
+    seed: int,
 ) -> dict[PlayerId, int]:
+    """Select opponents from the materialized world, never actor policy priors.
+
+    The observation and its legal mask come from ``env`` only after replaying a
+    public-belief start override. They are not serialized, and no observation
+    from the source battle's opposing seat is available to this function.
+    """
+
     actions: dict[PlayerId, int] = {}
     for player_id in requested_players:
         if player_id == actor:
             continue
-        legal_mask = env.legal_actions(player_id)
-        legal = tuple(index for index, is_legal in enumerate(legal_mask) if is_legal)
-        if not legal:
+        observation = env.observe(player_id)
+        legal_mask = tuple(bool(value) for value in observation.legal_action_mask)
+        if not any(legal_mask):
             raise ValueError("sampled world has no legal opponent action")
-        actions[player_id] = max(legal, key=lambda index: (actor_priors[index], -index))
+        policy_rng = random.Random(_stable_seed(seed, player_id))
+        action_index = policy.select_action(observation, rng=policy_rng).action_index
+        if not legal_mask[action_index]:
+            raise ValueError("sampled-world opponent policy selected an illegal action")
+        actions[player_id] = action_index
     return actions
 
 
-def _public_profile_metadata(profile: BeliefWorldSamplingProfile, world_index: int) -> dict[str, object]:
+def _public_profile_metadata(
+    profile: BeliefWorldSamplingProfile,
+    world_index: int,
+    *,
+    opponent_policy_id: str,
+) -> dict[str, object]:
     return {
         "world_index": world_index,
         "belief_sampling": profile.to_metadata(),
         "world_source": "public-belief-determinization",
+        "sampled_world_opponent_policy": opponent_policy_id,
     }
 
 

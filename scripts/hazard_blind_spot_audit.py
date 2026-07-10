@@ -29,6 +29,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.online_client import build_agent
 from pokezero.opponents import require_current_family_checkpoint_paths
+from pokezero.policy import MaxDamagePolicy
 from pokezero.randbat import load_gen3_randbat_source_cached
 
 
@@ -133,8 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         value_fn=value,
         world_provider=PublicBeliefWorldProvider(
             env_factory=lambda: LocalShowdownEnv(env_config),
-            action_priors=priors,
             set_source=set_source,
+            sampled_world_opponent_policy=MaxDamagePolicy(showdown_root=args.showdown_root),
             world_sample_cap=args.belief_world_sample_cap,
         ),
         config=config,
@@ -144,6 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "checkpoint_model_config_hash": canonical_hash(agent.policy.result.model_config),
             "showdown_root": str(args.showdown_root.resolve()),
             "randbat_source_hash": set_source.metadata.source_hash,
+            "sampled_world_opponent_policy": "max-damage",
             "corpus_config": corpus_config,
         },
     )
