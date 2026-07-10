@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 import hashlib
 from itertools import product
 from time import perf_counter
+from time import perf_counter as _timing_perf_counter
 import math
 import random
 from typing import Callable, Mapping, Sequence
@@ -30,6 +31,7 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    RootPUCTSearchTiming,
     RootPUCTVisitBudgetContext,
     RootVisitBudgetResolver,
     START_OVERRIDE_MISSING_WORLD_MESSAGE,
@@ -434,10 +436,13 @@ class RootPUCTSearchPolicy:
     ) -> PolicyDecision:
         if context.player_id not in context.requested_players:
             return self._fallback(context, rng=rng, reason="player is not requested")
+        timing_started_at = _timing_perf_counter()
+        opponent_scenario_planning_started_at = _timing_perf_counter()
         try:
             opponent_scenarios = _opponent_action_scenarios(self, context, rng)
         except ValueError as exc:
             return self._fallback(context, rng=rng, reason=str(exc))
+        opponent_scenario_planning_seconds = _timing_perf_counter() - opponent_scenario_planning_started_at
         legality_checked = False
         for scenario in opponent_scenarios:
             planner_error = _opponent_action_planner_error(
@@ -472,10 +477,12 @@ class RootPUCTSearchPolicy:
             player_id=context.player_id,
             through_decision_round=context.decision_round_index,
         )
+        policy_evaluation_started_at = _timing_perf_counter()
         base_priors = _temperature_scale_action_priors(
             self.prior_fn(history),
             temperature=self.root_prior_temperature,
         )
+        policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
         priors, root_dirichlet_metadata = _root_dirichlet_action_priors(
             base_priors,
             context=context,
@@ -692,6 +699,14 @@ class RootPUCTSearchPolicy:
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
             elapsed_seconds = perf_counter() - start
+            timing = (
+                RootPUCTSearchTiming.aggregate(
+                    tuple(scenario_search.timing for scenario_search in scenario_searches)
+                )
+                .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
+                .with_policy_evaluation(policy_evaluation_seconds)
+                .with_total(_timing_perf_counter() - timing_started_at)
+            )
         finally:
             close = getattr(env, "close", None)
             if callable(close):
@@ -840,6 +855,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_pre_gate_changed_prior_action": search_best.action_index != prior_best.action_index,
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
+                "root_puct_timing": timing.to_dict(),
                 "root_puct_opponent_actions": dict(used_scenarios[0].actions),
                 "root_puct_opponent_action_scenario_count": len(used_scenarios),
                 **_opponent_scenario_skip_metadata(
@@ -1325,6 +1341,7 @@ def _aggregate_scenario_searches(
         visit_budget_context=first.visit_budget_context,
         root_time_budget_seconds=first.root_time_budget_seconds,
         time_budget_exhausted=any(search.time_budget_exhausted for search in scenario_searches),
+        timing=RootPUCTSearchTiming.aggregate(tuple(search.timing for search in scenario_searches)),
     )
 
 

@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -7,7 +8,13 @@ from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig
-from pokezero.search import flat_branch_search, puct_branch_search, terminal_value_for_player, value_branch_search
+from pokezero.search import (
+    RootPUCTSearchTiming,
+    flat_branch_search,
+    puct_branch_search,
+    terminal_value_for_player,
+    value_branch_search,
+)
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -129,6 +136,16 @@ class SnapshotValueBranchEnv(ValueBranchEnv):
     def restore(self, snapshot) -> None:
         self.restore_calls += 1
         self._requested, self._terminal = snapshot
+
+
+class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
+    def snapshot(self):
+        time.sleep(0.001)
+        return super().snapshot()
+
+    def restore(self, snapshot) -> None:
+        time.sleep(0.001)
+        super().restore(snapshot)
 
 
 class StrictLegalValueBranchEnv(ValueBranchEnv):
@@ -498,6 +515,36 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(result.candidates[0].prior, 0.9)
         self.assertGreater(result.candidates[0].score, result.candidates[1].score)
         self.assertEqual(result.to_dict()["selected_action_index"], 0)
+        timing = result.timing.to_dict()
+        self.assertEqual(timing["prefix_replay_count"], 2)
+        self.assertEqual(timing["branch_simulator_step_count"], 2)
+        self.assertEqual(timing["state_snapshot_count"], 0)
+        self.assertEqual(timing["state_restore_count"], 0)
+        self.assertEqual(timing["opponent_scenario_planning_count"], 0)
+        self.assertEqual(timing["policy_evaluation_count"], 0)
+        self.assertEqual(timing["value_evaluation_count"], 2)
+        self.assertEqual(timing["policy_value_evaluation_count"], 2)
+        self.assertEqual(timing["rollout_tail_count"], 0)
+        self.assertEqual(timing["policy_evaluation_seconds"], 0.0)
+        self.assertEqual(timing["rollout_tail_seconds"], 0.0)
+        self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
+        self.assertAlmostEqual(
+            timing["total_seconds"],
+            timing["prefix_replay_seconds"]
+            + timing["branch_simulator_step_seconds"]
+            + timing["state_snapshot_seconds"]
+            + timing["state_restore_seconds"]
+            + timing["opponent_scenario_planning_seconds"]
+            + timing["policy_value_evaluation_seconds"]
+            + timing["rollout_tail_seconds"]
+            + timing["raw_residual_seconds"],
+        )
+
+    def test_root_puct_timing_exposes_raw_residual_before_clamping(self) -> None:
+        timing = RootPUCTSearchTiming(branch_simulator_step_seconds=2.0, total_seconds=1.0).to_dict()
+
+        self.assertEqual(timing["raw_residual_seconds"], -1.0)
+        self.assertEqual(timing["residual_seconds"], 0.0)
 
     def test_puct_branch_search_accumulates_root_visit_budget(self) -> None:
         env = ValueBranchEnv()
@@ -526,7 +573,7 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(result.action_index, 0)
 
     def test_puct_branch_search_reuses_initial_value_sweep_prefix_snapshot(self) -> None:
-        env = SnapshotValueBranchEnv()
+        env = TimedSnapshotValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
 
         result = puct_branch_search(
@@ -547,6 +594,26 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(env.snapshot_calls, 1)
         self.assertEqual(env.restore_calls, 5)
         self.assertEqual(len(env.all_step_calls), 5)
+        timing = result.timing.to_dict()
+        self.assertEqual(timing["prefix_replay_count"], 1)
+        self.assertEqual(timing["state_snapshot_count"], 1)
+        self.assertEqual(timing["state_restore_count"], 5)
+        self.assertEqual(timing["branch_simulator_step_count"], 5)
+        self.assertGreater(timing["state_snapshot_seconds"], 0.0)
+        self.assertGreater(timing["state_restore_seconds"], 0.0)
+        self.assertLessEqual(timing["state_snapshot_seconds"], timing["total_seconds"])
+        self.assertLessEqual(timing["state_restore_seconds"], timing["total_seconds"])
+        self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
+        self.assertAlmostEqual(
+            timing["total_seconds"],
+            timing["prefix_replay_seconds"]
+            + timing["branch_simulator_step_seconds"]
+            + timing["state_snapshot_seconds"]
+            + timing["state_restore_seconds"]
+            + timing["policy_value_evaluation_seconds"]
+            + timing["rollout_tail_seconds"]
+            + timing["raw_residual_seconds"],
+        )
 
     def test_puct_branch_search_accumulates_until_root_time_budget_expires(self) -> None:
         env = ValueBranchEnv()
