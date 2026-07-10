@@ -7,10 +7,12 @@ from pokezero.hazard_audit import (
     AuditConfig,
     AuditWorld,
     HazardAuditDecision,
+    PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
     PublicActorObservation,
     PublicActionRound,
     aggregate_hazard_audit_records,
     hazard_audit_decisions_from_trajectory,
+    hazard_audit_decisions_from_public_corpus,
     run_hazard_blind_spot_audit,
 )
 from pokezero.observation import PokeZeroObservationV0
@@ -161,6 +163,23 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(aggregate["R_off"]["24"]["rate"], 0.5)
         self.assertIn("target_revisits == 0", aggregate["definitions"]["entrenchment"])
         self.assertAlmostEqual(aggregate["DeltaChoice_on"]["0"]["delta_choice_on"], 2 / 3)
+
+    def test_audit_consumes_the_generic_public_decision_corpus_schema(self) -> None:
+        source = _decision()
+        corpus = {
+            "schema_version": PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
+            "records": [source.to_public_decision_record()],
+        }
+
+        decisions = hazard_audit_decisions_from_public_corpus(corpus)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].target_move_id, "spikes")
+        self.assertEqual(decisions[0].target_action_index, 1)
+        self.assertEqual(decisions[0].observation.legal_action_mask, _mask(0, 1))
+        self.assertEqual(decisions[0].public_action_rounds, ())
+        with self.assertRaisesRegex(ValueError, "requires 'pokezero.public-decision-corpus.v1'"):
+            hazard_audit_decisions_from_public_corpus({"schema_version": "wrong", "records": []})
 
     def test_records_are_deterministic_for_fixed_public_state_world_and_puct(self) -> None:
         decision = _decision()

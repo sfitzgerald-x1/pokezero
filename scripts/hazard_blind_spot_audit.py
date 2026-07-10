@@ -18,6 +18,7 @@ from pokezero.hazard_audit import (
     PublicBeliefWorldProvider,
     canonical_hash,
     capture_hazard_audit_corpus,
+    hazard_audit_decisions_from_public_corpus,
     run_hazard_blind_spot_audit,
     sha256_file,
 )
@@ -36,6 +37,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--showdown-root", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--public-corpus",
+        type=Path,
+        help="Step 2 pokezero.public-decision-corpus.v1 JSON. When set, fixed-driver capture is skipped.",
+    )
     parser.add_argument("--games", type=int, default=60, help="fixed-driver games used to build the corpus")
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--max-states", type=int, default=800)
@@ -61,13 +67,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     if feature_masks is not None:
         env_config_kwargs["feature_masks"] = feature_masks
     env_config = LocalShowdownConfig(**env_config_kwargs)
-    corpus = capture_hazard_audit_corpus(
-        env_config=env_config,
-        games=args.games,
-        seed_start=args.seed_start,
-        max_states=args.max_states,
-        max_decision_rounds=args.max_decision_rounds,
-    )
+    if args.public_corpus is not None:
+        public_corpus_payload = json.loads(args.public_corpus.read_text(encoding="utf-8"))
+        if not isinstance(public_corpus_payload, dict):
+            raise ValueError("--public-corpus must contain a JSON object.")
+        corpus = hazard_audit_decisions_from_public_corpus(public_corpus_payload)
+        corpus_config = {
+            "source": "pokezero.public-decision-corpus.v1",
+            "path": str(args.public_corpus),
+            "sha256": sha256_file(args.public_corpus),
+            "schema_version": public_corpus_payload.get("schema_version"),
+        }
+    else:
+        corpus = capture_hazard_audit_corpus(
+            env_config=env_config,
+            games=args.games,
+            seed_start=args.seed_start,
+            max_states=args.max_states,
+            max_decision_rounds=args.max_decision_rounds,
+        )
+        corpus_config = {
+            "source": "fixed-checkpoint-independent-drivers",
+            "drivers": [
+                "max-damage-vs-max-damage",
+                "max-damage-vs-random-legal",
+                "simple-legal-vs-simple-legal",
+                "random-legal-vs-random-legal",
+            ],
+            "games": args.games,
+            "seed_start": args.seed_start,
+            "max_states": args.max_states,
+            "max_decision_rounds": args.max_decision_rounds,
+        }
     config = AuditConfig(
         cpuct=args.cpuct,
         low_prior_threshold=args.low_prior_threshold,
@@ -113,18 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "checkpoint_model_config_hash": canonical_hash(agent.policy.result.model_config),
             "showdown_root": str(args.showdown_root.resolve()),
             "randbat_source_hash": set_source.metadata.source_hash,
-            "corpus_config": {
-                "drivers": [
-                    "max-damage-vs-max-damage",
-                    "max-damage-vs-random-legal",
-                    "simple-legal-vs-simple-legal",
-                    "random-legal-vs-random-legal",
-                ],
-                "games": args.games,
-                "seed_start": args.seed_start,
-                "max_states": args.max_states,
-                "max_decision_rounds": args.max_decision_rounds,
-            },
+            "corpus_config": corpus_config,
         },
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
