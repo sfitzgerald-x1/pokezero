@@ -8,6 +8,7 @@ import random
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -45,9 +46,12 @@ from pokezero.foulplay_bridge import (
 from pokezero.env import TerminalState
 from pokezero.foulplay_capture import async_main as async_capture_main
 from pokezero.foulplay_capture import build_capture_arg_parser
+from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+from pokezero.value_calibration import evaluate_value_calibration
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
@@ -92,11 +96,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
 
     def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
+        spec = DEFAULT_REPLAY_OBSERVATION_SPEC
         observation = PokeZeroObservationV0(
-            categorical_ids=(),
-            numeric_features=(),
-            token_type_ids=(),
-            attention_mask=(),
+            categorical_ids=tuple(
+                tuple(0 for _ in range(spec.categorical_feature_count))
+                for _ in range(spec.token_count)
+            ),
+            numeric_features=tuple(
+                tuple(0.0 for _ in range(spec.numeric_feature_count))
+                for _ in range(spec.token_count)
+            ),
+            token_type_ids=tuple(0 for _ in range(spec.token_count)),
+            attention_mask=tuple(True for _ in range(spec.token_count)),
             legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
         )
         trajectory = BattleTrajectory(battle_id="capture-1", format_id="gen3randombattle", seed=17)
@@ -144,9 +155,32 @@ class FoulPlayBridgeTest(unittest.TestCase):
             self.assertEqual([step.player_id for step in records[0].trajectory.steps], ["p1"])
             self.assertEqual(records[0].trajectory.metadata["capture"], "controlled-foulplay/raw")
             self.assertEqual(records[0].trajectory.metadata["pool"], "step0")
+            self.assertEqual(records[0].trajectory.steps[0].observation.schema_version, spec.schema_version)
+            self.assertEqual(len(records[0].trajectory.steps[0].observation.numeric_features[0]), spec.numeric_feature_count)
             self.assertEqual(result.captured_games, 1)
             self.assertEqual(result.skipped_capped_games, 0)
             self.assertTrue(result.checkpoint_sha256)
+
+            if torch_available():
+                torch = require_torch()
+
+                class FixedValueModel:
+                    def eval(self) -> None:
+                        pass
+
+                    def __call__(self, **kwargs):
+                        batch_size = int(kwargs["categorical_ids"].shape[0])
+                        return SimpleNamespace(value=torch.full((batch_size,), 0.25))
+
+                report = evaluate_value_calibration(
+                    model=FixedValueModel(),
+                    training_result=SimpleNamespace(training_config=TransformerTrainingConfig(window_size=1)),
+                    paths=out_path,
+                    batch_size=1,
+                    bins=2,
+                )
+                self.assertEqual(report.examples, 1)
+                self.assertEqual(report.sign_accuracy, 1.0)
 
             with self.assertRaises(FileExistsError):
                 asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path, pool_id="step0"))
