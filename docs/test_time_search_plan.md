@@ -178,6 +178,20 @@ ties/round-capped games counted as 0.5 and reported separately. Decision
 criteria bind on the CI, not the point estimate: **go requires the 95% CI lower
 bound of the delta > 0 AND the point estimate ≥ the threshold** (+3 md / +5 fp).
 
+**Owner amendment (2026-07-10)**: the binding outcomes of this plan are the two
+paired capstone deltas, not the Step-0 calibration metrics. The two failure
+shapes the owner cares about: (1) any search arm LOSING to the base-policy arm
+(the strongest indictment — an uncalibrated/mispriced leaf evaluator is the
+expected mechanism, via exact terminals vs optimistic leaves); (2) no search
+arm beating the base policy against foul-play specifically. Foul-play-corpus
+ECE is an instrumental precondition, not an accuracy claim about the model
+(foul-play is not human play). Consequence for gating: the Step-0 calibrated
+thresholds stand as the cheap defense against failure shape (1), but a
+MARGINAL calibrated miss (e.g. ECE slightly above 0.10 with ranking and sign
+intact) routes to owner review and may proceed to the capstone with the miss
+documented in every row — it does not auto-stop the program. A ranking failure
+still re-points the capstone per Step 0.
+
 **Metrics**: paired win-rate deltas ±95% CI; per-move wall (mean + p95);
 sims→strength curve from arm 2 (H5); arm-2-vs-arm-3 delta (is the value head
 search-ready, or do tails still carry it?); arm-4 vs arm-2 at matched wall
