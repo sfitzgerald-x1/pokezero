@@ -896,6 +896,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--root-dirichlet-alpha",
+        type=float,
+        default=None,
+        help=(
+            "Enable an audit-only root Dirichlet-noise arm with this positive concentration. "
+            "Omit it to keep the deterministic primary evaluation priors."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--root-dirichlet-mix",
+        type=float,
+        default=0.25,
+        help="Fraction of legal root prior mass replaced by Dirichlet noise when enabled.",
+    )
+    root_puct_play.add_argument(
+        "--root-dirichlet-seed",
+        type=int,
+        default=0,
+        help="Base seed for reproducible per-decision root Dirichlet draws.",
+    )
+    root_puct_play.add_argument(
         "--belief-start-overrides",
         action="store_true",
         help=(
@@ -3211,13 +3232,20 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         )
     raw_policy_id = str(result.model_config.policy_id)
 
-    def search_policy_id_for(leaf_rollout_rounds: int) -> str:
+    root_dirichlet_enabled = args.root_dirichlet_alpha is not None
+    root_puct_variants = (False, True) if root_dirichlet_enabled else (False,)
+
+    def search_policy_id_for(leaf_rollout_rounds: int, *, dirichlet_enabled: bool) -> str:
+        root_puct_id = f"{raw_policy_id}+root-puct"
         if tag_leaf_policy_ids:
-            return f"{raw_policy_id}+root-puct-leaf{leaf_rollout_rounds}"
-        return f"{raw_policy_id}+root-puct"
+            root_puct_id = f"{root_puct_id}-leaf{leaf_rollout_rounds}"
+        if dirichlet_enabled:
+            root_puct_id = f"{root_puct_id}+dirichlet"
+        return root_puct_id
     search_policy_ids = tuple(
-        search_policy_id_for(leaf_rollout_rounds)
+        search_policy_id_for(leaf_rollout_rounds, dirichlet_enabled=dirichlet_enabled)
         for leaf_rollout_rounds in leaf_rollout_rounds_values
+        for dirichlet_enabled in root_puct_variants
     )
 
     def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
@@ -3232,14 +3260,14 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
 
     def make_leaf_rollout_policy(
         *,
-        search_policy_id: str,
+        deterministic_search_policy_id: str,
         search_player_id: str,
         benchmark_opponent_policy: Policy | None,
         player_id: str,
     ) -> Policy:
         if benchmark_opponent_policy is not None and player_id != search_player_id:
             return benchmark_opponent_policy
-        return make_raw_policy(policy_id=f"{search_policy_id}-leaf-{player_id}")
+        return make_raw_policy(policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}")
 
     def value_fn(history):
         return evaluate_transformer_observation_value(
@@ -3273,6 +3301,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         leaf_rollout_rounds: int,
         search_player_id: str,
         benchmark_opponent_spec: str,
+        dirichlet_enabled: bool,
     ) -> RootPUCTSearchPolicy:
         root_opponent_player_id = "p2" if search_player_id == "p1" else "p1"
         opponent_action_scenario_planner = None
@@ -3297,7 +3326,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 else None
             )
             leaf_rollout_policy_factory = lambda player_id: make_leaf_rollout_policy(
-                search_policy_id=search_policy_id,
+                deterministic_search_policy_id=search_policy_id_for(
+                    leaf_rollout_rounds,
+                    dirichlet_enabled=False,
+                ),
                 search_player_id=search_player_id,
                 benchmark_opponent_policy=benchmark_opponent_policy,
                 player_id=player_id,
@@ -3312,7 +3344,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,
-            fallback_policy=make_raw_policy(policy_id=f"{search_policy_id}-fallback"),
+            fallback_policy=make_raw_policy(policy_id=f"{raw_policy_id}-fallback"),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
             cpuct=args.cpuct,
@@ -3322,6 +3354,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             root_prior_temperature=(
                 args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
             ),
+            root_dirichlet_alpha=(args.root_dirichlet_alpha if dirichlet_enabled else None),
+            root_dirichlet_mix=args.root_dirichlet_mix,
+            root_dirichlet_seed=args.root_dirichlet_seed,
             max_opponent_action_scenarios=args.root_opponent_action_scenarios,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
@@ -3352,31 +3387,37 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             )
         )
         for leaf_rollout_rounds in leaf_rollout_rounds_values:
-            search_policy_id = search_policy_id_for(leaf_rollout_rounds)
-            matchups.extend(
-                (
-                    BenchmarkMatchup(
-                        f"{search_policy_id} vs {opponent_id}",
-                        make_search_policy(
-                            search_policy_id=search_policy_id,
-                            leaf_rollout_rounds=leaf_rollout_rounds,
-                            search_player_id="p1",
-                            benchmark_opponent_spec=benchmark_opponent_spec,
-                        ),
-                        policy_from_spec(benchmark_opponent_spec),
-                    ),
-                    BenchmarkMatchup(
-                        f"{opponent_id} vs {search_policy_id}",
-                        policy_from_spec(benchmark_opponent_spec),
-                        make_search_policy(
-                            search_policy_id=search_policy_id,
-                            leaf_rollout_rounds=leaf_rollout_rounds,
-                            search_player_id="p2",
-                            benchmark_opponent_spec=benchmark_opponent_spec,
-                        ),
-                    ),
+            for dirichlet_enabled in root_puct_variants:
+                search_policy_id = search_policy_id_for(
+                    leaf_rollout_rounds,
+                    dirichlet_enabled=dirichlet_enabled,
                 )
-            )
+                matchups.extend(
+                    (
+                        BenchmarkMatchup(
+                            f"{search_policy_id} vs {opponent_id}",
+                            make_search_policy(
+                                search_policy_id=search_policy_id,
+                                leaf_rollout_rounds=leaf_rollout_rounds,
+                                search_player_id="p1",
+                                benchmark_opponent_spec=benchmark_opponent_spec,
+                                dirichlet_enabled=dirichlet_enabled,
+                            ),
+                            policy_from_spec(benchmark_opponent_spec),
+                        ),
+                        BenchmarkMatchup(
+                            f"{opponent_id} vs {search_policy_id}",
+                            policy_from_spec(benchmark_opponent_spec),
+                            make_search_policy(
+                                search_policy_id=search_policy_id,
+                                leaf_rollout_rounds=leaf_rollout_rounds,
+                                search_player_id="p2",
+                                benchmark_opponent_spec=benchmark_opponent_spec,
+                                dirichlet_enabled=dirichlet_enabled,
+                            ),
+                        ),
+                    )
+                )
 
     report = benchmark_rollouts(
         games=args.games,
@@ -3391,6 +3432,16 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         report,
         raw_policy_id=raw_policy_id,
         search_policy_ids=search_policy_ids,
+        root_dirichlet_config=(
+            {
+                "enabled": True,
+                "alpha": args.root_dirichlet_alpha,
+                "mix": args.root_dirichlet_mix,
+                "base_seed": args.root_dirichlet_seed,
+            }
+            if root_dirichlet_enabled
+            else None
+        ),
     )
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
@@ -3434,6 +3485,7 @@ def _root_puct_play_payload(
     *,
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
+    root_dirichlet_config: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     payload = dict(report.to_dict())
     comparisons = _root_puct_play_comparisons(
@@ -3443,6 +3495,8 @@ def _root_puct_play_payload(
     )
     if comparisons:
         payload["root_puct_play_comparisons"] = comparisons
+    if root_dirichlet_config is not None:
+        payload["root_dirichlet"] = dict(root_dirichlet_config)
     return payload
 
 

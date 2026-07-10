@@ -3229,7 +3229,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         class FakeReport:
             def to_dict(self) -> dict:
-                return {"matchups": 4}
+                return {"matchups": 6}
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
@@ -3240,7 +3240,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         def fake_benchmark_rollouts(**kwargs):
             captured.update(kwargs)
             matchups = tuple(kwargs["matchups"])
-            search_policy = matchups[2].p1_policy
+            deterministic_search_policy = matchups[2].p1_policy
+            search_policy = matchups[4].p1_policy
+            self.assertIsNone(deterministic_search_policy.root_dirichlet_alpha)
             self.assertEqual(search_policy.value_fn((observation(1),)), 0.25)
             self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
             self.assertEqual(search_policy.root_prior_temperature, 2.5)
@@ -3299,6 +3301,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "1.5",
                     "--root-prior-temperature",
                     "2.5",
+                    "--root-dirichlet-alpha",
+                    "0.3",
+                    "--root-dirichlet-mix",
+                    "0.2",
+                    "--root-dirichlet-seed",
+                    "11",
                     "--json",
                 ]
             )
@@ -3314,20 +3322,28 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "random-legal vs neural-smoke",
             "neural-smoke+root-puct vs random-legal",
             "random-legal vs neural-smoke+root-puct",
+            "neural-smoke+root-puct+dirichlet vs random-legal",
+            "random-legal vs neural-smoke+root-puct+dirichlet",
         ])
         self.assertEqual(matchups[0].p1_policy.policy_id, "neural-smoke")
         self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct")
         self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct")
-        self.assertEqual(matchups[2].p1_policy.cpuct, 0.75)
-        self.assertEqual(matchups[2].p1_policy.selection_mode, "value")
-        self.assertEqual(matchups[2].p1_policy.root_visit_budget, 17)
-        self.assertEqual(matchups[2].p1_policy.minimum_value_improvement, 0.2)
-        self.assertEqual(matchups[2].p1_policy.leaf_rollout_decision_rounds, 2)
-        self.assertIsNotNone(matchups[2].p1_policy.leaf_rollout_policy_factory)
-        self.assertEqual(matchups[2].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
-        self.assertEqual(matchups[2].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
+        self.assertEqual(matchups[4].p1_policy.policy_id, "neural-smoke+root-puct+dirichlet")
+        self.assertEqual(matchups[5].p2_policy.policy_id, "neural-smoke+root-puct+dirichlet")
+        self.assertEqual(matchups[4].p1_policy.cpuct, 0.75)
+        self.assertEqual(matchups[4].p1_policy.selection_mode, "value")
+        self.assertEqual(matchups[4].p1_policy.root_visit_budget, 17)
+        self.assertEqual(matchups[4].p1_policy.root_dirichlet_alpha, 0.3)
+        self.assertEqual(matchups[4].p1_policy.root_dirichlet_mix, 0.2)
+        self.assertEqual(matchups[4].p1_policy.root_dirichlet_seed, 11)
+        self.assertEqual(matchups[4].p1_policy.minimum_value_improvement, 0.2)
+        self.assertEqual(matchups[4].p1_policy.leaf_rollout_decision_rounds, 2)
+        self.assertIsNotNone(matchups[4].p1_policy.leaf_rollout_policy_factory)
+        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
+        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
+        self.assertEqual(matchups[4].p1_policy.fallback_policy.policy_id, "neural-smoke-fallback")
         self.assertEqual(
-            matchups[2].p1_policy.leaf_rollout_metadata,
+            matchups[4].p1_policy.leaf_rollout_metadata,
             {"root_puct_leaf_rollout_opponent_policy": "checkpoint"},
         )
         self.assertTrue(matchups[2].p1_policy.allow_fallback)
@@ -3335,7 +3351,13 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.0)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
-        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "matchups": 6,
+                "root_dirichlet": {"enabled": True, "alpha": 0.3, "mix": 0.2, "base_seed": 11},
+            },
+        )
 
     def test_neural_cli_root_puct_play_benchmark_defaults_to_visit_selection(self) -> None:
         parser = build_neural_arg_parser()
@@ -3351,6 +3373,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
+        self.assertIsNone(args.root_dirichlet_alpha)
+        self.assertEqual(args.root_dirichlet_mix, 0.25)
+        self.assertEqual(args.root_dirichlet_seed, 0)
 
     def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
         if not torch_available():
