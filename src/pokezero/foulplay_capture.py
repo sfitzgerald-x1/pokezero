@@ -28,6 +28,20 @@ def build_capture_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", type=Path, required=True, help="New rollout JSONL path to create.")
     parser.add_argument("--pool-id", default="controlled-foulplay", help="Capture-pool provenance label.")
+    parser.add_argument(
+        "--public-decision-corpus-out",
+        type=Path,
+        default=None,
+        help=(
+            "Optional appendable pokezero.public-decision-corpus.v1 JSONL sidecar. It contains only "
+            "p1 observations/history, public resolved rounds, and the public belief view."
+        ),
+    )
+    parser.add_argument(
+        "--append-public-decision-corpus",
+        action="store_true",
+        help="Append non-duplicate decisions to --public-decision-corpus-out from another controlled seed band.",
+    )
     return parser
 
 
@@ -36,6 +50,10 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.showdown_root is None:
         parser.error("--showdown-root is required unless POKEZERO_SHOWDOWN_ROOT is set.")
+    if args.append_public_decision_corpus and args.public_decision_corpus_out is None:
+        parser.error("--append-public-decision-corpus requires --public-decision-corpus-out.")
+    if args.opponent_legal_mask_mode != "hidden":
+        parser.error("public decision corpus capture refuses --opponent-legal-mask-mode privileged.")
     config = _config_from_args(args, policy_mode="raw")
     def capture_progress(payload: dict) -> None:
         if args.summary_out is not None:
@@ -46,6 +64,8 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         out_path=args.out,
         pool_id=args.pool_id,
         capture_progress_callback=capture_progress,
+        public_corpus_out=args.public_decision_corpus_out,
+        append_public_corpus=args.append_public_decision_corpus,
     )
     payload = result.to_dict()
     if args.summary_out is not None:

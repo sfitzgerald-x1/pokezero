@@ -84,6 +84,34 @@ python -m pokezero.neural_cli benchmark --checkpoint runs/policy.pt --games 50 \
   --showdown-root /path/to/pokemon-showdown
 ```
 
+## Public Prior/Belief Profile
+
+Capture a `pokezero.public-decision-corpus.v1` sidecar from controlled raw-policy FoulPlay games.
+The sidecar retains only the acting player's encoded observation/history and legal mask, public
+resolved action rounds, and public belief view. It never serializes opponent observations, request
+payloads, or opponent legal masks. Capture another non-overlapping seed band with
+`--append-public-decision-corpus` until the corpus has at least 2,000 valid `p1` decisions:
+
+```bash
+pokezero-foulplay-capture --checkpoint runs/policy.pt --out runs/foulplay-band-001.jsonl \
+  --public-decision-corpus-out runs/public-decisions.jsonl --games 128 \
+  --showdown-root /path/to/pokemon-showdown
+
+pokezero-foulplay-capture --checkpoint runs/policy.pt --out runs/foulplay-band-002.jsonl \
+  --public-decision-corpus-out runs/public-decisions.jsonl --append-public-decision-corpus \
+  --games 128 --seed-start 129 --showdown-root /path/to/pokemon-showdown
+```
+
+Profile raw, untempered checkpoint priors and public-belief worlds. The command rejects smaller
+corpora and privileged opponent-mask mode, disables root noise, and records checkpoint, corpus,
+schema, and configuration hashes in the report:
+
+```bash
+pokezero-neural prior-belief-profile --corpus runs/public-decisions.jsonl \
+  --checkpoint runs/policy.pt --showdown-root /path/to/pokemon-showdown \
+  --out runs/prior-belief-profile.json
+```
+
 ## Components & docs
 
 - **Self-play environment** — `pokezero.local_showdown`: a Node BattleStream-backed Gen 3 env;

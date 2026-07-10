@@ -55,6 +55,10 @@ from .observation import (
     PokeZeroObservationV0,
 )
 from .policy import Policy, PolicyContext, PolicyDecision
+from .public_decision_corpus import (
+    PublicDecisionCorpusWriter,
+    public_corpus_manifest,
+)
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .rollout import RolloutConfig
@@ -653,6 +657,8 @@ class ControlledFoulPlayCaptureResult:
     captured_games: int
     skipped_capped_games: int
     skipped_tied_games: int
+    public_corpus_path: Path | None = None
+    captured_public_decisions: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = self.benchmark.to_dict()
@@ -669,6 +675,10 @@ class ControlledFoulPlayCaptureResult:
             "skipped_capped_games": self.skipped_capped_games,
             "skipped_tied_games": self.skipped_tied_games,
             "foulplay_search_time_ms": self.benchmark.config.search_time_ms,
+            "public_decision_corpus_out": (
+                str(self.public_corpus_path) if self.public_corpus_path is not None else None
+            ),
+            "captured_public_decisions": self.captured_public_decisions,
         }
         return payload
 
@@ -1256,6 +1266,8 @@ async def capture_controlled_foulplay_rollouts(
     pool_id: str = "controlled-foulplay",
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     capture_progress_callback: ControlledFoulPlayCaptureProgressCallback | None = None,
+    public_corpus_out: Path | None = None,
+    append_public_corpus: bool = False,
 ) -> ControlledFoulPlayCaptureResult:
     """Capture raw-policy p1 trajectories from a deterministic foul-play seed band.
 
@@ -1267,10 +1279,14 @@ async def capture_controlled_foulplay_rollouts(
 
     if config.policy_mode != "raw":
         raise ValueError("controlled foul-play rollout capture requires policy_mode='raw'.")
+    if config.opponent_legal_mask_mode != "hidden":
+        raise ValueError("public decision corpus capture requires opponent_legal_mask_mode='hidden'.")
     if not pool_id.strip():
         raise ValueError("pool_id must be non-empty.")
     if out_path.exists():
         raise FileExistsError(f"capture output already exists: {out_path}")
+    if public_corpus_out is not None and public_corpus_out == out_path:
+        raise ValueError("public decision corpus output must differ from rollout output.")
 
     source = _resolved_belief_set_source(config)
     belief_set_source_hash = source.metadata.source_hash if source is not None else None
@@ -1282,6 +1298,18 @@ async def capture_controlled_foulplay_rollouts(
     observation_schema_version: str | None = None
     numeric_feature_count: int | None = None
     previous_capture_time = time.monotonic()
+    public_corpus_writer: PublicDecisionCorpusWriter | None = None
+    captured_public_decisions = 0
+    if public_corpus_out is not None:
+        public_corpus_writer = PublicDecisionCorpusWriter(
+            public_corpus_out,
+            manifest=public_corpus_manifest(
+                checkpoint_sha256=checkpoint_sha256,
+                belief_set_source_hash=belief_set_source_hash,
+                capture_config=_public_corpus_capture_config(config),
+            ),
+            append=append_public_corpus,
+        )
 
     def progress_payload(*, status: str) -> dict[str, Any]:
         return {
@@ -1299,6 +1327,8 @@ async def capture_controlled_foulplay_rollouts(
                 "skipped_capped_games": skipped_capped_games,
                 "skipped_tied_games": skipped_tied_games,
                 "foulplay_search_time_ms": config.search_time_ms,
+                "public_decision_corpus_out": str(public_corpus_out) if public_corpus_out is not None else None,
+                "captured_public_decisions": captured_public_decisions,
             },
         }
 
@@ -1308,7 +1338,7 @@ async def capture_controlled_foulplay_rollouts(
 
     def capture(trajectory: BattleTrajectory) -> None:
         nonlocal handle, captured_games, skipped_capped_games, skipped_tied_games
-        nonlocal observation_schema_version, numeric_feature_count, previous_capture_time
+        nonlocal observation_schema_version, numeric_feature_count, previous_capture_time, captured_public_decisions
         if trajectory.terminal is None:
             raise RuntimeError("controlled foul-play capture requires a terminal trajectory")
         if trajectory.terminal.winner is None:
@@ -1348,6 +1378,8 @@ async def capture_controlled_foulplay_rollouts(
         write_rollout_record(handle, record)
         handle.flush()
         os.fsync(handle.fileno())
+        if public_corpus_writer is not None:
+            captured_public_decisions += public_corpus_writer.append_trajectory(trajectory, acting_player="p1")
         previous_capture_time = now
         captured_games += 1
         emit_progress()
@@ -1361,6 +1393,8 @@ async def capture_controlled_foulplay_rollouts(
     finally:
         if handle is not None:
             handle.close()
+        if public_corpus_writer is not None:
+            public_corpus_writer.close()
     result = ControlledFoulPlayCaptureResult(
         benchmark=benchmark,
         output_path=out_path,
@@ -1372,6 +1406,8 @@ async def capture_controlled_foulplay_rollouts(
         captured_games=captured_games,
         skipped_capped_games=skipped_capped_games,
         skipped_tied_games=skipped_tied_games,
+        public_corpus_path=public_corpus_out,
+        captured_public_decisions=captured_public_decisions,
     )
     if capture_progress_callback is not None:
         capture_progress_callback({"status": "complete", **result.to_dict()})
@@ -2615,6 +2651,26 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _public_corpus_capture_config(config: ControlledFoulPlayConfig) -> dict[str, Any]:
+    """Return only the stable public-corpus capture conditions.
+
+    Seed bands are intentionally omitted so separate controlled runs can append
+    to one checkpoint/config-homogeneous corpus without weakening provenance.
+    """
+
+    return {
+        "capture_mode": "controlled-foulplay/raw",
+        "format_id": config.format_id,
+        "policy_mode": config.policy_mode,
+        "max_decision_rounds": config.max_decision_rounds,
+        "foulplay_search_time_ms": config.search_time_ms,
+        "belief_set_source_enabled": config.belief_set_source_enabled(),
+        "opponent_legal_mask_mode": "hidden",
+        "root_dirichlet_alpha": None,
+        "root_noise_enabled": False,
+    }
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -46,6 +46,7 @@ from pokezero.foulplay_bridge import (
 from pokezero.env import TerminalState
 from pokezero.foulplay_capture import async_main as async_capture_main
 from pokezero.foulplay_capture import build_capture_arg_parser
+from pokezero.public_decision_corpus import load_public_decision_corpus
 from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
@@ -109,6 +110,14 @@ class FoulPlayBridgeTest(unittest.TestCase):
             token_type_ids=tuple(0 for _ in range(spec.token_count)),
             attention_mask=tuple(True for _ in range(spec.token_count)),
             legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
+            metadata={
+                "belief_view": {
+                    "self_slot": "p1",
+                    "opponent_slot": "p2",
+                    "self_pokemon": [],
+                    "opponent_pokemon": [],
+                }
+            },
         )
         trajectory = BattleTrajectory(battle_id="capture-1", format_id="gen3randombattle", seed=17)
         trajectory.append(
@@ -147,8 +156,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 return ControlledFoulPlayBenchmarkResult(config=config, policy_id="raw", games=())
 
             out_path = Path(tmp_dir) / "pool.jsonl"
+            public_corpus_path = Path(tmp_dir) / "public.jsonl"
             with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
-                result = asyncio.run(capture_controlled_foulplay_rollouts(config, out_path=out_path, pool_id="step0"))
+                result = asyncio.run(
+                    capture_controlled_foulplay_rollouts(
+                        config,
+                        out_path=out_path,
+                        pool_id="step0",
+                        public_corpus_out=public_corpus_path,
+                    )
+                )
 
             records = list(read_rollout_records(out_path))
             self.assertEqual(len(records), 1)
@@ -160,6 +177,11 @@ class FoulPlayBridgeTest(unittest.TestCase):
             self.assertEqual(result.captured_games, 1)
             self.assertEqual(result.skipped_capped_games, 0)
             self.assertTrue(result.checkpoint_sha256)
+            self.assertEqual(result.captured_public_decisions, 1)
+            public_corpus = load_public_decision_corpus(public_corpus_path)
+            self.assertEqual(len(public_corpus.decisions), 1)
+            self.assertEqual(public_corpus.decisions[0].acting_player, "p1")
+            self.assertEqual(public_corpus.manifest["opponent_legal_mask_mode"], "hidden")
 
             if torch_available():
                 torch = require_torch()
