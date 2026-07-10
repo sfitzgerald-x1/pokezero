@@ -24,25 +24,24 @@ Exists and works today:
 
 Does not exist: a multi-ply tree (no internal nodes/backup), in-tree chance
 nodes, batched/served NN evaluation for search, tree reuse across moves.
-**Also not wired (review findings, 2026-07-10, verified in code)**: the
-`root-puct-play-benchmark` surface does not expose a `start_override_planner`
-(belief determinization exists as a module but is NOT reachable from the play
-path); no root Dirichlet noise exists anywhere; the visit budget is fixed
-per-policy (no per-decision budget hook); and the checkpoint scenario planner's
+**Still not wired (review findings, 2026-07-10, verified in code)**: no root
+Dirichlet noise exists anywhere; the visit budget is fixed per-policy (no
+per-decision budget hook); and the checkpoint scenario planner's
 requested-legal-mask path is a **privileged** benchmark guard (its own comment
 says so).
 
 ## Prerequisite implementations (small, test-gated; required before the steps that cite them)
 
-- **P-1 Belief-world wiring (required by Steps 2–4)**: expose
-  `start_override_planner` + world-sample count through the play/benchmark
-  surface; define **K by belief uncertainty, not policy uncertainty** (e.g., a
-  function of the belief engine's candidate-set entropy for unrevealed slots,
-  with a pre-registered mapping and a cap). **Anti-leakage gate (test)**: the
-  sampled-world distribution must be a function of PUBLIC evidence only —
-  matched games that differ only in the true hidden set must induce the same
-  world distribution; assert in a fixture test, and log a per-game leakage
-  checksum in benchmarks.
+- **P-1 Belief-world wiring (implemented, required by Steps 2–4)**:
+  `root-puct-play-benchmark --belief-start-overrides` wires the public Gen 3
+  belief planner into replay search and explicitly enables the candidate-set
+  source for the benchmark environment. `--belief-world-sample-cap` implements
+  the pre-registered mapping **K = min(cap, public surviving-variant
+  combinations)**; uncertainty bits and the resolved K are diagnostics, not
+  policy uncertainty. **Anti-leakage gate (tested)**: the sampling profile is a
+  function of public belief only; matched fixture contexts that differ only in
+  an ignored true-hidden payload have identical checksums/K. Benchmark JSON
+  logs the distinct public-belief checksum(s) for each game seed.
 - **P-2 Root Dirichlet noise (required by Step 3)**: alpha/mixture/seed
   semantics specified up front (per-decision seeded for reproducibility;
   diagnostics record the noise draw). **Audit-only by default**: primary
@@ -81,13 +80,14 @@ best value-ready checkpoint and the plan's title claim changes accordingly.
 ## Step 1 — Mechanics + cost profile (hours; no new code)
 
 Run `neural_cli root_puct` (recorded-decision re-scoring) with the 1M checkpoint
-on ~50 recorded games (its own eval games are fine).
+on ~50 recorded games (its own eval games are fine). This is a cost/profile
+probe; use `root-puct-play-benchmark --belief-start-overrides` for the P-1
+end-to-end determinization validation.
 
-Validates: the checkpoint loads under search (v2.2 latch), scenario planners and
-belief determinization run end-to-end, and — the measured numbers this plan's
-cost claims depend on — the per-move wall split into {prefix replay, per-branch
-sim stepping, NN evals, rollout tails}. The scoping estimates (5–20 ms/edge,
-seconds/tail) are hypotheses until this table exists.
+Validates: the checkpoint loads under search (v2.2 latch), and — the measured
+numbers this plan's cost claims depend on — the per-move wall split into {prefix
+replay, per-branch sim stepping, NN evals, rollout tails}. The scoping estimates
+(5–20 ms/edge, seconds/tail) are hypotheses until this table exists.
 
 Gate: any component >3× its estimate → update this doc's budget math before
 proceeding (measure-don't-assume; twice this month the finer measurement

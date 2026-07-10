@@ -50,9 +50,10 @@ class BenchmarkMatchupResult:
     metrics: "CollectionMetrics"
     p1_policy_provenance: Mapping[str, Any] | None = None
     p2_policy_provenance: Mapping[str, Any] | None = None
+    root_puct_belief_public_checksums_by_seed: Mapping[int, tuple[str, ...]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "label": self.label,
             "p1_policy_id": self.p1_policy_id,
             "p2_policy_id": self.p2_policy_id,
@@ -61,6 +62,12 @@ class BenchmarkMatchupResult:
             "seed_start": self.seed_start,
             "metrics": self.metrics.to_dict(),
         }
+        if self.root_puct_belief_public_checksums_by_seed:
+            result["root_puct_belief_public_checksums_by_seed"] = {
+                str(seed): list(checksums)
+                for seed, checksums in sorted(self.root_puct_belief_public_checksums_by_seed.items())
+            }
+        return result
 
 
 @dataclass(frozen=True)
@@ -371,6 +378,7 @@ def benchmark_rollouts(
                 "p2": matchup.p2_policy,
             }
             accumulator = _MetricsAccumulator()
+            belief_public_checksums_by_seed: dict[int, tuple[str, ...]] = {}
             matchup_start = perf_counter()
             for game_index in range(games):
                 seed = seed_start + game_index
@@ -382,6 +390,17 @@ def benchmark_rollouts(
                     battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
                 )
                 accumulator.add(record)
+                checksums = tuple(
+                    sorted(
+                        {
+                            str(step.metadata["root_puct_belief_public_checksum"])
+                            for step in record.trajectory.steps
+                            if step.metadata.get("root_puct_belief_public_checksum")
+                        }
+                    )
+                )
+                if checksums:
+                    belief_public_checksums_by_seed[seed] = checksums
             elapsed = perf_counter() - matchup_start
             results.append(
                 BenchmarkMatchupResult(
@@ -392,6 +411,7 @@ def benchmark_rollouts(
                     metrics=accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()),
                     p1_policy_provenance=benchmark_policy_provenance(matchup.p1_policy),
                     p2_policy_provenance=benchmark_policy_provenance(matchup.p2_policy),
+                    root_puct_belief_public_checksums_by_seed=belief_public_checksums_by_seed or None,
                 )
             )
     finally:

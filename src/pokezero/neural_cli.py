@@ -43,6 +43,10 @@ from .dataset import (
     training_cache_root_byte_size,
     write_training_cache_from_rollouts,
 )
+from .determinization import (
+    DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+    gen3_randbat_belief_start_override_planner,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
@@ -89,6 +93,7 @@ from .search_policy import (
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
 )
+from .randbat import load_gen3_randbat_source_cached
 from .value_calibration import (
     VALUE_SELECTION_METRICS,
     ValueCalibrationReport,
@@ -889,6 +894,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Temperature applied only to root-PUCT action priors. Defaults to --temperature, "
             "so existing invocations keep their prior softness unless overridden."
         ),
+    )
+    root_puct_play.add_argument(
+        "--belief-start-overrides",
+        action="store_true",
+        help=(
+            "Sample player-relative public Gen 3 randbat belief into complete custom-game branch "
+            "starts for root-PUCT search. Enables the candidate-set belief source in the benchmark env."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--belief-world-sample-cap",
+        type=int,
+        default=DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+        help=(
+            "Maximum PIMC belief worlds per opponent-action scenario when --belief-start-overrides is set. "
+            "The resolved count is min(cap, public surviving-variant combinations)."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--belief-start-override-attempts",
+        type=int,
+        default=10,
+        help="Replay-consistency attempts per belief-world sample.",
+    )
+    root_puct_play.add_argument(
+        "--belief-start-override-hp-fraction-tolerance",
+        type=float,
+        default=0.02,
+        help="Allowed HP-fraction drift when validating public belief-world replay prefixes.",
     )
     root_puct_play.add_argument(
         "--no-search-fallback",
@@ -3157,6 +3191,22 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         extra_model_configs=(result.model_config,),
         context="root-puct play benchmark",
     )
+    belief_start_override_planner = None
+    if args.belief_start_overrides:
+        if args.format_id != "gen3randombattle":
+            raise ValueError("--belief-start-overrides currently supports only gen3randombattle.")
+        if args.belief_world_sample_cap <= 0:
+            raise ValueError("--belief-world-sample-cap must be positive.")
+        if args.belief_start_override_attempts <= 0:
+            raise ValueError("--belief-start-override-attempts must be positive.")
+        if args.belief_start_override_hp_fraction_tolerance < 0.0:
+            raise ValueError("--belief-start-override-hp-fraction-tolerance must be non-negative.")
+        # The planner consumes the same candidate-set source that produced the observation's public belief.
+        env_config = replace(env_config, set_belief_source=True)
+        belief_start_override_planner = gen3_randbat_belief_start_override_planner(
+            load_gen3_randbat_source_cached(env_config.resolved_showdown_root()),
+            world_sample_cap=args.belief_world_sample_cap,
+        )
     raw_policy_id = str(result.model_config.policy_id)
 
     def search_policy_id_for(leaf_rollout_rounds: int) -> str:
@@ -3273,6 +3323,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             max_opponent_action_scenarios=args.root_opponent_action_scenarios,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
+            start_override_planner=belief_start_override_planner,
+            start_override_attempts=args.belief_start_override_attempts,
+            start_override_samples_per_scenario=(None if belief_start_override_planner is not None else 1),
+            start_override_hp_fraction_tolerance=args.belief_start_override_hp_fraction_tolerance,
             leaf_rollout_metadata=leaf_rollout_metadata,
         )
 

@@ -10,6 +10,7 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.determinization import (
     _gen3_randbat_fixture_spread,
+    belief_world_sampling_profile,
     gen3_randbat_belief_start_override,
     gen3_randbat_belief_start_override_planner,
     player_belief_view_from_payload,
@@ -213,6 +214,45 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(view.opponent_pokemon[0].species, "Xatu")
         self.assertEqual(view.opponent_pokemon[0].revealed_moves, ("Psychic",))
 
+    def test_belief_world_sampling_profile_is_bounded_by_public_variant_combinations(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"].append(  # type: ignore[index]
+            {
+                "variant_id": "xatu-setup",
+                "source_set_id": "xatu-2",
+                "role": "Setup",
+                "level": 84,
+                "moves": ["psychic", "calmmind", "rest", "hiddenpowerfire"],
+                "ability": "Early Bird",
+                "item": "Leftovers",
+            }
+        )
+
+        profile = belief_world_sampling_profile(_context(metadata), sample_cap=8)
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.combination_count, 2)
+        self.assertEqual(profile.sample_count, 2)
+        self.assertEqual(profile.uncertainty_bits, 1.0)
+        self.assertEqual(profile.uncertain_slot_count, 1)
+
+    def test_belief_world_sampling_checksum_ignores_true_hidden_team_payload(self) -> None:
+        first = _metadata()
+        second = _metadata()
+        first["private_true_opponent_team"] = {"p1": ["Xatu support"]}
+        second["private_true_opponent_team"] = {"p1": ["Xatu setup"]}
+
+        first_profile = belief_world_sampling_profile(_context(first), sample_cap=4)
+        second_profile = belief_world_sampling_profile(_context(second), sample_cap=4)
+
+        self.assertIsNotNone(first_profile)
+        self.assertIsNotNone(second_profile)
+        assert first_profile is not None and second_profile is not None
+        self.assertEqual(first_profile.public_checksum, second_profile.public_checksum)
+        self.assertEqual(first_profile.sample_count, second_profile.sample_count)
+
     def test_builds_player_relative_custom_start_override_from_public_belief(self) -> None:
         context = _context(_metadata())
 
@@ -274,6 +314,29 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         second = source()
         self.assertIsNotNone(first)
         self.assertIs(first, second)
+
+    def test_planner_exposes_public_context_world_count_and_checksum(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"].append(  # type: ignore[index]
+            {
+                "variant_id": "xatu-setup",
+                "source_set_id": "xatu-2",
+                "role": "Setup",
+                "level": 84,
+                "moves": ["psychic", "calmmind", "rest", "hiddenpowerfire"],
+                "ability": "Early Bird",
+                "item": "Leftovers",
+            }
+        )
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3, world_sample_cap=4)
+        context = _context(metadata)
+
+        self.assertEqual(planner.sample_count_for_context(context), 2)  # type: ignore[attr-defined]
+        sampling_metadata = planner.sampling_metadata_for_context(context)  # type: ignore[attr-defined]
+        self.assertEqual(sampling_metadata["root_puct_belief_world_sample_cap"], 4)
+        self.assertEqual(sampling_metadata["root_puct_belief_world_sample_count"], 2)
+        self.assertTrue(sampling_metadata["root_puct_belief_public_checksum"])
 
     def test_planner_returns_reason_bearing_missing_source_for_supported_failure(self) -> None:
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)

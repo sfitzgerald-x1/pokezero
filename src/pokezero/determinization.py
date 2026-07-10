@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+import hashlib
+import json
+import math
 import random
 import re
 from typing import Any, Mapping, Sequence
@@ -23,6 +26,7 @@ from .showdown_fixture import FixturePokemon, pack_team
 
 
 DEFAULT_RANDBAT_TEAM_SIZE = 6
+DEFAULT_BELIEF_WORLD_SAMPLE_CAP = 4
 _STAT_ORDER = ("hp", "atk", "def", "spa", "spd", "spe")
 _PINCH_BERRIES = {"salacberry", "petayaberry", "liechiberry"}
 _HIDDEN_POWER_IVS: Mapping[str, Mapping[str, int]] = {
@@ -45,21 +49,88 @@ _HIDDEN_POWER_IVS: Mapping[str, Mapping[str, int]] = {
 }
 
 
+@dataclass(frozen=True)
+class BeliefWorldSamplingProfile:
+    """Public-belief-derived world-count and audit metadata for root search.
+
+    ``sample_count`` is deliberately bounded by the number of concrete public
+    variant combinations. The profile never reads the real opponent team.
+    """
+
+    sample_cap: int
+    sample_count: int
+    combination_count: int
+    uncertainty_bits: float
+    uncertain_slot_count: int
+    public_checksum: str
+
+    def to_metadata(self) -> dict[str, object]:
+        return {
+            "root_puct_belief_world_sample_cap": self.sample_cap,
+            "root_puct_belief_world_sample_count": self.sample_count,
+            "root_puct_belief_world_combination_count": self.combination_count,
+            "root_puct_belief_world_uncertainty_bits": self.uncertainty_bits,
+            "root_puct_belief_world_uncertain_slot_count": self.uncertain_slot_count,
+            "root_puct_belief_public_checksum": self.public_checksum,
+        }
+
+
+def belief_world_sampling_profile(
+    context: PolicyContext,
+    *,
+    sample_cap: int = DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+) -> BeliefWorldSamplingProfile | None:
+    """Derive a bounded PIMC world count from player-relative public belief.
+
+    The pre-registered mapping is ``K = min(sample_cap, combination_count)``.
+    ``combination_count`` is the product of surviving public variant counts for
+    revealed opponent slots, while ``uncertainty_bits = log2(combination_count)``
+    is recorded for later profiling. Unknown/unsourced slots contribute one
+    rather than inventing a probability distribution.
+    """
+
+    if sample_cap <= 0:
+        raise ValueError("sample_cap must be positive.")
+    metadata = context.observation.metadata
+    if not isinstance(metadata, Mapping):
+        return None
+    view = player_belief_view_from_payload(metadata.get("belief_view"))
+    if view is None:
+        return None
+
+    candidate_counts = tuple(
+        max(1, len(pokemon.candidate_variants))
+        for pokemon in view.opponent_pokemon
+    )
+    combination_count = math.prod(candidate_counts) if candidate_counts else 1
+    return BeliefWorldSamplingProfile(
+        sample_cap=sample_cap,
+        sample_count=min(sample_cap, combination_count),
+        combination_count=combination_count,
+        uncertainty_bits=math.log2(combination_count),
+        uncertain_slot_count=sum(count > 1 for count in candidate_counts),
+        public_checksum=_belief_world_public_checksum(context=context, view=view),
+    )
+
+
 def gen3_randbat_belief_start_override_planner(
     set_source: Gen3RandbatSource,
     *,
     team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
+    world_sample_cap: int = DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
 ) -> StartOverridePlanner:
     """Create a root-PUCT start-override planner from player-relative public belief.
 
     The returned planner is hidden-info safe: it reads the acting player's observation metadata,
     which contains the player's own request-known team plus public belief about the opponent. It
-    does not inspect the opponent's private observation or legal-action mask. Each scenario gets one
-    sampled world so all candidate root actions are scored against the same materialized battle.
+    does not inspect the opponent's private observation or legal-action mask. Each sampled world is
+    shared across all candidate root actions for its scenario.
     """
 
     if team_size <= 0:
         raise ValueError("team_size must be positive.")
+    if world_sample_cap <= 0:
+        raise ValueError("world_sample_cap must be positive.")
 
     def planner(
         context: PolicyContext,
@@ -91,9 +162,38 @@ def gen3_randbat_belief_start_override_planner(
         sample_override.start_override_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
         return sample_override
 
+    def sample_count_for_context(context: PolicyContext) -> int:
+        profile = belief_world_sampling_profile(context, sample_cap=world_sample_cap)
+        return profile.sample_count if profile is not None else 1
+
+    def sampling_metadata_for_context(context: PolicyContext) -> Mapping[str, object]:
+        profile = belief_world_sampling_profile(context, sample_cap=world_sample_cap)
+        return profile.to_metadata() if profile is not None else {
+            "root_puct_belief_world_sampling_profile": "missing"
+        }
+
     planner.planner_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
     planner.scenario_independent = True  # type: ignore[attr-defined]
+    planner.sample_count_for_context = sample_count_for_context  # type: ignore[attr-defined]
+    planner.sampling_metadata_for_context = sampling_metadata_for_context  # type: ignore[attr-defined]
     return planner
+
+
+def _belief_world_public_checksum(
+    *,
+    context: PolicyContext,
+    view: PlayerBeliefView,
+) -> str:
+    """Hash only the player-relative public state that determines world sampling."""
+
+    payload = {
+        "format_id": context.format_id,
+        "self_slot": view.self_slot,
+        "opponent_slot": view.opponent_slot,
+        "opponent_pokemon": [pokemon.to_overlay_payload() for pokemon in view.opponent_pokemon],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def gen3_randbat_belief_start_override(

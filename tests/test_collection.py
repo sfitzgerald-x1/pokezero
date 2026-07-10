@@ -160,6 +160,7 @@ class MetadataPolicy:
         leaf_rollout_opponent_policy: str | None = None,
         leaf_actual_rounds: dict[str, int] | None = None,
         leaf_evaluations: dict[str, int] | None = None,
+        belief_public_checksum: str | None = None,
     ) -> None:
         self.policy_id = policy_id
         self.fallback = fallback
@@ -173,6 +174,7 @@ class MetadataPolicy:
         self.leaf_rollout_opponent_policy = leaf_rollout_opponent_policy
         self.leaf_actual_rounds = leaf_actual_rounds
         self.leaf_evaluations = leaf_evaluations
+        self.belief_public_checksum = belief_public_checksum
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         if self.fallback:
@@ -213,6 +215,8 @@ class MetadataPolicy:
             metadata["root_puct_leaf_actual_rollout_rounds"] = dict(self.leaf_actual_rounds)
         if self.leaf_evaluations is not None:
             metadata["root_puct_leaf_evaluations"] = dict(self.leaf_evaluations)
+        if self.belief_public_checksum is not None:
+            metadata["root_puct_belief_public_checksum"] = self.belief_public_checksum
         return PolicyDecision(
             action_index=0,
             policy_id=self.policy_id,
@@ -542,6 +546,27 @@ class CollectionTest(unittest.TestCase):
         )
         self.assertEqual(summary["random-legal"]["decisions"], 2)
         self.assertNotIn("root_puct_searches", summary["random-legal"])
+
+    def test_benchmark_rollouts_logs_belief_public_checksums_per_seed(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct belief vs random",
+                    MetadataPolicy(belief_public_checksum="public-belief"),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        payload = report.to_dict()["matchups"][0]
+        self.assertEqual(
+            payload["root_puct_belief_public_checksums_by_seed"],
+            {"20": ["public-belief"], "21": ["public-belief"]},
+        )
 
     def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
         checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
