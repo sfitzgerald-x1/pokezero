@@ -11,6 +11,7 @@ from pokezero.foulplay_capture import build_capture_arg_parser
 from pokezero.neural_cli import main as neural_main
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.prior_belief_profile import (
+    CandidateValueEvaluation,
     MINIMUM_PROFILE_DECISIONS,
     PriorBeliefProfileConfig,
     WorldScenarioEvaluation,
@@ -22,10 +23,12 @@ from pokezero.prior_belief_profile import (
     public_policy_context,
 )
 from pokezero.public_decision_corpus import (
+    PublicActionIdentifier,
     PublicDecisionCorpus,
     PublicDecisionCorpusWriter,
     PublicDecisionRecord,
     PublicObservation,
+    PublicResolvedActionRound,
     load_public_decision_corpus,
     public_corpus_manifest,
     public_decision_id,
@@ -289,6 +292,93 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertEqual(margin_sweep["forced_or_insufficient_context_count"], 1)
         self.assertEqual(margin_sweep["contested_count"], 0)
         self.assertIsNone(margin_sweep["contested_fraction"])
+        decision_margin_sweep = next(
+            row for row in forced["decision_normalized_threshold_sweeps"] if row["gate"] == "margin"
+        )
+        self.assertEqual(decision_margin_sweep["margin_eligible_decision_count"], 0)
+        self.assertEqual(decision_margin_sweep["forced_or_insufficient_decision_count"], 1)
+        self.assertIsNone(decision_margin_sweep["contested_fraction"])
+
+    def test_unsupported_event_skip_is_named_and_counted_by_phase(self) -> None:
+        record = _record()
+        event_record = replace(
+            record,
+            turn_index=2,
+            public_resolved_action_rounds=(
+                PublicResolvedActionRound(
+                    turn_index=0,
+                    actions={"p2": PublicActionIdentifier(kind="event", event_id="unresolved-public-event")},
+                ),
+                PublicResolvedActionRound(
+                    turn_index=1,
+                    actions={"p1": PublicActionIdentifier(kind="move", move_id="tackle")},
+                ),
+            ),
+        )
+        report = profile_public_decisions(
+            [event_record],
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda _record: CandidateValueEvaluation(
+                contexts=(),
+                skip_reason="unsupported_public_event:unresolved-public-event",
+                failure_reasons={"unsupported_public_event:unresolved-public-event": 1},
+            ),
+        )
+
+        self.assertEqual(report["skipped_decision_rows"][0]["reason"], "unsupported_public_event:unresolved-public-event")
+        early = next(row for row in report["representativeness"]["by_phase"] if row["phase"] == "early")
+        self.assertEqual(early["event_bearing_prefix_count"], 1)
+        self.assertEqual(early["unsupported_event_prefix_count"], 1)
+        self.assertEqual(
+            early["skip_reason_counts"],
+            {"unsupported_public_event:unresolved-public-event": 1},
+        )
+
+    def test_decision_normalized_sweeps_do_not_multiply_multi_world_contexts(self) -> None:
+        report = profile_public_decisions(
+            [_record()],
+            prior_evaluator=lambda _history: (0.6, 0.4) + (0.0,) * (ACTION_COUNT - 2),
+            candidate_value_evaluator=lambda _record: (
+                WorldScenarioEvaluation(0, 0, "world-0", 0.25, {0: 0.5, 1: 0.4}),
+                WorldScenarioEvaluation(1, 0, "world-1", 0.75, {0: 0.9, 1: 0.2}),
+            ),
+            config=PriorBeliefProfileConfig(entropy_thresholds=(9.0,), margin_thresholds=(0.2,)),
+        )
+
+        context_margin = next(row for row in report["threshold_sweeps"] if row["gate"] == "margin")
+        decision_margin = next(
+            row for row in report["decision_normalized_threshold_sweeps"] if row["gate"] == "margin"
+        )
+        self.assertEqual(context_margin["rate_unit"], "per_selection_context")
+        self.assertEqual(context_margin["selection_context_count"], 2)
+        self.assertEqual(context_margin["contested_count"], 1)
+        self.assertAlmostEqual(context_margin["contested_fraction"], 0.5)
+        self.assertEqual(decision_margin["rate_unit"], "per_decision_normalized")
+        self.assertEqual(decision_margin["decision_count"], 1)
+        self.assertEqual(decision_margin["contested_count"], 0)
+        self.assertEqual(decision_margin["contested_fraction"], 0.0)
+        self.assertIn("scenario-weighted", decision_margin["decision_aggregation"])
+
+    def test_malformed_candidate_context_skips_without_aborting_two_thousand_valid_decisions(self) -> None:
+        valid = _record()
+        malformed = replace(valid, battle_id="malformed-candidate")
+        corpus = PublicDecisionCorpus(
+            manifest={"schema_version": "pokezero.public-decision-corpus.v1"},
+            decisions=(valid,) * MINIMUM_PROFILE_DECISIONS + (malformed,),
+        )
+        report = profile_public_corpus(
+            corpus,
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda record: (
+                WorldScenarioEvaluation(0, 0, "malformed", 1.0, {3: 0.1})
+                if record.battle_id == "malformed-candidate"
+                else WorldScenarioEvaluation(0, 0, "valid", 1.0, {0: 0.1}),
+            ),
+        )
+
+        self.assertEqual(report["decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(report["skipped_decision_count"], 1)
+        self.assertEqual(report["skipped_decision_rows"][0]["reason"], "candidate_legality_or_contract_failure")
 
     def test_corpus_floor_rejects_less_than_two_thousand_decisions(self) -> None:
         record = _record()

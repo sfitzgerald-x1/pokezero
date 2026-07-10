@@ -32,15 +32,14 @@ from .policy import PolicyContext
 from .prior_belief_profile import public_policy_context
 from .public_decision_corpus import (
     PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
-    PublicActionIdentifier,
     PublicDecisionCorpus,
     PublicDecisionRecord,
     PublicResolvedActionRound,
     load_public_decision_corpus,
     public_decision_records_from_trajectory,
 )
+from .public_replay_materializer import PublicReplayError, replay_public_action_rounds
 from .randbat import Gen3RandbatSource
-from .replay_branching import replay_action_rounds
 from .rollout import RolloutConfig, RolloutDriver
 from .search import ActionPriorVector, ObservationValueFunction, puct_branch_search
 from .search_policy import OpponentActionScenario, _root_dirichlet_action_priors
@@ -361,23 +360,40 @@ class PublicBeliefWorldProvider:
                 start_override = source() if callable(source) else source
                 env = self.env_factory()
                 try:
-                    prefix, replay_actions = _replay_public_hazard_prefix(
+                    materialization = replay_public_action_rounds(
                         env,
-                        decision=decision,
+                        seed=decision.seed,
+                        format_id=decision.format_id,
+                        public_action_rounds=decision.public_action_rounds,
                         start_override=start_override,
                     )
-                    if decision.player_id not in prefix.requested_players:
+                    if decision.player_id not in materialization.requested_players:
                         raise ValueError("sampled world does not request the actor")
                     opponent_actions = _sampled_world_opponent_actions(
                         env=env,
                         actor=decision.player_id,
-                        requested_players=prefix.requested_players,
+                        requested_players=materialization.requested_players,
                         policy=self.sampled_world_opponent_policy,
                         seed=_stable_seed(decision.state_id, "sampled-world-opponent-policy", world_index),
                     )
                 finally:
                     if env is not None:
                         _close_env(env)
+            except PublicReplayError as exc:
+                worlds.append(
+                    AuditWorld(
+                        world_id=world_id,
+                        opponent_actions={},
+                        available=False,
+                        rejection_code=exc.reason,
+                        metadata=_public_profile_metadata(
+                            profile,
+                            world_index,
+                            opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                        ),
+                    )
+                )
+                continue
             except (ValueError, RuntimeError):
                 worlds.append(
                     AuditWorld(
@@ -398,11 +414,12 @@ class PublicBeliefWorldProvider:
                     world_id=world_id,
                     opponent_actions=opponent_actions,
                     start_override=start_override,
-                    replay_actions=replay_actions,
+                    replay_actions=materialization.replay_actions,
                     metadata=_public_profile_metadata(
                         profile,
                         world_index,
                         opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                        event_canonicalizations=materialization.event_canonicalizations,
                     ),
                 )
             )
@@ -916,91 +933,21 @@ def _sampled_world_opponent_actions(
     return actions
 
 
-def _replay_public_hazard_prefix(
-    env: PokeZeroEnv,
-    *,
-    decision: HazardAuditDecision,
-    start_override: BattleStartOverride,
-) -> tuple[Any, dict[int, dict[PlayerId, int]]]:
-    """Resolve public IDs against a sampled world and retain indexes only in memory."""
-
-    replay_action_rounds(
-        env,
-        seed=decision.seed,
-        format_id=decision.format_id,
-        action_rounds=(),
-        start_override=start_override,
-        check_prefix_observations=False,
-    )
-    replay_actions: dict[int, dict[PlayerId, int]] = {}
-    for expected_turn, public_round in enumerate(decision.public_action_rounds):
-        if public_round.turn_index != expected_turn:
-            raise ValueError("public action rounds must be contiguous from turn zero.")
-        requested_players = tuple(env.requested_players())
-        if set(requested_players) != set(public_round.actions):
-            raise ValueError("sampled world request shape does not match the public prefix.")
-        actions = {
-            player: _resolve_public_action_identifier(env.observe(player), identifier)
-            for player, identifier in public_round.actions.items()
-        }
-        replay_actions[public_round.turn_index] = actions
-        env.step(actions)
-    return (
-        type(
-            "PublicHazardReplayPrefix",
-            (),
-            {"terminal": env.terminal(), "requested_players": tuple(env.requested_players())},
-        )(),
-        replay_actions,
-    )
-
-
-def _resolve_public_action_identifier(
-    observation: PokeZeroObservationV0,
-    identifier: PublicActionIdentifier,
-) -> int:
-    candidates = observation.metadata.get("action_candidates")
-    if not isinstance(candidates, Sequence):
-        raise ValueError("sampled world observation has no action candidates.")
-    matches: list[int] = []
-    for candidate in candidates:
-        if not isinstance(candidate, Mapping):
-            continue
-        action_index = candidate.get("action_index")
-        if (
-            not isinstance(action_index, int)
-            or action_index < 0
-            or action_index >= len(observation.legal_action_mask)
-            or not observation.legal_action_mask[action_index]
-        ):
-            continue
-        if identifier.kind == "move" and candidate.get("kind") == "move":
-            if _normalized_move_id(candidate.get("move_id")) == _normalized_move_id(identifier.move_id):
-                matches.append(action_index)
-        elif identifier.kind == "switch" and candidate.get("kind") == "switch":
-            species = candidate.get("switched_species")
-            if species is None and isinstance(candidate.get("pokemon"), Mapping):
-                species = candidate["pokemon"].get("species")
-            if _normalized_move_id(species) == _normalized_move_id(identifier.switched_species):
-                matches.append(action_index)
-    if identifier.kind == "event":
-        raise ValueError("public event identifier cannot be replayed as an action.")
-    if not matches:
-        raise ValueError("public action identifier is unavailable in the sampled world.")
-    return min(matches)
-
-
 def _public_profile_metadata(
     profile: BeliefWorldSamplingProfile,
     world_index: int,
     *,
     opponent_policy_id: str,
+    event_canonicalizations: Sequence[Any] = (),
 ) -> dict[str, object]:
     return {
         "world_index": world_index,
         "belief_sampling": profile.to_metadata(),
         "world_source": "public-belief-determinization",
         "sampled_world_opponent_policy": opponent_policy_id,
+        "public_event_canonicalizations": [
+            canonicalization.to_dict() for canonicalization in event_canonicalizations
+        ],
     }
 
 

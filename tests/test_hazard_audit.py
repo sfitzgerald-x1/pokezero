@@ -22,9 +22,11 @@ from pokezero.hazard_audit import (
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.public_decision_corpus import (
+    PublicActionIdentifier,
     PublicDecisionCorpusWriter,
     PublicDecisionRecord,
     PublicObservation,
+    PublicResolvedActionRound,
     public_corpus_manifest,
     public_decision_id,
 )
@@ -156,6 +158,44 @@ class SampledWorldReplayEnv:
         self.closed = True
 
 
+class CantAuditReplayEnv:
+    def __init__(self, current: PokeZeroObservationV0) -> None:
+        self.current = current
+        self.phase = -1
+        self.closed = False
+
+    def reset_with_start_override(self, *, seed: int, format_id: str, start_override: BattleStartOverride) -> None:
+        del seed, format_id
+        if start_override.player_teams["p2"] != "sampled-p2-team":
+            raise AssertionError("expected sampled start override")
+        self.phase = 0
+
+    def requested_players(self) -> tuple[str, ...]:
+        return ("p1", "p2")
+
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        if self.phase == 0:
+            if player == "p1":
+                return _observation(1, metadata={"action_candidates": [{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}]})
+            return _observation(2, 5)
+        if player == "p1":
+            return self.current
+        return _observation(3, metadata={"action_candidates": [{"action_index": 3, "kind": "move", "move_id": "growl", "legal": True}]})
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        if self.phase == 0:
+            if actions != {"p1": 1, "p2": 2}:
+                raise AssertionError(f"expected sampled-world cant canonicalization, got {actions!r}")
+            self.phase = 1
+        return StepResult(observations={"p1": self.current}, rewards={"p1": 0.0, "p2": 0.0}, terminal=None, requested_players=("p1", "p2"))
+
+    def terminal(self):
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _decision() -> HazardAuditDecision:
     observation = _observation(
         0,
@@ -189,6 +229,43 @@ def _decision() -> HazardAuditDecision:
         target_action_index=1,
         target_move_id="spikes",
     )
+
+
+def _cant_decision() -> HazardAuditDecision:
+    current = _observation(
+        0,
+        1,
+        metadata={
+            "action_candidates": [
+                {"action_index": 0, "kind": "move", "move_id": "tackle", "legal": True},
+                {"action_index": 1, "kind": "move", "move_id": "spikes", "legal": True},
+            ]
+        },
+    )
+    prototype = PublicDecisionRecord(
+        decision_id="pending",
+        battle_id="cant-audit",
+        seed=13,
+        format_id="gen3randombattle",
+        acting_player="p1",
+        turn_index=1,
+        recorded_action_index=1,
+        observation=PublicObservation.from_observation(current),
+        history=(),
+        current_legal_action_mask=_mask(0, 1),
+        public_resolved_action_rounds=(
+            PublicResolvedActionRound(
+                turn_index=0,
+                actions={
+                    "p1": PublicActionIdentifier(kind="move", move_id="tackle"),
+                    "p2": PublicActionIdentifier(kind="event", event_id="cant:slp"),
+                },
+            ),
+        ),
+        public_belief_view={"self_slot": "p1", "opponent_slot": "p2", "self_pokemon": [], "opponent_pokemon": []},
+    )
+    record = replace(prototype, decision_id=public_decision_id(prototype))
+    return HazardAuditDecision(public_record=record, driver_id="fixed-driver", target_action_index=1, target_move_id="spikes")
 
 
 class HazardAuditTest(unittest.TestCase):
@@ -315,7 +392,7 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(delta["delta_choice_on"], 0.0)
         self.assertIn("exact ties resolve false", delta["world_aggregation"])
 
-    def test_audit_consumes_the_generic_public_decision_corpus_schema(self) -> None:
+    def test_actual_step2_jsonl_corpus_loads_into_hazard_adapter(self) -> None:
         source = _decision()
         manifest = public_corpus_manifest(
             checkpoint_sha256="checkpoint-hash",
@@ -333,6 +410,7 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(decisions[0].target_action_index, 1)
         self.assertEqual(decisions[0].observation.legal_action_mask, _mask(0, 1))
         self.assertEqual(decisions[0].public_action_rounds, ())
+        self.assertEqual(decisions[0].public_record, source.public_record)
         with self.assertRaisesRegex(ValueError, "canonical PublicDecisionCorpus"):
             hazard_audit_decisions_from_public_corpus({})
 
@@ -387,6 +465,42 @@ class HazardAuditTest(unittest.TestCase):
         serialized = json.dumps(world.to_dict(), sort_keys=True)
         self.assertNotIn("opponent_actions", serialized)
         self.assertNotIn("start_override", serialized)
+
+    def test_hazard_provider_uses_same_cant_canonicalization_as_step2_corpus(self) -> None:
+        decision = _cant_decision()
+        env = CantAuditReplayEnv(decision.observation)
+        policy = SampledWorldPolicy()
+        start_override = BattleStartOverride(player_teams={"p1": "sampled-p1-team", "p2": "sampled-p2-team"})
+        profile = BeliefWorldSamplingProfile(
+            sample_cap=1,
+            sample_count=1,
+            combination_count=1,
+            uncertainty_bits=0.0,
+            uncertain_slot_count=0,
+            public_checksum="cant-audit",
+        )
+
+        with (
+            patch("pokezero.hazard_audit.belief_world_sampling_profile", return_value=profile),
+            patch(
+                "pokezero.hazard_audit.gen3_randbat_belief_start_override_planner",
+                return_value=lambda *_args: lambda: start_override,
+            ),
+        ):
+            worlds = PublicBeliefWorldProvider(
+                env_factory=lambda: env,
+                set_source=object(),
+                sampled_world_opponent_policy=policy,
+            )(decision)
+
+        self.assertEqual(len(worlds), 1)
+        world = worlds[0]
+        self.assertTrue(world.available)
+        self.assertEqual(world.replay_actions, {0: {"p1": 1, "p2": 2}})
+        canonicalization = world.metadata["public_event_canonicalizations"][0]
+        self.assertEqual(canonicalization["event_id"], "cant:slp")
+        self.assertEqual(canonicalization["resolution"], "sampled-world-lowest-legal-action")
+        self.assertNotIn("action_index", canonicalization)
 
     def test_mandatory_sweep_visit_mismatch_invalidates_records(self) -> None:
         decision = _decision()

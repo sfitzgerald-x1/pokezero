@@ -8,6 +8,7 @@ public corpus and testable without a privileged battle state.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 import math
 from typing import Any, Callable, Mapping, Sequence
@@ -21,6 +22,7 @@ from .public_decision_corpus import (
     PublicDecisionRecord,
     canonical_json_sha256,
 )
+from .public_replay_materializer import public_event_prefix_summary
 
 
 PRIOR_BELIEF_PROFILE_SCHEMA_VERSION = "pokezero.prior-belief-profile.v1"
@@ -29,7 +31,9 @@ EARLY_PHASE_MAX_TURN = 5
 MID_PHASE_MAX_TURN = 15
 
 PriorEvaluator = Callable[[tuple[Any, ...]], Sequence[float]]
-CandidateValueEvaluator = Callable[[PublicDecisionRecord], Sequence["WorldScenarioEvaluation"]]
+CandidateValueEvaluator = Callable[
+    [PublicDecisionRecord], Sequence["WorldScenarioEvaluation"] | "CandidateValueEvaluation"
+]
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class WorldScenarioEvaluation:
     scenario_label: str
     scenario_weight: float
     candidate_values: Mapping[int, float]
+    public_event_canonicalizations: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.world_index < 0 or self.scenario_index < 0:
@@ -63,6 +68,30 @@ class WorldScenarioEvaluation:
             if not math.isfinite(value):
                 raise ValueError("candidate values must be finite.")
         object.__setattr__(self, "candidate_values", normalized)
+        object.__setattr__(
+            self,
+            "public_event_canonicalizations",
+            tuple(dict(value) for value in self.public_event_canonicalizations),
+        )
+
+
+@dataclass(frozen=True)
+class CandidateValueEvaluation:
+    """Evaluator outcome with a public reason when no replay context is available."""
+
+    contexts: tuple[WorldScenarioEvaluation, ...]
+    skip_reason: str | None = None
+    failure_reasons: Mapping[str, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.contexts and self.skip_reason is not None:
+            raise ValueError("candidate evaluation cannot have both contexts and a skip reason.")
+        if not self.contexts and not self.skip_reason:
+            raise ValueError("empty candidate evaluation requires a skip reason.")
+        normalized = {str(reason): int(count) for reason, count in (self.failure_reasons or {}).items()}
+        if any(count <= 0 for count in normalized.values()):
+            raise ValueError("candidate evaluation failure counts must be positive.")
+        object.__setattr__(self, "failure_reasons", normalized)
 
 
 @dataclass(frozen=True)
@@ -211,10 +240,25 @@ def profile_public_decisions(
     selection_context_rows: list[dict[str, Any]] = []
     skipped_decision_rows: list[dict[str, Any]] = []
     for record in records:
+        phase = phase_for_turn(
+            record.turn_index,
+            early_phase_max_turn=config.early_phase_max_turn,
+            mid_phase_max_turn=config.mid_phase_max_turn,
+        )
+        event_summary = public_event_prefix_summary(record.public_resolved_action_rounds)
         legal_actions = tuple(index for index, legal in enumerate(record.current_legal_action_mask) if legal)
         if not legal_actions:
-            raise ValueError(f"public decision {record.decision_id} has no legal acting-player actions.")
-        priors = _normalized_raw_legal_priors(prior_evaluator(record.observations()), legal_actions)
+            skipped_decision_rows.append(
+                _skipped_decision_row(record, phase=phase, reason="no_legal_acting_player_actions", event_summary=event_summary)
+            )
+            continue
+        try:
+            priors = _normalized_raw_legal_priors(prior_evaluator(record.observations()), legal_actions)
+        except (TypeError, ValueError):
+            skipped_decision_rows.append(
+                _skipped_decision_row(record, phase=phase, reason="prior_evaluator_contract_failure", event_summary=event_summary)
+            )
+            continue
         raw_entropy = _shannon_entropy(priors[index] for index in legal_actions)
         normalized_entropy = raw_entropy / math.log(len(legal_actions)) if len(legal_actions) > 1 else 0.0
         ranked_priors = sorted(((index, priors[index]) for index in legal_actions), key=lambda item: (-item[1], item[0]))
@@ -227,25 +271,45 @@ def profile_public_decisions(
                 set_source=belief_set_source,
             )
         except ValueError:
-            skipped_decision_rows.append(_skipped_decision_row(record, reason="invalid_public_belief"))
+            skipped_decision_rows.append(
+                _skipped_decision_row(record, phase=phase, reason="invalid_public_belief", event_summary=event_summary)
+            )
             continue
-        phase = phase_for_turn(
-            record.turn_index,
-            early_phase_max_turn=config.early_phase_max_turn,
-            mid_phase_max_turn=config.mid_phase_max_turn,
-        )
-        contexts = tuple(candidate_value_evaluator(record))
+        try:
+            evaluated = candidate_value_evaluator(record)
+            outcome = _candidate_evaluation_outcome(evaluated)
+        except (TypeError, ValueError):
+            skipped_decision_rows.append(
+                _skipped_decision_row(
+                    record,
+                    phase=phase,
+                    reason="candidate_evaluator_contract_failure",
+                    event_summary=event_summary,
+                )
+            )
+            continue
+        contexts = outcome.contexts
         if not contexts:
-            skipped_decision_rows.append(_skipped_decision_row(record, reason="no_public_replay_contexts"))
+            skipped_decision_rows.append(
+                _skipped_decision_row(
+                    record,
+                    phase=phase,
+                    reason=outcome.skip_reason or "no_public_replay_contexts",
+                    event_summary=event_summary,
+                    failure_reasons=outcome.failure_reasons,
+                )
+            )
             continue
         margins: list[tuple[float, float]] = []
-        for context in contexts:
-            _validate_context_legal_candidates(record, context)
-            margin, value_top1, value_top2 = initial_candidate_value_top_two_margin(context.candidate_values)
-            if margin is not None:
-                margins.append((context.scenario_weight, margin))
-            margin_available = margin is not None
-            selection_context_rows.append(
+        prepared_context_rows: list[dict[str, Any]] = []
+        try:
+            for context in contexts:
+                _validate_context_legal_candidates(record, context)
+                margin, value_top1, value_top2 = initial_candidate_value_top_two_margin(context.candidate_values)
+                if margin is not None:
+                    margins.append((context.scenario_weight, margin))
+                margin_available = margin is not None
+                prepared_context_rows.append(
                 {
                     "decision_id": record.decision_id,
                     "phase": phase,
@@ -268,6 +332,10 @@ def profile_public_decisions(
                     "initial_candidate_value_top_two_margin": margin,
                     "candidate_margin_available": margin_available,
                     "candidate_value_context_kind": "competitive" if margin_available else "forced",
+                    "public_event_canonicalizations": [
+                        dict(value) for value in context.public_event_canonicalizations
+                    ],
+                    "public_event_canonicalization_count": len(context.public_event_canonicalizations),
                     "selection_gate_inputs": {
                         "policy_entropy": raw_entropy,
                         "value_margin": margin,
@@ -276,7 +344,18 @@ def profile_public_decisions(
                         "opponent_legal_mask_mode": "hidden",
                     },
                 }
+                )
+        except (TypeError, ValueError):
+            skipped_decision_rows.append(
+                _skipped_decision_row(
+                    record,
+                    phase=phase,
+                    reason="candidate_legality_or_contract_failure",
+                    event_summary=event_summary,
+                )
             )
+            continue
+        selection_context_rows.extend(prepared_context_rows)
         weighted_margin = (
             sum(weight * margin for weight, margin in margins) / sum(weight for weight, _ in margins)
             if margins
@@ -308,6 +387,7 @@ def profile_public_decisions(
                 "resolved_dynamic_k": belief.sample_count,
                 "belief_public_checksum": belief.public_checksum,
                 "selection_context_count": len(contexts),
+                **event_summary,
             }
         )
     profile_config = config.to_dict()
@@ -329,6 +409,12 @@ def profile_public_decisions(
         "decision_rows": decision_rows,
         "selection_context_rows": selection_context_rows,
         "threshold_sweeps": _threshold_sweeps(selection_context_rows, config=config),
+        "decision_normalized_threshold_sweeps": _threshold_sweeps(
+            decision_rows,
+            config=config,
+            unit="decision",
+        ),
+        "representativeness": _representativeness_summary(records, decision_rows, skipped_decision_rows, config=config),
         "provenance": provenance_payload,
     }
     return {**report_core, "profile_sha256": canonical_json_sha256(report_core)}
@@ -402,30 +488,60 @@ def _shannon_entropy(probabilities: Sequence[float]) -> float:
 
 
 def _validate_context_legal_candidates(record: PublicDecisionRecord, context: WorldScenarioEvaluation) -> None:
-    illegal = sorted(action for action in context.candidate_values if not record.current_legal_action_mask[action])
+    illegal = sorted(
+        action
+        for action in context.candidate_values
+        if action < 0 or action >= len(record.current_legal_action_mask) or not record.current_legal_action_mask[action]
+    )
     if illegal:
         raise ValueError(
             f"initial candidate sweep for {record.decision_id} contains acting-player illegal actions: {illegal}"
         )
 
 
-def _skipped_decision_row(record: PublicDecisionRecord, *, reason: str) -> dict[str, Any]:
+def _candidate_evaluation_outcome(
+    value: Sequence[WorldScenarioEvaluation] | CandidateValueEvaluation,
+) -> CandidateValueEvaluation:
+    if isinstance(value, CandidateValueEvaluation):
+        return value
+    contexts = tuple(value)
+    if not all(isinstance(context, WorldScenarioEvaluation) for context in contexts):
+        raise ValueError("candidate evaluator must return WorldScenarioEvaluation contexts.")
+    if not contexts:
+        return CandidateValueEvaluation(contexts=(), skip_reason="no_public_replay_contexts")
+    return CandidateValueEvaluation(contexts=contexts)
+
+
+def _skipped_decision_row(
+    record: PublicDecisionRecord,
+    *,
+    phase: str,
+    reason: str,
+    event_summary: Mapping[str, Any],
+    failure_reasons: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
     return {
         "decision_id": record.decision_id,
         "battle_id": record.battle_id,
         "turn_index": record.turn_index,
+        "phase": phase,
         "reason": reason,
+        "failure_reasons": dict(failure_reasons or {}),
+        **dict(event_summary),
     }
 
 
 def _threshold_sweeps(
-    selection_context_rows: Sequence[Mapping[str, Any]],
+    source_rows: Sequence[Mapping[str, Any]],
     *,
     config: PriorBeliefProfileConfig,
+    unit: str = "selection_context",
 ) -> list[dict[str, Any]]:
+    if unit not in {"selection_context", "decision"}:
+        raise ValueError("threshold sweep unit must be selection_context or decision.")
     rows: list[dict[str, Any]] = []
     for phase in ("early", "mid", "late"):
-        phase_rows = [row for row in selection_context_rows if row["phase"] == phase]
+        phase_rows = [row for row in source_rows if row["phase"] == phase]
         for threshold in config.entropy_thresholds:
             rows.append(
                 _sweep_row(
@@ -434,6 +550,7 @@ def _threshold_sweeps(
                     gate="entropy",
                     entropy_threshold=threshold,
                     margin_threshold=None,
+                    unit=unit,
                 )
             )
         for threshold in config.margin_thresholds:
@@ -444,6 +561,7 @@ def _threshold_sweeps(
                     gate="margin",
                     entropy_threshold=None,
                     margin_threshold=threshold,
+                    unit=unit,
                 )
             )
         for entropy_threshold in config.entropy_thresholds:
@@ -455,6 +573,7 @@ def _threshold_sweeps(
                         gate="entropy_or_margin",
                         entropy_threshold=entropy_threshold,
                         margin_threshold=margin_threshold,
+                        unit=unit,
                     )
                 )
     return rows
@@ -467,12 +586,13 @@ def _sweep_row(
     gate: str,
     entropy_threshold: float | None,
     margin_threshold: float | None,
+    unit: str,
 ) -> dict[str, Any]:
     contested = 0
     margin_eligible_rows = [
         row for row in rows if bool(row.get("candidate_margin_available"))
     ]
-    forced_or_insufficient_context_count = len(rows) - len(margin_eligible_rows)
+    forced_or_insufficient_count = len(rows) - len(margin_eligible_rows)
     for row in rows:
         entropy_contested = entropy_threshold is not None and float(row["raw_policy_entropy"]) >= entropy_threshold
         margin_contested = (
@@ -491,11 +611,70 @@ def _sweep_row(
         "gate": gate,
         "entropy_threshold": entropy_threshold,
         "margin_threshold": margin_threshold,
-        "selection_context_count": count,
-        "margin_eligible_selection_context_count": len(margin_eligible_rows),
-        "forced_or_insufficient_context_count": forced_or_insufficient_context_count,
+        "rate_unit": "per_selection_context" if unit == "selection_context" else "per_decision_normalized",
+        "selection_context_count": count if unit == "selection_context" else None,
+        "decision_count": count if unit == "decision" else None,
+        "margin_eligible_selection_context_count": len(margin_eligible_rows) if unit == "selection_context" else None,
+        "margin_eligible_decision_count": len(margin_eligible_rows) if unit == "decision" else None,
+        "forced_or_insufficient_context_count": forced_or_insufficient_count if unit == "selection_context" else None,
+        "forced_or_insufficient_decision_count": forced_or_insufficient_count if unit == "decision" else None,
         "contested_count": contested,
         "contested_fraction": (contested / denominator) if denominator else None,
         "entropy_metric": "raw-shannon-nats-from-untempered-legal-priors",
         "margin_metric": "initial-candidate-value-top-two",
+        "decision_aggregation": (
+            "not_applicable"
+            if unit == "selection_context"
+            else "raw entropy per decision; scenario-weighted candidate margin over available contexts; one gate event per decision"
+        ),
+    }
+
+
+def _representativeness_summary(
+    records: Sequence[PublicDecisionRecord],
+    decision_rows: Sequence[Mapping[str, Any]],
+    skipped_decision_rows: Sequence[Mapping[str, Any]],
+    *,
+    config: PriorBeliefProfileConfig,
+) -> dict[str, Any]:
+    """Report which public prefix classes survived evaluation in each phase."""
+
+    profiled_by_phase = Counter(str(row["phase"]) for row in decision_rows)
+    skipped_by_phase: dict[str, list[Mapping[str, Any]]] = {phase: [] for phase in ("early", "mid", "late")}
+    for row in skipped_decision_rows:
+        skipped_by_phase[str(row["phase"])].append(row)
+    rows: list[dict[str, Any]] = []
+    for phase in ("early", "mid", "late"):
+        phase_records = [
+            record
+            for record in records
+            if phase_for_turn(
+                record.turn_index,
+                early_phase_max_turn=config.early_phase_max_turn,
+                mid_phase_max_turn=config.mid_phase_max_turn,
+            )
+            == phase
+        ]
+        summaries = [public_event_prefix_summary(record.public_resolved_action_rounds) for record in phase_records]
+        skipped = skipped_by_phase[phase]
+        rows.append(
+            {
+                "phase": phase,
+                "corpus_decision_count": len(phase_records),
+                "profiled_decision_count": profiled_by_phase[phase],
+                "skipped_decision_count": len(skipped),
+                "event_bearing_prefix_count": sum(summary["public_event_count"] > 0 for summary in summaries),
+                "public_event_count": sum(int(summary["public_event_count"]) for summary in summaries),
+                "unsupported_event_prefix_count": sum(
+                    summary["unsupported_public_event_count"] > 0 for summary in summaries
+                ),
+                "unsupported_public_event_count": sum(
+                    int(summary["unsupported_public_event_count"]) for summary in summaries
+                ),
+                "skip_reason_counts": dict(sorted(Counter(str(row["reason"]) for row in skipped).items())),
+            }
+        )
+    return {
+        "definition": "event-bearing and unsupported-event counts are derived only from persisted public event identifiers; skip reasons are evaluator/public-prefix outcomes.",
+        "by_phase": rows,
     }
