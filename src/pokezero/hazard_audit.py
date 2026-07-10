@@ -10,7 +10,7 @@ captured opponent mask.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, is_dataclass, replace
 import hashlib
 import json
@@ -662,46 +662,67 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
             if arm not in {"deterministic", "dirichlet_audit_only"}:
                 continue
             paired[(str(row["state_id"]), str(row["world_id"]))][arm] = row
-        complete = [arms for arms in paired.values() if set(arms) == {"deterministic", "dirichlet_audit_only"}]
-        off_rate = _rate(sum(bool(arms["deterministic"]["target_selected"]) for arms in complete), len(complete))
-        on_rate = _rate(sum(bool(arms["dirichlet_audit_only"]["target_selected"]) for arms in complete), len(complete))
+        paired_by_state: dict[str, list[Mapping[str, Mapping[str, Any]]]] = defaultdict(list)
+        for (state_id, _world_id), arms in paired.items():
+            if set(arms) == {"deterministic", "dirichlet_audit_only"}:
+                paired_by_state[state_id].append(arms)
+        state_choices = {
+            state_id: {
+                "deterministic": _strict_majority_choice(
+                    bool(arms["deterministic"]["target_selected"])
+                    for arms in world_pairs
+                ),
+                "dirichlet_audit_only": _strict_majority_choice(
+                    bool(arms["dirichlet_audit_only"]["target_selected"])
+                    for arms in world_pairs
+                ),
+            }
+            for state_id, world_pairs in paired_by_state.items()
+        }
+        complete = tuple(state_choices.values())
+        off_rate = _rate(sum(choice["deterministic"] for choice in complete), len(complete))
+        on_rate = _rate(sum(choice["dirichlet_audit_only"] for choice in complete), len(complete))
         toward_target = sum(
-            not bool(arms["deterministic"]["target_selected"])
-            and bool(arms["dirichlet_audit_only"]["target_selected"])
-            for arms in complete
+            not choice["deterministic"] and choice["dirichlet_audit_only"]
+            for choice in complete
         )
         away_from_target = sum(
-            bool(arms["deterministic"]["target_selected"])
-            and not bool(arms["dirichlet_audit_only"]["target_selected"])
-            for arms in complete
-        )
-        any_choice_changed = sum(
-            arms["deterministic"].get("selected_action_index")
-            != arms["dirichlet_audit_only"].get("selected_action_index")
-            for arms in complete
+            choice["deterministic"] and not choice["dirichlet_audit_only"]
+            for choice in complete
         )
         choice_delta[str(budget)] = {
-            "paired_low_prior_target_lines": len(complete),
-            "toward_low_prior_target_lines": toward_target,
-            "away_from_low_prior_target_lines": away_from_target,
+            "paired_low_prior_target_states": len(complete),
+            "paired_state_world_pairs": sum(len(world_pairs) for world_pairs in paired_by_state.values()),
+            "toward_low_prior_target_states": toward_target,
+            "away_from_low_prior_target_states": away_from_target,
             "choice_rate_off": off_rate,
             "choice_rate_on": on_rate,
             "delta_choice_on": _rate(toward_target - away_from_target, len(complete)),
-            "supplementary_any_action_change_rate": _rate(any_choice_changed, len(complete)),
+            "world_aggregation": "strict-majority target selection over paired valid belief worlds; exact ties resolve false",
             "interpretation": (
                 "noise_only_choice_sensitivity"
                 if budget == 0
                 else "search_choice_change_toward_low_prior_target"
             ),
-            "definition": "paired changes toward minus away from the low-prior hazard/spin target; this is a choice metric, not a rescue metric",
+            "definition": "per-state changes toward minus away from the low-prior hazard/spin target after strict-majority aggregation over paired belief worlds; this is a choice metric, not a rescue metric",
         }
 
     searched = [row for row in rows if row.get("status") == "searched"]
+    status_counts = Counter(str(row.get("status") or "missing_status") for row in rows)
+    invalid_reason_counts = Counter(
+        str(row.get("invalid_reason") or "missing_invalid_reason")
+        for row in rows
+        if row.get("status") == "search_invalid"
+    )
+    world_unavailable_records = status_counts["world_unavailable"]
+    rejected_records = status_counts["search_rejected"] + status_counts["target_branch_unavailable"]
+    invalid_records = status_counts["search_invalid"]
+    other_non_search_records = len(rows) - len(searched) - world_unavailable_records - rejected_records - invalid_records
     return {
         "definitions": {
             "E": "share of unique legal hazard/spin target lines with normalized legal prior at or below low_prior_threshold",
             "R_off": "deterministic rescue rate; a rescue is at least one re-visit, not merely the mandatory initial visit",
-            "DeltaChoice_on": "paired changes toward minus away from the low-prior hazard/spin target; budget 0 is noise-only sensitivity, never rescue",
+            "DeltaChoice_on": "per-state changes toward minus away from the low-prior hazard/spin target after strict-majority aggregation over paired belief worlds; budget 0 is noise-only sensitivity, never rescue",
             "entrenchment": "target_revisits == 0. Each legal target receives one mandatory initial-sweep visit per valid world, so entrenchment is never defined as target_visits == 0.",
         },
         "E": {
@@ -714,7 +735,12 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
         "coverage": {
             "records": len(rows),
             "searched_records": len(searched),
-            "unavailable_records": len(rows) - len(searched),
+            "status_counts": dict(sorted(status_counts.items())),
+            "world_unavailable_records": world_unavailable_records,
+            "rejected_records": rejected_records,
+            "invalid_records": invalid_records,
+            "invalid_reason_counts": dict(sorted(invalid_reason_counts.items())),
+            "other_non_search_records": other_non_search_records,
             "unique_target_lines": total_states,
         },
     }
@@ -1151,6 +1177,13 @@ def _stable_seed(*parts: object) -> int:
 
 def _rate(numerator: int, denominator: int) -> float | None:
     return None if denominator == 0 else round(numerator / denominator, 8)
+
+
+def _strict_majority_choice(choices: Iterable[bool]) -> bool:
+    """Collapse paired belief worlds to a conservative per-state target choice."""
+
+    values = tuple(bool(choice) for choice in choices)
+    return sum(values) * 2 > len(values)
 
 
 def _close_env(env: PokeZeroEnv) -> None:

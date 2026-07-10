@@ -247,11 +247,50 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(aggregate["R_off"]["24"]["rate"], 0.5)
         self.assertIn("target_revisits == 0", aggregate["definitions"]["entrenchment"])
         delta = aggregate["DeltaChoice_on"]["0"]
-        self.assertEqual(delta["paired_low_prior_target_lines"], 2)
-        self.assertEqual(delta["toward_low_prior_target_lines"], 1)
-        self.assertEqual(delta["away_from_low_prior_target_lines"], 0)
+        self.assertEqual(delta["paired_low_prior_target_states"], 2)
+        self.assertEqual(delta["paired_state_world_pairs"], 2)
+        self.assertEqual(delta["toward_low_prior_target_states"], 1)
+        self.assertEqual(delta["away_from_low_prior_target_states"], 0)
         self.assertEqual(delta["interpretation"], "noise_only_choice_sensitivity")
         self.assertEqual(delta["delta_choice_on"], 0.5)
+        self.assertEqual(aggregate["coverage"]["status_counts"], {"searched": 18})
+        self.assertEqual(aggregate["coverage"]["invalid_records"], 0)
+
+    def test_delta_choice_collapses_paired_worlds_to_one_conservative_state_vote(self) -> None:
+        records = []
+        for world_id, dirichlet_target_selected in (("w0", True), ("w1", False)):
+            records.extend(
+                (
+                    {
+                        "state_id": "one-state",
+                        "world_id": world_id,
+                        "arm": "deterministic",
+                        "extra_visits": 24,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": False,
+                    },
+                    {
+                        "state_id": "one-state",
+                        "world_id": world_id,
+                        "arm": "dirichlet_audit_only",
+                        "extra_visits": 24,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": dirichlet_target_selected,
+                    },
+                )
+            )
+
+        delta = aggregate_hazard_audit_records(records)["DeltaChoice_on"]["24"]
+
+        self.assertEqual(delta["paired_low_prior_target_states"], 1)
+        self.assertEqual(delta["paired_state_world_pairs"], 2)
+        self.assertEqual(delta["toward_low_prior_target_states"], 0)
+        self.assertEqual(delta["delta_choice_on"], 0.0)
+        self.assertIn("exact ties resolve false", delta["world_aggregation"])
 
     def test_audit_consumes_the_generic_public_decision_corpus_schema(self) -> None:
         source = _decision()
@@ -340,6 +379,11 @@ class HazardAuditTest(unittest.TestCase):
         self.assertTrue(
             all(record["total_visits"] != record["expected_total_visits"] for record in invalid)
         )
+        coverage = payload["aggregate"]["coverage"]
+        self.assertEqual(coverage["invalid_records"], 6)
+        self.assertEqual(coverage["invalid_reason_counts"], {"mandatory_sweep_visit_mismatch": 6})
+        self.assertEqual(coverage["world_unavailable_records"], 0)
+        self.assertEqual(coverage["rejected_records"], 0)
 
     def test_records_are_deterministic_for_fixed_public_state_world_and_puct(self) -> None:
         decision = _decision()
