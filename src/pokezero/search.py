@@ -48,7 +48,11 @@ class RootPUCTVisitBudgetContext:
 
     @property
     def policy_entropy(self) -> float:
-        return -sum(prior * math.log(prior) for _action, prior in self.action_priors if prior > 0.0)
+        action_count = len(self.action_priors)
+        if action_count < 2:
+            return 0.0
+        entropy = -sum(prior * math.log(prior) for _action, prior in self.action_priors if prior > 0.0)
+        return entropy / math.log(action_count)
 
     @property
     def value_margin(self) -> float | None:

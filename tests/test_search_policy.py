@@ -2231,7 +2231,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(budget_context.action_priors, ((0, 0.9), (1, 0.1)))
         self.assertEqual(budget_context.initial_values, ((0, -1.0), (1, 1.0)))
         self.assertAlmostEqual(budget_context.value_margin or 0.0, 2.0)
-        self.assertGreater(budget_context.policy_entropy, 0.0)
+        self.assertAlmostEqual(budget_context.policy_entropy, 0.4689955935892812)
         self.assertEqual(step.metadata["root_puct_total_visits"], 5)
         self.assertEqual(step.metadata["root_puct_root_visit_budget_mode"], "adaptive")
         self.assertEqual(step.metadata["root_puct_root_visit_budget_selector"], "test-adaptive")
@@ -2291,6 +2291,23 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(search.configured_root_visit_budget, 1)
         self.assertEqual(len(budget_contexts), 1)
         self.assertEqual(budget_contexts[0].action_priors, ((0, 0.9), (1, 0.1)))
+
+    def test_puct_visit_budget_context_has_zero_entropy_for_one_legal_action(self) -> None:
+        budget_contexts = []
+        puct_branch_search(
+            env=ImmediateOutcomeEnv(label="branch"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            root_visit_budget_resolver=lambda budget_context: budget_contexts.append(budget_context) or None,
+        )
+
+        self.assertEqual(len(budget_contexts), 1)
+        self.assertEqual(budget_contexts[0].policy_entropy, 0.0)
 
     def test_root_puct_policy_visits_selection_tie_prefers_prior(self) -> None:
         policy = RootPUCTSearchPolicy(
