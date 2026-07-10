@@ -89,7 +89,9 @@ python -m pokezero.neural_cli benchmark --checkpoint runs/policy.pt --games 50 \
 Capture a `pokezero.public-decision-corpus.v1` sidecar from controlled raw-policy FoulPlay games.
 The sidecar retains only the acting player's encoded observation/history and legal mask, public
 resolved action rounds, and public belief view. It never serializes opponent observations, request
-payloads, or opponent legal masks. Capture another non-overlapping seed band with
+payloads, opponent legal masks, or opponent request-local action indexes/slot order. Resolved
+historical actions are public move IDs, switched species, or public event IDs and are resolved only
+inside a sampled belief world. Capture another non-overlapping seed band with
 `--append-public-decision-corpus` until the corpus has at least 2,000 valid `p1` decisions:
 
 ```bash
@@ -102,9 +104,10 @@ pokezero-foulplay-capture --checkpoint runs/policy.pt --out runs/foulplay-band-0
   --games 128 --seed-start 129 --showdown-root /path/to/pokemon-showdown
 ```
 
-Profile raw, untempered checkpoint priors and public-belief worlds. The command rejects smaller
-corpora and privileged opponent-mask mode, disables root noise, and records checkpoint, corpus,
-schema, and configuration hashes in the report:
+Profile raw, untempered checkpoint priors and public-belief worlds. The command skips and records
+individual prefixes that cannot replay publicly, requires at least 2,000 successfully profiled
+decisions, rejects privileged opponent-mask mode, disables root noise, and records checkpoint,
+corpus, schema, and configuration hashes in the report:
 
 ```bash
 pokezero-neural prior-belief-profile --corpus runs/public-decisions.jsonl \

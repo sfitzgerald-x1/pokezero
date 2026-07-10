@@ -14,13 +14,17 @@ from typing import Any, Callable, Sequence
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .determinization import gen3_randbat_belief_start_override
-from .replay_branching import ReplayActionRound, replay_action_rounds
+from .replay_branching import replay_action_rounds
 from .prior_belief_profile import (
     WorldScenarioEvaluation,
     public_belief_sampling_profile,
     public_policy_context,
 )
-from .public_decision_corpus import PublicDecisionRecord
+from .public_decision_corpus import (
+    PublicActionIdentifier,
+    PublicDecisionRecord,
+    PublicResolvedActionRound,
+)
 
 
 ObservationValueEvaluator = Callable[[tuple[Any, ...]], float]
@@ -69,10 +73,6 @@ class PublicPrefixCandidateValueEvaluator:
             acting_player=record.acting_player,
             scenario_count=self._scenario_count,
         )
-        action_rounds = tuple(
-            ReplayActionRound(turn_index=round_.turn_index, actions=round_.actions)
-            for round_ in record.public_resolved_action_rounds
-        )
         rows: list[WorldScenarioEvaluation] = []
         for world_index in range(belief.sample_count):
             rng = random.Random(f"{record.decision_id}:public-belief-world:{world_index}")
@@ -86,7 +86,7 @@ class PublicPrefixCandidateValueEvaluator:
             for scenario_index, (opponent_action, scenario_weight, scenario_label) in enumerate(scenarios):
                 candidate_values = self._candidate_values(
                     record,
-                    action_rounds=action_rounds,
+                    public_action_rounds=record.public_resolved_action_rounds,
                     start_override=override,
                     opponent_action=opponent_action,
                 )
@@ -106,7 +106,7 @@ class PublicPrefixCandidateValueEvaluator:
         self,
         record: PublicDecisionRecord,
         *,
-        action_rounds: tuple[ReplayActionRound, ...],
+        public_action_rounds: tuple[PublicResolvedActionRound, ...],
         start_override: Any,
         opponent_action: int,
     ) -> dict[int, float]:
@@ -117,13 +117,12 @@ class PublicPrefixCandidateValueEvaluator:
                 continue
             env = self._env_factory()
             try:
-                prefix = replay_action_rounds(
+                prefix = _replay_public_action_rounds(
                     env,
                     seed=record.seed,
                     format_id=record.format_id,
-                    action_rounds=action_rounds,
+                    public_action_rounds=public_action_rounds,
                     start_override=start_override,
-                    check_prefix_observations=False,
                 )
                 if prefix.terminal is not None:
                     continue
@@ -180,6 +179,79 @@ def _hidden_opponent_scenarios(
         ranked = [(action, 1.0) for action, _weight in ranked]
     opponent_player = "p2" if acting_player == "p1" else "p1"
     return tuple(
-        (action, weight / total, f"hidden-prior:{opponent_player}:{action}")
-        for action, weight in ranked
+        # The index is in-memory only. Persisted context labels identify the
+        # model-ranked scenario without exposing a request-local slot.
+        (action, weight / total, f"hidden-prior:{opponent_player}:rank-{rank}")
+        for rank, (action, weight) in enumerate(ranked)
     )
+
+
+def _replay_public_action_rounds(
+    env: Any,
+    *,
+    seed: int,
+    format_id: str,
+    public_action_rounds: tuple[PublicResolvedActionRound, ...],
+    start_override: Any,
+) -> Any:
+    """Replay a public prefix by resolving identifiers inside this sampled world."""
+
+    replay_action_rounds(
+        env,
+        seed=seed,
+        format_id=format_id,
+        action_rounds=(),
+        start_override=start_override,
+        check_prefix_observations=False,
+    )
+    for expected_turn, action_round in enumerate(public_action_rounds):
+        if action_round.turn_index != expected_turn:
+            raise ValueError("public action rounds must be contiguous from turn zero.")
+        requested_players = tuple(env.requested_players())
+        if set(requested_players) != set(action_round.actions):
+            raise ValueError("sampled world request shape does not match the public action round.")
+        actions = {
+            player: _resolve_public_action_identifier(
+                env.observe(player),
+                identifier,
+            )
+            for player, identifier in action_round.actions.items()
+        }
+        env.step(actions)
+    return type(
+        "PublicReplayPrefix",
+        (),
+        {"terminal": env.terminal(), "requested_players": tuple(env.requested_players())},
+    )()
+
+
+def _resolve_public_action_identifier(
+    observation: Any,
+    identifier: PublicActionIdentifier,
+) -> int:
+    """Resolve a public move/species ID against the sampled world's legal request."""
+
+    candidates = observation.metadata.get("action_candidates")
+    if not isinstance(candidates, Sequence):
+        raise ValueError("sampled world observation has no action candidates.")
+    matches: list[int] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        action_index = candidate.get("action_index")
+        if not isinstance(action_index, int) or not observation.legal_action_mask[action_index]:
+            continue
+        if identifier.kind == "move" and candidate.get("kind") == "move":
+            if str(candidate.get("move_id") or "").lower() == str(identifier.move_id).lower():
+                matches.append(action_index)
+        elif identifier.kind == "switch" and candidate.get("kind") == "switch":
+            species = candidate.get("switched_species")
+            if species is None and isinstance(candidate.get("pokemon"), dict):
+                species = candidate["pokemon"].get("species")
+            if str(species or "").lower() == str(identifier.switched_species).lower():
+                matches.append(action_index)
+    if identifier.kind == "event":
+        raise ValueError("public event identifier cannot be replayed as a sampled-world action.")
+    if not matches:
+        raise ValueError("public action identifier is unavailable in the sampled world.")
+    return min(matches)

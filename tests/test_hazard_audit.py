@@ -1,4 +1,7 @@
 import json
+from dataclasses import replace
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -10,8 +13,6 @@ from pokezero.hazard_audit import (
     AuditWorld,
     HazardAuditDecision,
     PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
-    PublicActorObservation,
-    PublicActionRound,
     PublicBeliefWorldProvider,
     aggregate_hazard_audit_records,
     hazard_audit_decisions_from_trajectory,
@@ -20,6 +21,13 @@ from pokezero.hazard_audit import (
 )
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero.public_decision_corpus import (
+    PublicDecisionCorpusWriter,
+    PublicDecisionRecord,
+    PublicObservation,
+    public_corpus_manifest,
+    public_decision_id,
+)
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -159,28 +167,42 @@ def _decision() -> HazardAuditDecision:
             ]
         },
     )
-    return HazardAuditDecision(
+    public_observation = PublicObservation.from_observation(observation)
+    prototype = PublicDecisionRecord(
+        decision_id="pending",
         battle_id="audit-battle",
-        format_id="gen3randombattle",
         seed=7,
+        format_id="gen3randombattle",
+        acting_player="p1",
+        turn_index=0,
+        recorded_action_index=0,
+        observation=public_observation,
+        history=(),
+        current_legal_action_mask=_mask(0, 1),
+        public_resolved_action_rounds=(),
+        public_belief_view={"self_slot": "p1", "opponent_slot": "p2", "self_pokemon": [], "opponent_pokemon": []},
+    )
+    record = replace(prototype, decision_id=public_decision_id(prototype))
+    return HazardAuditDecision(
+        public_record=record,
         driver_id="fixed-driver",
-        player_id="p1",
-        decision_round=0,
         target_action_index=1,
         target_move_id="spikes",
-        observation_history=(PublicActorObservation(turn_index=0, observation=observation),),
-        public_action_rounds=(),
     )
 
 
 class HazardAuditTest(unittest.TestCase):
-    def test_corpus_state_is_public_only_and_replay_uses_placeholder_opponent_steps(self) -> None:
-        p1_first = _observation(0, 1)
+    def test_corpus_state_is_public_only_and_contains_no_replay_action_indexes(self) -> None:
+        belief_view = {"self_slot": "p1", "opponent_slot": "p2", "self_pokemon": [], "opponent_pokemon": []}
+        p1_first = _observation(0, 1, metadata={"belief_view": belief_view})
         p2_private = _observation(0, metadata={"request": {"private": "do-not-retain"}})
         p1_target = _observation(
             0,
             1,
-            metadata={"action_candidates": [{"action_index": 1, "move_id": "Rapid Spin", "legal": True}]},
+            metadata={
+                "belief_view": belief_view,
+                "action_candidates": [{"action_index": 1, "move_id": "Rapid Spin", "legal": True}],
+            },
         )
         trajectory = BattleTrajectory(battle_id="source", format_id="gen3randombattle", seed=3)
         trajectory.append(TrajectoryStep("p1", 0, p1_first, p1_first.legal_action_mask, 0))
@@ -195,9 +217,10 @@ class HazardAuditTest(unittest.TestCase):
         self.assertNotIn("do-not-retain", serialized)
         self.assertNotIn('"request"', serialized)
         self.assertNotIn("requested_legal_action_masks", serialized)
-        opponent_step = next(step for step in payload["replay_trajectory"]["steps"] if step["player_id"] == "p2")
-        self.assertEqual(opponent_step["legal_action_mask"], [True] * ACTION_COUNT)
-        self.assertTrue(opponent_step["metadata"]["hazard_audit_public_replay_placeholder"])
+        self.assertEqual(payload["public_decision"]["schema_version"], PUBLIC_DECISION_CORPUS_SCHEMA_VERSION)
+        self.assertNotIn("replay_trajectory", payload)
+        rounds = payload["public_decision"]["public_resolved_action_rounds"]
+        self.assertNotIn("action_index", json.dumps(rounds, sort_keys=True))
         with self.assertRaisesRegex(ValueError, "forbidden private key"):
             AuditWorld("bad", {}, metadata={"requested_legal_action_masks": {"p2": [True]}})
         with self.assertRaisesRegex(ValueError, "forbidden private key"):
@@ -294,20 +317,24 @@ class HazardAuditTest(unittest.TestCase):
 
     def test_audit_consumes_the_generic_public_decision_corpus_schema(self) -> None:
         source = _decision()
-        corpus = {
-            "schema_version": PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
-            "records": [source.to_public_decision_record()],
-        }
-
-        decisions = hazard_audit_decisions_from_public_corpus(corpus)
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint-hash",
+            belief_set_source_hash=None,
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "step2-public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                writer.append(source.public_record)
+            decisions = hazard_audit_decisions_from_public_corpus(path)
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].target_move_id, "spikes")
         self.assertEqual(decisions[0].target_action_index, 1)
         self.assertEqual(decisions[0].observation.legal_action_mask, _mask(0, 1))
         self.assertEqual(decisions[0].public_action_rounds, ())
-        with self.assertRaisesRegex(ValueError, "requires 'pokezero.public-decision-corpus.v1'"):
-            hazard_audit_decisions_from_public_corpus({"schema_version": "wrong", "records": []})
+        with self.assertRaisesRegex(ValueError, "canonical PublicDecisionCorpus"):
+            hazard_audit_decisions_from_public_corpus({})
 
     def test_public_belief_provider_replays_sampled_world_and_uses_its_own_opponent_observation(self) -> None:
         decision = _decision()
@@ -331,8 +358,8 @@ class HazardAuditTest(unittest.TestCase):
             def planner(context, scenario, scenario_index, rng):
                 del scenario, scenario_index, rng
                 self.assertEqual(context.player_id, "p1")
-                self.assertEqual(context.requested_observations, {})
-                self.assertEqual(context.requested_legal_action_masks, {})
+                self.assertEqual(set(context.requested_observations), {"p1"})
+                self.assertEqual(set(context.requested_legal_action_masks), {"p1"})
                 return lambda: start_override
 
             return planner

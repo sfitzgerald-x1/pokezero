@@ -19,6 +19,7 @@ from pokezero.prior_belief_profile import (
     profile_public_corpus,
     profile_public_decisions,
     public_belief_sampling_profile,
+    public_policy_context,
 )
 from pokezero.public_decision_corpus import (
     PublicDecisionCorpus,
@@ -119,7 +120,10 @@ class PublicCorpusTest(unittest.TestCase):
         encoded = records[1].to_dict()
         self.assertNotIn("request", str(encoded))
         self.assertNotIn("opponent_legal", str(encoded))
-        self.assertEqual(records[1].public_resolved_action_rounds[0].actions, {"p1": 0, "p2": 0})
+        round_actions = records[1].public_resolved_action_rounds[0].actions
+        self.assertEqual(round_actions["p1"].event_id, "unresolved-public-action")
+        self.assertEqual(round_actions["p2"].event_id, "unresolved-public-action")
+        self.assertNotIn("action_index", str(records[1].to_dict()["public_resolved_action_rounds"]))
         profile_kwargs = {
             "prior_evaluator": lambda _history: (0.6, 0.4) + (0.0,) * (ACTION_COUNT - 2),
             "candidate_value_evaluator": lambda _record: (
@@ -149,6 +153,36 @@ class PublicCorpusTest(unittest.TestCase):
         record["opponent_observation"] = {"secret": 1}
         with self.assertRaisesRegex(ValueError, "forbidden private field"):
             PublicDecisionRecord.from_dict(record)
+
+    def test_reader_rejects_request_local_public_action_fields(self) -> None:
+        record = _record().to_dict()
+        record["public_resolved_action_rounds"] = [
+            {
+                "turn_index": 0,
+                "actions": {"p2": {"kind": "move", "move_id": "tackle", "action_index": 0}},
+            }
+        ]
+        record["turn_index"] = 1
+        with self.assertRaisesRegex(ValueError, "request-local"):
+            PublicDecisionRecord.from_dict(record)
+
+    def test_history_keeps_source_turns_across_asymmetric_request_gap(self) -> None:
+        first = _observation(0, 1, metadata={"turn_number": 1})
+        p2_private = _observation(0, metadata={"request": {"private": "do-not-read"}})
+        third = _observation(0, 1, metadata={"turn_number": 3})
+        current = _observation(0, 1, metadata={"turn_number": 4})
+        trajectory = BattleTrajectory(battle_id="asymmetric-gap", format_id="gen3randombattle", seed=8)
+        trajectory.append(TrajectoryStep("p1", 0, first, _mask(0, 1), 0))
+        trajectory.append(TrajectoryStep("p2", 1, p2_private, _mask(0), 0))
+        trajectory.append(TrajectoryStep("p1", 2, third, _mask(0, 1), 0))
+        trajectory.append(TrajectoryStep("p1", 3, current, _mask(0, 1), 0))
+        record = public_decision_records_from_trajectory(trajectory)[-1]
+
+        context = public_policy_context(record)
+
+        self.assertEqual([step.turn_index for step in context.trajectory.steps], [0, 2])
+        self.assertEqual([step.observation.metadata["turn_number"] for step in context.trajectory.steps], [1, 3])
+        self.assertEqual(context.observation.metadata["turn_number"], 4)
 
     def test_writer_appends_controlled_seed_bands_without_duplicate_decisions(self) -> None:
         record = _record()
@@ -230,6 +264,32 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertAlmostEqual(profile.uncertainty_bits, 1.584962500721156)
         self.assertEqual(profile.uncertain_slot_count, 1)
 
+    def test_empty_replay_contexts_are_skipped_and_forced_margin_is_unavailable(self) -> None:
+        record = _record()
+        skipped = profile_public_decisions(
+            [record],
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda _record: (),
+        )
+        self.assertEqual(skipped["decision_count"], 0)
+        self.assertEqual(skipped["skipped_decision_count"], 1)
+        self.assertEqual(skipped["skipped_decision_rows"][0]["reason"], "no_public_replay_contexts")
+
+        forced = profile_public_decisions(
+            [record],
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda _record: (
+                WorldScenarioEvaluation(0, 0, "forced", 1.0, {0: 0.2}),
+            ),
+            config=PriorBeliefProfileConfig(entropy_thresholds=(0.0,), margin_thresholds=(0.3,)),
+        )
+        self.assertIsNone(forced["decision_rows"][0]["initial_candidate_value_top_two_margin"])
+        margin_sweep = next(row for row in forced["threshold_sweeps"] if row["gate"] == "margin")
+        self.assertEqual(margin_sweep["margin_eligible_selection_context_count"], 0)
+        self.assertEqual(margin_sweep["forced_or_insufficient_context_count"], 1)
+        self.assertEqual(margin_sweep["contested_count"], 0)
+        self.assertIsNone(margin_sweep["contested_fraction"])
+
     def test_corpus_floor_rejects_less_than_two_thousand_decisions(self) -> None:
         record = _record()
         corpus = PublicDecisionCorpus(
@@ -243,6 +303,19 @@ class PriorBeliefProfileTest(unittest.TestCase):
                 candidate_value_evaluator=lambda _record: (
                     WorldScenarioEvaluation(0, 0, "single", 1.0, {0: 0.0}),
                 ),
+            )
+
+    def test_corpus_floor_counts_successfully_profiled_decisions_not_rows(self) -> None:
+        record = _record()
+        corpus = PublicDecisionCorpus(
+            manifest={"schema_version": "pokezero.public-decision-corpus.v1"},
+            decisions=(record,) * MINIMUM_PROFILE_DECISIONS,
+        )
+        with self.assertRaisesRegex(ValueError, "successfully profiled"):
+            profile_public_corpus(
+                corpus,
+                prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                candidate_value_evaluator=lambda _record: (),
             )
 
     def test_cli_rejects_privileged_mask_mode_before_opening_inputs(self) -> None:

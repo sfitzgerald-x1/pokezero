@@ -105,7 +105,7 @@ class PriorBeliefProfileConfig:
 class _PublicReplayStep:
     player_id: str
     turn_index: int
-    action_index: int
+    action_index: int | None
     observation: Any | None = None
 
 
@@ -141,25 +141,22 @@ def phase_for_turn(
 def public_policy_context(record: PublicDecisionRecord) -> PolicyContext:
     """Build the minimal trajectory shape used by public belief determinization.
 
-    Opponent entries intentionally have no observation. Their resolved action
-    is retained because it is public after resolution and required to replay a
-    prefix, but no opponent request or legal mask is materialized.
+    The public belief sampler receives only actor observations at their source
+    decision rounds. Resolved public action identifiers are intentionally not
+    converted to request-local indexes here; sampled-world replay resolves them
+    only after materializing that world.
     """
 
-    own_history = {index: observation for index, observation in enumerate(record.observations()[:-1])}
-    steps: list[_PublicReplayStep] = []
-    for action_round in record.public_resolved_action_rounds:
-        for player, action_index in action_round.actions.items():
-            observation = own_history.get(action_round.turn_index) if player == record.acting_player else None
-            steps.append(
-                _PublicReplayStep(
-                    player_id=player,
-                    turn_index=action_round.turn_index,
-                    action_index=action_index,
-                    observation=observation,
-                )
-            )
-    trajectory = _PublicReplayTrajectory(steps=tuple(steps))
+    own_history = tuple(
+        _PublicReplayStep(
+            player_id=record.acting_player,
+            turn_index=entry.turn_index,
+            action_index=None,
+            observation=entry.observation.to_observation(belief_view=record.public_belief_view),
+        )
+        for entry in record.history
+    )
+    trajectory = _PublicReplayTrajectory(steps=own_history)
     return PolicyContext(
         player_id=record.acting_player,
         decision_round_index=record.turn_index,
@@ -212,6 +209,7 @@ def profile_public_decisions(
         raise ValueError("prior/belief profile requires at least one public decision.")
     decision_rows: list[dict[str, Any]] = []
     selection_context_rows: list[dict[str, Any]] = []
+    skipped_decision_rows: list[dict[str, Any]] = []
     for record in records:
         legal_actions = tuple(index for index, legal in enumerate(record.current_legal_action_mask) if legal)
         if not legal_actions:
@@ -222,11 +220,15 @@ def profile_public_decisions(
         ranked_priors = sorted(((index, priors[index]) for index in legal_actions), key=lambda item: (-item[1], item[0]))
         top1_action, top1_prior = ranked_priors[0]
         top2_action, top2_prior = ranked_priors[1] if len(ranked_priors) > 1 else (None, 0.0)
-        belief = public_belief_sampling_profile(
-            record,
-            sample_cap=config.world_sample_cap,
-            set_source=belief_set_source,
-        )
+        try:
+            belief = public_belief_sampling_profile(
+                record,
+                sample_cap=config.world_sample_cap,
+                set_source=belief_set_source,
+            )
+        except ValueError:
+            skipped_decision_rows.append(_skipped_decision_row(record, reason="invalid_public_belief"))
+            continue
         phase = phase_for_turn(
             record.turn_index,
             early_phase_max_turn=config.early_phase_max_turn,
@@ -234,12 +236,15 @@ def profile_public_decisions(
         )
         contexts = tuple(candidate_value_evaluator(record))
         if not contexts:
-            raise ValueError(f"public decision {record.decision_id} produced no initial candidate-value contexts.")
+            skipped_decision_rows.append(_skipped_decision_row(record, reason="no_public_replay_contexts"))
+            continue
         margins: list[tuple[float, float]] = []
         for context in contexts:
             _validate_context_legal_candidates(record, context)
             margin, value_top1, value_top2 = initial_candidate_value_top_two_margin(context.candidate_values)
-            margins.append((context.scenario_weight, margin))
+            if margin is not None:
+                margins.append((context.scenario_weight, margin))
+            margin_available = margin is not None
             selection_context_rows.append(
                 {
                     "decision_id": record.decision_id,
@@ -261,6 +266,8 @@ def profile_public_decisions(
                     "initial_candidate_value_top1": value_top1,
                     "initial_candidate_value_top2": value_top2,
                     "initial_candidate_value_top_two_margin": margin,
+                    "candidate_margin_available": margin_available,
+                    "candidate_value_context_kind": "competitive" if margin_available else "forced",
                     "selection_gate_inputs": {
                         "policy_entropy": raw_entropy,
                         "value_margin": margin,
@@ -270,7 +277,11 @@ def profile_public_decisions(
                     },
                 }
             )
-        weighted_margin = sum(weight * margin for weight, margin in margins) / sum(weight for weight, _ in margins)
+        weighted_margin = (
+            sum(weight * margin for weight, margin in margins) / sum(weight for weight, _ in margins)
+            if margins
+            else None
+        )
         decision_rows.append(
             {
                 "decision_id": record.decision_id,
@@ -290,6 +301,7 @@ def profile_public_decisions(
                 "top2_prior": top2_prior,
                 "top2_prior_mass": top1_prior + top2_prior,
                 "initial_candidate_value_top_two_margin": weighted_margin,
+                "candidate_margin_available": weighted_margin is not None,
                 "belief_combination_count": belief.combination_count,
                 "belief_uncertainty_bits": belief.uncertainty_bits,
                 "belief_uncertain_slot_count": belief.uncertain_slot_count,
@@ -309,7 +321,10 @@ def profile_public_decisions(
         "public_corpus_schema_sha256": PUBLIC_DECISION_CORPUS_SCHEMA_SHA256,
         "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
         "opponent_legal_mask_mode": "hidden",
+        "corpus_decision_count": len(records),
         "decision_count": len(decision_rows),
+        "skipped_decision_count": len(skipped_decision_rows),
+        "skipped_decision_rows": skipped_decision_rows,
         "selection_context_count": len(selection_context_rows),
         "decision_rows": decision_rows,
         "selection_context_rows": selection_context_rows,
@@ -350,10 +365,15 @@ def profile_public_corpus(
             "corpus_manifest": dict(corpus.manifest),
         },
     )
+    if report["decision_count"] < minimum_decisions:
+        raise ValueError(
+            f"prior/belief profiling requires at least {minimum_decisions} successfully profiled p1 decisions; "
+            f"corpus contains {len(corpus.decisions)} rows but only {report['decision_count']} produced public replay contexts."
+        )
     return report
 
 
-def initial_candidate_value_top_two_margin(candidate_values: Mapping[int, float]) -> tuple[float, float, float | None]:
+def initial_candidate_value_top_two_margin(candidate_values: Mapping[int, float]) -> tuple[float | None, float, float | None]:
     """Match the root search mandatory-sweep ranking: value descending, action ascending ties."""
 
     ranked = sorted(((int(action), float(value)) for action, value in candidate_values.items()), key=lambda item: (-item[1], item[0]))
@@ -361,7 +381,7 @@ def initial_candidate_value_top_two_margin(candidate_values: Mapping[int, float]
         raise ValueError("candidate_values must not be empty.")
     top1 = ranked[0][1]
     top2 = ranked[1][1] if len(ranked) > 1 else None
-    return (top1 - top2 if top2 is not None else 0.0, top1, top2)
+    return (top1 - top2 if top2 is not None else None, top1, top2)
 
 
 def _normalized_raw_legal_priors(raw_priors: Sequence[float], legal_actions: Sequence[int]) -> tuple[float, ...]:
@@ -387,6 +407,15 @@ def _validate_context_legal_candidates(record: PublicDecisionRecord, context: Wo
         raise ValueError(
             f"initial candidate sweep for {record.decision_id} contains acting-player illegal actions: {illegal}"
         )
+
+
+def _skipped_decision_row(record: PublicDecisionRecord, *, reason: str) -> dict[str, Any]:
+    return {
+        "decision_id": record.decision_id,
+        "battle_id": record.battle_id,
+        "turn_index": record.turn_index,
+        "reason": reason,
+    }
 
 
 def _threshold_sweeps(
@@ -440,10 +469,15 @@ def _sweep_row(
     margin_threshold: float | None,
 ) -> dict[str, Any]:
     contested = 0
+    margin_eligible_rows = [
+        row for row in rows if bool(row.get("candidate_margin_available"))
+    ]
+    forced_or_insufficient_context_count = len(rows) - len(margin_eligible_rows)
     for row in rows:
         entropy_contested = entropy_threshold is not None and float(row["raw_policy_entropy"]) >= entropy_threshold
         margin_contested = (
             margin_threshold is not None
+            and bool(row.get("candidate_margin_available"))
             and float(row["initial_candidate_value_top_two_margin"]) <= margin_threshold
         )
         if (gate == "entropy" and entropy_contested) or (gate == "margin" and margin_contested) or (
@@ -451,14 +485,17 @@ def _sweep_row(
         ):
             contested += 1
     count = len(rows)
+    denominator = len(margin_eligible_rows) if gate == "margin" else count
     return {
         "phase": phase,
         "gate": gate,
         "entropy_threshold": entropy_threshold,
         "margin_threshold": margin_threshold,
         "selection_context_count": count,
+        "margin_eligible_selection_context_count": len(margin_eligible_rows),
+        "forced_or_insufficient_context_count": forced_or_insufficient_context_count,
         "contested_count": contested,
-        "contested_fraction": (contested / count) if count else None,
+        "contested_fraction": (contested / denominator) if denominator else None,
         "entropy_metric": "raw-shannon-nats-from-untempered-legal-priors",
         "margin_metric": "initial-candidate-value-top-two",
     }

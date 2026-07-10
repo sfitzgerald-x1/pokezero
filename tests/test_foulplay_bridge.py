@@ -22,6 +22,7 @@ from pokezero.foulplay_bridge import (
     FoulPlayProcessExitError,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
+    _capture_resolved_public_action_round,
     _build_policy,
     _foulplay_command,
     _foulplay_env,
@@ -65,6 +66,32 @@ class FoulPlayBridgeTest(unittest.TestCase):
             parser.parse_args(
                 ["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl", "--policy-mode", "root-puct"]
             )
+
+    def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
+        state = _ControlledBattleState(
+            battle_id="public-round",
+            seed=7,
+            format_id="gen3randombattle",
+            public_lines=["|switch|p1a: Lead|Pikachu, L100|100/100"],
+        )
+        _capture_resolved_public_action_round(state, 0)
+        state.previous_requested_players = ("p1", "p2")
+        state.public_lines.extend(
+            (
+                "|move|p1a: Lead|Thunderbolt|p2a: Rival",
+                "|move|p2a: Rival|Earthquake|p1a: Lead",
+            )
+        )
+
+        _capture_resolved_public_action_round(state, 1)
+
+        payload = state.public_resolved_action_rounds[0].to_dict()
+        self.assertEqual(payload["actions"]["p1"], {"kind": "move", "move_id": "thunderbolt"})
+        self.assertEqual(payload["actions"]["p2"], {"kind": "move", "move_id": "earthquake"})
+        serialized = json.dumps(payload, sort_keys=True)
+        self.assertNotIn("action_index", serialized)
+        self.assertNotIn("move_slot", serialized)
+        self.assertNotIn("raw_choice", serialized)
 
     def test_capture_cli_requires_showdown_root(self) -> None:
         with self.assertRaises(SystemExit):

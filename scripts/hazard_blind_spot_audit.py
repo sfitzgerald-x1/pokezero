@@ -30,6 +30,7 @@ from pokezero.neural_policy import (
 from pokezero.online_client import build_agent
 from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.policy import MaxDamagePolicy
+from pokezero.public_decision_corpus import load_public_decision_corpus
 from pokezero.randbat import load_gen3_randbat_source_cached
 
 
@@ -41,7 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--public-corpus",
         type=Path,
-        help="Step 2 pokezero.public-decision-corpus.v1 JSON. When set, fixed-driver capture is skipped.",
+        help="Step 2 pokezero.public-decision-corpus.v1 JSONL. When set, fixed-driver capture is skipped.",
     )
     parser.add_argument("--games", type=int, default=60, help="fixed-driver games used to build the corpus")
     parser.add_argument("--seed-start", type=int, default=1)
@@ -69,15 +70,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         env_config_kwargs["feature_masks"] = feature_masks
     env_config = LocalShowdownConfig(**env_config_kwargs)
     if args.public_corpus is not None:
-        public_corpus_payload = json.loads(args.public_corpus.read_text(encoding="utf-8"))
-        if not isinstance(public_corpus_payload, dict):
-            raise ValueError("--public-corpus must contain a JSON object.")
-        corpus = hazard_audit_decisions_from_public_corpus(public_corpus_payload)
+        public_corpus = load_public_decision_corpus(args.public_corpus)
+        corpus = hazard_audit_decisions_from_public_corpus(public_corpus)
         corpus_config = {
             "source": "pokezero.public-decision-corpus.v1",
             "path": str(args.public_corpus),
             "sha256": sha256_file(args.public_corpus),
-            "schema_version": public_corpus_payload.get("schema_version"),
+            "schema_version": public_corpus.manifest.get("schema_version"),
         }
     else:
         corpus = capture_hazard_audit_corpus(
