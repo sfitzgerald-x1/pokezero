@@ -25,6 +25,7 @@ from pokezero.dataset import (
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
+    _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
     _refutation_cache_training_contract,
     _training_cache_lifecycle,
@@ -3350,6 +3351,101 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
+
+    def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(
+            model_config=SimpleNamespace(
+                policy_id="neural-smoke",
+                window_size=1,
+                format_id="gen3randombattle",
+                observation_schema_version="pokezero.observation.v2.1",
+                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                stats_block_enabled=True,
+                exact_state_enabled=True,
+                transition_token_budget=128,
+                tier2_residuals=True,
+                tier2_investment=False,
+            )
+        )
+        captured = {}
+
+        def belief_planner(context, scenario, scenario_index, rng):
+            del context, scenario, scenario_index, rng
+            return None
+
+        belief_planner.sample_count_for_context = lambda context: 2  # type: ignore[attr-defined]
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            search_policy = tuple(kwargs["matchups"])[2].p1_policy
+            captured["search_policy"] = search_policy
+            search_policy.env_factory()
+            return SimpleNamespace(to_dict=lambda: {"matchups": 4}, matchups=())
+
+        def capture_env(config):
+            captured["env_config"] = config
+            return object()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.load_gen3_randbat_source_cached", return_value=object()) as load_source,
+            patch("pokezero.neural_cli.gen3_randbat_belief_start_override_planner", return_value=belief_planner) as planner,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            patch("pokezero.neural_cli.LocalShowdownEnv", side_effect=capture_env),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--belief-start-overrides",
+                    "--belief-world-sample-cap",
+                    "3",
+                    "--belief-start-override-attempts",
+                    "7",
+                    "--belief-start-override-hp-fraction-tolerance",
+                    "0.03",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        load_source.assert_called_once()
+        planner.assert_called_once_with(load_source.return_value, world_sample_cap=3)
+        search_policy = captured["search_policy"]
+        self.assertIs(search_policy.start_override_planner, belief_planner)
+        self.assertIsNone(search_policy.start_override_samples_per_scenario)
+        self.assertEqual(search_policy.start_override_attempts, 7)
+        self.assertEqual(search_policy.start_override_hp_fraction_tolerance, 0.03)
+        self.assertTrue(captured["env_config"].set_belief_source)
+
+    def test_root_puct_belief_benchmark_rejects_missing_world_checksums(self) -> None:
+        result = SimpleNamespace(
+            label="search vs max-damage",
+            p1_policy_id="search",
+            p2_policy_id="max-damage",
+            seed_start=12,
+            metrics=SimpleNamespace(games=2),
+            root_puct_belief_public_checksums_by_seed={12: ("public",)},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing belief-world checksum for seeds 13"):
+            _require_belief_world_benchmark_coverage(
+                SimpleNamespace(matchups=(result,)),
+                search_policy_ids=("search",),
+            )
 
     def test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature(self) -> None:
         if not torch_available():

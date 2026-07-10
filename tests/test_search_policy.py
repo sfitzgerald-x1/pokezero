@@ -695,6 +695,111 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
         self.assertEqual(len(branch_envs[0].start_overrides), 4)
 
+    def test_root_puct_policy_resolves_dynamic_belief_world_count_and_metadata(self) -> None:
+        branch_envs: list[StartOverrideOutcomeEnv] = []
+
+        def branch_env_factory() -> StartOverrideOutcomeEnv:
+            env = StartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            del context, scenario, rng
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": f"Xatu||||Psychic|||||||{scenario_index}",
+                    }
+                )
+
+            return sample_override
+
+        start_override_planner.scenario_independent = True  # type: ignore[attr-defined]
+        start_override_planner.sample_count_for_context = lambda context: 2  # type: ignore[attr-defined]
+        start_override_planner.sampling_metadata_for_context = lambda context: {  # type: ignore[attr-defined]
+            "root_puct_belief_world_sample_cap": 4,
+            "root_puct_belief_world_sample_count": 2,
+            "root_puct_belief_public_checksum": "public-only",
+        }
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=None,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_start_override_samples_per_scenario"], 2)
+        self.assertEqual(decision.metadata["root_puct_belief_world_sample_cap"], 4)
+        self.assertEqual(decision.metadata["root_puct_belief_public_checksum"], "public-only")
+        self.assertEqual(
+            len(
+                {
+                    tuple(sorted(override.player_teams.items()))
+                    for override in branch_envs[0].start_overrides
+                }
+            ),
+            2,
+        )
+
+    def test_root_puct_policy_falls_back_when_dynamic_world_count_is_invalid(self) -> None:
+        def start_override_planner(context, scenario, scenario_index, rng):
+            raise AssertionError("invalid dynamic world count should fail before planning")
+
+        start_override_planner.sample_count_for_context = lambda context: 0  # type: ignore[attr-defined]
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="unused"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            fallback_policy=FixedPolicy(1, policy_id="raw"),
+            allow_fallback=True,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=None,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertIn("sample_count_for_context", decision.metadata["root_puct_fallback_reason"])
+
     def test_root_puct_policy_reuses_scenario_independent_start_override_samples(self) -> None:
         branch_envs: list[StartOverrideOutcomeEnv] = []
         planner_calls: list[tuple[str, int]] = []

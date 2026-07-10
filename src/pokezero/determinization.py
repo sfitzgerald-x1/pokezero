@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+import hashlib
+import json
+import math
 import random
 import re
 from typing import Any, Mapping, Sequence
@@ -23,6 +26,7 @@ from .showdown_fixture import FixturePokemon, pack_team
 
 
 DEFAULT_RANDBAT_TEAM_SIZE = 6
+DEFAULT_BELIEF_WORLD_SAMPLE_CAP = 4
 _STAT_ORDER = ("hp", "atk", "def", "spa", "spd", "spe")
 _PINCH_BERRIES = {"salacberry", "petayaberry", "liechiberry"}
 _HIDDEN_POWER_IVS: Mapping[str, Mapping[str, int]] = {
@@ -45,21 +49,99 @@ _HIDDEN_POWER_IVS: Mapping[str, Mapping[str, int]] = {
 }
 
 
+@dataclass(frozen=True)
+class BeliefWorldSamplingProfile:
+    """Public-belief-derived world-count and audit metadata for root search.
+
+    ``sample_count`` is deliberately bounded by the number of concrete public
+    variant combinations. The profile never reads the real opponent team.
+    """
+
+    sample_cap: int
+    sample_count: int
+    combination_count: int
+    uncertainty_bits: float
+    uncertain_slot_count: int
+    public_checksum: str
+
+    def to_metadata(self) -> dict[str, object]:
+        return {
+            "root_puct_belief_world_sample_cap": self.sample_cap,
+            "root_puct_belief_world_sample_count": self.sample_count,
+            "root_puct_belief_world_combination_count": self.combination_count,
+            "root_puct_belief_world_uncertainty_bits": self.uncertainty_bits,
+            "root_puct_belief_world_uncertain_slot_count": self.uncertain_slot_count,
+            "root_puct_belief_public_checksum": self.public_checksum,
+        }
+
+
+def belief_world_sampling_profile(
+    context: PolicyContext,
+    *,
+    sample_cap: int = DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+    set_source: Gen3RandbatSource | None = None,
+    team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
+) -> BeliefWorldSamplingProfile | None:
+    """Derive a bounded PIMC world count from player-relative public belief.
+
+    The pre-registered mapping is ``K = min(sample_cap, combination_count)``.
+    ``combination_count`` covers both surviving revealed variants and the
+    distinct-species hidden backline worlds the materializer can sample. When a
+    set source is unavailable, the profile deliberately falls back to revealed
+    variants only rather than inventing a hidden-team distribution.
+    """
+
+    if sample_cap <= 0:
+        raise ValueError("sample_cap must be positive.")
+    if team_size <= 0:
+        raise ValueError("team_size must be positive.")
+    metadata = context.observation.metadata
+    if not isinstance(metadata, Mapping):
+        return None
+    view = player_belief_view_from_payload(metadata.get("belief_view"))
+    if view is None:
+        return None
+
+    revealed_candidate_counts = tuple(
+        max(1, len(pokemon.candidate_variants))
+        for pokemon in view.opponent_pokemon
+    )
+    revealed_combination_count = math.prod(revealed_candidate_counts) if revealed_candidate_counts else 1
+    hidden_combination_count, hidden_slot_count = _public_hidden_backline_combination_count(
+        context=context,
+        view=view,
+        set_source=set_source,
+        team_size=team_size,
+    )
+    combination_count = revealed_combination_count * hidden_combination_count
+    return BeliefWorldSamplingProfile(
+        sample_cap=sample_cap,
+        sample_count=min(sample_cap, combination_count),
+        combination_count=combination_count,
+        uncertainty_bits=math.log2(combination_count),
+        uncertain_slot_count=sum(count > 1 for count in revealed_candidate_counts) + hidden_slot_count,
+        public_checksum=_belief_world_public_checksum(context=context, view=view),
+    )
+
+
 def gen3_randbat_belief_start_override_planner(
     set_source: Gen3RandbatSource,
     *,
     team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
+    world_sample_cap: int = DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
 ) -> StartOverridePlanner:
     """Create a root-PUCT start-override planner from player-relative public belief.
 
     The returned planner is hidden-info safe: it reads the acting player's observation metadata,
     which contains the player's own request-known team plus public belief about the opponent. It
-    does not inspect the opponent's private observation or legal-action mask. Each scenario gets one
-    sampled world so all candidate root actions are scored against the same materialized battle.
+    does not inspect the opponent's private observation or legal-action mask. Each sampled world is
+    shared across all candidate root actions for its scenario.
     """
 
     if team_size <= 0:
         raise ValueError("team_size must be positive.")
+    if world_sample_cap <= 0:
+        raise ValueError("world_sample_cap must be positive.")
 
     def planner(
         context: PolicyContext,
@@ -91,9 +173,137 @@ def gen3_randbat_belief_start_override_planner(
         sample_override.start_override_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
         return sample_override
 
+    def sample_count_for_context(context: PolicyContext) -> int:
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=world_sample_cap,
+            set_source=set_source,
+            team_size=team_size,
+        )
+        return profile.sample_count if profile is not None else 1
+
+    def sampling_metadata_for_context(context: PolicyContext) -> Mapping[str, object]:
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=world_sample_cap,
+            set_source=set_source,
+            team_size=team_size,
+        )
+        return profile.to_metadata() if profile is not None else {
+            "root_puct_belief_world_sampling_profile": "missing"
+        }
+
     planner.planner_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
     planner.scenario_independent = True  # type: ignore[attr-defined]
+    planner.sample_count_for_context = sample_count_for_context  # type: ignore[attr-defined]
+    planner.sampling_metadata_for_context = sampling_metadata_for_context  # type: ignore[attr-defined]
     return planner
+
+
+def _belief_world_public_checksum(
+    *,
+    context: PolicyContext,
+    view: PlayerBeliefView,
+) -> str:
+    """Hash only the player-relative public state that determines world sampling."""
+
+    payload = {
+        "format_id": context.format_id,
+        "self_slot": view.self_slot,
+        "opponent_slot": view.opponent_slot,
+        "opponent_pokemon": [pokemon.to_overlay_payload() for pokemon in view.opponent_pokemon],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _public_hidden_backline_combination_count(
+    *,
+    context: PolicyContext,
+    view: PlayerBeliefView,
+    set_source: Gen3RandbatSource | None,
+    team_size: int,
+) -> tuple[int, int]:
+    """Count the public hidden-team branch space used by ``_sample_hidden_backline``.
+
+    The sampler draws distinct species and then one set variant for each. The
+    elementary-symmetric recurrence counts that weighted without-replacement
+    space exactly, including public switch/move-slot constraints and ordering
+    because packed-team order is observable to replay materialization.
+    """
+
+    hidden_slots = max(0, team_size - len(view.opponent_pokemon))
+    if hidden_slots == 0 or set_source is None:
+        return 1, 0
+    used_species = {_normalize_species_id(pokemon.species) for pokemon in view.opponent_pokemon}
+    team_index_constraints = _public_opponent_team_index_constraints(
+        context,
+        opponent_slot=view.opponent_slot,
+        team_size=team_size,
+    )
+    if team_index_constraints is None:
+        return 1, hidden_slots
+    move_slot_constraints = _public_opponent_move_slot_constraints(context, view.opponent_slot)
+    constrained_count = 1
+    constrained_uncertain_slots = 0
+    for species in sorted(team_index_constraints):
+        if species in used_species:
+            continue
+        universe = set_source.universe_for(species)
+        if universe is None:
+            return 1, hidden_slots
+        moves = tuple(
+            move
+            for _slot, move in sorted(move_slot_constraints.get(species, {}).items())
+            if str(move).strip()
+        )
+        summary = (
+            set_source.summarize(
+                format_id=context.format_id,
+                species=universe.species,
+                revealed_moves=moves,
+            )
+            if moves
+            else None
+        )
+        variants = (
+            tuple(summary.candidate_variants)
+            if summary is not None
+            else tuple(variant.to_summary() for variant in universe.variants)
+        )
+        if not variants:
+            return 1, hidden_slots
+        constrained_count *= len(variants)
+        constrained_uncertain_slots += int(len(variants) > 1)
+        used_species.add(species)
+        hidden_slots -= 1
+    if hidden_slots < 0:
+        return 1, 0
+    variant_counts = tuple(
+        len(universe.variants)
+        for universe in set_source.universes.values()
+        if universe.variants and _normalize_species_id(universe.species) not in used_species
+    )
+    if len(variant_counts) < hidden_slots:
+        return 1, constrained_uncertain_slots + hidden_slots
+    return (
+        constrained_count * _ordered_distinct_variant_combination_count(variant_counts, hidden_slots),
+        constrained_uncertain_slots + hidden_slots,
+    )
+
+
+def _ordered_distinct_variant_combination_count(
+    variant_counts: Sequence[int],
+    slots: int,
+) -> int:
+    """Return ordered distinct-species variant assignments for ``slots`` team slots."""
+
+    elementary = [0] * (slots + 1)
+    elementary[0] = 1
+    for count in variant_counts:
+        for index in range(slots, 0, -1):
+            elementary[index] += elementary[index - 1] * count
+    return elementary[slots] * math.factorial(slots)
 
 
 def gen3_randbat_belief_start_override(

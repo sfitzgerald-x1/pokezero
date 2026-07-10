@@ -262,7 +262,9 @@ class RootPUCTSearchPolicy:
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     start_override_planner: StartOverridePlanner | None = None
     start_override_attempts: int = 1
-    start_override_samples_per_scenario: int = 1
+    # ``None`` delegates the count to a belief-world planner's public-context
+    # sampler. Static integer counts preserve the original behavior.
+    start_override_samples_per_scenario: int | None = 1
     start_override_hp_fraction_tolerance: float = 0.02
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
@@ -297,10 +299,17 @@ class RootPUCTSearchPolicy:
             raise ValueError("leaf_rollout_policy_factory is required when leaf rollouts are enabled.")
         if self.start_override_attempts <= 0:
             raise ValueError("start_override_attempts must be positive.")
-        if self.start_override_samples_per_scenario <= 0:
-            raise ValueError("start_override_samples_per_scenario must be positive.")
-        if self.start_override_samples_per_scenario > 1 and self.start_override_planner is None:
-            raise ValueError("start_override_samples_per_scenario requires start_override_planner.")
+        if self.start_override_samples_per_scenario is not None:
+            if self.start_override_samples_per_scenario <= 0:
+                raise ValueError("start_override_samples_per_scenario must be positive when set.")
+            if self.start_override_samples_per_scenario > 1 and self.start_override_planner is None:
+                raise ValueError("start_override_samples_per_scenario requires start_override_planner.")
+        elif self.start_override_planner is None or not callable(
+            getattr(self.start_override_planner, "sample_count_for_context", None)
+        ):
+            raise ValueError(
+                "dynamic start_override_samples_per_scenario requires a planner with sample_count_for_context."
+            )
         if self.start_override_hp_fraction_tolerance < 0.0 or not math.isfinite(
             self.start_override_hp_fraction_tolerance
         ):
@@ -364,10 +373,15 @@ class RootPUCTSearchPolicy:
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
                 return self._fallback(context, rng=rng, reason=legality_report.error)
+        try:
+            start_override_samples_per_scenario = _start_override_samples_per_scenario(self, context)
+            start_override_sampling_metadata = _start_override_sampling_metadata(self, context)
+        except ValueError as exc:
+            return self._fallback(context, rng=rng, reason=str(exc))
         search_scenario_groups = _start_override_sampled_scenario_groups(
             opponent_scenarios,
             samples_per_scenario=(
-                self.start_override_samples_per_scenario
+                start_override_samples_per_scenario
                 if self.start_override_planner is not None
                 else 1
             ),
@@ -558,13 +572,12 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_sources_used": 0,
                                 "root_puct_start_override_attempts": self.start_override_attempts,
                                 "root_puct_start_override_attempts_used": start_override_attempts_used,
-                                "root_puct_start_override_samples_per_scenario": (
-                                    self.start_override_samples_per_scenario
-                                ),
+                                "root_puct_start_override_samples_per_scenario": start_override_samples_per_scenario,
                                 "root_puct_start_override_hp_fraction_tolerance": (
                                     self.start_override_hp_fraction_tolerance
                                 ),
                                 **_shared_start_override_metadata(shared_start_override_samples),
+                                **start_override_sampling_metadata,
                             }
                         )
                     raise _AllOpponentScenariosReplayIllegal(
@@ -662,11 +675,12 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_sources_used": start_override_sources_used,
                 "root_puct_start_override_attempts": self.start_override_attempts,
                 "root_puct_start_override_attempts_used": start_override_attempts_used,
-                "root_puct_start_override_samples_per_scenario": self.start_override_samples_per_scenario,
+                "root_puct_start_override_samples_per_scenario": start_override_samples_per_scenario,
                 "root_puct_start_override_hp_fraction_tolerance": (
                     self.start_override_hp_fraction_tolerance
                 ),
                 **_shared_start_override_metadata(shared_start_override_samples),
+                **start_override_sampling_metadata,
             }
             if self.start_override_planner is not None
             else {}
@@ -868,6 +882,39 @@ def _start_override_sampled_scenario_groups(
             )
         groups.append(_OpponentActionScenarioGroup(root=scenario, samples=tuple(samples)))
     return tuple(groups)
+
+
+def _start_override_samples_per_scenario(
+    policy: RootPUCTSearchPolicy,
+    context: PolicyContext,
+) -> int:
+    configured = policy.start_override_samples_per_scenario
+    if configured is not None:
+        return configured
+    if policy.start_override_planner is None:
+        raise ValueError("dynamic start-override sampling requires start_override_planner.")
+    resolver = getattr(policy.start_override_planner, "sample_count_for_context", None)
+    if not callable(resolver):
+        raise ValueError("dynamic start-override sampling planner lacks sample_count_for_context.")
+    resolved = resolver(context)
+    if isinstance(resolved, bool) or not isinstance(resolved, int) or resolved <= 0:
+        raise ValueError("sample_count_for_context must return a positive integer.")
+    return resolved
+
+
+def _start_override_sampling_metadata(
+    policy: RootPUCTSearchPolicy,
+    context: PolicyContext,
+) -> Mapping[str, object]:
+    if policy.start_override_planner is None:
+        return {}
+    provider = getattr(policy.start_override_planner, "sampling_metadata_for_context", None)
+    if not callable(provider):
+        return {}
+    metadata = provider(context)
+    if not isinstance(metadata, Mapping):
+        raise ValueError("sampling_metadata_for_context must return a mapping.")
+    return dict(metadata)
 
 
 def _flatten_scenario_groups(
