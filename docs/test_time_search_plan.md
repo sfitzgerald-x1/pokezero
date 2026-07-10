@@ -24,10 +24,10 @@ Exists and works today:
 
 Does not exist: a multi-ply tree (no internal nodes/backup), in-tree chance
 nodes, batched/served NN evaluation for search, tree reuse across moves.
-**Still not wired (review findings, 2026-07-10, verified in code)**: the visit
-budget is fixed per-policy (no per-decision budget hook); and the checkpoint scenario planner's
-requested-legal-mask path is a **privileged** benchmark guard (its own comment
-says so).
+**Still not wired (review findings, 2026-07-10, verified in code)**: the
+checkpoint scenario planner's requested-legal-mask path is a **privileged**
+benchmark guard (its own comment says so). P-3's per-decision visit-budget hook
+is implemented; its strength benefit remains unmeasured.
 
 ## Prerequisite implementations (small, test-gated; required before the steps that cite them)
 
