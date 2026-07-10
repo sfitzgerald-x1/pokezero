@@ -11,7 +11,7 @@ captured opponent mask.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, is_dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -26,11 +26,20 @@ from .determinization import (
 )
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
-from .observation import ObservationPerspective, PokeZeroObservationV0
+from .observation import PokeZeroObservationV0
 from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, SimpleLegalPolicy
 from .policy import PolicyContext
+from .prior_belief_profile import public_policy_context
+from .public_decision_corpus import (
+    PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
+    PublicDecisionCorpus,
+    PublicDecisionRecord,
+    PublicResolvedActionRound,
+    load_public_decision_corpus,
+    public_decision_records_from_trajectory,
+)
+from .public_replay_materializer import PublicReplayError, replay_public_action_rounds
 from .randbat import Gen3RandbatSource
-from .replay_branching import replay_trajectory_prefix
 from .rollout import RolloutConfig, RolloutDriver
 from .search import ActionPriorVector, ObservationValueFunction, puct_branch_search
 from .search_policy import OpponentActionScenario, _root_dirichlet_action_priors
@@ -38,7 +47,6 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 
 
 HAZARD_AUDIT_SCHEMA_VERSION = "pokezero.hazard-blind-spot-audit.v1"
-PUBLIC_DECISION_CORPUS_SCHEMA_VERSION = "pokezero.public-decision-corpus.v1"
 DEFAULT_EXTRA_VISITS = (0, 24, 120)
 DEFAULT_LOW_PRIOR_THRESHOLD = 0.01
 DEFAULT_DIRICHLET_ALPHA = 0.3
@@ -69,31 +77,6 @@ WorldProvider = Callable[["HazardAuditDecision"], Sequence["AuditWorld"]]
 
 
 @dataclass(frozen=True)
-class PublicActionRound:
-    """Completed public actions used to replay a decision prefix.
-
-    An action becomes public after its round resolves.  This class intentionally
-    carries no request or legality data for either player.
-    """
-
-    turn_index: int
-    actions: Mapping[PlayerId, int]
-
-    def __post_init__(self) -> None:
-        if self.turn_index < 0:
-            raise ValueError("turn_index must be non-negative.")
-        if not self.actions:
-            raise ValueError("public action rounds must contain at least one action.")
-        normalized = {str(player): int(action) for player, action in sorted(self.actions.items())}
-        if any(action < 0 or action >= ACTION_COUNT for action in normalized.values()):
-            raise ValueError(f"public action indices must be in 0..{ACTION_COUNT - 1}.")
-        object.__setattr__(self, "actions", normalized)
-
-    def to_dict(self) -> dict[str, object]:
-        return {"turn_index": self.turn_index, "actions": dict(self.actions)}
-
-
-@dataclass(frozen=True)
 class PublicActorObservation:
     """One retained observation from the acting player's own information set."""
 
@@ -104,50 +87,62 @@ class PublicActorObservation:
         if self.turn_index < 0:
             raise ValueError("turn_index must be non-negative.")
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "turn_index": self.turn_index,
-            "observation": public_observation_to_dict(self.observation),
-        }
-
 
 @dataclass(frozen=True)
 class HazardAuditDecision:
-    """A replayable legal Spikes/Rapid Spin decision with public-only inputs."""
+    """A Step 3 target derived from one canonical Step 2 public record."""
 
-    battle_id: str
-    format_id: str
-    seed: int
+    public_record: PublicDecisionRecord
     driver_id: str
-    player_id: PlayerId
-    decision_round: int
     target_action_index: int
     target_move_id: str
-    observation_history: tuple[PublicActorObservation, ...]
-    public_action_rounds: tuple[PublicActionRound, ...]
 
     def __post_init__(self) -> None:
-        if self.decision_round < 0:
-            raise ValueError("decision_round must be non-negative.")
         if self.target_move_id not in {"spikes", "rapidspin"}:
             raise ValueError("target_move_id must be 'spikes' or 'rapidspin'.")
         if not 0 <= self.target_action_index < ACTION_COUNT:
             raise ValueError(f"target_action_index must be in 0..{ACTION_COUNT - 1}.")
-        history_turns = tuple(entry.turn_index for entry in self.observation_history)
-        if not history_turns or history_turns[-1] != self.decision_round:
-            raise ValueError("observation_history must end at decision_round.")
-        if history_turns != tuple(sorted(set(history_turns))):
-            raise ValueError("observation_history turn indexes must be unique and sorted.")
         if not self.observation.legal_action_mask[self.target_action_index]:
             raise ValueError("the hazard target action must be legal in the actor observation.")
-        round_indexes = tuple(round_.turn_index for round_ in self.public_action_rounds)
-        if round_indexes != tuple(range(self.decision_round)):
-            raise ValueError("public_action_rounds must be contiguous from 0 through the replay prefix.")
         _assert_public_payload(self.public_payload())
 
     @property
+    def battle_id(self) -> str:
+        return self.public_record.battle_id
+
+    @property
+    def format_id(self) -> str:
+        return self.public_record.format_id
+
+    @property
+    def seed(self) -> int:
+        return self.public_record.seed
+
+    @property
+    def player_id(self) -> PlayerId:
+        return self.public_record.acting_player
+
+    @property
+    def decision_round(self) -> int:
+        return self.public_record.turn_index
+
+    @property
     def observation(self) -> PokeZeroObservationV0:
-        return self.observation_history[-1].observation
+        return self.public_record.observation.to_observation(belief_view=self.public_record.public_belief_view)
+
+    @property
+    def observation_history(self) -> tuple[PublicActorObservation, ...]:
+        return tuple(
+            PublicActorObservation(
+                turn_index=entry.turn_index,
+                observation=entry.observation.to_observation(belief_view=self.public_record.public_belief_view),
+            )
+            for entry in (*self.public_record.history,)
+        ) + (PublicActorObservation(turn_index=self.decision_round, observation=self.observation),)
+
+    @property
+    def public_action_rounds(self) -> tuple[PublicResolvedActionRound, ...]:
+        return self.public_record.public_resolved_action_rounds
 
     @property
     def actor_history(self) -> tuple[PokeZeroObservationV0, ...]:
@@ -161,7 +156,8 @@ class HazardAuditDecision:
         """Serializable corpus payload, excluding every opponent-private input."""
 
         return {
-            "public_decision": self.to_public_decision_record(),
+            "public_decision": self.public_record.to_dict(),
+            "driver_id": self.driver_id,
             "target": {
                 "action_index": self.target_action_index,
                 "move_id": self.target_move_id,
@@ -169,41 +165,19 @@ class HazardAuditDecision:
         }
 
     def to_public_decision_record(self) -> dict[str, object]:
-        """Emit the generic Step 2 replay-prefix corpus shape consumed by this audit.
+        """Return the exact canonical Step 2 decision representation."""
 
-        The record stays independent of the hazard target, so a state with both
-        legal lines can produce two audit rows without forking corpus semantics.
-        """
-
-        return {
-            "schema_version": PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
-            "battle_id": self.battle_id,
-            "format_id": self.format_id,
-            "seed": self.seed,
-            "driver_id": self.driver_id,
-            "actor": self.player_id,
-            "decision_round": self.decision_round,
-            "replay_prefix": {
-                "public_action_rounds": [round_.to_dict() for round_ in self.public_action_rounds],
-            },
-            "own_observation_history": [entry.to_dict() for entry in self.observation_history[:-1]],
-            "current_observation": public_observation_to_dict(self.observation),
-            "current_legal_action_mask": list(self.observation.legal_action_mask),
-        }
+        return self.public_record.to_dict()
 
     def to_dict(self) -> dict[str, object]:
-        trajectory = self.to_search_trajectory()
         return {
             "state_id": self.state_id,
             "public_state_hash": canonical_hash(self.public_payload()),
             **self.public_payload(),
-            # The replay trajectory is derived from the public payload.  Its non-actor
-            # observations are explicit all-legal placeholders, never captured data.
-            "replay_trajectory": _public_trajectory_to_dict(trajectory),
         }
 
-    def to_search_trajectory(self) -> BattleTrajectory:
-        """Build a replay trajectory without retaining any opponent-private mask."""
+    def to_search_trajectory(self, *, replay_actions: Mapping[int, Mapping[PlayerId, int]]) -> BattleTrajectory:
+        """Build an ephemeral raw replay only after sampled-world ID resolution."""
 
         history_by_turn = {entry.turn_index: entry.observation for entry in self.observation_history}
         trajectory = BattleTrajectory(
@@ -213,7 +187,10 @@ class HazardAuditDecision:
             metadata={"hazard_audit_public_only": True, "driver_id": self.driver_id},
         )
         for round_ in self.public_action_rounds:
-            for player_id, action_index in sorted(round_.actions.items()):
+            actions = replay_actions.get(round_.turn_index)
+            if actions is None or set(actions) != set(round_.actions):
+                raise ValueError("sampled replay actions do not match the public prefix.")
+            for player_id, action_index in sorted(actions.items()):
                 observation = (
                     history_by_turn[round_.turn_index]
                     if player_id == self.player_id and round_.turn_index in history_by_turn
@@ -247,18 +224,7 @@ class HazardAuditDecision:
         return trajectory
 
     def policy_context(self) -> PolicyContext:
-        """A deliberately actor-only context for public-belief determinization/noise."""
-
-        return PolicyContext(
-            player_id=self.player_id,
-            decision_round_index=self.decision_round,
-            battle_id=self.battle_id,
-            format_id=self.format_id,
-            seed=self.seed,
-            observation=self.observation,
-            requested_players=(self.player_id,),
-            trajectory=self.to_search_trajectory(),
-        )
+        return public_policy_context(self.public_record)
 
 
 @dataclass(frozen=True)
@@ -308,6 +274,7 @@ class AuditWorld:
     world_id: str
     opponent_actions: Mapping[PlayerId, int]
     start_override: BattleStartOverride | None = None
+    replay_actions: Mapping[int, Mapping[PlayerId, int]] = field(default_factory=dict)
     metadata: Mapping[str, object] | None = None
     available: bool = True
     rejection_code: str | None = None
@@ -317,6 +284,20 @@ class AuditWorld:
         if any(action < 0 or action >= ACTION_COUNT for action in normalized.values()):
             raise ValueError(f"opponent action indices must be in 0..{ACTION_COUNT - 1}.")
         object.__setattr__(self, "opponent_actions", normalized)
+        normalized_replay_actions = {
+            int(turn_index): {
+                str(player): int(action)
+                for player, action in sorted(actions.items())
+            }
+            for turn_index, actions in sorted(self.replay_actions.items())
+        }
+        if any(
+            action < 0 or action >= ACTION_COUNT
+            for actions in normalized_replay_actions.values()
+            for action in actions.values()
+        ):
+            raise ValueError(f"sampled replay action indices must be in 0..{ACTION_COUNT - 1}.")
+        object.__setattr__(self, "replay_actions", normalized_replay_actions)
         _assert_public_payload(dict(self.metadata or {}))
 
     def to_dict(self) -> dict[str, object]:
@@ -379,27 +360,40 @@ class PublicBeliefWorldProvider:
                 start_override = source() if callable(source) else source
                 env = self.env_factory()
                 try:
-                    prefix = replay_trajectory_prefix(
+                    materialization = replay_public_action_rounds(
                         env,
-                        decision.to_search_trajectory(),
-                        decision_round_count=decision.decision_round,
+                        seed=decision.seed,
+                        format_id=decision.format_id,
+                        public_action_rounds=decision.public_action_rounds,
                         start_override=start_override,
-                        consistency_player_id=decision.player_id,
-                        expected_current_observation=decision.observation,
-                        check_prefix_observations=False,
                     )
-                    if decision.player_id not in prefix.requested_players:
+                    if decision.player_id not in materialization.requested_players:
                         raise ValueError("sampled world does not request the actor")
                     opponent_actions = _sampled_world_opponent_actions(
                         env=env,
                         actor=decision.player_id,
-                        requested_players=prefix.requested_players,
+                        requested_players=materialization.requested_players,
                         policy=self.sampled_world_opponent_policy,
                         seed=_stable_seed(decision.state_id, "sampled-world-opponent-policy", world_index),
                     )
                 finally:
                     if env is not None:
                         _close_env(env)
+            except PublicReplayError as exc:
+                worlds.append(
+                    AuditWorld(
+                        world_id=world_id,
+                        opponent_actions={},
+                        available=False,
+                        rejection_code=exc.reason,
+                        metadata=_public_profile_metadata(
+                            profile,
+                            world_index,
+                            opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                        ),
+                    )
+                )
+                continue
             except (ValueError, RuntimeError):
                 worlds.append(
                     AuditWorld(
@@ -420,10 +414,12 @@ class PublicBeliefWorldProvider:
                     world_id=world_id,
                     opponent_actions=opponent_actions,
                     start_override=start_override,
+                    replay_actions=materialization.replay_actions,
                     metadata=_public_profile_metadata(
                         profile,
                         world_index,
                         opponent_policy_id=self.sampled_world_opponent_policy.policy_id,
+                        event_canonicalizations=materialization.event_canonicalizations,
                     ),
                 )
             )
@@ -466,73 +462,47 @@ def hazard_audit_decisions_from_trajectory(
     *,
     driver_id: str,
 ) -> tuple[HazardAuditDecision, ...]:
-    """Extract legal hazard targets while retaining no opponent-private step data."""
+    """Capture Step 3 targets from canonical p1 public corpus records only."""
 
-    actions_by_round: dict[int, dict[PlayerId, int]] = defaultdict(dict)
-    for step in trajectory.steps:
-        actions_by_round[step.turn_index][step.player_id] = step.action_index
+    return _hazard_decisions_from_public_records(
+        public_decision_records_from_trajectory(trajectory, acting_player="p1"),
+        driver_id=driver_id,
+    )
+
+
+def hazard_audit_decisions_from_public_corpus(
+    corpus: PublicDecisionCorpus | Path,
+) -> tuple[HazardAuditDecision, ...]:
+    """Adapt the canonical Step 2 JSONL corpus without a second schema reader."""
+
+    loaded = load_public_decision_corpus(corpus) if isinstance(corpus, Path) else corpus
+    if not isinstance(loaded, PublicDecisionCorpus):
+        raise ValueError("hazard audit requires a canonical PublicDecisionCorpus or its JSONL path.")
+    if loaded.manifest.get("schema_version") != PUBLIC_DECISION_CORPUS_SCHEMA_VERSION:
+        raise ValueError(f"hazard audit requires {PUBLIC_DECISION_CORPUS_SCHEMA_VERSION!r}.")
+    return _hazard_decisions_from_public_records(loaded.decisions, driver_id="public-decision-corpus")
+
+
+def _hazard_decisions_from_public_records(
+    records: Sequence[PublicDecisionRecord],
+    *,
+    driver_id: str,
+) -> tuple[HazardAuditDecision, ...]:
     decisions: list[HazardAuditDecision] = []
-    for step in trajectory.steps:
-        targets = _hazard_target_moves(step.observation, step.legal_action_mask)
-        if not targets:
-            continue
-        actor_history = tuple(
-            PublicActorObservation(turn_index=other.turn_index, observation=other.observation)
-            for other in trajectory.steps
-            if other.player_id == step.player_id and other.turn_index <= step.turn_index
-        )
-        public_rounds = tuple(
-            PublicActionRound(turn_index=turn_index, actions=actions_by_round[turn_index])
-            for turn_index in range(step.turn_index)
-        )
-        for target_action_index, target_move_id in targets:
+    for record in records:
+        observation = record.observation.to_observation(belief_view=record.public_belief_view)
+        for target_action_index, target_move_id in _hazard_target_moves(
+            observation,
+            record.current_legal_action_mask,
+        ):
             decisions.append(
                 HazardAuditDecision(
-                    battle_id=trajectory.battle_id,
-                    format_id=trajectory.format_id,
-                    seed=trajectory.seed,
+                    public_record=record,
                     driver_id=driver_id,
-                    player_id=step.player_id,
-                    decision_round=step.turn_index,
                     target_action_index=target_action_index,
                     target_move_id=target_move_id,
-                    observation_history=actor_history,
-                    public_action_rounds=public_rounds,
                 )
             )
-    return tuple(decisions)
-
-
-def hazard_audit_decisions_from_public_corpus(payload: Mapping[str, Any]) -> tuple[HazardAuditDecision, ...]:
-    """Load legal hazard targets from Step 2's public replay-prefix corpus.
-
-    The adapter accepts the announced v1 schema and the two harmless container
-    names used by corpus writers (``records`` and ``decisions``). It reads only
-    public action rounds, the actor's own history/current observation, and the
-    actor's current legal mask; any request or opponent legality key is refused.
-    """
-
-    schema_version = str(payload.get("schema_version") or "")
-    if schema_version != PUBLIC_DECISION_CORPUS_SCHEMA_VERSION:
-        raise ValueError(
-            "hazard audit requires "
-            f"{PUBLIC_DECISION_CORPUS_SCHEMA_VERSION!r}, got {schema_version!r}."
-        )
-    raw_records = payload.get("records", payload.get("decisions", payload.get("states")))
-    if not isinstance(raw_records, Sequence) or isinstance(raw_records, str | bytes):
-        raise ValueError("public decision corpus must contain a records, decisions, or states array.")
-    decisions: list[HazardAuditDecision] = []
-    for raw_record in raw_records:
-        if not isinstance(raw_record, Mapping):
-            raise ValueError("public decision corpus records must be JSON objects.")
-        record = raw_record.get("public_decision", raw_record)
-        if not isinstance(record, Mapping):
-            raise ValueError("public decision corpus record has an invalid public_decision payload.")
-        _assert_public_payload(record)
-        record_schema = str(record.get("schema_version") or schema_version)
-        if record_schema != PUBLIC_DECISION_CORPUS_SCHEMA_VERSION:
-            raise ValueError("public decision record schema does not match the corpus schema.")
-        decisions.extend(_hazard_decisions_from_public_record(record))
     return tuple(sorted(decisions, key=lambda decision: decision.state_id))
 
 
@@ -761,29 +731,6 @@ def sha256_file(path: Path | str) -> str:
     return digest.hexdigest()
 
 
-def public_observation_to_dict(observation: PokeZeroObservationV0) -> dict[str, object]:
-    """Serialize an actor observation and refuse accidental raw request fields."""
-
-    payload = {
-        "schema_version": observation.schema_version,
-        "categorical_ids": observation.categorical_ids,
-        "numeric_features": observation.numeric_features,
-        "token_type_ids": observation.token_type_ids,
-        "attention_mask": observation.attention_mask,
-        "legal_action_mask": observation.legal_action_mask,
-        "perspective": None
-        if observation.perspective is None
-        else {
-            "player_id": observation.perspective.player_id,
-            "showdown_slot": observation.perspective.showdown_slot,
-            "opponent_showdown_slot": observation.perspective.opponent_showdown_slot,
-        },
-        "metadata": dict(observation.metadata),
-    }
-    _assert_public_payload(payload)
-    return _jsonable(payload)
-
-
 def _run_record(
     *,
     decision: HazardAuditDecision,
@@ -828,7 +775,7 @@ def _run_record(
     try:
         result = puct_branch_search(
             env=env,
-            trajectory=decision.to_search_trajectory(),
+            trajectory=decision.to_search_trajectory(replay_actions=world.replay_actions),
             player_id=decision.player_id,
             prefix_decision_round_count=decision.decision_round,
             legal_action_mask=tuple(bool(value) for value in decision.observation.legal_action_mask),
@@ -916,119 +863,6 @@ def _arm_priors(
     )
 
 
-def _hazard_decisions_from_public_record(record: Mapping[str, Any]) -> tuple[HazardAuditDecision, ...]:
-    replay_prefix = record.get("replay_prefix", {})
-    if not isinstance(replay_prefix, Mapping):
-        raise ValueError("public decision replay_prefix must be an object.")
-    actor = record.get("actor", record.get("player_id"))
-    if not isinstance(actor, str) or not actor:
-        raise ValueError("public decision record must name an actor.")
-    try:
-        decision_round = int(record["decision_round"])
-        seed = int(record["seed"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("public decision record must include integer seed and decision_round.") from exc
-    current_payload = record.get(
-        "current_observation",
-        record.get("own_observation", record.get("observation")),
-    )
-    current = _public_observation_from_dict(current_payload)
-    mask_payload = record.get("current_legal_action_mask", record.get("legal_action_mask"))
-    if mask_payload is not None:
-        mask = tuple(bool(value) for value in _require_sequence(mask_payload, "current_legal_action_mask"))
-        if len(mask) != ACTION_COUNT:
-            raise ValueError(f"current_legal_action_mask must contain {ACTION_COUNT} values.")
-        current = replace(current, legal_action_mask=mask)
-    history_payload = record.get("own_observation_history", record.get("public_observation_history", ()))
-    history = tuple(_public_actor_observation_from_dict(value) for value in _require_sequence(history_payload, "own_observation_history"))
-    if not history or history[-1].turn_index != decision_round:
-        history = (*history, PublicActorObservation(turn_index=decision_round, observation=current))
-    else:
-        history = (*history[:-1], PublicActorObservation(turn_index=decision_round, observation=current))
-    rounds_payload = replay_prefix.get(
-        "public_action_rounds",
-        record.get("public_action_rounds", replay_prefix.get("action_rounds", ())),
-    )
-    public_rounds = tuple(
-        _public_action_round_from_dict(value)
-        for value in _require_sequence(rounds_payload, "public_action_rounds")
-    )
-    targets = _hazard_target_moves(current, current.legal_action_mask)
-    return tuple(
-        HazardAuditDecision(
-            battle_id=str(record.get("battle_id") or "public-decision-corpus"),
-            format_id=str(record.get("format_id") or "gen3randombattle"),
-            seed=seed,
-            driver_id=str(record.get("driver_id") or "public-decision-corpus"),
-            player_id=actor,
-            decision_round=decision_round,
-            target_action_index=target_action_index,
-            target_move_id=target_move_id,
-            observation_history=history,
-            public_action_rounds=public_rounds,
-        )
-        for target_action_index, target_move_id in targets
-    )
-
-
-def _public_actor_observation_from_dict(value: object) -> PublicActorObservation:
-    if not isinstance(value, Mapping):
-        raise ValueError("own_observation_history entries must be objects.")
-    try:
-        turn_index = int(value["turn_index"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("own_observation_history entry is missing turn_index.") from exc
-    return PublicActorObservation(
-        turn_index=turn_index,
-        observation=_public_observation_from_dict(value.get("observation")),
-    )
-
-
-def _public_action_round_from_dict(value: object) -> PublicActionRound:
-    if not isinstance(value, Mapping):
-        raise ValueError("public_action_rounds entries must be objects.")
-    actions = value.get("actions")
-    if not isinstance(actions, Mapping):
-        raise ValueError("public action rounds must contain an actions object.")
-    try:
-        turn_index = int(value["turn_index"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("public action round is missing turn_index.") from exc
-    return PublicActionRound(turn_index=turn_index, actions=actions)
-
-
-def _public_observation_from_dict(value: object) -> PokeZeroObservationV0:
-    if isinstance(value, PokeZeroObservationV0):
-        return value
-    if not isinstance(value, Mapping):
-        raise ValueError("current_observation must be an object.")
-    _assert_public_payload(value)
-    perspective_payload = value.get("perspective")
-    perspective = None
-    if isinstance(perspective_payload, Mapping):
-        perspective = ObservationPerspective(
-            player_id=str(perspective_payload["player_id"]),
-            showdown_slot=str(perspective_payload["showdown_slot"]),
-            opponent_showdown_slot=str(perspective_payload["opponent_showdown_slot"]),
-        )
-    return PokeZeroObservationV0(
-        categorical_ids=tuple(tuple(int(item) for item in row) for row in _require_sequence(value.get("categorical_ids", ()), "categorical_ids")),
-        numeric_features=tuple(tuple(float(item) for item in row) for row in _require_sequence(value.get("numeric_features", ()), "numeric_features")),
-        token_type_ids=tuple(int(item) for item in _require_sequence(value.get("token_type_ids", ()), "token_type_ids")),
-        attention_mask=tuple(bool(item) for item in _require_sequence(value.get("attention_mask", ()), "attention_mask")),
-        legal_action_mask=tuple(bool(item) for item in _require_sequence(value.get("legal_action_mask", ()), "legal_action_mask")),
-        perspective=perspective,
-        metadata=dict(value.get("metadata", {})),
-        schema_version=str(value.get("schema_version") or "pokezero.observation.unversioned"),
-    )
-
-
-def _require_sequence(value: object, name: str) -> Sequence[object]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise ValueError(f"{name} must be an array.")
-    return value
-
-
 def _hazard_target_moves(
     observation: PokeZeroObservationV0,
     legal_mask: Sequence[bool],
@@ -1104,12 +938,16 @@ def _public_profile_metadata(
     world_index: int,
     *,
     opponent_policy_id: str,
+    event_canonicalizations: Sequence[Any] = (),
 ) -> dict[str, object]:
     return {
         "world_index": world_index,
         "belief_sampling": profile.to_metadata(),
         "world_source": "public-belief-determinization",
         "sampled_world_opponent_policy": opponent_policy_id,
+        "public_event_canonicalizations": [
+            canonicalization.to_dict() for canonicalization in event_canonicalizations
+        ],
     }
 
 
@@ -1148,26 +986,6 @@ def _public_replay_placeholder_observation() -> PokeZeroObservationV0:
         metadata={"hazard_audit_public_replay_placeholder": True},
         schema_version="pokezero.hazard-audit.placeholder.v1",
     )
-
-
-def _public_trajectory_to_dict(trajectory: BattleTrajectory) -> dict[str, object]:
-    return {
-        "battle_id": trajectory.battle_id,
-        "format_id": trajectory.format_id,
-        "seed": trajectory.seed,
-        "metadata": dict(trajectory.metadata),
-        "steps": [
-            {
-                "player_id": step.player_id,
-                "turn_index": step.turn_index,
-                "action_index": step.action_index,
-                "metadata": dict(step.metadata),
-                "observation": public_observation_to_dict(step.observation),
-                "legal_action_mask": list(step.legal_action_mask),
-            }
-            for step in trajectory.steps
-        ],
-    }
 
 
 def _stable_seed(*parts: object) -> int:

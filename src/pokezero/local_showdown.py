@@ -346,12 +346,20 @@ class LocalShowdownEnv:
                 self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
             ),
         )
-        return observation_from_player_state(
+        observation = observation_from_player_state(
             state,
             category_vocab=vocab,
             spec=self.config.observation_spec,
             dex=load_showdown_dex_cached(root),
             feature_masks=self.config.feature_masks,
+        )
+        # The belief view is derived from the same public protocol transcript as
+        # the observation. Keeping it in metadata makes public-corpus capture
+        # consistent across fixed-driver and controlled FoulPlay games without
+        # exposing either player's request payload.
+        return replace(
+            observation,
+            metadata={**dict(observation.metadata), "belief_view": state.belief_view.to_overlay_payload()},
         )
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:

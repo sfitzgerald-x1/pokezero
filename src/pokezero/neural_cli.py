@@ -47,6 +47,13 @@ from .determinization import (
     DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
     gen3_randbat_belief_start_override_planner,
 )
+from .prior_belief_profile import (
+    MINIMUM_PROFILE_DECISIONS,
+    PriorBeliefProfileConfig,
+    profile_public_corpus,
+)
+from .public_decision_corpus import load_public_decision_corpus, sha256_file
+from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
@@ -1073,6 +1080,55 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct_counterfactual.add_argument("--json", action="store_true", help="Print counterfactual search benchmark results as JSON.")
     root_puct_counterfactual.set_defaults(func=_root_puct_counterfactual)
 
+    prior_belief_profile = subparsers.add_parser(
+        "prior-belief-profile",
+        help="Profile untempered priors and public-belief uncertainty from a controlled FoulPlay corpus.",
+    )
+    prior_belief_profile.add_argument(
+        "--corpus",
+        type=Path,
+        required=True,
+        help=(
+            "pokezero.public-decision-corpus.v1 JSONL. Profiling rejects corpora with fewer than "
+            f"{MINIMUM_PROFILE_DECISIONS} valid p1 decisions."
+        ),
+    )
+    prior_belief_profile.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint used for raw priors and value sweeps.")
+    prior_belief_profile.add_argument("--showdown-root", type=Path, required=True, help="Built Pokemon Showdown checkout used for public-world replay.")
+    prior_belief_profile.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
+    prior_belief_profile.add_argument("--node-binary", default="node", help="Node executable used by public replay worlds.")
+    prior_belief_profile.add_argument(
+        "--world-sample-cap",
+        type=int,
+        default=DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+        help="Maximum public-belief worlds; resolved K=min(cap, public combination count).",
+    )
+    prior_belief_profile.add_argument(
+        "--opponent-scenarios",
+        type=int,
+        default=1,
+        help="Hidden-mode opponent-prior scenarios evaluated per public belief world.",
+    )
+    prior_belief_profile.add_argument(
+        "--entropy-thresholds",
+        default="0.25,0.5,0.75,1.0,1.25,1.5,1.75,2.0",
+        help="Comma-separated raw Shannon-entropy thresholds for the adaptive gate sweep.",
+    )
+    prior_belief_profile.add_argument(
+        "--margin-thresholds",
+        default="0,0.025,0.05,0.1,0.2,0.4",
+        help="Comma-separated initial candidate-value top-two margin thresholds for the gate sweep.",
+    )
+    prior_belief_profile.add_argument(
+        "--opponent-legal-mask-mode",
+        choices=("hidden", "privileged"),
+        default="hidden",
+        help="Must remain hidden; privileged mode is rejected because this is a public-only audit.",
+    )
+    prior_belief_profile.add_argument("--out", type=Path, default=None, help="Optional JSON report path.")
+    prior_belief_profile.add_argument("--json", action="store_true", help="Print the full JSON report.")
+    prior_belief_profile.set_defaults(func=_prior_belief_profile)
+
     value_calibration = subparsers.add_parser(
         "value-calibration",
         help="Evaluate a neural checkpoint value head against rollout return targets.",
@@ -2059,6 +2115,124 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def _prior_belief_profile(args: argparse.Namespace) -> int:
+    """Run the public-only Step 2 prior/belief uncertainty profile."""
+
+    if args.opponent_legal_mask_mode != "hidden":
+        raise ValueError("prior-belief-profile refuses privileged opponent legal-mask mode.")
+    corpus = load_public_decision_corpus(args.corpus)
+    if len(corpus.decisions) < MINIMUM_PROFILE_DECISIONS:
+        raise ValueError(
+            f"prior/belief profiling requires at least {MINIMUM_PROFILE_DECISIONS} valid p1 decisions; "
+            f"corpus contains {len(corpus.decisions)}."
+        )
+    checkpoint_sha256 = sha256_file(args.checkpoint)
+    captured_checkpoint_sha256 = corpus.manifest.get("checkpoint_sha256")
+    if captured_checkpoint_sha256 != checkpoint_sha256:
+        raise ValueError(
+            "checkpoint hash does not match the public corpus manifest; profile the checkpoint that generated "
+            "the controlled capture or capture a new corpus."
+        )
+    model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    observation_spec = observation_spec_from_model_config(result.model_config)
+    vocab = gen3_category_vocabulary(
+        args.showdown_root,
+        include_turn_merged=observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+    )
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+        observation_spec=observation_spec,
+        category_vocab=vocab,
+        feature_masks=feature_masks_from_model_config(result.model_config),
+    )
+    set_source = load_gen3_randbat_source_cached(args.showdown_root)
+    captured_source_hash = corpus.manifest.get("belief_set_source_hash")
+    if captured_source_hash != set_source.metadata.source_hash:
+        raise ValueError(
+            "public corpus belief set-source hash does not match the current Showdown source; "
+            "refuse to profile against a different public belief universe."
+        )
+    profile_config = PriorBeliefProfileConfig(
+        entropy_thresholds=_parse_profile_thresholds(args.entropy_thresholds, option="--entropy-thresholds"),
+        margin_thresholds=_parse_profile_thresholds(args.margin_thresholds, option="--margin-thresholds"),
+        world_sample_cap=args.world_sample_cap,
+        opponent_legal_mask_mode="hidden",
+        root_noise_enabled=False,
+    )
+
+    def prior_evaluator(observations: tuple[PokeZeroObservationV0, ...]) -> tuple[float, ...]:
+        # Adaptive gates always see raw checkpoint priors: no collection/root temperature or noise.
+        return evaluate_transformer_action_priors(
+            model=model,
+            result=result,
+            observations=observations,
+            temperature=1.0,
+            device=args.device,
+        )
+
+    def value_evaluator(observations: tuple[PokeZeroObservationV0, ...]) -> float:
+        return evaluate_transformer_observation_value(
+            model=model,
+            result=result,
+            observations=observations,
+            device=args.device,
+        )
+
+    def opponent_prior_evaluator(observations: tuple[PokeZeroObservationV0, ...]) -> tuple[float, ...]:
+        return evaluate_transformer_opponent_action_priors(
+            model=model,
+            result=result,
+            observations=observations,
+            temperature=1.0,
+            device=args.device,
+        )
+
+    candidate_value_evaluator = PublicPrefixCandidateValueEvaluator(
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        value_evaluator=value_evaluator,
+        opponent_prior_evaluator=opponent_prior_evaluator,
+        set_source=set_source,
+        world_sample_cap=profile_config.world_sample_cap,
+        scenario_count=args.opponent_scenarios,
+    )
+    report = profile_public_corpus(
+        corpus,
+        prior_evaluator=prior_evaluator,
+        candidate_value_evaluator=candidate_value_evaluator,
+        config=profile_config,
+        belief_set_source=set_source,
+        provenance={
+            "checkpoint": str(args.checkpoint),
+            "checkpoint_sha256": checkpoint_sha256,
+            "belief_set_source_hash": set_source.metadata.source_hash,
+            "root_noise_enabled": False,
+            "opponent_legal_mask_mode": "hidden",
+        },
+    )
+    if args.out is not None:
+        _write_json(args.out, report)
+        print(f"prior_belief_profile: {args.out}")
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    elif args.out is None:
+        print(
+            f"profiled {report['decision_count']} public decisions and "
+            f"{report['selection_context_count']} hidden-mode selection contexts"
+        )
+    return 0
+
+
+def _parse_profile_thresholds(value: str, *, option: str) -> tuple[float, ...]:
+    try:
+        thresholds = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError(f"{option} must be a comma-separated list of finite non-negative numbers.") from exc
+    if not thresholds or any(item < 0.0 or not math.isfinite(item) for item in thresholds):
+        raise ValueError(f"{option} must be a comma-separated list of finite non-negative numbers.")
+    return thresholds
 
 
 def _explicit_cli_options(argv: Iterable[str]) -> frozenset[str]:
