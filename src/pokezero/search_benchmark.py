@@ -358,6 +358,7 @@ def benchmark_root_puct_search(
                 if player_step is None:
                     skipped_prefixes += 1
                     continue
+                timing_started_at = _timing_perf_counter()
                 opponent_actions = {
                     step.player_id: step.action_index
                     for step in steps
@@ -368,7 +369,6 @@ def benchmark_root_puct_search(
                     player_id=search_player,
                     through_decision_round=prefix_decision_round_count,
                 )
-                timing_started_at = _timing_perf_counter()
                 policy_evaluation_started_at = _timing_perf_counter()
                 priors = prior_fn(history)
                 policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
@@ -470,6 +470,7 @@ def benchmark_root_puct_counterfactual_rollouts(
                 if player_step is None:
                     skipped_prefixes += 1
                     continue
+                search_timing_started_at = _timing_perf_counter()
                 opponent_actions = {
                     step.player_id: step.action_index
                     for step in steps
@@ -480,7 +481,6 @@ def benchmark_root_puct_counterfactual_rollouts(
                     player_id=search_player,
                     through_decision_round=prefix_decision_round_count,
                 )
-                search_timing_started_at = _timing_perf_counter()
                 policy_evaluation_started_at = _timing_perf_counter()
                 priors = prior_fn(history)
                 policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at

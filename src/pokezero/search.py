@@ -74,12 +74,24 @@ class RootPUCTVisitBudgetContext:
 
 @dataclass(frozen=True)
 class RootPUCTSearchTiming:
-    """Non-overlapping wall-clock components for one root-PUCT decision."""
+    """Non-overlapping wall-clock components for one root-PUCT decision.
+
+    ``total_seconds`` covers root-decision preparation through branch search.
+    ``opponent_scenario_planning`` includes any neural policy work performed by
+    an opponent-action scenario planner; recorded-prefix benchmarks have no
+    such planner and report this bucket as zero.
+    """
 
     prefix_replay_seconds: float = 0.0
     prefix_replay_count: int = 0
     branch_simulator_step_seconds: float = 0.0
     branch_simulator_step_count: int = 0
+    state_snapshot_seconds: float = 0.0
+    state_snapshot_count: int = 0
+    state_restore_seconds: float = 0.0
+    state_restore_count: int = 0
+    opponent_scenario_planning_seconds: float = 0.0
+    opponent_scenario_planning_count: int = 0
     policy_evaluation_seconds: float = 0.0
     policy_evaluation_count: int = 0
     value_evaluation_seconds: float = 0.0
@@ -97,14 +109,28 @@ class RootPUCTSearchTiming:
         return self.policy_evaluation_count + self.value_evaluation_count
 
     @property
-    def residual_seconds(self) -> float:
-        measured_components = (
+    def raw_residual_seconds(self) -> float:
+        accounted_components = (
             self.prefix_replay_seconds
             + self.branch_simulator_step_seconds
+            + self.state_snapshot_seconds
+            + self.state_restore_seconds
+            + self.opponent_scenario_planning_seconds
             + self.policy_value_evaluation_seconds
             + self.rollout_tail_seconds
         )
-        return max(0.0, self.total_seconds - measured_components)
+        return self.total_seconds - accounted_components
+
+    @property
+    def residual_seconds(self) -> float:
+        return max(0.0, self.raw_residual_seconds)
+
+    def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
+        return replace(
+            self,
+            opponent_scenario_planning_seconds=self.opponent_scenario_planning_seconds + elapsed_seconds,
+            opponent_scenario_planning_count=self.opponent_scenario_planning_count + 1,
+        )
 
     def with_policy_evaluation(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -125,6 +151,16 @@ class RootPUCTSearchTiming:
                 timing.branch_simulator_step_seconds for timing in timings
             ),
             branch_simulator_step_count=sum(timing.branch_simulator_step_count for timing in timings),
+            state_snapshot_seconds=sum(timing.state_snapshot_seconds for timing in timings),
+            state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
+            state_restore_seconds=sum(timing.state_restore_seconds for timing in timings),
+            state_restore_count=sum(timing.state_restore_count for timing in timings),
+            opponent_scenario_planning_seconds=sum(
+                timing.opponent_scenario_planning_seconds for timing in timings
+            ),
+            opponent_scenario_planning_count=sum(
+                timing.opponent_scenario_planning_count for timing in timings
+            ),
             policy_evaluation_seconds=sum(timing.policy_evaluation_seconds for timing in timings),
             policy_evaluation_count=sum(timing.policy_evaluation_count for timing in timings),
             value_evaluation_seconds=sum(timing.value_evaluation_seconds for timing in timings),
@@ -140,6 +176,12 @@ class RootPUCTSearchTiming:
             "prefix_replay_count": self.prefix_replay_count,
             "branch_simulator_step_seconds": self.branch_simulator_step_seconds,
             "branch_simulator_step_count": self.branch_simulator_step_count,
+            "state_snapshot_seconds": self.state_snapshot_seconds,
+            "state_snapshot_count": self.state_snapshot_count,
+            "state_restore_seconds": self.state_restore_seconds,
+            "state_restore_count": self.state_restore_count,
+            "opponent_scenario_planning_seconds": self.opponent_scenario_planning_seconds,
+            "opponent_scenario_planning_count": self.opponent_scenario_planning_count,
             "policy_evaluation_seconds": self.policy_evaluation_seconds,
             "policy_evaluation_count": self.policy_evaluation_count,
             "value_evaluation_seconds": self.value_evaluation_seconds,
@@ -148,6 +190,7 @@ class RootPUCTSearchTiming:
             "policy_value_evaluation_count": self.policy_value_evaluation_count,
             "rollout_tail_seconds": self.rollout_tail_seconds,
             "rollout_tail_count": self.rollout_tail_count,
+            "raw_residual_seconds": self.raw_residual_seconds,
             "residual_seconds": self.residual_seconds,
             "total_seconds": self.total_seconds,
         }
@@ -159,6 +202,10 @@ class _RootPUCTSearchTimingAccumulator:
     prefix_replay_count: int = 0
     branch_simulator_step_seconds: float = 0.0
     branch_simulator_step_count: int = 0
+    state_snapshot_seconds: float = 0.0
+    state_snapshot_count: int = 0
+    state_restore_seconds: float = 0.0
+    state_restore_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
     rollout_tail_seconds: float = 0.0
@@ -171,6 +218,14 @@ class _RootPUCTSearchTimingAccumulator:
     def add_branch_simulator_step(self, elapsed_seconds: float) -> None:
         self.branch_simulator_step_seconds += elapsed_seconds
         self.branch_simulator_step_count += 1
+
+    def add_state_snapshot(self, elapsed_seconds: float) -> None:
+        self.state_snapshot_seconds += elapsed_seconds
+        self.state_snapshot_count += 1
+
+    def add_state_restore(self, elapsed_seconds: float) -> None:
+        self.state_restore_seconds += elapsed_seconds
+        self.state_restore_count += 1
 
     def add_value_evaluation(self, elapsed_seconds: float) -> None:
         self.value_evaluation_seconds += elapsed_seconds
@@ -186,6 +241,10 @@ class _RootPUCTSearchTimingAccumulator:
             prefix_replay_count=self.prefix_replay_count,
             branch_simulator_step_seconds=self.branch_simulator_step_seconds,
             branch_simulator_step_count=self.branch_simulator_step_count,
+            state_snapshot_seconds=self.state_snapshot_seconds,
+            state_snapshot_count=self.state_snapshot_count,
+            state_restore_seconds=self.state_restore_seconds,
+            state_restore_count=self.state_restore_count,
             value_evaluation_seconds=self.value_evaluation_seconds,
             value_evaluation_count=self.value_evaluation_count,
             rollout_tail_seconds=self.rollout_tail_seconds,
@@ -979,7 +1038,12 @@ def _restorable_prefix_snapshot(
         timing.add_prefix_replay(_timing_perf_counter() - prefix_replay_started_at)
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
-    return _RestorablePrefix(prefix=prefix, snapshot=snapshotter())
+    snapshot_started_at = _timing_perf_counter() if timing is not None else None
+    snapshot = snapshotter()
+    if timing is not None:
+        assert snapshot_started_at is not None
+        timing.add_state_snapshot(_timing_perf_counter() - snapshot_started_at)
+    return _RestorablePrefix(prefix=prefix, snapshot=snapshot)
 
 
 def _branch_from_replay_prefix(
@@ -1037,7 +1101,11 @@ def _branch_from_replay_prefix(
     restorer = getattr(env, "restore", None)
     if not callable(restorer):
         raise ValueError("environment snapshot restore became unavailable.")
+    restore_started_at = _timing_perf_counter() if timing is not None else None
     restorer(restorable_prefix.snapshot)
+    if timing is not None:
+        assert restore_started_at is not None
+        timing.add_state_restore(_timing_perf_counter() - restore_started_at)
     branch_round = ReplayActionRound(
         turn_index=prefix_decision_round_count,
         actions=branch_actions,

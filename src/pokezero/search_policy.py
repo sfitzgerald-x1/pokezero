@@ -436,10 +436,13 @@ class RootPUCTSearchPolicy:
     ) -> PolicyDecision:
         if context.player_id not in context.requested_players:
             return self._fallback(context, rng=rng, reason="player is not requested")
+        timing_started_at = _timing_perf_counter()
+        opponent_scenario_planning_started_at = _timing_perf_counter()
         try:
             opponent_scenarios = _opponent_action_scenarios(self, context, rng)
         except ValueError as exc:
             return self._fallback(context, rng=rng, reason=str(exc))
+        opponent_scenario_planning_seconds = _timing_perf_counter() - opponent_scenario_planning_started_at
         legality_checked = False
         for scenario in opponent_scenarios:
             planner_error = _opponent_action_planner_error(
@@ -469,7 +472,6 @@ class RootPUCTSearchPolicy:
         search_scenarios = _flatten_scenario_groups(search_scenario_groups)
 
         search_trajectory = _trajectory_with_current_observation(context)
-        timing_started_at = _timing_perf_counter()
         history = player_observation_history(
             search_trajectory,
             player_id=context.player_id,
@@ -697,6 +699,14 @@ class RootPUCTSearchPolicy:
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
             elapsed_seconds = perf_counter() - start
+            timing = (
+                RootPUCTSearchTiming.aggregate(
+                    tuple(scenario_search.timing for scenario_search in scenario_searches)
+                )
+                .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
+                .with_policy_evaluation(policy_evaluation_seconds)
+                .with_total(_timing_perf_counter() - timing_started_at)
+            )
         finally:
             close = getattr(env, "close", None)
             if callable(close):
@@ -815,11 +825,6 @@ class RootPUCTSearchPolicy:
             }
             if self.start_override_planner is not None
             else {}
-        )
-        timing = RootPUCTSearchTiming.aggregate(
-            tuple(scenario_search.timing for scenario_search in scenario_searches)
-        ).with_policy_evaluation(policy_evaluation_seconds).with_total(
-            _timing_perf_counter() - timing_started_at
         )
         return PolicyDecision(
             action_index=best.action_index,

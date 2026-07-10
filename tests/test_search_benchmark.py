@@ -163,6 +163,9 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         for key in (
             "prefix_replay_count",
             "branch_simulator_step_count",
+            "state_snapshot_count",
+            "state_restore_count",
+            "opponent_scenario_planning_count",
             "policy_evaluation_count",
             "value_evaluation_count",
             "policy_value_evaluation_count",
@@ -172,16 +175,34 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         for key in (
             "prefix_replay_seconds",
             "branch_simulator_step_seconds",
+            "state_snapshot_seconds",
+            "state_restore_seconds",
+            "opponent_scenario_planning_seconds",
             "policy_evaluation_seconds",
             "value_evaluation_seconds",
             "policy_value_evaluation_seconds",
             "rollout_tail_seconds",
-            "residual_seconds",
+            "raw_residual_seconds",
             "total_seconds",
         ):
             self.assertAlmostEqual(timing[key], sum(decision_timing[key] for decision_timing in decision_timings))
+        for timing_payload in (*decision_timings, timing):
+            self.assertGreaterEqual(timing_payload["raw_residual_seconds"], -1e-9)
+            self.assertAlmostEqual(
+                timing_payload["total_seconds"],
+                timing_payload["prefix_replay_seconds"]
+                + timing_payload["branch_simulator_step_seconds"]
+                + timing_payload["state_snapshot_seconds"]
+                + timing_payload["state_restore_seconds"]
+                + timing_payload["opponent_scenario_planning_seconds"]
+                + timing_payload["policy_value_evaluation_seconds"]
+                + timing_payload["rollout_tail_seconds"]
+                + timing_payload["raw_residual_seconds"],
+            )
         self.assertEqual(timing["rollout_tail_count"], 0)
         self.assertEqual(timing["rollout_tail_seconds"], 0.0)
+        self.assertEqual(timing["opponent_scenario_planning_count"], 0)
+        self.assertEqual(timing["opponent_scenario_planning_seconds"], 0.0)
         self.assertTrue(envs[0].closed)
 
     def test_benchmark_root_puct_counterfactual_rollouts_compares_recorded_and_selected_outcomes(self) -> None:
