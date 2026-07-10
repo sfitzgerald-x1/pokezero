@@ -56,11 +56,12 @@ says so).
   data have identical checksums/K and sampled worlds. Benchmark JSON logs the
   distinct public-belief checksum(s) for each game seed and refuses a
   belief-enabled result if any searched seed materialized no world.
-- **P-2 Root Dirichlet noise (required by Step 3)**: alpha/mixture/seed
-  semantics specified up front (per-decision seeded for reproducibility;
-  diagnostics record the noise draw). **Audit-only by default**: primary
-  evaluation arms run deterministic priors; noise arms are separate, labeled
-  rows. Noise never silently enters a strength row.
+- **P-2 Root Dirichlet noise (implemented; required by Step 3)**: alpha/mix/seed
+  semantics are explicit and per-decision seeded for reproducibility; diagnostics
+  record the legal-action noise draw and mixed priors. **Audit-only by default**:
+  primary evaluation arms run deterministic priors; `--root-dirichlet-alpha`
+  creates a separately labeled `+dirichlet` row. Noise never silently enters a
+  strength row.
 - **P-3 Per-decision budget hook (required by Step 4 arm 4)**: the visit budget
   becomes a callable of the decision context (entropy/value-margin gates from
   Step 2); fixed-budget behavior preserved as the default; unit tests for both.

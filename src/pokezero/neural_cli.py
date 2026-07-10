@@ -896,6 +896,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--root-dirichlet-alpha",
+        type=float,
+        default=None,
+        help=(
+            "Enable an audit-only root Dirichlet-noise arm with this positive concentration. "
+            "Omit it to keep the deterministic primary evaluation priors."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--root-dirichlet-mix",
+        type=float,
+        default=0.25,
+        help="Fraction of legal root prior mass replaced by Dirichlet noise when enabled.",
+    )
+    root_puct_play.add_argument(
+        "--root-dirichlet-seed",
+        type=int,
+        default=0,
+        help="Base seed for reproducible per-decision root Dirichlet draws.",
+    )
+    root_puct_play.add_argument(
         "--belief-start-overrides",
         action="store_true",
         help=(
@@ -3212,9 +3233,12 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     raw_policy_id = str(result.model_config.policy_id)
 
     def search_policy_id_for(leaf_rollout_rounds: int) -> str:
+        root_puct_id = f"{raw_policy_id}+root-puct"
+        if args.root_dirichlet_alpha is not None:
+            root_puct_id = f"{root_puct_id}+dirichlet"
         if tag_leaf_policy_ids:
-            return f"{raw_policy_id}+root-puct-leaf{leaf_rollout_rounds}"
-        return f"{raw_policy_id}+root-puct"
+            return f"{root_puct_id}-leaf{leaf_rollout_rounds}"
+        return root_puct_id
     search_policy_ids = tuple(
         search_policy_id_for(leaf_rollout_rounds)
         for leaf_rollout_rounds in leaf_rollout_rounds_values
@@ -3322,6 +3346,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             root_prior_temperature=(
                 args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
             ),
+            root_dirichlet_alpha=args.root_dirichlet_alpha,
+            root_dirichlet_mix=args.root_dirichlet_mix,
+            root_dirichlet_seed=args.root_dirichlet_seed,
             max_opponent_action_scenarios=args.root_opponent_action_scenarios,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,

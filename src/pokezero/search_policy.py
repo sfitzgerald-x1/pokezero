@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import hashlib
 from itertools import product
 from time import perf_counter
 import math
@@ -257,6 +258,11 @@ class RootPUCTSearchPolicy:
     root_visit_budget: int | None = ACTION_COUNT + 7
     root_time_budget_seconds: float | None = None
     root_prior_temperature: float = 1.0
+    # Disabled unless alpha is set. Search evaluation defaults to deterministic priors;
+    # Dirichlet noise is an explicitly labeled blind-spot audit arm.
+    root_dirichlet_alpha: float | None = None
+    root_dirichlet_mix: float = 0.25
+    root_dirichlet_seed: int = 0
     max_opponent_action_scenarios: int | None = None
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
@@ -291,6 +297,18 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
         if self.root_prior_temperature <= 0.0 or not math.isfinite(self.root_prior_temperature):
             raise ValueError("root_prior_temperature must be a finite positive value.")
+        if self.root_dirichlet_alpha is not None and (
+            self.root_dirichlet_alpha <= 0.0 or not math.isfinite(self.root_dirichlet_alpha)
+        ):
+            raise ValueError("root_dirichlet_alpha must be a finite positive value when set.")
+        if not math.isfinite(self.root_dirichlet_mix) or not 0.0 <= self.root_dirichlet_mix <= 1.0:
+            raise ValueError("root_dirichlet_mix must be finite and between 0 and 1.")
+        if self.root_dirichlet_alpha is not None and self.root_dirichlet_mix == 0.0:
+            raise ValueError("root_dirichlet_mix must be positive when root_dirichlet_alpha is set.")
+        if isinstance(self.root_dirichlet_seed, bool) or not isinstance(self.root_dirichlet_seed, int):
+            raise ValueError("root_dirichlet_seed must be an integer.")
+        if self.root_dirichlet_alpha is not None and "dirichlet" not in self.policy_id:
+            self.policy_id = f"{self.policy_id}+dirichlet"
         if self.max_opponent_action_scenarios is not None and self.max_opponent_action_scenarios <= 0:
             raise ValueError("max_opponent_action_scenarios must be positive when set.")
         if self.leaf_rollout_decision_rounds < 0:
@@ -397,6 +415,14 @@ class RootPUCTSearchPolicy:
         priors = _temperature_scale_action_priors(
             self.prior_fn(history),
             temperature=self.root_prior_temperature,
+        )
+        priors, root_dirichlet_metadata = _root_dirichlet_action_priors(
+            priors,
+            context=context,
+            legal_action_mask=context.observation.legal_action_mask,
+            alpha=self.root_dirichlet_alpha,
+            mix=self.root_dirichlet_mix,
+            base_seed=self.root_dirichlet_seed,
         )
         leaf_rollout_policies = (
             _leaf_rollout_policies(context, self.leaf_rollout_policy_factory)
@@ -695,6 +721,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_cpuct": self.cpuct,
                 "root_puct_selection_mode": self.selection_mode,
                 "root_puct_root_prior_temperature": self.root_prior_temperature,
+                **root_dirichlet_metadata,
                 "root_puct_selected_value": best.value,
                 "root_puct_selected_score": best.score,
                 "root_puct_selected_action_prior": best.prior,
@@ -1465,6 +1492,65 @@ def _temperature_scale_action_priors(
     if total <= 0.0:
         return scaled
     return tuple(value / total for value in scaled)
+
+
+def _root_dirichlet_action_priors(
+    priors: Sequence[float],
+    *,
+    context: PolicyContext,
+    legal_action_mask: Sequence[bool],
+    alpha: float | None,
+    mix: float,
+    base_seed: int,
+) -> tuple[tuple[float, ...], dict[str, object]]:
+    """Mix a reproducible Dirichlet draw into legal root priors when explicitly enabled."""
+
+    normalized = tuple(float(value) for value in priors)
+    _validate_action_prior_vector(normalized, name="action priors")
+    if alpha is None:
+        return normalized, {"root_puct_root_dirichlet_enabled": False}
+
+    legal = legal_action_indices(tuple(legal_action_mask))
+    if not legal:
+        raise ValueError("root Dirichlet noise requires at least one legal action.")
+    decision_seed = _root_dirichlet_decision_seed(context, base_seed=base_seed)
+    noise_rng = random.Random(decision_seed)
+    samples = [noise_rng.gammavariate(alpha, 1.0) for _index in legal]
+    sample_total = sum(samples)
+    if sample_total <= 0.0 or not math.isfinite(sample_total):
+        raise ValueError("root Dirichlet sampling produced an invalid distribution.")
+    noise = tuple(sample / sample_total for sample in samples)
+    legal_prior_total = sum(normalized[index] for index in legal)
+    if legal_prior_total > 0.0:
+        legal_priors = tuple(normalized[index] / legal_prior_total for index in legal)
+    else:
+        legal_priors = (1.0 / len(legal),) * len(legal)
+    mixed = tuple((1.0 - mix) * prior + mix * noise_value for prior, noise_value in zip(legal_priors, noise, strict=True))
+    output = [0.0] * ACTION_COUNT
+    for index, value in zip(legal, mixed, strict=True):
+        output[index] = value
+    return tuple(output), {
+        "root_puct_root_dirichlet_enabled": True,
+        "root_puct_root_dirichlet_alpha": alpha,
+        "root_puct_root_dirichlet_mix": mix,
+        "root_puct_root_dirichlet_base_seed": base_seed,
+        "root_puct_root_dirichlet_decision_seed": decision_seed,
+        "root_puct_root_dirichlet_noise": {str(index): value for index, value in zip(legal, noise, strict=True)},
+        "root_puct_root_dirichlet_mixed_priors": {
+            str(index): value for index, value in zip(legal, mixed, strict=True)
+        },
+    }
+
+
+def _root_dirichlet_decision_seed(context: PolicyContext, *, base_seed: int) -> int:
+    """Derive an independent reproducible noise seed for one player decision."""
+
+    digest = hashlib.sha256(
+        f"{base_seed}:{context.seed}:{context.player_id}:{context.decision_round_index}:root-dirichlet".encode(
+            "utf-8"
+        )
+    ).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 def _trajectory_with_current_observation(context: PolicyContext) -> BattleTrajectory:
