@@ -25,6 +25,7 @@ from pokezero.dataset import (
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
+    _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
     _refutation_cache_training_contract,
     _training_cache_lifecycle,
@@ -3384,7 +3385,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             search_policy = tuple(kwargs["matchups"])[2].p1_policy
             captured["search_policy"] = search_policy
             search_policy.env_factory()
-            return SimpleNamespace(to_dict=lambda: {"matchups": 4})
+            return SimpleNamespace(to_dict=lambda: {"matchups": 4}, matchups=())
 
         def capture_env(config):
             captured["env_config"] = config
@@ -3429,6 +3430,22 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(search_policy.start_override_attempts, 7)
         self.assertEqual(search_policy.start_override_hp_fraction_tolerance, 0.03)
         self.assertTrue(captured["env_config"].set_belief_source)
+
+    def test_root_puct_belief_benchmark_rejects_missing_world_checksums(self) -> None:
+        result = SimpleNamespace(
+            label="search vs max-damage",
+            p1_policy_id="search",
+            p2_policy_id="max-damage",
+            seed_start=12,
+            metrics=SimpleNamespace(games=2),
+            root_puct_belief_public_checksums_by_seed={12: ("public",)},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing belief-world checksum for seeds 13"):
+            _require_belief_world_benchmark_coverage(
+                SimpleNamespace(matchups=(result,)),
+                search_policy_ids=("search",),
+            )
 
     def test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature(self) -> None:
         if not torch_available():

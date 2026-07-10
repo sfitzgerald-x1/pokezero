@@ -373,8 +373,11 @@ class RootPUCTSearchPolicy:
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
                 return self._fallback(context, rng=rng, reason=legality_report.error)
-        start_override_samples_per_scenario = _start_override_samples_per_scenario(self, context)
-        start_override_sampling_metadata = _start_override_sampling_metadata(self, context)
+        try:
+            start_override_samples_per_scenario = _start_override_samples_per_scenario(self, context)
+            start_override_sampling_metadata = _start_override_sampling_metadata(self, context)
+        except ValueError as exc:
+            return self._fallback(context, rng=rng, reason=str(exc))
         search_scenario_groups = _start_override_sampled_scenario_groups(
             opponent_scenarios,
             samples_per_scenario=(

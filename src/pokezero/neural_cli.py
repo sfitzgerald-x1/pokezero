@@ -3176,6 +3176,17 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
     )
+    if args.belief_start_overrides:
+        if args.format_id != "gen3randombattle":
+            raise ValueError("--belief-start-overrides currently supports only gen3randombattle.")
+        if args.belief_world_sample_cap <= 0:
+            raise ValueError("--belief-world-sample-cap must be positive.")
+        if args.belief_start_override_attempts <= 0:
+            raise ValueError("--belief-start-override-attempts must be positive.")
+        if args.belief_start_override_hp_fraction_tolerance < 0.0:
+            raise ValueError("--belief-start-override-hp-fraction-tolerance must be non-negative.")
+        # Latch masks through the same belief-enabled environment used for both live and branch play.
+        env_config = replace(env_config, set_belief_source=True)
     policy_showdown_root = env_config.resolved_showdown_root()
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
@@ -3193,16 +3204,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     )
     belief_start_override_planner = None
     if args.belief_start_overrides:
-        if args.format_id != "gen3randombattle":
-            raise ValueError("--belief-start-overrides currently supports only gen3randombattle.")
-        if args.belief_world_sample_cap <= 0:
-            raise ValueError("--belief-world-sample-cap must be positive.")
-        if args.belief_start_override_attempts <= 0:
-            raise ValueError("--belief-start-override-attempts must be positive.")
-        if args.belief_start_override_hp_fraction_tolerance < 0.0:
-            raise ValueError("--belief-start-override-hp-fraction-tolerance must be non-negative.")
         # The planner consumes the same candidate-set source that produced the observation's public belief.
-        env_config = replace(env_config, set_belief_source=True)
         belief_start_override_planner = gen3_randbat_belief_start_override_planner(
             load_gen3_randbat_source_cached(env_config.resolved_showdown_root()),
             world_sample_cap=args.belief_world_sample_cap,
@@ -3383,6 +3385,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         matchups=tuple(matchups),
     )
+    if belief_start_override_planner is not None:
+        _require_belief_world_benchmark_coverage(report, search_policy_ids=search_policy_ids)
     payload = _root_puct_play_payload(
         report,
         raw_policy_id=raw_policy_id,
@@ -3396,6 +3400,33 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     else:
         print_benchmark_report(report)
     return 0
+
+
+def _require_belief_world_benchmark_coverage(
+    report: Any,
+    *,
+    search_policy_ids: Sequence[str],
+) -> None:
+    """Fail closed when an opt-in belief benchmark fell back before materializing worlds."""
+
+    search_ids = set(search_policy_ids)
+    missing: list[str] = []
+    for result in report.matchups:
+        if result.p1_policy_id not in search_ids and result.p2_policy_id not in search_ids:
+            continue
+        expected_seeds = set(range(result.seed_start, result.seed_start + result.metrics.games))
+        observed_seeds = set((result.root_puct_belief_public_checksums_by_seed or {}).keys())
+        if expected_seeds - observed_seeds:
+            missing.append(
+                f"{result.label}: missing belief-world checksum for seeds "
+                f"{', '.join(str(seed) for seed in sorted(expected_seeds - observed_seeds))}"
+            )
+    if missing:
+        raise RuntimeError(
+            "belief-start-overrides requested but no public belief world was materialized for every "
+            "searched game; refusing to report a fallback-contaminated benchmark: "
+            + "; ".join(missing)
+        )
 
 
 def _root_puct_play_payload(

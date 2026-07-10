@@ -79,18 +79,22 @@ def belief_world_sampling_profile(
     context: PolicyContext,
     *,
     sample_cap: int = DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
+    set_source: Gen3RandbatSource | None = None,
+    team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
 ) -> BeliefWorldSamplingProfile | None:
     """Derive a bounded PIMC world count from player-relative public belief.
 
     The pre-registered mapping is ``K = min(sample_cap, combination_count)``.
-    ``combination_count`` is the product of surviving public variant counts for
-    revealed opponent slots, while ``uncertainty_bits = log2(combination_count)``
-    is recorded for later profiling. Unknown/unsourced slots contribute one
-    rather than inventing a probability distribution.
+    ``combination_count`` covers both surviving revealed variants and the
+    distinct-species hidden backline worlds the materializer can sample. When a
+    set source is unavailable, the profile deliberately falls back to revealed
+    variants only rather than inventing a hidden-team distribution.
     """
 
     if sample_cap <= 0:
         raise ValueError("sample_cap must be positive.")
+    if team_size <= 0:
+        raise ValueError("team_size must be positive.")
     metadata = context.observation.metadata
     if not isinstance(metadata, Mapping):
         return None
@@ -98,17 +102,24 @@ def belief_world_sampling_profile(
     if view is None:
         return None
 
-    candidate_counts = tuple(
+    revealed_candidate_counts = tuple(
         max(1, len(pokemon.candidate_variants))
         for pokemon in view.opponent_pokemon
     )
-    combination_count = math.prod(candidate_counts) if candidate_counts else 1
+    revealed_combination_count = math.prod(revealed_candidate_counts) if revealed_candidate_counts else 1
+    hidden_combination_count, hidden_slot_count = _public_hidden_backline_combination_count(
+        context=context,
+        view=view,
+        set_source=set_source,
+        team_size=team_size,
+    )
+    combination_count = revealed_combination_count * hidden_combination_count
     return BeliefWorldSamplingProfile(
         sample_cap=sample_cap,
         sample_count=min(sample_cap, combination_count),
         combination_count=combination_count,
         uncertainty_bits=math.log2(combination_count),
-        uncertain_slot_count=sum(count > 1 for count in candidate_counts),
+        uncertain_slot_count=sum(count > 1 for count in revealed_candidate_counts) + hidden_slot_count,
         public_checksum=_belief_world_public_checksum(context=context, view=view),
     )
 
@@ -163,11 +174,21 @@ def gen3_randbat_belief_start_override_planner(
         return sample_override
 
     def sample_count_for_context(context: PolicyContext) -> int:
-        profile = belief_world_sampling_profile(context, sample_cap=world_sample_cap)
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=world_sample_cap,
+            set_source=set_source,
+            team_size=team_size,
+        )
         return profile.sample_count if profile is not None else 1
 
     def sampling_metadata_for_context(context: PolicyContext) -> Mapping[str, object]:
-        profile = belief_world_sampling_profile(context, sample_cap=world_sample_cap)
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=world_sample_cap,
+            set_source=set_source,
+            team_size=team_size,
+        )
         return profile.to_metadata() if profile is not None else {
             "root_puct_belief_world_sampling_profile": "missing"
         }
@@ -194,6 +215,95 @@ def _belief_world_public_checksum(
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _public_hidden_backline_combination_count(
+    *,
+    context: PolicyContext,
+    view: PlayerBeliefView,
+    set_source: Gen3RandbatSource | None,
+    team_size: int,
+) -> tuple[int, int]:
+    """Count the public hidden-team branch space used by ``_sample_hidden_backline``.
+
+    The sampler draws distinct species and then one set variant for each. The
+    elementary-symmetric recurrence counts that weighted without-replacement
+    space exactly, including public switch/move-slot constraints and ordering
+    because packed-team order is observable to replay materialization.
+    """
+
+    hidden_slots = max(0, team_size - len(view.opponent_pokemon))
+    if hidden_slots == 0 or set_source is None:
+        return 1, 0
+    used_species = {_normalize_species_id(pokemon.species) for pokemon in view.opponent_pokemon}
+    team_index_constraints = _public_opponent_team_index_constraints(
+        context,
+        opponent_slot=view.opponent_slot,
+        team_size=team_size,
+    )
+    if team_index_constraints is None:
+        return 1, hidden_slots
+    move_slot_constraints = _public_opponent_move_slot_constraints(context, view.opponent_slot)
+    constrained_count = 1
+    constrained_uncertain_slots = 0
+    for species in sorted(team_index_constraints):
+        if species in used_species:
+            continue
+        universe = set_source.universe_for(species)
+        if universe is None:
+            return 1, hidden_slots
+        moves = tuple(
+            move
+            for _slot, move in sorted(move_slot_constraints.get(species, {}).items())
+            if str(move).strip()
+        )
+        summary = (
+            set_source.summarize(
+                format_id=context.format_id,
+                species=universe.species,
+                revealed_moves=moves,
+            )
+            if moves
+            else None
+        )
+        variants = (
+            tuple(summary.candidate_variants)
+            if summary is not None
+            else tuple(variant.to_summary() for variant in universe.variants)
+        )
+        if not variants:
+            return 1, hidden_slots
+        constrained_count *= len(variants)
+        constrained_uncertain_slots += int(len(variants) > 1)
+        used_species.add(species)
+        hidden_slots -= 1
+    if hidden_slots < 0:
+        return 1, 0
+    variant_counts = tuple(
+        len(universe.variants)
+        for universe in set_source.universes.values()
+        if universe.variants and _normalize_species_id(universe.species) not in used_species
+    )
+    if len(variant_counts) < hidden_slots:
+        return 1, constrained_uncertain_slots + hidden_slots
+    return (
+        constrained_count * _ordered_distinct_variant_combination_count(variant_counts, hidden_slots),
+        constrained_uncertain_slots + hidden_slots,
+    )
+
+
+def _ordered_distinct_variant_combination_count(
+    variant_counts: Sequence[int],
+    slots: int,
+) -> int:
+    """Return ordered distinct-species variant assignments for ``slots`` team slots."""
+
+    elementary = [0] * (slots + 1)
+    elementary[0] = 1
+    for count in variant_counts:
+        for index in range(slots, 0, -1):
+            elementary[index] += elementary[index - 1] * count
+    return elementary[slots] * math.factorial(slots)
 
 
 def gen3_randbat_belief_start_override(

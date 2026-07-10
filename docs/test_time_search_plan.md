@@ -36,12 +36,15 @@ says so).
   `root-puct-play-benchmark --belief-start-overrides` wires the public Gen 3
   belief planner into replay search and explicitly enables the candidate-set
   source for the benchmark environment. `--belief-world-sample-cap` implements
-  the pre-registered mapping **K = min(cap, public surviving-variant
-  combinations)**; uncertainty bits and the resolved K are diagnostics, not
-  policy uncertainty. **Anti-leakage gate (tested)**: the sampling profile is a
-  function of public belief only; matched fixture contexts that differ only in
-  an ignored true-hidden payload have identical checksums/K. Benchmark JSON
-  logs the distinct public-belief checksum(s) for each game seed.
+  the pre-registered mapping **K = min(cap, public full-team combinations)**:
+  surviving revealed variants plus the distinct-species unrevealed backline
+  worlds the materializer can draw, respecting public switch/move constraints.
+  Uncertainty bits and the resolved K are diagnostics, not policy uncertainty.
+  **Anti-leakage gate (tested)**: the sampling profile is a function of public
+  belief only; matched fixture contexts with different opponent-private request
+  data have identical checksums/K and sampled worlds. Benchmark JSON logs the
+  distinct public-belief checksum(s) for each game seed and refuses a
+  belief-enabled result if any searched seed materialized no world.
 - **P-2 Root Dirichlet noise (required by Step 3)**: alpha/mixture/seed
   semantics specified up front (per-decision seeded for reproducibility;
   diagnostics record the noise draw). **Audit-only by default**: primary
