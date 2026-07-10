@@ -3237,10 +3237,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
 
     def search_policy_id_for(leaf_rollout_rounds: int, *, dirichlet_enabled: bool) -> str:
         root_puct_id = f"{raw_policy_id}+root-puct"
+        if tag_leaf_policy_ids:
+            root_puct_id = f"{root_puct_id}-leaf{leaf_rollout_rounds}"
         if dirichlet_enabled:
             root_puct_id = f"{root_puct_id}+dirichlet"
-        if tag_leaf_policy_ids:
-            return f"{root_puct_id}-leaf{leaf_rollout_rounds}"
         return root_puct_id
     search_policy_ids = tuple(
         search_policy_id_for(leaf_rollout_rounds, dirichlet_enabled=dirichlet_enabled)
@@ -3260,14 +3260,13 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
 
     def make_leaf_rollout_policy(
         *,
-        search_policy_id: str,
+        deterministic_search_policy_id: str,
         search_player_id: str,
         benchmark_opponent_policy: Policy | None,
         player_id: str,
     ) -> Policy:
         if benchmark_opponent_policy is not None and player_id != search_player_id:
             return benchmark_opponent_policy
-        deterministic_search_policy_id = search_policy_id.replace("+dirichlet", "")
         return make_raw_policy(policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}")
 
     def value_fn(history):
@@ -3327,7 +3326,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 else None
             )
             leaf_rollout_policy_factory = lambda player_id: make_leaf_rollout_policy(
-                search_policy_id=search_policy_id,
+                deterministic_search_policy_id=search_policy_id_for(
+                    leaf_rollout_rounds,
+                    dirichlet_enabled=False,
+                ),
                 search_player_id=search_player_id,
                 benchmark_opponent_policy=benchmark_opponent_policy,
                 player_id=player_id,

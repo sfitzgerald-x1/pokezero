@@ -307,7 +307,7 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_dirichlet_mix must be positive when root_dirichlet_alpha is set.")
         if isinstance(self.root_dirichlet_seed, bool) or not isinstance(self.root_dirichlet_seed, int):
             raise ValueError("root_dirichlet_seed must be an integer.")
-        if self.root_dirichlet_alpha is not None and "dirichlet" not in self.policy_id:
+        if self.root_dirichlet_alpha is not None and not self.policy_id.endswith("+dirichlet"):
             self.policy_id = f"{self.policy_id}+dirichlet"
         if self.max_opponent_action_scenarios is not None and self.max_opponent_action_scenarios <= 0:
             raise ValueError("max_opponent_action_scenarios must be positive when set.")
