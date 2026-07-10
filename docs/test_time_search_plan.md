@@ -32,6 +32,16 @@ says so).
 
 ## Prerequisite implementations (small, test-gated; required before the steps that cite them)
 
+- **P-0 Schema-matched external evaluation corpus (capture path implemented; frozen pool pending,
+  required by Step 0)**: every value-readiness corpus must match the checkpoint's observation
+  schema and numeric census. The historical `pool-fp-v1` and `pool-fp-v2` artifacts cannot score
+  this v2.2/155-column capstone checkpoint, so they are explicitly ineligible. The controlled
+  foul-play harness now normalizes turn-merged history for v2.2 and exposes
+  `capture_controlled_foulplay_rollouts` for raw-policy, p1-only external-opponent capture; it
+  writes each terminal game immediately and stamps belief-source provenance. Before Step 0, freeze
+  a v2.2 capture seed band plus a disjoint calibration-fit band, record both hashes and the capture
+  checkpoint/config, and re-derive the E1 Pearson floor on that compatible corpus. A one-game
+  v2.2 capture smoke validates plumbing only; it is not a gate result.
 - **P-1 Belief-world wiring (implemented, required by Steps 2–4)**:
   `root-puct-play-benchmark --belief-start-overrides` wires the public Gen 3
   belief planner into replay search and explicitly enables the candidate-set
@@ -69,16 +79,18 @@ says so).
 
 The 1M checkpoint was chosen for policy strength; nothing yet certifies its
 VALUE head as a leaf evaluator — and project precedent (the E1 value-readiness
-line) treats that as the prerequisite it is. On the frozen held-out corpus
-(the pool-fp-v1 pooled-eval machinery): held-out value **ranking**
-(Pearson vs realized outcomes) and **calibration** (ECE + sign agreement) for
-iteration-0312 specifically, with checkpoint/data provenance recorded.
-Pre-registered thresholds: Pearson ≥ the E1 bar re-derived on pool-fp-v1;
+line) treats that as the prerequisite it is. On the frozen P-0 v2.2
+external-opponent corpus: held-out value **ranking** (Pearson vs realized
+outcomes) and **calibration** (ECE + sign agreement) for iteration-0312
+specifically, with checkpoint/data provenance recorded. Historical v1/v2
+encoded pools are invalid for this v2.2 checkpoint.
+Pre-registered thresholds: Pearson ≥ the E1 floor re-derived on the P-0 pool;
 sign agreement ≥ 0.75; ECE ≤ 0.10 (raw) — if raw calibration fails but ranking
-passes, a **calibrated copy** (temperature/isotonic fit on held-out data, never
-on capstone games) MAY be used as the leaf evaluator and must be labeled as
-such in every capstone row. If ranking fails, the capstone is re-pointed at the
-best value-ready checkpoint and the plan's title claim changes accordingly.
+passes, a **calibrated copy** (temperature/isotonic fit on the disjoint P-0
+calibration band, never on capstone games) MAY be used as the leaf evaluator
+and must be labeled as such in every capstone row. If ranking fails, the
+capstone is re-pointed at the best value-ready checkpoint and the plan's title
+claim changes accordingly.
 
 ## Step 1 — Mechanics + cost profile (hours; no new code)
 

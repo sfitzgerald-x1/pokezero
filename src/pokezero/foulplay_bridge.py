@@ -25,6 +25,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .category_vocab import CategoryVocabulary
+from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
@@ -80,6 +81,7 @@ _WILSON_95_Z = 1.959963984540054
 _MIN_STRENGTH_SAMPLE_GAMES = 300
 ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
 ControlledFoulPlayComparisonProgressCallback = Callable[["ControlledFoulPlayComparisonResult"], None]
+ControlledFoulPlayTrajectoryCallback = Callable[[BattleTrajectory], None]
 _COMPARISON_MODES = {"per-seed", "per-arm"}
 
 
@@ -1099,6 +1101,7 @@ async def run_controlled_foulplay_benchmark(
     config: ControlledFoulPlayConfig,
     *,
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
+    trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
@@ -1178,6 +1181,7 @@ async def run_controlled_foulplay_benchmark(
                     seed=seed,
                     foulplay_process=foulplay_process,
                     foulplay_logs=foulplay_logs,
+                    trajectory_callback=trajectory_callback,
                 )
             )
             if progress_callback is not None:
@@ -1206,6 +1210,79 @@ async def run_controlled_foulplay_benchmark(
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
     )
+
+
+async def capture_controlled_foulplay_rollouts(
+    config: ControlledFoulPlayConfig,
+    *,
+    out_path: Path,
+    pool_id: str = "controlled-foulplay",
+    progress_callback: ControlledFoulPlayProgressCallback | None = None,
+) -> ControlledFoulPlayBenchmarkResult:
+    """Capture raw-policy p1 trajectories from a deterministic foul-play seed band.
+
+    Each completed game is appended and flushed before the next seed begins, so
+    a process failure preserves all previously captured rollouts. The output
+    path must be new; callers resume with a fresh seed band rather than risk
+    silently mixing duplicate seeds into a frozen evaluation corpus.
+    """
+
+    if config.policy_mode != "raw":
+        raise ValueError("controlled foul-play rollout capture requires policy_mode='raw'.")
+    if not pool_id.strip():
+        raise ValueError("pool_id must be non-empty.")
+    if out_path.exists():
+        raise FileExistsError(f"capture output already exists: {out_path}")
+
+    source = _resolved_belief_set_source(config)
+    belief_set_source_hash = source.metadata.source_hash if source is not None else None
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("x", encoding="utf-8") as handle:
+        def capture(trajectory: BattleTrajectory) -> None:
+            p1_trajectory = _p1_capture_trajectory(trajectory, pool_id=pool_id)
+            record = RolloutRecord(
+                battle_id=p1_trajectory.battle_id,
+                seed=p1_trajectory.seed,
+                format_id=p1_trajectory.format_id,
+                policy_ids={"p1": f"neural:{config.checkpoint}", "p2": "foul-play"},
+                decision_round_count=len(p1_trajectory.steps),
+                elapsed_seconds=0.0,
+                terminal=p1_trajectory.terminal,
+                trajectory=p1_trajectory,
+                belief_set_source_hash=belief_set_source_hash,
+            )
+            write_rollout_record(handle, record)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        return await run_controlled_foulplay_benchmark(
+            config,
+            progress_callback=progress_callback,
+            trajectory_callback=capture,
+        )
+
+
+def _p1_capture_trajectory(trajectory: BattleTrajectory, *, pool_id: str) -> BattleTrajectory:
+    """Keep only PokeZero's public/request-known decisions for external value evaluation."""
+
+    if trajectory.terminal is None:
+        raise ValueError("controlled foul-play trajectory has no terminal state.")
+    captured = BattleTrajectory(
+        battle_id=trajectory.battle_id,
+        format_id=trajectory.format_id,
+        seed=trajectory.seed,
+        metadata={
+            **dict(trajectory.metadata),
+            "capture": "controlled-foulplay/raw",
+            "pool": pool_id,
+            "sides": "p1-only",
+        },
+    )
+    for step in trajectory.steps:
+        if step.player_id == "p1":
+            captured.append(step)
+    captured.record_terminal(trajectory.terminal)
+    return captured
 
 
 async def run_controlled_foulplay_comparison(
@@ -1630,6 +1707,7 @@ async def _run_single_game(
     seed: int,
     foulplay_process: asyncio.subprocess.Process,
     foulplay_logs: _ProcessLogBuffer,
+    trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -1875,6 +1953,10 @@ async def _run_single_game(
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
     root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
+    if trajectory_callback is not None:
+        if state.trajectory.terminal is None:
+            raise RuntimeError("controlled foul-play capture requires a terminal trajectory")
+        trajectory_callback(state.trajectory)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -2104,7 +2186,12 @@ async def _handle_decision_boundary(
     assert state.trajectory is not None
     belief_set_source = _resolved_belief_set_source(config)
     player_states = {
-        player: _player_state(state, player, set_source=belief_set_source)
+        player: _player_state(
+            state,
+            player,
+            set_source=belief_set_source,
+            include_turn_merged=observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         for player in requested_players
     }
     observations = {
@@ -2334,6 +2421,7 @@ def _player_state(
     player: PlayerId,
     *,
     set_source=None,
+    include_turn_merged: bool = False,
 ) -> PlayerRelativeBattleState:
     replay = parse_showdown_replay(state.all_lines(), battle_id=state.battle_id)
     return normalize_for_player(
@@ -2342,6 +2430,7 @@ def _player_state(
         configured_showdown_slot=player,
         format_id=state.format_id,
         set_source=set_source,
+        include_turn_merged=include_turn_merged,
     )
 
 
