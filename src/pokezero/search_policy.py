@@ -1517,9 +1517,14 @@ def _root_dirichlet_action_priors(
     noise_rng = random.Random(decision_seed)
     samples = [noise_rng.gammavariate(alpha, 1.0) for _index in legal]
     sample_total = sum(samples)
+    underflow_fallback = False
     if sample_total <= 0.0 or not math.isfinite(sample_total):
-        raise ValueError("root Dirichlet sampling produced an invalid distribution.")
-    noise = tuple(sample / sample_total for sample in samples)
+        # Extremely small alpha values can underflow every gamma draw. Preserve the
+        # audit run by falling back to a valid symmetric draw instead of aborting a game.
+        noise = (1.0 / len(legal),) * len(legal)
+        underflow_fallback = True
+    else:
+        noise = tuple(sample / sample_total for sample in samples)
     legal_prior_total = sum(normalized[index] for index in legal)
     if legal_prior_total > 0.0:
         legal_priors = tuple(normalized[index] / legal_prior_total for index in legal)
@@ -1535,6 +1540,7 @@ def _root_dirichlet_action_priors(
         "root_puct_root_dirichlet_mix": mix,
         "root_puct_root_dirichlet_base_seed": base_seed,
         "root_puct_root_dirichlet_decision_seed": decision_seed,
+        "root_puct_root_dirichlet_underflow_fallback": underflow_fallback,
         "root_puct_root_dirichlet_noise": {str(index): value for index, value in zip(legal, noise, strict=True)},
         "root_puct_root_dirichlet_mixed_priors": {
             str(index): value for index, value in zip(legal, mixed, strict=True)

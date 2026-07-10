@@ -1,5 +1,6 @@
 import random
 import unittest
+from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import BattleStartOverride, StepResult, TerminalState
@@ -13,6 +14,7 @@ from pokezero.search_policy import (
     _aggregate_scenario_searches,
     _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
+    _root_dirichlet_action_priors,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
@@ -483,38 +485,74 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
     def test_root_puct_policy_dirichlet_noise_is_per_decision_reproducible_and_recorded(self) -> None:
         def run_once():
             policy = RootPUCTSearchPolicy(
-                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                env_factory=lambda: DelayedOutcomeEnv({0: "p1", 1: "p1"}),
                 rollout_config=RolloutConfig(max_decision_rounds=3),
                 value_fn=lambda history: 0.0,
-                prior_fn=lambda history: (0.8, 0.2) + (0.0,) * (ACTION_COUNT - 2),
+                prior_fn=lambda history: (0.99, 0.01) + (0.0,) * (ACTION_COUNT - 2),
                 opponent_action_planner=lambda context, rng: {"p2": 0},
-                cpuct=0.0,
-                root_visit_budget=2,
+                cpuct=1.0,
+                root_visit_budget=3,
                 root_dirichlet_alpha=0.3,
-                root_dirichlet_mix=0.25,
-                root_dirichlet_seed=41,
+                root_dirichlet_mix=1.0,
+                root_dirichlet_seed=0,
             )
             self.assertEqual(policy.policy_id, "root-puct-search+dirichlet")
-            result = RolloutDriver(
-                env=ImmediateOutcomeEnv(label="live"),
-                policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
-                config=RolloutConfig(max_decision_rounds=3),
-            ).run(seed=91, battle_id="search-policy")
-            return result.trajectory.steps_for_player("p1")[0].metadata
+            context = PolicyContext(
+                player_id="p1",
+                decision_round_index=0,
+                battle_id="search-policy",
+                format_id="gen3randombattle",
+                seed=91,
+                observation=_observation(0, 1),
+                requested_players=("p1", "p2"),
+                trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+                requested_legal_action_masks={"p1": _mask(0, 1), "p2": _mask(0)},
+            )
+            return policy.select_action_with_context(context, rng=random.Random(999)).metadata
 
         first = run_once()
         second = run_once()
 
         self.assertTrue(first["root_puct_root_dirichlet_enabled"])
         self.assertEqual(first["root_puct_root_dirichlet_alpha"], 0.3)
-        self.assertEqual(first["root_puct_root_dirichlet_mix"], 0.25)
-        self.assertEqual(first["root_puct_root_dirichlet_base_seed"], 41)
+        self.assertEqual(first["root_puct_root_dirichlet_mix"], 1.0)
+        self.assertEqual(first["root_puct_root_dirichlet_base_seed"], 0)
         self.assertEqual(first["root_puct_root_dirichlet_decision_seed"], second["root_puct_root_dirichlet_decision_seed"])
         self.assertEqual(first["root_puct_root_dirichlet_noise"], second["root_puct_root_dirichlet_noise"])
         self.assertEqual(first["root_puct_root_dirichlet_mixed_priors"], second["root_puct_root_dirichlet_mixed_priors"])
         self.assertEqual(set(first["root_puct_root_dirichlet_noise"]), {"0", "1"})
         self.assertAlmostEqual(sum(first["root_puct_root_dirichlet_noise"].values()), 1.0)
         self.assertAlmostEqual(sum(first["root_puct_root_dirichlet_mixed_priors"].values()), 1.0)
+        self.assertEqual(first["root_puct_search_action"], 1)
+        self.assertEqual(first["root_puct_selected_action_visits"], 2)
+        self.assertEqual(
+            first["root_puct_search_action_prior"],
+            first["root_puct_root_dirichlet_mixed_priors"]["1"],
+        )
+
+    def test_root_dirichlet_underflow_uses_a_valid_symmetric_distribution(self) -> None:
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+        )
+        with patch("pokezero.search_policy.random.Random.gammavariate", return_value=0.0):
+            priors, metadata = _root_dirichlet_action_priors(
+                (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                context=context,
+                legal_action_mask=_mask(0, 1),
+                alpha=0.03,
+                mix=1.0,
+                base_seed=0,
+            )
+
+        self.assertTrue(metadata["root_puct_root_dirichlet_underflow_fallback"])
+        self.assertEqual(priors[:2], (0.5, 0.5))
 
     def test_root_puct_policy_can_plan_root_opponent_action_from_policy(self) -> None:
         planner_policy = ResettableFixedPolicy(0, policy_id="benchmark-opponent")
