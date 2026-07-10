@@ -1,13 +1,13 @@
 # Test-time search: validation-first plan from root-PUCT to ladder budgets
 
-Status: executable plan, 2026-07-10. Slots under `selfplay_mcts_roadmap.md`'s
+Status: active validation program, 2026-07-10. Slots under `selfplay_mcts_roadmap.md`'s
 "MCTS at inference" workstream. Every step validates a named assumption before the
 next step spends effort on it; the capstone is a pre-registered strength test using
 the **`emeta-v2-2-lr3m-1m-belief` 1M checkpoint (iteration-0312)** — the current
 best pure self-play agent (93.2% max-damage / 41% foul-play low-fi) — as the search
 value head. Later phases are funded by the capstone's outcome, not by default.
 
-## Current state (verified in code, 2026-07-10)
+## Current state (verified in code/artifacts, 2026-07-10)
 
 Exists and works today:
 - `RootPUCTSearchPolicy` (`search_policy.py`): one-ply PUCT over root actions —
@@ -29,19 +29,28 @@ checkpoint scenario planner's requested-legal-mask path is a **privileged**
 benchmark guard (its own comment says so). P-3's per-decision visit-budget hook
 is implemented; its strength benefit remains unmeasured.
 
+Step 0 is closed. A frozen isotonic calibrated copy of iteration-0312 passed
+the global held-out thresholds on the schema-matched external corpus: Pearson
+0.503, sign agreement 0.758, and ECE 0.063. The raw head failed calibration,
+so every subsequent value-leaf result must name the calibrated copy. Phase
+stratification is retained as a risk diagnostic: early/mid/late ECE was
+0.089/0.054/0.136 respectively. The late-game slice is above the global target;
+it is not hidden or tuned away, and capstone reporting must preserve that
+limitation alongside the global authorization.
+
 ## Prerequisite implementations (small, test-gated; required before the steps that cite them)
 
-- **P-0 Schema-matched external evaluation corpus (capture path implemented; frozen pool pending,
-  required by Step 0)**: every value-readiness corpus must match the checkpoint's observation
+- **P-0 Schema-matched external evaluation corpus (closed for Step 0)**: every value-readiness corpus must match the checkpoint's observation
   schema and numeric census. The historical `pool-fp-v1` and `pool-fp-v2` artifacts cannot score
   this v2.2/155-column capstone checkpoint, so they are explicitly ineligible. The controlled
   foul-play harness now normalizes turn-merged history for v2.2 and exposes
   `capture_controlled_foulplay_rollouts` for raw-policy, p1-only external-opponent capture; it
   writes each labeled terminal game immediately, excludes capped/tied outcomes, and stamps
-  belief-source provenance. Before Step 0, freeze
-  a v2.2 capture seed band plus a disjoint calibration-fit band, record both hashes and the capture
-  checkpoint/config, and re-derive the E1 Pearson floor on that compatible corpus. A one-game
-  v2.2 capture smoke validates plumbing only; it is not a gate result.
+  belief-source provenance. The completed Step 0 read used disjoint v2.2
+  calibration-fit and evaluation bands of 120 labeled games each, with corpus,
+  source-checkpoint, observation-census, belief-source, and seed-range provenance
+  frozen in the gate artifact. A one-game v2.2 capture smoke validates plumbing
+  only; it is not a gate result.
 - **P-1 Belief-world wiring (implemented, required by Steps 2–4)**:
   `root-puct-play-benchmark --belief-start-overrides` wires the public Gen 3
   belief planner into replay search and explicitly enables the candidate-set
@@ -74,7 +83,7 @@ is implemented; its strength benefit remains unmeasured.
 | H0 | the chosen checkpoint's VALUE HEAD is a valid leaf evaluator (held-out ranking + calibration), independent of its policy strength | Step 0 |
 | H1 | root-only search adds measurable strength on a strong checkpoint ("MCTS is a topper") | Step 4 |
 | H2 | search value concentrates at contested decisions (high policy entropy / small value margin) → adaptive budgets beat flat budgets | Steps 2, 4 |
-| H3 | prior-guided search inherits systematic blind spots (near-zero prior ⇒ branch never visited at any budget) — root noise is load-bearing, not hygiene | Step 3 |
+| H3 | prior-guided search inherits systematic blind spots (near-zero prior ⇒ no post-sweep revisit at useful budgets); root noise is a separately tested remedy, not default hygiene | Step 3 |
 | H4 | per-simulation cost is dominated by NN eval (not sim stepping) at 10M+, and grows with model scale — the eval path, not the simulator, is the bottleneck | Step 1 |
 | H5 | the sims→strength curve flattens quickly under a strong prior (few, well-aimed sims suffice) — bounding whether a fast simulator backend is ever required | Step 4 |
 
@@ -89,9 +98,10 @@ specifically, with checkpoint/data provenance recorded. Historical v1/v2
 encoded pools are invalid for this v2.2 checkpoint.
 Pre-registered thresholds: Pearson ≥ the E1 floor re-derived on the P-0 pool;
 sign agreement ≥ 0.75; ECE ≤ 0.10 (raw) — if raw calibration fails but ranking
-passes, a **calibrated copy** (temperature/isotonic fit on the disjoint P-0
+passes, a **calibrated copy** (affine/isotonic fit on the disjoint P-0
 calibration band, never on capstone games) MAY be used as the leaf evaluator
-and must be labeled as such in every capstone row. If ranking fails, the
+and must be labeled as such in every capstone row. The completed selection is
+the isotonic copy described above. If ranking fails, the
 capstone is re-pointed at the best value-ready checkpoint and the plan's title
 claim changes accordingly.
 
@@ -131,24 +141,29 @@ ladder-budget arithmetic.
 ## Step 3 — Blind-spot entrenchment audit (half day; requires P-2)
 
 From the hazard-probe state corpus (states where hazard/spin actions are
-available and the ΔV work showed mispricing): measure the prior mass the 1M net
-assigns to those actions, then run root-PUCT with root Dirichlet noise ON vs OFF
-and count visits to the mispriced branches.
+available and the ΔV work showed mispricing), first run the deterministic legal
+sweep plus extra visits 24 and 120. Mandatory visits make entrenchment **no
+post-sweep revisit**, never "never visited." Report E (low-prior target rate),
+R_off at 24/120 (post-sweep rescue rate), and target-directed `DeltaChoice_on`.
 
-Validates H3 with numbers: if noise-OFF search never visits hazard lines the
-priors bury (predicted), the caveat is confirmed — root noise is mandatory in
-every search config, and search strength gains must not be read as "the blind
-spots are fixed" (that remains G4/diversity's job). If noise-OFF search *does*
-find them via the value head, the value repair is further along than ΔV implies —
-worth knowing either way.
+Then run the same budgets with explicitly labeled, audit-only Dirichlet noise.
+The primary capstone remains deterministic. If R_off is about 80% or higher,
+there is no noise capstone arm. If R_off is low and Dirichlet materially changes
+choices toward the mispriced line, add one separately labeled `+dirichlet`
+secondary arm using audit-selected parameters; those parameters are tuned only
+on the audit corpus, never capstone seeds. If R_off is low without a material
+choice change, do not add a noise arm and route the finding to training/G4.
+Hazards remain diagnostic targets, not rewards or terminal objectives.
 
 ## Step 4 — CAPSTONE: strength test, 1M checkpoint as the value head
 
 **Config**: `RootPUCTSearchPolicy` with priors AND leaf values from
 `emeta-v2-2-lr3m-1m-belief` iteration-0312 (local convention:
 `checkpoints/pz-v2-2-1m.pt`); belief-determinized worlds (K per Step 2's
-uncertainty gating); root Dirichlet noise per Step 3; seeds fixed and shared
-across arms.
+uncertainty gating); **deterministic root priors**; and seeds fixed and shared
+across arms. The selected isotonic calibrated value copy is named on every
+value-leaf row. A Dirichlet row is secondary-only and exists only when Step 3's
+pre-registered routing rule selects it.
 
 **Honest hidden-information mode (pre-registered, primary)**: no real opponent
 action, no requested-opponent legal mask, no privileged fallback — opponent
