@@ -25,6 +25,7 @@ from pokezero.dataset import (
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
+    _adaptive_root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
     _refutation_cache_training_contract,
@@ -3307,6 +3308,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "0.2",
                     "--root-dirichlet-seed",
                     "11",
+                    "--adaptive-root-contested-extra-visits",
+                    "120",
+                    "--adaptive-root-policy-entropy-threshold",
+                    "0.7",
+                    "--adaptive-root-value-margin-threshold",
+                    "0.15",
                     "--json",
                 ]
             )
@@ -3320,27 +3327,37 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual([matchup.label for matchup in matchups], [
             "neural-smoke vs random-legal",
             "random-legal vs neural-smoke",
-            "neural-smoke+root-puct vs random-legal",
-            "random-legal vs neural-smoke+root-puct",
-            "neural-smoke+root-puct+dirichlet vs random-legal",
-            "random-legal vs neural-smoke+root-puct+dirichlet",
+            "neural-smoke+root-puct+adaptive-budget vs random-legal",
+            "random-legal vs neural-smoke+root-puct+adaptive-budget",
+            "neural-smoke+root-puct+adaptive-budget+dirichlet vs random-legal",
+            "random-legal vs neural-smoke+root-puct+adaptive-budget+dirichlet",
         ])
         self.assertEqual(matchups[0].p1_policy.policy_id, "neural-smoke")
-        self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct")
-        self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct")
-        self.assertEqual(matchups[4].p1_policy.policy_id, "neural-smoke+root-puct+dirichlet")
-        self.assertEqual(matchups[5].p2_policy.policy_id, "neural-smoke+root-puct+dirichlet")
+        self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct+adaptive-budget")
+        self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct+adaptive-budget")
+        self.assertEqual(matchups[4].p1_policy.policy_id, "neural-smoke+root-puct+adaptive-budget+dirichlet")
+        self.assertEqual(matchups[5].p2_policy.policy_id, "neural-smoke+root-puct+adaptive-budget+dirichlet")
         self.assertEqual(matchups[4].p1_policy.cpuct, 0.75)
         self.assertEqual(matchups[4].p1_policy.selection_mode, "value")
         self.assertEqual(matchups[4].p1_policy.root_visit_budget, 17)
         self.assertEqual(matchups[4].p1_policy.root_dirichlet_alpha, 0.3)
         self.assertEqual(matchups[4].p1_policy.root_dirichlet_mix, 0.2)
         self.assertEqual(matchups[4].p1_policy.root_dirichlet_seed, 11)
+        self.assertEqual(
+            matchups[4].p1_policy.root_visit_budget_selector.to_dict(),
+            {
+                "selector_id": "entropy-or-value-margin",
+                "contested_extra_visits": 120,
+                "uncontested_extra_visits": 0,
+                "minimum_policy_entropy": 0.7,
+                "maximum_value_margin": 0.15,
+            },
+        )
         self.assertEqual(matchups[4].p1_policy.minimum_value_improvement, 0.2)
         self.assertEqual(matchups[4].p1_policy.leaf_rollout_decision_rounds, 2)
         self.assertIsNotNone(matchups[4].p1_policy.leaf_rollout_policy_factory)
-        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
-        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
+        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct+adaptive-budget-leaf-p1")
+        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct+adaptive-budget-leaf-p2")
         self.assertEqual(matchups[4].p1_policy.fallback_policy.policy_id, "neural-smoke-fallback")
         self.assertEqual(
             matchups[4].p1_policy.leaf_rollout_metadata,
@@ -3356,6 +3373,13 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             {
                 "matchups": 6,
                 "root_dirichlet": {"enabled": True, "alpha": 0.3, "mix": 0.2, "base_seed": 11},
+                "adaptive_root_visit_budget": {
+                    "selector_id": "entropy-or-value-margin",
+                    "contested_extra_visits": 120,
+                    "uncontested_extra_visits": 0,
+                    "minimum_policy_entropy": 0.7,
+                    "maximum_value_margin": 0.15,
+                },
             },
         )
 
@@ -3376,6 +3400,66 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIsNone(args.root_dirichlet_alpha)
         self.assertEqual(args.root_dirichlet_mix, 0.25)
         self.assertEqual(args.root_dirichlet_seed, 0)
+        self.assertIsNone(args.adaptive_root_contested_extra_visits)
+        self.assertEqual(args.adaptive_root_uncontested_extra_visits, 0)
+        self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
+        self.assertIsNone(args.adaptive_root_value_margin_threshold)
+
+    def test_neural_cli_root_puct_play_benchmark_builds_adaptive_budget_selector(self) -> None:
+        parser = build_neural_arg_parser()
+        args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--adaptive-root-contested-extra-visits",
+                "120",
+                "--adaptive-root-uncontested-extra-visits",
+                "3",
+                "--adaptive-root-policy-entropy-threshold",
+                "0.7",
+                "--adaptive-root-value-margin-threshold",
+                "0.15",
+            ]
+        )
+
+        selector = _adaptive_root_visit_budget_selector(args)
+
+        self.assertIsNotNone(selector)
+        self.assertEqual(
+            selector.to_dict(),
+            {
+                "selector_id": "entropy-or-value-margin",
+                "contested_extra_visits": 120,
+                "uncontested_extra_visits": 3,
+                "minimum_policy_entropy": 0.7,
+                "maximum_value_margin": 0.15,
+            },
+        )
+
+        invalid_args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--adaptive-root-policy-entropy-threshold",
+                "0.7",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "adaptive root thresholds"):
+            _adaptive_root_visit_budget_selector(invalid_args)
+
+        missing_threshold_args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--adaptive-root-contested-extra-visits",
+                "120",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "entropy or value-margin threshold"):
+            _adaptive_root_visit_budget_selector(missing_threshold_args)
 
     def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
         if not torch_available():

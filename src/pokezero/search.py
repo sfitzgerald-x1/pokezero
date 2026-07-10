@@ -26,8 +26,46 @@ from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
 ActionPriorVector = tuple[float, ...]
+RootVisitBudgetResolver = Callable[["RootPUCTVisitBudgetContext"], int | None]
 StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
 START_OVERRIDE_MISSING_WORLD_MESSAGE = "start override source did not produce a sampled world."
+
+
+@dataclass(frozen=True)
+class RootPUCTVisitBudgetContext:
+    """Public inputs available after root's mandatory one-visit-per-action sweep.
+
+    Adaptive callers can use policy entropy and the initial leaf-value margin
+    without changing the sweep that makes every legal action searchable.
+    """
+
+    player_id: PlayerId
+    prefix_decision_round_count: int
+    opponent_actions: Mapping[PlayerId, int]
+    configured_root_visit_budget: int | None
+    action_priors: tuple[tuple[int, float], ...]
+    initial_values: tuple[tuple[int, float], ...]
+
+    @property
+    def policy_entropy(self) -> float:
+        return -sum(prior * math.log(prior) for _action, prior in self.action_priors if prior > 0.0)
+
+    @property
+    def value_margin(self) -> float | None:
+        values = sorted((value for _action, value in self.initial_values), reverse=True)
+        return values[0] - values[1] if len(values) >= 2 else None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "player_id": self.player_id,
+            "prefix_decision_round_count": self.prefix_decision_round_count,
+            "opponent_actions": dict(self.opponent_actions),
+            "configured_root_visit_budget": self.configured_root_visit_budget,
+            "action_priors": {str(action): prior for action, prior in self.action_priors},
+            "initial_values": {str(action): value for action, value in self.initial_values},
+            "policy_entropy": self.policy_entropy,
+            "value_margin": self.value_margin,
+        }
 
 
 @dataclass(frozen=True)
@@ -152,6 +190,8 @@ class PUCTBranchSearchResult:
     candidates: tuple[PUCTBranchSearchCandidate, ...]
     value_search: ValueBranchSearchResult
     root_visit_budget: int | None = None
+    configured_root_visit_budget: int | None = None
+    visit_budget_context: RootPUCTVisitBudgetContext | None = None
     root_time_budget_seconds: float | None = None
     time_budget_exhausted: bool = False
 
@@ -174,6 +214,10 @@ class PUCTBranchSearchResult:
             "cpuct": self.cpuct,
             "total_visits": self.total_visits,
             "root_visit_budget": self.root_visit_budget,
+            "configured_root_visit_budget": self.configured_root_visit_budget,
+            "visit_budget_context": (
+                self.visit_budget_context.to_dict() if self.visit_budget_context is not None else None
+            ),
             "root_time_budget_seconds": self.root_time_budget_seconds,
             "time_budget_exhausted": self.time_budget_exhausted,
             "selected_action_index": best.action_index,
@@ -377,6 +421,8 @@ def puct_branch_search(
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
     root_visit_budget: int | None = None,
+    root_visit_budget_resolver: RootVisitBudgetResolver | None = None,
+    budget_action_priors: ActionPriorVector | None = None,
     root_time_budget_seconds: float | None = None,
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
@@ -418,13 +464,41 @@ def puct_branch_search(
         expected_current_observation=expected_current_observation,
         replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
-    if root_visit_budget is not None and root_visit_budget < len(value_search.candidates):
+    legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
+    if (
+        root_visit_budget_resolver is None
+        and root_visit_budget is not None
+        and root_visit_budget < len(legal_action_indices)
+    ):
         raise ValueError("root_visit_budget must be at least the number of legal root actions.")
     normalized_priors = _normalized_legal_priors(
         action_priors,
-        legal_action_indices=tuple(candidate.action_index for candidate in value_search.candidates),
+        legal_action_indices=legal_action_indices,
+    )
+    budget_priors = (
+        normalized_priors
+        if budget_action_priors is None
+        else _normalized_legal_priors(budget_action_priors, legal_action_indices=legal_action_indices)
+    )
+    visit_budget_context = (
+        RootPUCTVisitBudgetContext(
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            opponent_actions=dict(opponent_actions),
+            configured_root_visit_budget=root_visit_budget,
+            action_priors=tuple((action, budget_priors[action]) for action in legal_action_indices),
+            initial_values=tuple((candidate.action_index, candidate.value) for candidate in value_search.candidates),
+        )
+        if root_visit_budget_resolver is not None
+        else None
     )
     visit_budget = root_visit_budget
+    if root_visit_budget_resolver is not None:
+        assert visit_budget_context is not None
+        visit_budget = _resolve_root_visit_budget(
+            root_visit_budget_resolver(visit_budget_context),
+            legal_action_count=len(legal_action_indices),
+        )
     accumulators = {
         candidate.action_index: _PUCTRootAccumulator(
             value_candidate=candidate,
@@ -517,10 +591,26 @@ def puct_branch_search(
         total_visits=total_visits,
         candidates=candidates,
         value_search=value_search,
-        root_visit_budget=root_visit_budget,
+        root_visit_budget=visit_budget,
+        configured_root_visit_budget=root_visit_budget,
+        visit_budget_context=visit_budget_context,
         root_time_budget_seconds=root_time_budget_seconds,
         time_budget_exhausted=time_budget_exhausted,
     )
+
+
+def _resolve_root_visit_budget(
+    budget: int | None,
+    *,
+    legal_action_count: int,
+) -> int | None:
+    if budget is None:
+        return None
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        raise ValueError("root_visit_budget_resolver must return a positive integer or None.")
+    if budget < legal_action_count:
+        raise ValueError("root_visit_budget_resolver must return at least the number of legal root actions.")
+    return budget
 
 
 def flat_branch_search(
