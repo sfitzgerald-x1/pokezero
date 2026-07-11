@@ -33,6 +33,7 @@ from pokezero.foulplay_bridge import (
     _observation_with_search_metadata,
     _player_state,
     _root_puct_prior_action_change_details,
+    _run_single_game,
     _requested_legal_action_masks_for_context,
     _is_terminal_protocol_line,
     _split_outgoing_showdown_message,
@@ -195,6 +196,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "pokezero.foulplay_bridge.showdown_choice_for_action",
                 side_effect=lambda player_state, action: f"{player_state.slot}:{action}",
             ),
+            patch("pokezero.foulplay_bridge.time.perf_counter", side_effect=(10.0, 12.5)),
             patch("pokezero.foulplay_bridge._wait_for_foulplay_choice_or_exit", side_effect=foulplay_choice),
             patch("pokezero.foulplay_bridge.action_index_from_choice_string", side_effect=decode),
         ):
@@ -221,7 +223,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual([step.player_id for step in state.trajectory.steps], ["p1", "p2"])
         self.assertEqual([decision.policy_id for decision in state.decisions], ["pokezero-p2"])
         self.assertIn("policy_elapsed_seconds", state.decisions[0].metadata)
-        self.assertGreaterEqual(state.decisions[0].metadata["policy_elapsed_seconds"], 0.0)
+        self.assertEqual(state.decisions[0].metadata["policy_elapsed_seconds"], 2.5)
         self.assertEqual(bridge.messages[0]["choices"], {"p1": "move 1", "p2": "p2:0"})
 
     def test_benchmark_payload_records_terminal_and_policy_wall_telemetry(self) -> None:
@@ -278,6 +280,157 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "p95_elapsed_seconds": 0.006,
             },
         )
+        self.assertEqual(payload["score"], 1.0)
+        self.assertEqual(payload["score_rate"], 0.5)
+        self.assertEqual(
+            payload["outcome_scoring"],
+            {"win": 1.0, "tie": 0.5, "capped": 0.5, "loss": 0.0},
+        )
+
+    def test_comparison_scores_ties_and_caps_as_half_points(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=2,
+        )
+        raw = ControlledFoulPlayBenchmarkResult(
+            config=config,
+            policy_id="raw",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="raw-tie",
+                    seed=1,
+                    winner=None,
+                    pokezero_won=False,
+                    tied=True,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="raw-loss",
+                    seed=2,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                ),
+            ),
+        )
+        root_puct = ControlledFoulPlayBenchmarkResult(
+            config=ControlledFoulPlayConfig(
+                checkpoint=config.checkpoint,
+                showdown_root=config.showdown_root,
+                games=2,
+                policy_mode="root-puct",
+            ),
+            policy_id="root-puct",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="search-loss",
+                    seed=1,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="search-cap",
+                    seed=2,
+                    winner=None,
+                    pokezero_won=False,
+                    capped=True,
+                    decision_rounds=250,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+            ),
+        )
+
+        payload = ControlledFoulPlayComparisonResult(
+            config=config,
+            raw=raw,
+            root_puct=root_puct,
+        ).to_dict()
+
+        aggregate = payload["comparison"]["aggregate"]["scored_outcomes"]
+        paired = payload["comparison"]["paired_by_seed"]["scored_outcomes"]
+        self.assertEqual(aggregate["raw"], {"games": 2, "score": 0.5, "score_rate": 0.25})
+        self.assertEqual(aggregate["root_puct"], {"games": 2, "score": 0.5, "score_rate": 0.25})
+        self.assertEqual(aggregate["root_puct_minus_raw_score_rate"], 0.0)
+        self.assertEqual(paired["raw"], {"games": 2, "score": 0.5, "score_rate": 0.25})
+        self.assertEqual(paired["root_puct"], {"games": 2, "score": 0.5, "score_rate": 0.25})
+        self.assertEqual(paired["root_puct_minus_raw_score_rate"], 0.0)
+
+    def test_final_allowed_choice_can_settle_to_a_terminal_result(self) -> None:
+        class Bridge:
+            def __init__(self) -> None:
+                self.events = [
+                    {
+                        "type": "ready",
+                        "battleId": "battle-gen3randombattle-controlled-7",
+                        "requested": ["p1"],
+                    },
+                    {
+                        "type": "terminal",
+                        "battleId": "battle-gen3randombattle-controlled-7",
+                    },
+                ]
+
+            async def send(self, _payload: dict) -> None:
+                return None
+
+            async def next_event(self) -> dict:
+                return self.events.pop(0)
+
+        class Server:
+            async def send_room_lines(self, _battle_id: str, _lines: list[str]) -> None:
+                return None
+
+        async def handle_boundary(**_kwargs: object) -> None:
+            return None
+
+        async def notify_terminal(**_kwargs: object) -> None:
+            return None
+
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            max_decision_rounds=1,
+        )
+        with (
+            patch("pokezero.foulplay_bridge._handle_decision_boundary", side_effect=handle_boundary),
+            patch(
+                "pokezero.foulplay_bridge._terminal_from_public_lines",
+                return_value=TerminalState(winner="p1", turn_count=1),
+            ),
+            patch("pokezero.foulplay_bridge._notify_foulplay_terminal", side_effect=notify_terminal),
+        ):
+            result = asyncio.run(
+                _run_single_game(
+                    config=config,
+                    bridge=Bridge(),  # type: ignore[arg-type]
+                    server=Server(),  # type: ignore[arg-type]
+                    policy=object(),
+                    vocab=object(),
+                    dex=object(),
+                    observation_spec=object(),
+                    seed=7,
+                    foulplay_process=object(),
+                    foulplay_logs=object(),
+                )
+            )
+
+        self.assertEqual(result.winner, config.pokezero_username)
+        self.assertTrue(result.pokezero_won)
+        self.assertFalse(result.tied)
+        self.assertFalse(result.capped)
 
     def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
         state = _ControlledBattleState(
