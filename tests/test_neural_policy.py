@@ -3224,9 +3224,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     }
                 ],
             }
-            self.assertEqual(json.loads(summary_path.read_text()), expected)
+            saved = json.loads(summary_path.read_text())
+            for field, value in expected.items():
+                self.assertEqual(saved[field], value)
+            self.assertEqual(saved["root_puct_config"]["root_visit_budget"], 16)
+            self.assertEqual(saved["root_puct_config"]["allow_search_fallback"], True)
+            self.assertEqual(
+                saved["root_puct_policy_configs"]["neural-smoke+root-puct"],
+                saved["root_puct_config"],
+            )
             self.assertIn(f"root_puct_play_benchmark_summary: {summary_path}", stderr.getvalue())
-            self.assertEqual(json.loads(stdout.getvalue()), expected)
+            self.assertEqual(json.loads(stdout.getvalue()), saved)
 
     def test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups(self) -> None:
         if not torch_available():
