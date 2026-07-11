@@ -158,7 +158,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual([decision.candidate_count for decision in report.decisions], [2, 2])
         self.assertEqual([decision.total_visits for decision in report.decisions], [2, 2])
         payload = report.to_dict()
-        self.assertEqual(payload["schema_version"], "pokezero.root-puct-search-benchmark.v1")
+        self.assertEqual(payload["schema_version"], "pokezero.root-puct-search-benchmark.v2")
         self.assertEqual(payload["evaluated_prefixes"], 2)
         self.assertIsNone(payload["root_extra_visits"])
         timing = payload["timing"]

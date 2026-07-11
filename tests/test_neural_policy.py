@@ -4570,6 +4570,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             json.loads(stdout.getvalue()),
             {
                 "evaluated_prefixes": 2,
+                "search_config": {
+                    "prior_temperature": 1.5,
+                    "selection_mode": "visits",
+                },
                 "value_leaf": {
                     **value_leaf_provenance,
                     "uses_distinct_value_checkpoint": True,

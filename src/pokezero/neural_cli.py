@@ -2261,6 +2261,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             "belief_set_source_hash": set_source.metadata.source_hash,
             "root_noise_enabled": False,
             "opponent_legal_mask_mode": "hidden",
+            "opponent_scenarios": args.opponent_scenarios,
         },
     )
     if args.out is not None:
@@ -4091,6 +4092,10 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
     )
     if args.json:
         payload = report.to_dict()
+        payload["search_config"] = {
+            "prior_temperature": args.temperature,
+            "selection_mode": "visits",
+        }
         payload["value_leaf"] = (
             {
                 **value_leaf_provenance,

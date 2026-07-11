@@ -23,7 +23,7 @@ from .search import (
 )
 
 ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
-ROOT_PUCT_SEARCH_BENCHMARK_SCHEMA_VERSION = "pokezero.root-puct-search-benchmark.v1"
+ROOT_PUCT_SEARCH_BENCHMARK_SCHEMA_VERSION = "pokezero.root-puct-search-benchmark.v2"
 
 
 @dataclass(frozen=True)
