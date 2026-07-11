@@ -222,6 +222,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(contexts[0].requested_legal_action_masks, {"p2": (True,) + (False,) * 8})
         self.assertEqual([step.player_id for step in state.trajectory.steps], ["p1", "p2"])
         self.assertEqual([decision.policy_id for decision in state.decisions], ["pokezero-p2"])
+        self.assertEqual(state.pokezero_decision_players, ["p2"])
+        self.assertEqual(state.pokezero_submitted_choice_players, ["p2"])
         self.assertIn("policy_elapsed_seconds", state.decisions[0].metadata)
         self.assertEqual(state.decisions[0].metadata["policy_elapsed_seconds"], 2.5)
         self.assertEqual(bridge.messages[0]["choices"], {"p1": "move 1", "p2": "p2:0"})
@@ -271,6 +273,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertFalse(payload["game_results"][0]["capped"])
         self.assertFalse(payload["game_results"][1]["tied"])
         self.assertTrue(payload["game_results"][1]["capped"])
+        self.assertEqual(payload["game_results"][0]["pokezero_decision_players"], [])
+        self.assertEqual(payload["game_results"][0]["pokezero_submitted_choice_players"], [])
         self.assertEqual(
             payload["policy_timing"],
             {

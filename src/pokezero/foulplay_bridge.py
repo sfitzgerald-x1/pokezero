@@ -286,6 +286,10 @@ class ControlledFoulPlayGameResult:
     policy_elapsed_seconds: tuple[float, ...] = ()
     tied: bool = False
     capped: bool = False
+    # Seats observed while the bridge ran, rather than the requested config values. These make
+    # mirrored-seat smoke artifacts capable of detecting a dispatch/submission-side regression.
+    pokezero_decision_players: tuple[PlayerId, ...] = ()
+    pokezero_submitted_choice_players: tuple[PlayerId, ...] = ()
 
     @property
     def outcome_score(self) -> float:
@@ -304,6 +308,8 @@ class ControlledFoulPlayGameResult:
             "winner": self.winner,
             "pokezero_won": self.pokezero_won,
             "pokezero_score": self.outcome_score,
+            "pokezero_decision_players": list(self.pokezero_decision_players),
+            "pokezero_submitted_choice_players": list(self.pokezero_submitted_choice_players),
             "tied": self.tied,
             "capped": self.capped,
             "decision_rounds": self.decision_rounds,
@@ -1272,6 +1278,8 @@ class _ControlledBattleState:
     request_lines: dict[PlayerId, str] = field(default_factory=dict)
     trajectory: BattleTrajectory | None = None
     decisions: list[PolicyDecision] = field(default_factory=list)
+    pokezero_decision_players: list[PlayerId] = field(default_factory=list)
+    pokezero_submitted_choice_players: list[PlayerId] = field(default_factory=list)
     public_line_cursor: int = 0
     previous_requested_players: tuple[PlayerId, ...] = ()
     public_resolved_action_rounds: list[PublicResolvedActionRound] = field(default_factory=list)
@@ -2318,6 +2326,8 @@ async def _run_single_game(
         root_puct_fallback_categories=root_fallback_categories,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
         policy_elapsed_seconds=policy_elapsed,
+        pokezero_decision_players=tuple(state.pokezero_decision_players),
+        pokezero_submitted_choice_players=tuple(state.pokezero_submitted_choice_players),
     )
 
 
@@ -2672,6 +2682,15 @@ async def _handle_decision_boundary(
         )
         if player == pokezero_player:
             state.decisions.append(decision)
+            state.pokezero_decision_players.append(player)
+
+    # Derive submission ownership from the runtime decision map, not the requested config. This
+    # gives mirrored-seat artifacts an observable proof that PokeZero supplied the submitted move.
+    state.pokezero_submitted_choice_players.extend(
+        player
+        for player, decision in decisions.items()
+        if decision.policy_id != "foul-play" and player in choices
+    )
 
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
     return None
