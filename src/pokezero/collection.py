@@ -1472,6 +1472,8 @@ class _PolicyDecisionAccumulator:
     root_puct_selected_score_samples: int = 0
     root_puct_value_gate_checks: int = 0
     root_puct_value_gate_uses: int = 0
+    root_puct_time_budget_checks: int = 0
+    root_puct_time_budget_exhaustions: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: dict[str, int] = field(default_factory=dict)
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
@@ -1527,6 +1529,10 @@ class _PolicyDecisionAccumulator:
             self.root_puct_value_gate_checks += 1
             if bool(metadata.get("root_puct_value_gate_used")):
                 self.root_puct_value_gate_uses += 1
+        if "root_puct_time_budget_exhausted" in metadata:
+            self.root_puct_time_budget_checks += 1
+            if bool(metadata.get("root_puct_time_budget_exhausted")):
+                self.root_puct_time_budget_exhaustions += 1
         selection_mode = metadata.get("root_puct_selection_mode")
         if selection_mode is not None:
             key = str(selection_mode)
@@ -1593,6 +1599,9 @@ class _PolicyDecisionAccumulator:
             if self.root_puct_value_gate_checks:
                 result["root_puct_value_gate_checks"] = self.root_puct_value_gate_checks
                 result["root_puct_value_gate_uses"] = self.root_puct_value_gate_uses
+            if self.root_puct_time_budget_checks:
+                result["root_puct_time_budget_checks"] = self.root_puct_time_budget_checks
+                result["root_puct_time_budget_exhaustions"] = self.root_puct_time_budget_exhaustions
             if self.root_puct_selection_modes:
                 result["root_puct_selection_modes"] = dict(sorted(self.root_puct_selection_modes.items()))
             if self.root_puct_opponent_action_policies:

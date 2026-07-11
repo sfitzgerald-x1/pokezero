@@ -28,6 +28,7 @@ from pokezero.collection import (
     policy_from_spec,
     policy_spec_with_showdown_root,
     read_rollout_records,
+    _PolicyDecisionAccumulator,
     rollout_record_from_dict,
     rollout_record_to_dict,
     summarize_records,
@@ -243,6 +244,28 @@ def integration_config() -> LocalShowdownConfig | None:
 
 
 class CollectionTest(unittest.TestCase):
+    def test_policy_decision_summary_keeps_time_budget_exhaustion_count(self) -> None:
+        accumulator = _PolicyDecisionAccumulator()
+        accumulator.add(
+            {
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": False,
+                "root_puct_time_budget_exhausted": False,
+            }
+        )
+        accumulator.add(
+            {
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": False,
+                "root_puct_time_budget_exhausted": True,
+            }
+        )
+
+        summary = accumulator.to_dict()
+
+        self.assertEqual(summary["root_puct_time_budget_checks"], 2)
+        self.assertEqual(summary["root_puct_time_budget_exhaustions"], 1)
+
     def test_current_peak_rss_mb_normalizes_platform_units(self) -> None:
         usage = type("Usage", (), {"ru_maxrss": 2 * 1024 * 1024})()
 

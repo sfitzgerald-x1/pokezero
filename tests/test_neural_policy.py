@@ -884,6 +884,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             def read(self):
                 return b'{"window_size": 1, "policy_id": "ready"}'
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.inference_service.urlopen", side_effect=[OSError(1, "operation not permitted"), Response()]) as urlopen,
             patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
@@ -2590,7 +2591,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with (
             patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()) as load_checkpoint,
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             exit_code = neural_cli_main(
                 [
@@ -3438,13 +3439,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertEqual(search_policy.root_time_budget_seconds, 0.125)
             return SimpleNamespace(to_dict=lambda: {"matchups": 4}, matchups=())
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
             patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
             patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(1.0,) + (0.0,) * 8),
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             exit_code = neural_cli_main(
                 [
@@ -3462,6 +3464,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured["games"], 20)
+        self.assertEqual(json.loads(stdout.getvalue())["root_time_budget_ms"], 125)
 
     def test_neural_cli_root_puct_play_benchmark_rejects_time_budget_with_visit_selector(self) -> None:
         if not torch_available():
