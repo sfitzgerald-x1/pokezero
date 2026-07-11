@@ -403,7 +403,7 @@ class PriorBeliefProfileTest(unittest.TestCase):
             public_resolved_action_rounds=(
                 PublicResolvedActionRound(
                     turn_index=0,
-                    actions={"p2": PublicActionIdentifier(kind="event", event_id="unknown-public-event")},
+                    actions={"p2": PublicActionIdentifier(kind="event", event_id="unresolved-public-event")},
                 ),
                 PublicResolvedActionRound(
                     turn_index=1,
@@ -416,18 +416,18 @@ class PriorBeliefProfileTest(unittest.TestCase):
             prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
             candidate_value_evaluator=lambda _record: CandidateValueEvaluation(
                 contexts=(),
-                skip_reason="unsupported_public_event:unknown-public-event",
-                failure_reasons={"unsupported_public_event:unknown-public-event": 1},
+                skip_reason="unsupported_public_event:unresolved-public-event",
+                failure_reasons={"unsupported_public_event:unresolved-public-event": 1},
             ),
         )
 
-        self.assertEqual(report["skipped_decision_rows"][0]["reason"], "unsupported_public_event:unknown-public-event")
+        self.assertEqual(report["skipped_decision_rows"][0]["reason"], "unsupported_public_event:unresolved-public-event")
         early = next(row for row in report["representativeness"]["by_phase"] if row["phase"] == "early")
         self.assertEqual(early["event_bearing_prefix_count"], 1)
         self.assertEqual(early["unsupported_event_prefix_count"], 1)
         self.assertEqual(
             early["skip_reason_counts"],
-            {"unsupported_public_event:unknown-public-event": 1},
+            {"unsupported_public_event:unresolved-public-event": 1},
         )
 
     def test_decision_normalized_sweeps_do_not_multiply_multi_world_contexts(self) -> None:

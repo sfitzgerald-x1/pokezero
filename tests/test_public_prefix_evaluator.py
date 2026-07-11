@@ -15,7 +15,6 @@ from pokezero.public_decision_corpus import (
     public_decision_id,
 )
 from pokezero.public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
-from pokezero.public_replay_materializer import resolve_public_action_identifier
 
 
 def _mask(*legal: int) -> tuple[bool, ...]:
@@ -197,28 +196,6 @@ def _event_record(*, event_id: str) -> PublicDecisionRecord:
 
 
 class PublicPrefixCandidateValueEvaluatorTest(unittest.TestCase):
-    def test_unresolved_public_event_uses_sampled_world_legal_representative(self) -> None:
-        observation = _observation(
-            3,
-            5,
-            candidates=[
-                {"action_index": 3, "kind": "move", "move_id": "tackle", "legal": True},
-                {"action_index": 5, "kind": "switch", "switched_species": "Pikachu", "legal": True},
-            ],
-        )
-
-        action, canonicalization = resolve_public_action_identifier(
-            observation,
-            PublicActionIdentifier(kind="event", event_id="unresolved-public-event"),
-            turn_index=4,
-            player_id="p2",
-        )
-
-        self.assertEqual(action, 3)
-        self.assertIsNotNone(canonicalization)
-        self.assertEqual(canonicalization.event_id, "unresolved-public-event")
-        self.assertEqual(canonicalization.resolution, "sampled-world-lowest-legal-action")
-
     def test_replays_public_identifiers_only_after_sampling_a_world(self) -> None:
         historical = _observation(
             1,
@@ -326,7 +303,7 @@ class PublicPrefixCandidateValueEvaluatorTest(unittest.TestCase):
         self.assertNotIn("action_index", canonicalization)
 
     def test_unsupported_event_returns_named_public_prefix_skip_reason(self) -> None:
-        record = _event_record(event_id="unknown-public-event")
+        record = _event_record(event_id="unresolved-public-event")
         profile = BeliefWorldSamplingProfile(
             sample_cap=1,
             sample_count=1,
@@ -353,7 +330,7 @@ class PublicPrefixCandidateValueEvaluatorTest(unittest.TestCase):
             evaluation = evaluator(record)
 
         self.assertEqual(evaluation.contexts, ())
-        self.assertEqual(evaluation.skip_reason, "unsupported_public_event:unknown-public-event")
+        self.assertEqual(evaluation.skip_reason, "unsupported_public_event:unresolved-public-event")
 
 
 if __name__ == "__main__":

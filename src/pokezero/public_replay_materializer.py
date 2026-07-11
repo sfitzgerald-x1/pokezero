@@ -2,9 +2,8 @@
 
 Persisted public prefixes never contain request-local opponent action indexes.
 This module resolves public move/species IDs after a belief world is sampled.
-It also handles a small, explicit set of no-effect public events (``|cant|``
-and bridge-marked unresolved actions), using a deterministic sampled-world legal
-representative.
+It also handles a small, explicit set of public ``|cant|`` events whose chosen
+action has no effect, using a deterministic sampled-world legal representative.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from .replay_branching import replay_action_rounds
 
 
 _SUPPORTED_CANT_REASONS = frozenset({"slp", "frz", "par", "flinch", "recharge", "truant"})
-_SUPPORTED_UNRESOLVED_EVENTS = frozenset({"unresolved-public-event", "unresolved-public-action"})
 
 
 class PublicReplayError(ValueError):
@@ -157,7 +155,7 @@ def public_event_prefix_summary(public_action_rounds: Sequence[PublicResolvedAct
         for identifier in action_round.actions.values()
         if identifier.kind == "event"
     )
-    unsupported = tuple(event_id for event_id in event_ids if not _is_supported_no_effect_event(event_id))
+    unsupported = tuple(event_id for event_id in event_ids if not _is_supported_cant_event(event_id))
     return {
         "public_event_count": len(event_ids),
         "public_event_ids": list(event_ids),
@@ -174,7 +172,7 @@ def _canonicalize_public_event(
     player_id: str,
 ) -> tuple[int, PublicEventCanonicalization]:
     event_id = str(identifier.event_id)
-    if not _is_supported_no_effect_event(event_id):
+    if not _is_supported_cant_event(event_id):
         raise PublicReplayError(f"unsupported_public_event:{event_id}")
     if not legal_actions:
         raise PublicReplayError("public_event_canonicalization_no_legal_action")
@@ -184,13 +182,7 @@ def _canonicalize_public_event(
     )
 
 
-def _is_supported_no_effect_event(event_id: str) -> bool:
-    if event_id in _SUPPORTED_UNRESOLVED_EVENTS:
-        # The bridge emits this only when the requested player has no public
-        # move/switch/cant event for the completed round. The hidden action did
-        # not resolve publicly, so a sampled-world legal representative is the
-        # only replay-safe public choice and exposes no request-local slot.
-        return True
+def _is_supported_cant_event(event_id: str) -> bool:
     prefix, separator, reason = event_id.partition(":")
     return prefix == "cant" and bool(separator) and reason in _SUPPORTED_CANT_REASONS
 
