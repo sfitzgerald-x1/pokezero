@@ -42,6 +42,54 @@ class BenchmarkMatchup:
 
 
 @dataclass(frozen=True)
+class BenchmarkGameResult:
+    """Compact per-seed benchmark evidence for paired evaluation.
+
+    Full trajectories remain in-memory rollout artifacts; this deliberately retains only the
+    outcome, elapsed time, and root-search diagnostics needed to compare independently run arms
+    on the same seed without serializing private observations or action histories.
+    """
+
+    seed: int
+    battle_id: str
+    winner: str | None
+    capped: bool
+    decision_rounds: int
+    elapsed_seconds: float
+    root_puct_by_player: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+    @property
+    def tied(self) -> bool:
+        return self.winner is None and not self.capped
+
+    def score_for(self, player_id: str) -> float:
+        if self.winner == player_id:
+            return 1.0
+        if self.tied or self.capped:
+            return 0.5
+        return 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "seed": self.seed,
+            "battle_id": self.battle_id,
+            "winner": self.winner,
+            "tied": self.tied,
+            "capped": self.capped,
+            "decision_rounds": self.decision_rounds,
+            "elapsed_seconds": self.elapsed_seconds,
+            "p1_score": self.score_for("p1"),
+            "p2_score": self.score_for("p2"),
+        }
+        if self.root_puct_by_player:
+            payload["root_puct_by_player"] = {
+                player: dict(diagnostics)
+                for player, diagnostics in sorted(self.root_puct_by_player.items())
+            }
+        return payload
+
+
+@dataclass(frozen=True)
 class BenchmarkMatchupResult:
     label: str
     p1_policy_id: str
@@ -51,6 +99,7 @@ class BenchmarkMatchupResult:
     p1_policy_provenance: Mapping[str, Any] | None = None
     p2_policy_provenance: Mapping[str, Any] | None = None
     root_puct_belief_public_checksums_by_seed: Mapping[int, tuple[str, ...]] | None = None
+    game_results: tuple[BenchmarkGameResult, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -67,6 +116,8 @@ class BenchmarkMatchupResult:
                 str(seed): list(checksums)
                 for seed, checksums in sorted(self.root_puct_belief_public_checksums_by_seed.items())
             }
+        if self.game_results:
+            result["game_results"] = [game.to_dict() for game in self.game_results]
         return result
 
 
@@ -379,6 +430,7 @@ def benchmark_rollouts(
             }
             accumulator = _MetricsAccumulator()
             belief_public_checksums_by_seed: dict[int, tuple[str, ...]] = {}
+            game_results: list[BenchmarkGameResult] = []
             matchup_start = perf_counter()
             for game_index in range(games):
                 seed = seed_start + game_index
@@ -390,6 +442,7 @@ def benchmark_rollouts(
                     battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
                 )
                 accumulator.add(record)
+                game_results.append(_benchmark_game_result(record))
                 checksums = tuple(
                     sorted(
                         {
@@ -412,6 +465,7 @@ def benchmark_rollouts(
                     p1_policy_provenance=benchmark_policy_provenance(matchup.p1_policy),
                     p2_policy_provenance=benchmark_policy_provenance(matchup.p2_policy),
                     root_puct_belief_public_checksums_by_seed=belief_public_checksums_by_seed or None,
+                    game_results=tuple(game_results),
                 )
             )
     finally:
@@ -425,6 +479,35 @@ def benchmark_rollouts(
         games_per_matchup=games,
         matchups=tuple(results),
         policy_provenance=_benchmark_report_policy_provenance(results),
+    )
+
+
+def _benchmark_game_result(record: RolloutRecord) -> BenchmarkGameResult:
+    root_puct_by_player: dict[str, dict[str, Any]] = {}
+    for player_id in ("p1", "p2"):
+        accumulator = _PolicyDecisionAccumulator()
+        elapsed_samples: list[float] = []
+        for step in record.trajectory.steps:
+            if step.player_id != player_id:
+                continue
+            accumulator.add(step.metadata)
+            elapsed = _metadata_optional_float(step.metadata.get("root_puct_elapsed_seconds"))
+            if elapsed is not None:
+                elapsed_samples.append(elapsed)
+        diagnostics = accumulator.to_dict()
+        if "root_puct_searches" not in diagnostics:
+            continue
+        if elapsed_samples:
+            diagnostics["root_puct_elapsed_seconds"] = elapsed_samples
+        root_puct_by_player[player_id] = diagnostics
+    return BenchmarkGameResult(
+        seed=record.seed,
+        battle_id=record.battle_id,
+        winner=record.terminal.winner,
+        capped=record.terminal.capped,
+        decision_rounds=record.decision_round_count,
+        elapsed_seconds=record.elapsed_seconds,
+        root_puct_by_player=root_puct_by_player,
     )
 
 

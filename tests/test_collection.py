@@ -568,6 +568,44 @@ class CollectionTest(unittest.TestCase):
             {"20": ["public-belief"], "21": ["public-belief"]},
         )
 
+    def test_benchmark_rollouts_persists_compact_per_seed_outcomes_and_search_diagnostics(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct vs random",
+                    MetadataPolicy(policy_id="root-puct", root_total_visits=11),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        games = report.to_dict()["matchups"][0]["game_results"]
+
+        self.assertEqual([game["seed"] for game in games], [20, 21])
+        self.assertEqual([game["winner"] for game in games], ["p1", "p1"])
+        self.assertEqual([game["p1_score"] for game in games], [1.0, 1.0])
+        self.assertEqual([game["p2_score"] for game in games], [0.0, 0.0])
+        self.assertTrue(all(not game["tied"] and not game["capped"] for game in games))
+        self.assertEqual(
+            games[0]["root_puct_by_player"]["p1"],
+            {
+                "decisions": 1,
+                "root_puct_searches": 1,
+                "root_puct_fallbacks": 0,
+                "root_puct_total_visits": 11,
+                "root_puct_average_elapsed_seconds": 0.25,
+                "root_puct_average_candidate_count": 3.0,
+                "root_puct_average_selected_value": 0.5,
+                "root_puct_average_selected_score": 0.75,
+                "root_puct_selection_modes": {"puct": 1},
+                "root_puct_elapsed_seconds": [0.25],
+            },
+        )
+
     def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
         checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
         checkpoint_policy.checkpoint_path = "/tmp/candidate.pt"
