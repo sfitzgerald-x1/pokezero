@@ -497,6 +497,9 @@ def _benchmark_game_result(record: RolloutRecord) -> BenchmarkGameResult:
         diagnostics = accumulator.to_dict()
         if "root_puct_searches" not in diagnostics:
             continue
+        # Reasons can embed raw replay-observation mismatch values. Seed-level artifacts are
+        # intended for paired strength analysis, so retain only the stable category histogram.
+        diagnostics.pop("root_puct_fallback_reasons", None)
         if elapsed_samples:
             diagnostics["root_puct_elapsed_seconds"] = elapsed_samples
         root_puct_by_player[player_id] = diagnostics

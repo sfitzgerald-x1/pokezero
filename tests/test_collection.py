@@ -606,6 +606,26 @@ class CollectionTest(unittest.TestCase):
             },
         )
 
+    def test_per_seed_benchmark_search_diagnostics_sanitize_fallback_reasons(self) -> None:
+        report = benchmark_rollouts(
+            games=1,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct fallback vs random",
+                    MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        diagnostics = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_by_player"]["p1"]
+
+        self.assertEqual(diagnostics["root_puct_fallbacks"], 1)
+        self.assertEqual(diagnostics["root_puct_fallback_categories"], {"search_failed": 1})
+        self.assertNotIn("root_puct_fallback_reasons", diagnostics)
+
     def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
         checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
         checkpoint_policy.checkpoint_path = "/tmp/candidate.pt"
