@@ -107,10 +107,12 @@ claim changes accordingly.
 
 ## Step 1 — Mechanics + cost profile (hours; no new code)
 
-Run `neural_cli root_puct` (recorded-decision re-scoring) with the 1M checkpoint
-on ~50 recorded games (its own eval games are fine). This is a cost/profile
-probe; use `root-puct-play-benchmark --belief-start-overrides` for the P-1
-end-to-end determinization validation.
+Submit the persistent timing-audit job configured to run `neural_cli root_puct`
+(recorded-decision re-scoring) with the 1M checkpoint on ~50 recorded games
+(its own eval games are fine). Its durable timing artifact and terminal marker,
+not a foreground command's exit status, are the record of this probe. Use
+`root-puct-play-benchmark --belief-start-overrides` for the P-1 end-to-end
+determinization validation.
 
 Validates: the checkpoint loads under search (v2.2 latch), and — the measured
 numbers this plan's cost claims depend on — the per-move wall split into {prefix
