@@ -787,7 +787,7 @@ def aggregate_hazard_audit_records(
             "invalid_records": invalid_records,
             "invalid_reason_counts": dict(sorted(invalid_reason_counts.items())),
             "other_non_search_records": other_non_search_records,
-            "unique_target_lines": total_states,
+            "unique_target_lines": eligibility_total_states,
         },
     }
 

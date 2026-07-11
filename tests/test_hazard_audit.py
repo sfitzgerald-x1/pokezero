@@ -380,6 +380,7 @@ class HazardAuditTest(unittest.TestCase):
             payload["aggregate"]["E"],
             {"low_prior_lines": 1, "legal_target_lines": 1, "rate": 1.0},
         )
+        self.assertEqual(payload["aggregate"]["coverage"]["unique_target_lines"], 1)
         self.assertEqual(funnel["hazard_legal_target_states"], 1)
         self.assertEqual(funnel["low_prior_target_states"], 1)
         self.assertEqual(funnel["low_prior_target_states_with_available_belief_worlds"], 0)
