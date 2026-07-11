@@ -22,6 +22,7 @@ from pokezero.foulplay_bridge import (
     FoulPlayProcessExitError,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
+    _config_from_args,
     _capture_resolved_public_action_round,
     _build_policy,
     _foulplay_command,
@@ -1129,6 +1130,21 @@ class FoulPlayBridgeTest(unittest.TestCase):
             root_time_budget_ms=100,
         )
         self.assertIsNone(time_bounded.root_visit_budget)
+        parsed_time_bounded = _config_from_args(
+            build_arg_parser().parse_args(
+                [
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--showdown-root",
+                    "/showdown",
+                    "--root-visit-budget",
+                    "32",
+                    "--root-time-budget-ms",
+                    "100",
+                ]
+            )
+        )
+        self.assertIsNone(parsed_time_bounded.root_visit_budget)
 
     def test_build_policy_uses_full_action_default_opponent_candidate_reserve(self) -> None:
         class FakePolicy:

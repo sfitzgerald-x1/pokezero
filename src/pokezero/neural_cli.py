@@ -3776,6 +3776,14 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         search_policy_ids=search_policy_ids,
         root_time_budget_ms=args.root_time_budget_ms,
         root_search_config={
+            "max_decision_rounds": args.max_decision_rounds,
+            "temperature": args.temperature,
+            "cpuct": args.cpuct,
+            "selection_mode": args.selection_mode,
+            "root_prior_temperature": (
+                args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
+            ),
+            "minimum_value_improvement": args.min_value_improvement,
             "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
             "root_extra_visits": args.root_extra_visits,
             "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
@@ -3788,9 +3796,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "root_opponent_action_candidate_scenarios": root_opponent_action_candidate_scenarios,
             "leaf_rollout_rounds": list(leaf_rollout_rounds_values),
             "leaf_rollout_sampling": False,
+            "leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
             "belief_start_overrides": args.belief_start_overrides,
             "belief_world_sample_cap": args.belief_world_sample_cap,
+            "belief_start_override_attempts": args.belief_start_override_attempts,
+            "belief_start_override_hp_fraction_tolerance": args.belief_start_override_hp_fraction_tolerance,
             "allow_search_fallback": not args.no_search_fallback,
+            "root_dirichlet_alpha": args.root_dirichlet_alpha,
+            "root_dirichlet_mix": args.root_dirichlet_mix if args.root_dirichlet_alpha is not None else None,
+            "root_dirichlet_seed": args.root_dirichlet_seed if args.root_dirichlet_alpha is not None else None,
         },
         root_dirichlet_config=(
             {
