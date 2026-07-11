@@ -70,6 +70,7 @@ from .neural_policy import (
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
     TransformerTrainingResult,
+    checkpoint_file_sha256,
     collect_categorical_ids,
     distributed_training_context,
     evaluate_transformer_action_priors,
@@ -3496,9 +3497,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     value_checkpoint = args.value_checkpoint or args.checkpoint
     value_model, value_result = model, result
+    value_leaf_provenance: Mapping[str, object] | None = None
     if args.value_checkpoint is not None:
         value_model, value_result = load_transformer_checkpoint(value_checkpoint, map_location=args.device)
-        require_compatible_transformer_value_checkpoint(
+        value_leaf_provenance = require_compatible_transformer_value_checkpoint(
             policy_checkpoint=args.checkpoint,
             policy_result=result,
             value_checkpoint=value_checkpoint,
@@ -3733,12 +3735,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             if root_dirichlet_enabled
             else None
         ),
-        value_checkpoint=args.value_checkpoint,
-        value_calibration_transform=(
-            getattr(value_result, "value_calibration_transform", None).to_dict()
-            if getattr(value_result, "value_calibration_transform", None) is not None
-            else None
-        ),
+        value_leaf_provenance=value_leaf_provenance,
         root_visit_budget_selector_config=(
             root_visit_budget_selector.to_dict() if root_visit_budget_selector is not None else None
         ),
@@ -3786,8 +3783,7 @@ def _root_puct_play_payload(
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
     root_dirichlet_config: Mapping[str, object] | None = None,
-    value_checkpoint: Path | None,
-    value_calibration_transform: Mapping[str, object] | None,
+    value_leaf_provenance: Mapping[str, object] | None,
     root_visit_budget_selector_config: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     payload = dict(report.to_dict())
@@ -3800,13 +3796,8 @@ def _root_puct_play_payload(
         payload["root_puct_play_comparisons"] = comparisons
     if root_dirichlet_config is not None:
         payload["root_dirichlet"] = dict(root_dirichlet_config)
-    if value_checkpoint is not None:
-        payload["value_leaf"] = {
-            "checkpoint": str(value_checkpoint),
-            "calibration_transform": (
-                dict(value_calibration_transform) if value_calibration_transform is not None else None
-            ),
-        }
+    if value_leaf_provenance is not None:
+        payload["value_leaf"] = dict(value_leaf_provenance)
     if root_visit_budget_selector_config is not None:
         if root_visit_budget_selector_config.get("selector_id") == "entropy-or-value-margin":
             # Keep the established adaptive key for existing consumers while fixed-extra
@@ -4080,7 +4071,11 @@ def _value_calibration(args: argparse.Namespace) -> int:
             device=device,
             method=args.fit_method,
         )
-        training_result = replace(training_result, value_calibration_transform=transform)
+        training_result = replace(
+            training_result,
+            value_calibration_transform=transform,
+            value_calibration_source_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint),
+        )
         save_transformer_checkpoint(args.fit_out, model, result=training_result)
         if not evaluation_held_out:
             print(
@@ -4112,6 +4107,9 @@ def _value_calibration(args: argparse.Namespace) -> int:
                 "evaluation_paths": [str(path) for path in eval_paths],
                 "evaluation_held_out": evaluation_held_out,
                 "value_calibration_transform": transform.to_dict() if transform is not None else None,
+                "value_calibration_source_checkpoint_sha256": (
+                    training_result.value_calibration_source_checkpoint_sha256
+                ),
                 "report": payload,
             }
         if quality_gates["configured"]:

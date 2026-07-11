@@ -3531,6 +3531,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             belief_set_source_hash=None,
             value_calibration_transform=calibrated_transform,
         )
+        value_leaf_provenance = {
+            "policy_checkpoint": "/policy.pt",
+            "policy_checkpoint_sha256": "raw-sha",
+            "value_checkpoint": "/calibrated.pt",
+            "value_checkpoint_sha256": "leaf-sha",
+            "value_calibration_source_checkpoint_sha256": "raw-sha",
+            "model_config_match": True,
+            "belief_set_source_hash_match": True,
+            "value_calibration_transform": calibrated_transform.to_dict(),
+        }
         captured: dict[str, Any] = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -3550,6 +3560,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 "pokezero.neural_cli.load_transformer_checkpoint",
                 side_effect=((policy_model, raw_result), (value_model, value_result)),
             ) as load,
+            patch(
+                "pokezero.neural_cli.require_compatible_transformer_value_checkpoint",
+                return_value=value_leaf_provenance,
+            ),
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.5) as value_eval,
             patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
             patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(1.0,) + (0.0,) * 8),
@@ -3586,35 +3600,74 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "extra_visits": 24,
                 },
                 "value_leaf": {
-                    "checkpoint": "calibrated.pt",
-                    "calibration_transform": calibrated_transform.to_dict(),
+                    **value_leaf_provenance,
                 },
             },
         )
 
     def test_value_checkpoint_requires_matching_observation_and_belief_provenance(self) -> None:
         policy_result = SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-a")
-        matching_result = SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-a")
-        require_compatible_transformer_value_checkpoint(
-            policy_checkpoint=Path("policy.pt"),
-            policy_result=policy_result,
-            value_checkpoint=Path("calibrated.pt"),
-            value_result=matching_result,
+        matching_result = SimpleNamespace(
+            model_config="v2.2",
+            belief_set_source_hash="source-a",
+            value_calibration_source_checkpoint_sha256="raw-sha",
+            value_calibration_transform=None,
         )
+        with patch("pokezero.neural_policy.checkpoint_file_sha256", side_effect=("raw-sha", "leaf-sha")):
+            provenance = require_compatible_transformer_value_checkpoint(
+                policy_checkpoint=Path("policy.pt"),
+                policy_result=policy_result,
+                value_checkpoint=Path("calibrated.pt"),
+                value_result=matching_result,
+            )
+        self.assertEqual(provenance["policy_checkpoint_sha256"], "raw-sha")
+        self.assertEqual(provenance["value_checkpoint_sha256"], "leaf-sha")
         with self.assertRaisesRegex(ValueError, "model config"):
             require_compatible_transformer_value_checkpoint(
                 policy_checkpoint=Path("policy.pt"),
                 policy_result=policy_result,
                 value_checkpoint=Path("wrong-shape.pt"),
-                value_result=SimpleNamespace(model_config="v2.1", belief_set_source_hash="source-a"),
+                value_result=SimpleNamespace(
+                    model_config="v2.1",
+                    belief_set_source_hash="source-a",
+                    value_calibration_source_checkpoint_sha256="raw-sha",
+                ),
             )
         with self.assertRaisesRegex(ValueError, "belief-set provenance"):
             require_compatible_transformer_value_checkpoint(
                 policy_checkpoint=Path("policy.pt"),
                 policy_result=policy_result,
                 value_checkpoint=Path("wrong-belief.pt"),
-                value_result=SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-b"),
+                value_result=SimpleNamespace(
+                    model_config="v2.2",
+                    belief_set_source_hash="source-b",
+                    value_calibration_source_checkpoint_sha256="raw-sha",
+                ),
             )
+        with patch("pokezero.neural_policy.checkpoint_file_sha256", return_value="raw-sha"):
+            with self.assertRaisesRegex(ValueError, "no calibrated-copy source provenance"):
+                require_compatible_transformer_value_checkpoint(
+                    policy_checkpoint=Path("policy.pt"),
+                    policy_result=policy_result,
+                    value_checkpoint=Path("unproven.pt"),
+                    value_result=SimpleNamespace(
+                        model_config="v2.2",
+                        belief_set_source_hash="source-a",
+                        value_calibration_source_checkpoint_sha256=None,
+                    ),
+                )
+        with patch("pokezero.neural_policy.checkpoint_file_sha256", return_value="raw-sha"):
+            with self.assertRaisesRegex(ValueError, "source hash does not match"):
+                require_compatible_transformer_value_checkpoint(
+                    policy_checkpoint=Path("policy.pt"),
+                    policy_result=policy_result,
+                    value_checkpoint=Path("wrong-parent.pt"),
+                    value_result=SimpleNamespace(
+                        model_config="v2.2",
+                        belief_set_source_hash="source-a",
+                        value_calibration_source_checkpoint_sha256="other-sha",
+                    ),
+                )
 
     def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
         if not torch_available():
@@ -4526,6 +4579,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
             patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform),
+            patch("pokezero.neural_cli.checkpoint_file_sha256", return_value="source-sha"),
             patch("pokezero.neural_cli.save_transformer_checkpoint"),
             patch("pokezero.neural_cli.evaluate_value_calibration", return_value=report),
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
@@ -4609,6 +4663,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
             patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform) as fit,
+            patch("pokezero.neural_cli.checkpoint_file_sha256", return_value="source-sha"),
             patch("pokezero.neural_cli.save_transformer_checkpoint") as save,
             patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()) as evaluate,
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
@@ -4637,6 +4692,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         saved_result = save.call_args.kwargs["result"]
         self.assertEqual(save.call_args.args[0], Path("calibrated.pt"))
         self.assertEqual(saved_result.value_calibration_transform, transform)
+        self.assertEqual(saved_result.value_calibration_source_checkpoint_sha256, "source-sha")
         self.assertEqual(evaluate.call_args.kwargs["training_result"].value_calibration_transform, transform)
         self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("eval-rollouts.jsonl")])
         payload = json.loads(stdout.getvalue())
@@ -4645,6 +4701,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["evaluation_paths"], ["eval-rollouts.jsonl"])
         self.assertTrue(payload["evaluation_held_out"])
         self.assertEqual(payload["value_calibration_transform"]["scale"], 1.5)
+        self.assertEqual(payload["value_calibration_source_checkpoint_sha256"], "source-sha")
         self.assertEqual(payload["report"], {"examples": 3, "mae": 0.1})
 
     def test_neural_cli_value_calibration_can_save_isotonic_calibrated_checkpoint(self) -> None:
@@ -4674,6 +4731,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
             patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform) as fit,
+            patch("pokezero.neural_cli.checkpoint_file_sha256", return_value="source-sha"),
             patch("pokezero.neural_cli.save_transformer_checkpoint"),
             patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()),
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
@@ -4724,6 +4782,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
             patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform),
+            patch("pokezero.neural_cli.checkpoint_file_sha256", return_value="source-sha"),
             patch("pokezero.neural_cli.save_transformer_checkpoint"),
             patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()),
             patch("sys.stdout", new_callable=io.StringIO),

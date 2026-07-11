@@ -209,6 +209,10 @@ class ControlledFoulPlayConfig:
             )
         if self.root_time_budget_ms is not None and self.root_time_budget_ms <= 0:
             raise ValueError("root_time_budget_ms must be positive when set.")
+        if self.root_time_budget_ms is not None and (self.root_extra_visits is not None or adaptive_configured):
+            raise ValueError(
+                "root_time_budget_ms cannot be combined with fixed or adaptive post-sweep visit budgets."
+            )
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.root_opponent_action_candidate_scenarios <= 0:
@@ -475,6 +479,7 @@ class ControlledFoulPlayBenchmarkResult:
     policy_id: str
     games: tuple[ControlledFoulPlayGameResult, ...]
     foulplay_random_seed_schedule: tuple[int, ...] | None = None
+    value_leaf_provenance: Mapping[str, object] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -590,9 +595,6 @@ class ControlledFoulPlayBenchmarkResult:
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(self.config.checkpoint),
-            "value_checkpoint": (
-                str(self.config.value_checkpoint) if self.config.value_checkpoint is not None else None
-            ),
             "format_id": self.config.format_id,
             "policy_id": self.policy_id,
             "policy_mode": self.config.policy_mode,
@@ -661,6 +663,8 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if self.value_leaf_provenance is not None:
+            payload["value_leaf"] = dict(self.value_leaf_provenance)
         if policy_elapsed_values:
             payload["policy_timing"] = {
                 "decision_count": len(policy_elapsed_values),
@@ -1359,12 +1363,13 @@ async def run_controlled_foulplay_benchmark(
     _validate_external_paths(config)
     model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
     value_model, value_result = model, result
+    value_leaf_provenance: Mapping[str, object] | None = None
     if config.value_checkpoint is not None:
         value_model, value_result = load_transformer_checkpoint(
             config.value_checkpoint,
             map_location=config.device,
         )
-        require_compatible_transformer_value_checkpoint(
+        value_leaf_provenance = require_compatible_transformer_value_checkpoint(
             policy_checkpoint=config.checkpoint,
             policy_result=result,
             value_checkpoint=config.value_checkpoint,
@@ -1455,6 +1460,7 @@ async def run_controlled_foulplay_benchmark(
                         config=config,
                         policy_id=benchmark_policy_id,
                         games=tuple(game_results),
+                        value_leaf_provenance=value_leaf_provenance,
                     )
                 )
     finally:
@@ -1474,6 +1480,7 @@ async def run_controlled_foulplay_benchmark(
         config=config,
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
+        value_leaf_provenance=value_leaf_provenance,
     )
 
 
@@ -1736,6 +1743,8 @@ async def _run_controlled_foulplay_comparison_per_seed(
     root_puct_offsets: list[int] = []
     raw_policy_id: str | None = None
     root_puct_policy_id: str | None = None
+    raw_value_leaf_provenance: Mapping[str, object] | None = None
+    root_puct_value_leaf_provenance: Mapping[str, object] | None = None
     opponent_crashes: list[ControlledFoulPlayOpponentCrash] = []
 
     def raw_result() -> ControlledFoulPlayBenchmarkResult | None:
@@ -1749,6 +1758,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
                 config,
                 offsets=raw_offsets,
             ),
+            value_leaf_provenance=raw_value_leaf_provenance,
         )
 
     def root_puct_result() -> ControlledFoulPlayBenchmarkResult | None:
@@ -1762,6 +1772,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
                 config,
                 offsets=root_puct_offsets,
             ),
+            value_leaf_provenance=root_puct_value_leaf_provenance,
         )
 
     def emit_progress() -> None:
@@ -1791,6 +1802,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             continue
         assert raw_single is not None
         raw_policy_id = raw_single.policy_id
+        raw_value_leaf_provenance = raw_single.value_leaf_provenance
         raw_games.extend(raw_single.games)
         raw_offsets.extend([offset] * len(raw_single.games))
         emit_progress()
@@ -1810,6 +1822,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             continue
         assert root_puct_single is not None
         root_puct_policy_id = root_puct_single.policy_id
+        root_puct_value_leaf_provenance = root_puct_single.value_leaf_provenance
         root_puct_games.extend(root_puct_single.games)
         root_puct_offsets.extend([offset] * len(root_puct_single.games))
         emit_progress()

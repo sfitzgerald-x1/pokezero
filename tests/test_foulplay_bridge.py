@@ -293,6 +293,27 @@ class FoulPlayBridgeTest(unittest.TestCase):
             {"win": 1.0, "tie": 0.5, "capped": 0.5, "loss": 0.0},
         )
 
+    def test_benchmark_payload_preserves_immutable_calibrated_leaf_provenance(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            value_checkpoint=Path("calibrated.pt"),
+            showdown_root=Path("/showdown"),
+        )
+        provenance = {
+            "policy_checkpoint_sha256": "raw-sha",
+            "value_checkpoint_sha256": "leaf-sha",
+            "value_calibration_source_checkpoint_sha256": "raw-sha",
+            "value_calibration_transform": {"method": "isotonic"},
+        }
+        payload = ControlledFoulPlayBenchmarkResult(
+            config=config,
+            policy_id="checkpoint-root-puct",
+            games=(),
+            value_leaf_provenance=provenance,
+        ).to_dict()
+
+        self.assertEqual(payload["value_leaf"], provenance)
+
     def test_comparison_scores_ties_and_caps_as_half_points(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
@@ -1062,6 +1083,13 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 root_extra_visits=24,
                 adaptive_root_contested_extra_visits=120,
                 adaptive_root_policy_entropy_threshold=0.7,
+            )
+        with self.assertRaisesRegex(ValueError, "root_time_budget_ms cannot"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_extra_visits=24,
+                root_time_budget_ms=100,
             )
 
     def test_build_policy_uses_full_action_default_opponent_candidate_reserve(self) -> None:

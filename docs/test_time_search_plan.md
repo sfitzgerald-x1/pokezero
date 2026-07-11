@@ -164,6 +164,9 @@ uncertainty gating); **deterministic root priors**; and seeds fixed and shared
 across arms. The selected isotonic calibrated value copy is named on every
 value-leaf row and is passed as a leaf-only checkpoint: the raw checkpoint
 continues to supply policy priors, action selection, and rollout behavior.
+The calibrated copy records the immutable SHA-256 of its raw parent; every
+value-leaf run verifies that lineage and records both input hashes plus the
+applied transform.
 Fixed search rows use post-sweep extra visits, never an absolute visit cap, so
 the actual budget is `legal_action_count + extra_visits` on every decision. A
 Dirichlet row is secondary-only and exists only when Step 3's pre-registered

@@ -622,6 +622,10 @@ class TransformerTrainingResult:
     # with (None = source disabled, mixed provenance, or a pre-provenance checkpoint). Evaluators
     # should match observation conditions to this or expect degraded value reads.
     belief_set_source_hash: str | None = None
+    # Immutable source lineage for a checkpoint saved by the value-calibration command. A
+    # leaf-only evaluator must prove that it is a calibrated copy of the policy checkpoint,
+    # not merely another model with a coincidentally compatible schema.
+    value_calibration_source_checkpoint_sha256: str | None = None
 
     @property
     def final_metrics(self) -> TransformerEpochMetrics:
@@ -1392,6 +1396,16 @@ def _file_sha256(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def checkpoint_file_sha256(path: str | PathLike[str] | Path) -> str:
+    """Hash a checkpoint input and fail loudly if immutable provenance is unavailable."""
+
+    resolved = Path(path)
+    digest = _file_sha256(resolved)
+    if digest is None:
+        raise FileNotFoundError(f"checkpoint not found for provenance hashing: {resolved}")
+    return digest
+
+
 def _amp_autocast_device_type(device: Any) -> str:
     """Map a resolved torch device to an autocast device_type for bf16 (WS-A1).
 
@@ -2039,6 +2053,7 @@ def save_transformer_checkpoint(
             result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
         ),
         "belief_set_source_hash": result.belief_set_source_hash,
+        "value_calibration_source_checkpoint_sha256": result.value_calibration_source_checkpoint_sha256,
         "state_dict": model_to_save.state_dict(),
     }
     # Persist atomically: serialize into a temp file on the same filesystem, flush it
@@ -2183,6 +2198,11 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
         belief_set_source_hash=(
             str(payload["belief_set_source_hash"]) if payload.get("belief_set_source_hash") else None
         ),
+        value_calibration_source_checkpoint_sha256=(
+            str(payload["value_calibration_source_checkpoint_sha256"])
+            if payload.get("value_calibration_source_checkpoint_sha256")
+            else None
+        ),
     )
     return model, result
 
@@ -2193,7 +2213,7 @@ def require_compatible_transformer_value_checkpoint(
     policy_result: TransformerTrainingResult,
     value_checkpoint: str | PathLike[str] | Path,
     value_result: TransformerTrainingResult,
-) -> None:
+) -> dict[str, object]:
     """Ensure a leaf-only checkpoint cannot change the policy observation contract."""
 
     if policy_result.model_config != value_result.model_config:
@@ -2206,6 +2226,30 @@ def require_compatible_transformer_value_checkpoint(
             "value checkpoint belief-set provenance must match the policy checkpoint: "
             f"{value_checkpoint} is incompatible with {policy_checkpoint}."
         )
+    policy_sha256 = checkpoint_file_sha256(policy_checkpoint)
+    source_sha256 = value_result.value_calibration_source_checkpoint_sha256
+    if source_sha256 is None:
+        raise ValueError(
+            "value checkpoint has no calibrated-copy source provenance; recreate it with "
+            "the value-calibration command before using it for leaf evaluation."
+        )
+    if source_sha256 != policy_sha256:
+        raise ValueError(
+            "value checkpoint calibrated-copy source hash does not match the policy checkpoint: "
+            f"{value_checkpoint} is incompatible with {policy_checkpoint}."
+        )
+    value_sha256 = checkpoint_file_sha256(value_checkpoint)
+    transform = value_result.value_calibration_transform
+    return {
+        "policy_checkpoint": str(Path(policy_checkpoint).resolve(strict=False)),
+        "policy_checkpoint_sha256": policy_sha256,
+        "value_checkpoint": str(Path(value_checkpoint).resolve(strict=False)),
+        "value_checkpoint_sha256": value_sha256,
+        "value_calibration_source_checkpoint_sha256": source_sha256,
+        "model_config_match": True,
+        "belief_set_source_hash_match": True,
+        "value_calibration_transform": transform.to_dict() if transform is not None else None,
+    }
 
 
 @dataclass
