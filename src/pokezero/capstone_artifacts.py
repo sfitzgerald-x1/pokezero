@@ -104,6 +104,7 @@ def normalize_root_puct_play_artifact(
     if payload.get("root_dirichlet") is not None:
         raise ValueError("primary capstone artifacts must use deterministic root priors.")
     matchups = _mappings(payload.get("matchups"), field="matchups")
+    requires_time_budget_diagnostics = payload.get("root_time_budget_ms") is not None
     candidate_matchup = _select_root_puct_matchup(matchups, opponent_id=opponent_id, seat=seat)
     candidate_policy_id = _seat_policy_id(candidate_matchup, seat)
     raw_policy_id = candidate_policy_id.split("+root-puct", 1)[0]
@@ -128,6 +129,7 @@ def normalize_root_puct_play_artifact(
         uses_value_leaves=uses_value_leaves,
         calibrated_value_copy=_value_leaf_label(value_leaf) if uses_value_leaves else None,
         require_search=True,
+        require_time_budget_diagnostics=requires_time_budget_diagnostics,
     )
     raw = _benchmark_matchup_arm(
         raw_matchup,
@@ -137,6 +139,7 @@ def normalize_root_puct_play_artifact(
         uses_value_leaves=False,
         calibrated_value_copy=None,
         require_search=False,
+        require_time_budget_diagnostics=False,
     )
     return NormalizedCapstonePair(
         opponent_id=opponent_id,
@@ -399,6 +402,7 @@ def _benchmark_matchup_arm(
     uses_value_leaves: bool,
     calibrated_value_copy: str | None,
     require_search: bool,
+    require_time_budget_diagnostics: bool,
 ) -> CapstoneArmEvidence:
     outcomes: list[CapstoneGameOutcome] = []
     for game in _mappings(matchup.get("game_results"), field="matchup.game_results"):
@@ -410,7 +414,10 @@ def _benchmark_matchup_arm(
         if require_search and searches <= 0:
             raise ValueError("candidate root-PUCT artifact contains a game with no executed search.")
         if require_search:
-            _require_root_primary_diagnostics(diagnostics)
+            _require_root_primary_diagnostics(
+                diagnostics,
+                require_time_budget_diagnostics=require_time_budget_diagnostics,
+            )
         outcomes.append(
             CapstoneGameOutcome(
                 band=band,
@@ -576,7 +583,11 @@ def _require_foulplay_policy_lineage(
             raise ValueError("value-leaf policy hash does not match the controlled FoulPlay raw checkpoint hash.")
 
 
-def _require_root_primary_diagnostics(diagnostics: Mapping[str, Any]) -> None:
+def _require_root_primary_diagnostics(
+    diagnostics: Mapping[str, Any],
+    *,
+    require_time_budget_diagnostics: bool = False,
+) -> None:
     # A missing key is not zero evidence. The local benchmark may only be used
     # for a hidden-information primary row when it records these facts.
     for field in ("root_puct_searches", "root_puct_fallbacks", "root_puct_opponent_action_policies"):
@@ -586,6 +597,18 @@ def _require_root_primary_diagnostics(diagnostics: Mapping[str, Any]) -> None:
         raise ValueError("candidate root-PUCT artifact used a search fallback.")
     planners = _mapping(diagnostics["root_puct_opponent_action_policies"], field="root_puct_opponent_action_policies")
     _require_checkpoint_only_planners(planners, field="candidate root-PUCT opponent-action planner")
+    if require_time_budget_diagnostics:
+        for field in ("root_puct_time_budget_checks", "root_puct_time_budget_exhaustions"):
+            if field not in diagnostics:
+                raise ValueError(f"candidate root-PUCT artifact is missing {field} diagnostics.")
+        checks = _nonnegative_int(diagnostics["root_puct_time_budget_checks"], field="root_puct_time_budget_checks")
+        exhaustions = _nonnegative_int(
+            diagnostics["root_puct_time_budget_exhaustions"],
+            field="root_puct_time_budget_exhaustions",
+        )
+        searches = _nonnegative_int(diagnostics["root_puct_searches"], field="root_puct_searches")
+        if checks != searches or exhaustions > checks:
+            raise ValueError("candidate root-PUCT artifact has invalid time-budget diagnostics.")
     leaf_policies = diagnostics.get("root_puct_leaf_rollout_opponent_policies")
     if leaf_policies is not None:
         for policy_id, count in _mapping(leaf_policies, field="root_puct_leaf_rollout_opponent_policies").items():

@@ -24,7 +24,13 @@ def value_leaf() -> dict[str, object]:
     }
 
 
-def root_payload(*, seat: str, fallback: int = 0, include_value_leaf: bool = True) -> dict[str, object]:
+def root_payload(
+    *,
+    seat: str,
+    fallback: int = 0,
+    include_value_leaf: bool = True,
+    root_time_budget_ms: int | None = None,
+) -> dict[str, object]:
     opponent_seat = "p2" if seat == "p1" else "p1"
     raw_id = "test-policy"
     root_id = f"{raw_id}+root-puct"
@@ -38,6 +44,14 @@ def root_payload(*, seat: str, fallback: int = 0, include_value_leaf: bool = Tru
                     "root_puct_fallbacks": fallback,
                     "root_puct_opponent_action_policies": {"checkpoint": searches},
                     "root_puct_elapsed_seconds": [0.4, 0.6],
+                    **(
+                        {
+                            "root_puct_time_budget_checks": searches,
+                            "root_puct_time_budget_exhaustions": 1,
+                        }
+                        if root_time_budget_ms is not None
+                        else {}
+                    ),
                 }
             }
             if searches
@@ -70,6 +84,8 @@ def root_payload(*, seat: str, fallback: int = 0, include_value_leaf: bool = Tru
     }
     if include_value_leaf:
         payload["value_leaf"] = value_leaf()
+    if root_time_budget_ms is not None:
+        payload["root_time_budget_ms"] = root_time_budget_ms
     return payload
 
 
@@ -147,6 +163,30 @@ class CapstoneArtifactsTest(unittest.TestCase):
                 root_payload(seat="p1", fallback=1),
                 opponent_id="max-damage",
                 arm_id="value-24",
+                band="a",
+                seat="p1",
+            )
+
+    def test_root_normalization_requires_time_budget_diagnostics_when_configured(self) -> None:
+        payload = root_payload(seat="p1", root_time_budget_ms=125)
+        diagnostics = payload["matchups"][1]["game_results"][0]["root_puct_by_player"]["p1"]
+        del diagnostics["root_puct_time_budget_checks"]
+        with self.assertRaisesRegex(ValueError, "time_budget_checks"):
+            normalize_root_puct_play_artifact(
+                payload,
+                opponent_id="max-damage",
+                arm_id="rollout-tail",
+                band="a",
+                seat="p1",
+            )
+        payload = root_payload(seat="p1", root_time_budget_ms=125)
+        diagnostics = payload["matchups"][1]["game_results"][0]["root_puct_by_player"]["p1"]
+        diagnostics["root_puct_time_budget_checks"] = 1
+        with self.assertRaisesRegex(ValueError, "invalid time-budget diagnostics"):
+            normalize_root_puct_play_artifact(
+                payload,
+                opponent_id="max-damage",
+                arm_id="rollout-tail",
                 band="a",
                 seat="p1",
             )

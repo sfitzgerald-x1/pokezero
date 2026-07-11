@@ -528,7 +528,9 @@ class RootPUCTSearchPolicy:
             if self.leaf_rollout_decision_rounds
             else None
         )
-        start = perf_counter()
+        # The capstone's wall budget is defined at policy dispatch. Count opponent
+        # planning and prior evaluation before replay work spends its remaining budget.
+        search_started_at = perf_counter()
         env = self.env_factory()
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
@@ -605,7 +607,7 @@ class RootPUCTSearchPolicy:
                                 continue
                             scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
                                 total_budget_seconds=self.root_time_budget_seconds,
-                                started_at=start,
+                                started_at=timing_started_at,
                             )
                             visit_budget_resolver: RootVisitBudgetResolver | None = None
                             if self.root_visit_budget_selector is not None:
@@ -730,7 +732,7 @@ class RootPUCTSearchPolicy:
                 )
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
-            elapsed_seconds = perf_counter() - start
+            elapsed_seconds = perf_counter() - search_started_at
             timing = (
                 RootPUCTSearchTiming.aggregate(
                     tuple(scenario_search.timing for scenario_search in scenario_searches)

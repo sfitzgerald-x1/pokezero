@@ -884,6 +884,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             def read(self):
                 return b'{"window_size": 1, "policy_id": "ready"}'
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.inference_service.urlopen", side_effect=[OSError(1, "operation not permitted"), Response()]) as urlopen,
             patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
@@ -2587,10 +2588,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             captured.update(kwargs)
             return FakeReport()
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()) as load_checkpoint,
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             exit_code = neural_cli_main(
                 [
@@ -3398,6 +3400,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
+        self.assertIsNone(args.root_time_budget_ms)
         self.assertIsNone(args.root_prior_temperature)
         self.assertIsNone(args.root_dirichlet_alpha)
         self.assertEqual(args.root_dirichlet_mix, 0.25)
@@ -3406,6 +3409,107 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.adaptive_root_uncontested_extra_visits, 0)
         self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
         self.assertIsNone(args.adaptive_root_value_margin_threshold)
+
+    def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(
+            model_config=SimpleNamespace(
+                policy_id="neural-smoke",
+                window_size=1,
+                format_id="gen3randombattle",
+                observation_schema_version="pokezero.observation.v2.1",
+                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                stats_block_enabled=True,
+                exact_state_enabled=True,
+                transition_token_budget=128,
+                tier2_residuals=True,
+                tier2_investment=False,
+            )
+        )
+        captured: dict[str, Any] = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            search_policy = tuple(kwargs["matchups"])[2].p1_policy
+            self.assertIsNone(search_policy.root_visit_budget)
+            self.assertIsNone(search_policy.root_visit_budget_selector)
+            self.assertEqual(search_policy.root_time_budget_seconds, 0.125)
+            return SimpleNamespace(to_dict=lambda: {"matchups": 4}, matchups=())
+
+        stdout = io.StringIO()
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--root-time-budget-ms",
+                    "125",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured["games"], 20)
+        self.assertEqual(json.loads(stdout.getvalue())["root_time_budget_ms"], 125)
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_time_budget_with_visit_selector(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--root-time-budget-ms",
+                    "125",
+                    "--root-extra-visits",
+                    "24",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("root time budget cannot be combined", stderr.getvalue())
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_time_budget_with_explicit_visit_cap(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--root-time-budget-ms",
+                    "125",
+                    "--root-visit-budget",
+                    "16",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("explicit root visit budget", stderr.getvalue())
 
     def test_neural_cli_root_puct_play_benchmark_builds_adaptive_budget_selector(self) -> None:
         parser = build_neural_arg_parser()

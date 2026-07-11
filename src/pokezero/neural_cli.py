@@ -887,10 +887,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Q+U score and is diagnostic."
         ),
     )
+    root_puct_play.set_defaults(root_visit_budget_explicit=False)
     root_puct_play.add_argument(
         "--root-visit-budget",
         type=int,
         default=16,
+        action=_StoreExplicitArgument,
         help=(
             "Root visits per accepted opponent-action scenario; defaults to 16. "
             "With multiple accepted scenarios, total decision visits scale by searched scenario count."
@@ -903,6 +905,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Fixed visits added after the mandatory legal-action sweep. Mutually exclusive "
             "with adaptive root budgeting; use 0 for the sweep-only arm."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--root-time-budget-ms",
+        type=int,
+        default=None,
+        help=(
+            "Optional per-decision wall-clock budget after the mandatory legal-action sweep. "
+            "Mutually exclusive with fixed and adaptive post-sweep visit budgets."
         ),
     )
     root_puct_play.add_argument(
@@ -3355,6 +3366,20 @@ def _is_checkpoint_policy_spec(policy_spec: str) -> bool:
     return any(body.startswith(prefix) for prefix in CHECKPOINT_POLICY_SPEC_PREFIXES)
 
 
+class _StoreExplicitArgument(argparse.Action):
+    """Retain whether an option was supplied instead of only resolving its value."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
 @dataclass
 class _PolicyIdAlias:
     policy: Policy
@@ -3472,6 +3497,13 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "--root-opponent-action-policy checkpoint."
         )
     root_visit_budget_selector = _root_visit_budget_selector(args)
+    if args.root_time_budget_ms is not None:
+        if args.root_time_budget_ms <= 0:
+            raise ValueError("root time budget must be positive when set.")
+        if root_visit_budget_selector is not None:
+            raise ValueError("root time budget cannot be combined with fixed or adaptive root budgeting.")
+        if args.root_visit_budget_explicit:
+            raise ValueError("root time budget cannot be combined with an explicit root visit budget.")
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -3655,8 +3687,12 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
-            root_visit_budget=args.root_visit_budget,
+            # Time-bounded comparisons must not inherit the legacy 16-visit cap.
+            root_visit_budget=None if args.root_time_budget_ms is not None else args.root_visit_budget,
             root_visit_budget_selector=root_visit_budget_selector,
+            root_time_budget_seconds=(
+                None if args.root_time_budget_ms is None else args.root_time_budget_ms / 1000.0
+            ),
             root_prior_temperature=(
                 args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
             ),
@@ -3738,6 +3774,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         report,
         raw_policy_id=raw_policy_id,
         search_policy_ids=search_policy_ids,
+        root_time_budget_ms=args.root_time_budget_ms,
         root_dirichlet_config=(
             {
                 "enabled": True,
@@ -3795,6 +3832,7 @@ def _root_puct_play_payload(
     *,
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
+    root_time_budget_ms: int | None,
     root_dirichlet_config: Mapping[str, object] | None = None,
     value_leaf_provenance: Mapping[str, object] | None,
     root_visit_budget_selector_config: Mapping[str, object] | None = None,
@@ -3809,6 +3847,8 @@ def _root_puct_play_payload(
         payload["root_puct_play_comparisons"] = comparisons
     if root_dirichlet_config is not None:
         payload["root_dirichlet"] = dict(root_dirichlet_config)
+    if root_time_budget_ms is not None:
+        payload["root_time_budget_ms"] = root_time_budget_ms
     if value_leaf_provenance is not None:
         payload["value_leaf"] = dict(value_leaf_provenance)
     if root_visit_budget_selector_config is not None:
