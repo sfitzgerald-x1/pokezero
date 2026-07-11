@@ -156,8 +156,11 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual([decision.recorded_action_index for decision in report.decisions], [0, 0])
         self.assertEqual([decision.selected_action_index for decision in report.decisions], [1, 0])
         self.assertEqual([decision.candidate_count for decision in report.decisions], [2, 2])
+        self.assertEqual([decision.total_visits for decision in report.decisions], [2, 2])
         payload = report.to_dict()
+        self.assertEqual(payload["schema_version"], "pokezero.root-puct-search-benchmark.v1")
         self.assertEqual(payload["evaluated_prefixes"], 2)
+        self.assertIsNone(payload["root_extra_visits"])
         timing = payload["timing"]
         decision_timings = [decision["timing"] for decision in payload["decisions"]]
         for key in (
@@ -204,6 +207,40 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual(timing["opponent_scenario_planning_count"], 0)
         self.assertEqual(timing["opponent_scenario_planning_seconds"], 0.0)
         self.assertTrue(envs[0].closed)
+
+    def test_benchmark_root_puct_search_supports_fixed_extra_visits(self) -> None:
+        def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
+            return {0: 0.1, 1: 0.8}.get(int(history[-1].metadata.get("branch_action", 0)), 0.0)
+
+        report = benchmark_root_puct_search(
+            env_factory=TwoRoundBranchEnv,
+            policies={"p1": FixedPolicy(0, policy_id="fixed-p1"), "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            games=1,
+            prefixes_per_game=2,
+            value_fn=value_fn,
+            prior_fn=lambda _history: (0.5, 0.5) + (0.0,) * 7,
+            cpuct=0.0,
+            root_extra_visits=3,
+        )
+
+        self.assertEqual(report.root_extra_visits, 3)
+        self.assertEqual(
+            [decision.total_visits for decision in report.decisions],
+            [decision.candidate_count + 3 for decision in report.decisions],
+        )
+        self.assertEqual(report.to_dict()["root_extra_visits"], 3)
+
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            benchmark_root_puct_search(
+                env_factory=TwoRoundBranchEnv,
+                policies={"p1": FixedPolicy(0, policy_id="fixed-p1"), "p2": FixedPolicy(0, policy_id="fixed-p2")},
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                games=1,
+                value_fn=value_fn,
+                prior_fn=lambda _history: (0.5, 0.5) + (0.0,) * 7,
+                root_extra_visits=-1,
+            )
 
     def test_benchmark_root_puct_counterfactual_rollouts_compares_recorded_and_selected_outcomes(self) -> None:
         envs: list[ImmediateOutcomeEnv] = []

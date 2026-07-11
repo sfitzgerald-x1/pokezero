@@ -12,7 +12,7 @@ import tempfile
 from typing import Any
 import unittest
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from pokezero import neural_policy as neural_policy_module
 from pokezero.collection import RolloutRecord, write_rollout_record
@@ -4460,6 +4460,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"evaluated_prefixes": 2}
 
         fake_model = object()
+        fake_value_model = object()
         fake_training_result = SimpleNamespace(
             model_config=SimpleNamespace(
                 policy_id="neural-smoke", window_size=1,
@@ -4481,7 +4482,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         stdout = io.StringIO()
 
         with (
-            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                side_effect=((fake_model, fake_training_result), (fake_value_model, fake_training_result)),
+            ) as load,
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25) as value_eval,
             patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
             patch("pokezero.neural_cli.benchmark_root_puct_search", side_effect=fake_benchmark_root_puct_search),
@@ -4509,6 +4513,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "p2",
                     "--cpuct",
                     "0.75",
+                    "--value-checkpoint",
+                    "calibrated.pt",
+                    "--root-extra-visits",
+                    "24",
                     "--device",
                     "cpu",
                     "--temperature",
@@ -4518,20 +4526,37 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
+        self.assertEqual(
+            load.call_args_list,
+            [
+                call(Path("checkpoint.pt"), map_location="cpu"),
+                call(Path("calibrated.pt"), map_location="cpu"),
+            ],
+        )
         self.assertEqual(captured["games"], 3)
         self.assertEqual(captured["prefixes_per_game"], 4)
         self.assertEqual(captured["seed_start"], 99)
         self.assertEqual(captured["search_player"], "p2")
         self.assertEqual(captured["cpuct"], 0.75)
+        self.assertEqual(captured["root_extra_visits"], 24)
         self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
         self.assertEqual(captured["policies"]["p1"].policy_id, "random-legal")
         self.assertEqual(captured["policies"]["p2"].policy_id, "simple-legal")
-        self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
+        self.assertEqual(value_eval.call_args.kwargs["model"], fake_value_model)
         self.assertEqual(value_eval.call_args.kwargs["result"], fake_training_result)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
-        self.assertEqual(json.loads(stdout.getvalue()), {"evaluated_prefixes": 2})
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "evaluated_prefixes": 2,
+                "value_leaf": {
+                    "policy_checkpoint": "checkpoint.pt",
+                    "value_checkpoint": "calibrated.pt",
+                    "uses_distinct_value_checkpoint": True,
+                },
+            },
+        )
 
     def test_neural_cli_root_puct_counterfactual_wires_continuation_policies(self) -> None:
         if not torch_available():
