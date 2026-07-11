@@ -170,17 +170,22 @@ class PublicCorpusTest(unittest.TestCase):
                     prototype = replace(_record(), battle_id=f"stream-{index}")
                     writer.append(replace(prototype, decision_id=public_decision_id(prototype)))
 
-            report = profile_public_corpus(
-                open_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS),
-                prior_evaluator=lambda _history: (0.5, 0.3, 0.2) + (0.0,) * (ACTION_COUNT - 3),
-                candidate_value_evaluator=lambda _record: (
-                    WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.5, 1: 0.4, 2: 0.3}),
-                ),
-            )
+            def profile(corpus):
+                return profile_public_corpus(
+                    corpus,
+                    prior_evaluator=lambda _history: (0.5, 0.3, 0.2) + (0.0,) * (ACTION_COUNT - 3),
+                    candidate_value_evaluator=lambda _record: (
+                        WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.5, 1: 0.4, 2: 0.3}),
+                    ),
+                )
+
+            report = profile(open_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS))
+            eager_report = profile(load_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS))
 
         self.assertEqual(report["corpus_decision_count"], MINIMUM_PROFILE_DECISIONS)
         self.assertEqual(report["decision_count"], MINIMUM_PROFILE_DECISIONS)
         self.assertEqual(report["provenance"]["corpus_selection"]["selected_decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(report, eager_report)
 
     def test_public_roundtrip_and_private_opponent_leakage_invariance(self) -> None:
         p1_observation = _observation(0, 1, metadata={"self_team": []})
