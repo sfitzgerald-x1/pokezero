@@ -52,6 +52,8 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         parser.error("--showdown-root is required unless POKEZERO_SHOWDOWN_ROOT is set.")
     if args.append_public_decision_corpus and args.public_decision_corpus_out is None:
         parser.error("--append-public-decision-corpus requires --public-decision-corpus-out.")
+    if args.pokezero_player != "p1":
+        parser.error("controlled foul-play value capture supports only --pokezero-player p1.")
     if args.opponent_legal_mask_mode != "hidden":
         parser.error("public decision corpus capture refuses --opponent-legal-mask-mode privileged.")
     config = _config_from_args(args, policy_mode="raw")

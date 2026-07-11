@@ -135,6 +135,7 @@ class ControlledFoulPlayConfig:
     node_binary: str = "node"
     pokezero_username: str = "PokeZeroBot"
     foulplay_username: str = "FoulPlayBot"
+    pokezero_player: PlayerId = "p1"
     websocket_host: str = "127.0.0.1"
 
     def __post_init__(self) -> None:
@@ -199,6 +200,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
         if self.opponent_crash_retries < 0:
             raise ValueError("opponent_crash_retries must be non-negative.")
+        if self.pokezero_player not in {"p1", "p2"}:
+            raise ValueError("pokezero_player must be 'p1' or 'p2'.")
 
     @property
     def resolved_foulplay_python(self) -> Path:
@@ -222,6 +225,10 @@ class ControlledFoulPlayConfig:
         if self.root_prior_temperature is not None:
             return self.root_prior_temperature
         return self.temperature
+
+    @property
+    def foulplay_player(self) -> PlayerId:
+        return "p2" if self.pokezero_player == "p1" else "p1"
 
 
 @dataclass(frozen=True)
@@ -489,6 +496,8 @@ class ControlledFoulPlayBenchmarkResult:
             "policy_id": self.policy_id,
             "policy_mode": self.config.policy_mode,
             "opponent_policy_id": "foul-play",
+            "pokezero_player": self.config.pokezero_player,
+            "foulplay_player": self.config.foulplay_player,
             "games": self.config.games,
             "completed_games": self.completed_games,
             "complete": self.completed_games >= self.config.games,
@@ -1284,6 +1293,8 @@ async def capture_controlled_foulplay_rollouts(
 
     if config.policy_mode != "raw":
         raise ValueError("controlled foul-play rollout capture requires policy_mode='raw'.")
+    if config.pokezero_player != "p1":
+        raise ValueError("controlled foul-play rollout capture requires pokezero_player='p1'.")
     if config.opponent_legal_mask_mode != "hidden":
         raise ValueError("public decision corpus capture requires opponent_legal_mask_mode='hidden'.")
     if not pool_id.strip():
@@ -1875,7 +1886,12 @@ async def _run_single_game(
             battle_id=battle_id,
             format_id=config.format_id,
             seed=seed,
-            metadata={"opponent_policy_id": "foul-play", "controlled_foulplay_bridge": True},
+            metadata={
+                "opponent_policy_id": "foul-play",
+                "controlled_foulplay_bridge": True,
+                "pokezero_player": config.pokezero_player,
+                "foulplay_player": config.foulplay_player,
+            },
         ),
     )
     await server.send_room_lines(
@@ -1889,8 +1905,8 @@ async def _run_single_game(
             "formatid": config.format_id,
             "seed": showdown_seed_from_int(seed),
             "players": {
-                "p1": config.pokezero_username,
-                "p2": config.foulplay_username,
+                config.pokezero_player: config.pokezero_username,
+                config.foulplay_player: config.foulplay_username,
             },
         }
     )
@@ -1908,7 +1924,7 @@ async def _run_single_game(
             continue
         event_type = event.get("type")
         if event_type == "stream":
-            await _handle_stream_event(state, server, event)
+            await _handle_stream_event(state, server, event, config=config)
             terminal = _terminal_from_public_lines(state.public_lines, config)
             continue
         if event_type == "ready":
@@ -2242,6 +2258,8 @@ async def _handle_stream_event(
     state: _ControlledBattleState,
     server: _FoulPlayWebsocketServer,
     event: Mapping[str, Any],
+    *,
+    config: ControlledFoulPlayConfig,
 ) -> None:
     stream = event.get("stream")
     raw_lines = event.get("lines")
@@ -2254,7 +2272,7 @@ async def _handle_stream_event(
         for line in lines:
             if line.startswith("|request|"):
                 state.request_lines[stream] = line
-        if stream == "p2":
+        if stream == config.foulplay_player:
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
                 await server.send_room_lines(state.battle_id, chunk)
@@ -2446,44 +2464,49 @@ async def _handle_decision_boundary(
     }
     choices: dict[PlayerId, str] = {}
     decisions: dict[PlayerId, PolicyDecision] = {}
-    if "p1" in requested_players:
-        p1_context = PolicyContext(
-            player_id="p1",
+    pokezero_player = config.pokezero_player
+    foulplay_player = config.foulplay_player
+    if pokezero_player in requested_players:
+        pokezero_context = PolicyContext(
+            player_id=pokezero_player,
             decision_round_index=decision_round,
             battle_id=state.battle_id,
             format_id=config.format_id,
             seed=state.seed,
-            observation=observations["p1"],
+            observation=observations[pokezero_player],
             requested_players=requested_players,
             trajectory=state.trajectory,
             requested_legal_action_masks=_requested_legal_action_masks_for_context(
                 observations,
-                acting_player="p1",
+                acting_player=pokezero_player,
                 opponent_legal_mask_mode=config.opponent_legal_mask_mode,
             ),
             requested_observations=dict(observations),
         )
-        decisions["p1"] = await asyncio.to_thread(
+        decisions[pokezero_player] = await asyncio.to_thread(
             _select_policy_decision,
             policy,
-            observations["p1"],
-            p1_context,
+            observations[pokezero_player],
+            pokezero_context,
             seed=state.seed,
         )
-        choices["p1"] = showdown_choice_for_action(player_states["p1"], decisions["p1"].action_index)
-    if "p2" in requested_players:
+        choices[pokezero_player] = showdown_choice_for_action(
+            player_states[pokezero_player],
+            decisions[pokezero_player].action_index,
+        )
+    if foulplay_player in requested_players:
         choice = await _wait_for_foulplay_choice_or_exit(
             server=server,
             battle_id=state.battle_id,
             process=foulplay_process,
             logs=foulplay_logs,
         )
-        p2_action = action_index_from_choice_string(player_states["p2"], choice)
-        if p2_action is None:
+        foulplay_action = action_index_from_choice_string(player_states[foulplay_player], choice)
+        if foulplay_action is None:
             raise RuntimeError(f"unable to decode foul-play choice {choice!r}.")
-        choices["p2"] = choice
-        decisions["p2"] = PolicyDecision(
-            action_index=p2_action,
+        choices[foulplay_player] = choice
+        decisions[foulplay_player] = PolicyDecision(
+            action_index=foulplay_action,
             policy_id="foul-play",
             metadata={"raw_choice": choice},
         )
@@ -2502,7 +2525,7 @@ async def _handle_decision_boundary(
                 metadata={"policy_id": decision.policy_id, **dict(decision.metadata)},
             )
         )
-        if player == "p1":
+        if player == pokezero_player:
             state.decisions.append(decision)
 
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
@@ -2686,9 +2709,9 @@ def _terminal_from_public_lines(
         elif line.startswith("|win|"):
             winner_name = line.split("|", 2)[2] if len(line.split("|", 2)) >= 3 else ""
             if winner_name == config.pokezero_username:
-                winner = "p1"
+                winner = config.pokezero_player
             elif winner_name == config.foulplay_username:
-                winner = "p2"
+                winner = config.foulplay_player
             return TerminalState(winner=winner, turn_count=turn)
         elif line == "|tie" or line.startswith("|tie|"):
             return TerminalState(winner=None, turn_count=turn)
@@ -2696,9 +2719,9 @@ def _terminal_from_public_lines(
 
 
 def _winner_name(terminal: TerminalState, config: ControlledFoulPlayConfig) -> str | None:
-    if terminal.winner == "p1":
+    if terminal.winner == config.pokezero_player:
         return config.pokezero_username
-    if terminal.winner == "p2":
+    if terminal.winner == config.foulplay_player:
         return config.foulplay_username
     return None
 
@@ -2954,6 +2977,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--node-binary", default="node", help="Node executable for BattleStream bridge.")
     parser.add_argument("--pokezero-username", default="PokeZeroBot")
     parser.add_argument("--foulplay-username", default="FoulPlayBot")
+    parser.add_argument(
+        "--pokezero-player",
+        choices=("p1", "p2"),
+        default="p1",
+        help="Showdown seat controlled by PokeZero; use both seats for mirrored evaluation.",
+    )
     parser.add_argument("--summary-out", type=Path, default=None, help="Optional JSON result path.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     return parser
@@ -3048,6 +3077,7 @@ def _config_from_args(
         node_binary=args.node_binary,
         pokezero_username=args.pokezero_username,
         foulplay_username=args.foulplay_username,
+        pokezero_player=args.pokezero_player,
     )
 
 
