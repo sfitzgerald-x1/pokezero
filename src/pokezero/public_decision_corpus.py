@@ -426,12 +426,20 @@ class PublicDecisionCorpus:
     selected_decision_limit: int | None = None
 
     @property
-    def corpus_sha256(self) -> str:
-        if self.selected_content_sha256 is not None:
-            return self.selected_content_sha256
+    def source_file_sha256(self) -> str | None:
+        """Return a raw source-file digest only when the complete file was read."""
+
+        if self.selected_decision_limit is not None:
+            return None
         if self.path is not None:
             return sha256_file(self.path)
         return canonical_json_sha256({"manifest": self.manifest, "decisions": [record.to_dict() for record in self.decisions]})
+
+    @property
+    def corpus_sha256(self) -> str | None:
+        """Compatibility alias for the complete source-file digest, never a capped selection hash."""
+
+        return self.source_file_sha256
 
 
 def public_decision_id(record: PublicDecisionRecord) -> str:

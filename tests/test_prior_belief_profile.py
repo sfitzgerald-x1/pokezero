@@ -1,5 +1,7 @@
 import contextlib
+import hashlib
 import io
+import json
 from dataclasses import replace
 from pathlib import Path
 import tempfile
@@ -223,7 +225,30 @@ class PublicCorpusTest(unittest.TestCase):
 
         self.assertEqual(first.decisions, records[:2])
         self.assertEqual(first.selected_decision_limit, 2)
-        self.assertEqual(first.corpus_sha256, second.corpus_sha256)
+        expected = hashlib.sha256()
+        for payload in (manifest, *(record.to_dict() for record in records[:2])):
+            expected.update((json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode())
+        self.assertEqual(first.selected_content_sha256, expected.hexdigest())
+        self.assertEqual(first.selected_content_sha256, second.selected_content_sha256)
+        self.assertIsNone(first.source_file_sha256)
+
+    def test_uncapped_reader_keeps_the_raw_source_file_hash(self) -> None:
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint-hash",
+            belief_set_source_hash=None,
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                writer.append(_record())
+            expected = hashlib.sha256(path.read_bytes()).hexdigest()
+            loaded = load_public_decision_corpus(path)
+            source_hash = loaded.source_file_sha256
+            compatibility_hash = loaded.corpus_sha256
+
+        self.assertEqual(source_hash, expected)
+        self.assertEqual(compatibility_hash, expected)
 
     def test_reader_rejects_non_positive_decision_prefix_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -436,6 +461,29 @@ class PriorBeliefProfileTest(unittest.TestCase):
                 prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 candidate_value_evaluator=lambda _record: (),
             )
+
+    def test_profile_distinguishes_capped_selection_from_source_file_hash(self) -> None:
+        record = _record()
+        corpus = PublicDecisionCorpus(
+            manifest={"schema_version": "pokezero.public-decision-corpus.v1"},
+            decisions=(record,) * MINIMUM_PROFILE_DECISIONS,
+            selected_content_sha256="selected-content-hash",
+            selected_decision_limit=MINIMUM_PROFILE_DECISIONS,
+        )
+        report = profile_public_corpus(
+            corpus,
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda _record: (
+                WorldScenarioEvaluation(0, 0, "selected", 1.0, {0: 0.1}),
+            ),
+        )
+
+        self.assertIsNone(report["corpus_sha256"])
+        self.assertEqual(report["selected_content_sha256"], "selected-content-hash")
+        self.assertEqual(
+            report["corpus_selection"],
+            {"max_decisions": MINIMUM_PROFILE_DECISIONS, "selected_decision_count": MINIMUM_PROFILE_DECISIONS},
+        )
 
     def test_cli_rejects_privileged_mask_mode_before_opening_inputs(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):

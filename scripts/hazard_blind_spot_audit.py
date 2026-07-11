@@ -84,8 +84,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus_config = {
             "source": "pokezero.public-decision-corpus.v1",
             "path": str(args.public_corpus),
-            "sha256": public_corpus.corpus_sha256,
-            "max_decisions": args.max_public_decisions,
+            "source_file_sha256": public_corpus.source_file_sha256,
+            "selected_content_sha256": public_corpus.selected_content_sha256,
+            "selection": {
+                "max_decisions": args.max_public_decisions,
+                "selected_decision_count": len(public_corpus.decisions),
+            },
             "schema_version": public_corpus.manifest.get("schema_version"),
         }
     else:
