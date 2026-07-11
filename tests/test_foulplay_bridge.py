@@ -175,7 +175,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
         def select(_policy, _observation, context, *, seed):
             self.assertEqual(seed, 7)
             contexts.append(context)
-            return PolicyDecision(action_index=0, policy_id="pokezero-p2")
+            # A checkpoint may legitimately use the evaluator's display id. Seat telemetry must
+            # therefore use controller provenance, never classify decisions by this id.
+            return PolicyDecision(action_index=0, policy_id="foul-play")
 
         async def foulplay_choice(**_kwargs) -> str:
             return "move 1"
@@ -221,7 +223,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(contexts[0].player_id, "p2")
         self.assertEqual(contexts[0].requested_legal_action_masks, {"p2": (True,) + (False,) * 8})
         self.assertEqual([step.player_id for step in state.trajectory.steps], ["p1", "p2"])
-        self.assertEqual([decision.policy_id for decision in state.decisions], ["pokezero-p2"])
+        self.assertEqual([decision.policy_id for decision in state.decisions], ["foul-play"])
         self.assertEqual(state.pokezero_decision_players, ["p2"])
         self.assertEqual(state.pokezero_submitted_choice_players, ["p2"])
         self.assertIn("policy_elapsed_seconds", state.decisions[0].metadata)

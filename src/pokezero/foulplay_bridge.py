@@ -2613,6 +2613,7 @@ async def _handle_decision_boundary(
     }
     choices: dict[PlayerId, str] = {}
     decisions: dict[PlayerId, PolicyDecision] = {}
+    pokezero_context: PolicyContext | None = None
     if pokezero_player in requested_players:
         pokezero_context = PolicyContext(
             player_id=pokezero_player,
@@ -2649,6 +2650,9 @@ async def _handle_decision_boundary(
                 "policy_elapsed_seconds": time.perf_counter() - pokezero_choice_wall_start,
             },
         )
+        # Capture the actual controller context that selected the decision. This is distinct from
+        # a policy display id and remains useful when a checkpoint happens to use that same id.
+        state.pokezero_decision_players.append(pokezero_context.player_id)
     if foulplay_player in requested_players:
         choice = await _wait_for_foulplay_choice_or_exit(
             server=server,
@@ -2682,17 +2686,10 @@ async def _handle_decision_boundary(
         )
         if player == pokezero_player:
             state.decisions.append(decision)
-            state.pokezero_decision_players.append(player)
-
-    # Derive submission ownership from the runtime decision map, not the requested config. This
-    # gives mirrored-seat artifacts an observable proof that PokeZero supplied the submitted move.
-    state.pokezero_submitted_choice_players.extend(
-        player
-        for player, decision in decisions.items()
-        if decision.policy_id != "foul-play" and player in choices
-    )
 
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
+    if pokezero_context is not None and pokezero_context.player_id in choices:
+        state.pokezero_submitted_choice_players.append(pokezero_context.player_id)
     return None
 
 
