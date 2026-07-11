@@ -485,6 +485,38 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertNotIn("move_slot", serialized)
         self.assertNotIn("raw_choice", serialized)
 
+    def test_public_corpus_switch_identifier_uses_species_not_condition(self) -> None:
+        state = _ControlledBattleState(
+            battle_id="public-switch-round",
+            seed=7,
+            format_id="gen3randombattle",
+        )
+        state.previous_requested_players = ("p1",)
+        state.public_lines.append("|switch|p1a: Lead|Pikachu, L100|243/243")
+
+        _capture_resolved_public_action_round(state, 1)
+
+        self.assertEqual(
+            state.public_resolved_action_rounds[0].to_dict()["actions"]["p1"],
+            {"kind": "switch", "switched_species": "pikachu"},
+        )
+
+    def test_public_corpus_drag_does_not_invent_a_voluntary_switch(self) -> None:
+        state = _ControlledBattleState(
+            battle_id="public-drag-round",
+            seed=7,
+            format_id="gen3randombattle",
+        )
+        state.previous_requested_players = ("p2",)
+        state.public_lines.append("|drag|p2a: Rival|Pikachu, L100|243/243")
+
+        _capture_resolved_public_action_round(state, 1)
+
+        self.assertEqual(
+            state.public_resolved_action_rounds[0].to_dict()["actions"]["p2"],
+            {"kind": "event", "event_id": "unresolved-public-event"},
+        )
+
     def test_capture_cli_requires_showdown_root(self) -> None:
         with self.assertRaises(SystemExit):
             asyncio.run(async_capture_main(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"]))
