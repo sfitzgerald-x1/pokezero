@@ -1093,6 +1093,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             f"{MINIMUM_PROFILE_DECISIONS} valid p1 decisions."
         ),
     )
+    prior_belief_profile.add_argument(
+        "--max-decisions",
+        type=int,
+        default=None,
+        help=(
+            "Optional deterministic prefix cap. The report records a hash of the selected records rather than "
+            "the entire source file."
+        ),
+    )
     prior_belief_profile.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint used for raw priors and value sweeps.")
     prior_belief_profile.add_argument("--showdown-root", type=Path, required=True, help="Built Pokemon Showdown checkout used for public-world replay.")
     prior_belief_profile.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
@@ -2122,7 +2131,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
 
     if args.opponent_legal_mask_mode != "hidden":
         raise ValueError("prior-belief-profile refuses privileged opponent legal-mask mode.")
-    corpus = load_public_decision_corpus(args.corpus)
+    corpus = load_public_decision_corpus(args.corpus, max_decisions=args.max_decisions)
     if len(corpus.decisions) < MINIMUM_PROFILE_DECISIONS:
         raise ValueError(
             f"prior/belief profiling requires at least {MINIMUM_PROFILE_DECISIONS} valid p1 decisions; "
@@ -2207,6 +2216,8 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
         provenance={
             "checkpoint": str(args.checkpoint),
             "checkpoint_sha256": checkpoint_sha256,
+            "corpus_source_path": str(args.corpus),
+            "corpus_max_decisions": args.max_decisions,
             "belief_set_source_hash": set_source.metadata.source_hash,
             "root_noise_enabled": False,
             "opponent_legal_mask_mode": "hidden",

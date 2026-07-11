@@ -422,9 +422,13 @@ class PublicDecisionCorpus:
     manifest: Mapping[str, Any]
     decisions: tuple[PublicDecisionRecord, ...]
     path: Path | None = None
+    selected_content_sha256: str | None = None
+    selected_decision_limit: int | None = None
 
     @property
     def corpus_sha256(self) -> str:
+        if self.selected_content_sha256 is not None:
+            return self.selected_content_sha256
         if self.path is not None:
             return sha256_file(self.path)
         return canonical_json_sha256({"manifest": self.manifest, "decisions": [record.to_dict() for record in self.decisions]})
@@ -620,12 +624,16 @@ class PublicDecisionCorpusWriter:
         self._handle.flush()
 
 
-def load_public_decision_corpus(path: Path) -> PublicDecisionCorpus:
-    """Read and validate the complete public-only corpus before profiling it."""
+def load_public_decision_corpus(path: Path, *, max_decisions: int | None = None) -> PublicDecisionCorpus:
+    """Read a validated public-only corpus, optionally stopping at a deterministic prefix."""
+
+    if max_decisions is not None and max_decisions <= 0:
+        raise ValueError("max_decisions must be positive when provided.")
 
     manifest: Mapping[str, Any] | None = None
     decisions: list[PublicDecisionRecord] = []
     seen_ids: set[str] = set()
+    selected_digest = hashlib.sha256() if max_decisions is not None else None
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             text = line.strip()
@@ -641,6 +649,8 @@ def load_public_decision_corpus(path: Path) -> PublicDecisionCorpus:
                 if manifest is not None or decisions:
                     raise ValueError("public corpus manifest must be the first non-empty record.")
                 manifest = _validated_manifest(payload)
+                if selected_digest is not None:
+                    selected_digest.update(_canonical_json_line(manifest))
                 continue
             if manifest is None:
                 raise ValueError("public corpus is missing its manifest.")
@@ -649,9 +659,23 @@ def load_public_decision_corpus(path: Path) -> PublicDecisionCorpus:
                 raise ValueError(f"public corpus contains duplicate decision_id {record.decision_id!r}.")
             seen_ids.add(record.decision_id)
             decisions.append(record)
+            if selected_digest is not None:
+                selected_digest.update(_canonical_json_line(record.to_dict()))
+            if max_decisions is not None and len(decisions) >= max_decisions:
+                break
     if manifest is None:
         raise ValueError("public corpus is empty or missing its manifest.")
-    return PublicDecisionCorpus(manifest=manifest, decisions=tuple(decisions), path=path)
+    return PublicDecisionCorpus(
+        manifest=manifest,
+        decisions=tuple(decisions),
+        path=path,
+        selected_content_sha256=selected_digest.hexdigest() if selected_digest is not None else None,
+        selected_decision_limit=max_decisions,
+    )
+
+
+def _canonical_json_line(payload: Mapping[str, Any]) -> bytes:
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
 
 
 def _validated_manifest(payload: Mapping[str, Any]) -> dict[str, Any]:

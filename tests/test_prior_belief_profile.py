@@ -202,6 +202,35 @@ class PublicCorpusTest(unittest.TestCase):
                 self.assertEqual(writer.append(record), 0)
             self.assertEqual(len(load_public_decision_corpus(path).decisions), 1)
 
+    def test_reader_can_select_a_deterministic_prefix_without_hashing_the_full_file(self) -> None:
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint-hash",
+            belief_set_source_hash=None,
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        records = (_record(turn_index=1), _record(turn_index=2), _record(turn_index=3))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                for record in records:
+                    writer.append(record)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("{\n")
+            first = load_public_decision_corpus(path, max_decisions=2)
+            second = load_public_decision_corpus(path, max_decisions=2)
+            with self.assertRaisesRegex(ValueError, "invalid public corpus JSON"):
+                load_public_decision_corpus(path)
+
+        self.assertEqual(first.decisions, records[:2])
+        self.assertEqual(first.selected_decision_limit, 2)
+        self.assertEqual(first.corpus_sha256, second.corpus_sha256)
+
+    def test_reader_rejects_non_positive_decision_prefix_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "public.jsonl"
+            with self.assertRaisesRegex(ValueError, "max_decisions"):
+                load_public_decision_corpus(path, max_decisions=0)
+
     def test_foulplay_capture_parser_exposes_public_corpus_sidecar(self) -> None:
         args = build_capture_arg_parser().parse_args(
             ["--checkpoint", "checkpoint.pt", "--out", "rollouts.jsonl", "--public-decision-corpus-out", "public.jsonl"]
