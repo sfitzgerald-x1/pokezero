@@ -220,7 +220,64 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(contexts[0].requested_legal_action_masks, {"p2": (True,) + (False,) * 8})
         self.assertEqual([step.player_id for step in state.trajectory.steps], ["p1", "p2"])
         self.assertEqual([decision.policy_id for decision in state.decisions], ["pokezero-p2"])
+        self.assertIn("policy_elapsed_seconds", state.decisions[0].metadata)
+        self.assertGreaterEqual(state.decisions[0].metadata["policy_elapsed_seconds"], 0.0)
         self.assertEqual(bridge.messages[0]["choices"], {"p1": "move 1", "p2": "p2:0"})
+
+    def test_benchmark_payload_records_terminal_and_policy_wall_telemetry(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=2,
+        )
+        result = ControlledFoulPlayBenchmarkResult(
+            config=config,
+            policy_id="checkpoint-raw",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="tie",
+                    seed=1,
+                    winner=None,
+                    pokezero_won=False,
+                    tied=True,
+                    decision_rounds=2,
+                    pokezero_decisions=2,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                    policy_elapsed_seconds=(0.001, 0.003),
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="cap",
+                    seed=2,
+                    winner=None,
+                    pokezero_won=False,
+                    capped=True,
+                    decision_rounds=250,
+                    pokezero_decisions=2,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                    policy_elapsed_seconds=(0.002, 0.006),
+                ),
+            ),
+        )
+
+        payload = result.to_dict()
+
+        self.assertEqual(payload["ties"], 1)
+        self.assertEqual(payload["capped_games"], 1)
+        self.assertTrue(payload["game_results"][0]["tied"])
+        self.assertFalse(payload["game_results"][0]["capped"])
+        self.assertFalse(payload["game_results"][1]["tied"])
+        self.assertTrue(payload["game_results"][1]["capped"])
+        self.assertEqual(
+            payload["policy_timing"],
+            {
+                "decision_count": 4,
+                "total_elapsed_seconds": 0.012,
+                "average_elapsed_seconds": 0.003,
+                "p95_elapsed_seconds": 0.006,
+            },
+        )
 
     def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
         state = _ControlledBattleState(

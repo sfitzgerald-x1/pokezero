@@ -280,6 +280,12 @@ class ControlledFoulPlayGameResult:
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
+    # Wall-clock policy selection time for every PokeZero decision, including raw-policy arms.
+    # This deliberately includes the dispatch boundary, so capstone reports measure the cost a
+    # caller observes rather than only root-PUCT's internal timer.
+    policy_elapsed_seconds: tuple[float, ...] = ()
+    tied: bool = False
+    capped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -287,6 +293,8 @@ class ControlledFoulPlayGameResult:
             "seed": self.seed,
             "winner": self.winner,
             "pokezero_won": self.pokezero_won,
+            "tied": self.tied,
+            "capped": self.capped,
             "decision_rounds": self.decision_rounds,
             "pokezero_decisions": self.pokezero_decisions,
             "root_puct_searches": self.root_puct_searches,
@@ -354,6 +362,8 @@ class ControlledFoulPlayGameResult:
             )
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
+        if self.policy_elapsed_seconds:
+            payload["policy_elapsed_seconds"] = list(self.policy_elapsed_seconds)
         if self.root_puct_prior_action_change_details:
             payload["root_puct_prior_action_change_details"] = [
                 dict(detail)
@@ -406,6 +416,14 @@ class ControlledFoulPlayBenchmarkResult:
     @property
     def wins(self) -> int:
         return sum(1 for game in self.games if game.pokezero_won)
+
+    @property
+    def ties(self) -> int:
+        return sum(1 for game in self.games if game.tied)
+
+    @property
+    def capped_games(self) -> int:
+        return sum(1 for game in self.games if game.capped)
 
     @property
     def win_rate(self) -> float:
@@ -489,6 +507,11 @@ class ControlledFoulPlayBenchmarkResult:
             for game in self.games
             if game.root_puct_average_elapsed_seconds is not None
         ]
+        policy_elapsed_values = [
+            elapsed
+            for game in self.games
+            for elapsed in game.policy_elapsed_seconds
+        ]
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(self.config.checkpoint),
@@ -504,6 +527,8 @@ class ControlledFoulPlayBenchmarkResult:
             "status": "complete" if self.completed_games >= self.config.games else "partial",
             "wins": self.wins,
             "win_rate": self.win_rate,
+            "ties": self.ties,
+            "capped_games": self.capped_games,
             "seed_start": self.config.seed_start,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
@@ -550,6 +575,13 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if policy_elapsed_values:
+            payload["policy_timing"] = {
+                "decision_count": len(policy_elapsed_values),
+                "total_elapsed_seconds": sum(policy_elapsed_values),
+                "average_elapsed_seconds": sum(policy_elapsed_values) / len(policy_elapsed_values),
+                "p95_elapsed_seconds": _nearest_rank_percentile(policy_elapsed_values, percentile=0.95),
+            }
         if self.foulplay_random_seed_schedule is not None:
             payload["foulplay_random_seed_schedule"] = _foulplay_random_seed_schedule_payload(
                 self.foulplay_random_seed_schedule
@@ -888,6 +920,18 @@ def _rate_readout(wins: int, games: int) -> dict[str, Any]:
 
 def _rate(wins: int, games: int) -> float:
     return wins / games if games else 0.0
+
+
+def _nearest_rank_percentile(values: Sequence[float], *, percentile: float) -> float:
+    """Return a deterministic nearest-rank percentile for a non-empty timing sample."""
+
+    if not values:
+        raise ValueError("percentile requires at least one value.")
+    if not 0.0 < percentile <= 1.0:
+        raise ValueError("percentile must be in (0, 1].")
+    ordered = sorted(float(value) for value in values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return ordered[index]
 
 
 def _delta_rate(
@@ -1969,6 +2013,11 @@ async def _run_single_game(
         for decision in state.decisions
         if "root_puct_elapsed_seconds" in decision.metadata
     ]
+    policy_elapsed = tuple(
+        float(decision.metadata["policy_elapsed_seconds"])
+        for decision in state.decisions
+        if "policy_elapsed_seconds" in decision.metadata
+    )
     root_searches = sum(
         1
         for decision in state.decisions
@@ -2141,6 +2190,8 @@ async def _run_single_game(
         seed=seed,
         winner=winner_name,
         pokezero_won=winner_name == config.pokezero_username,
+        tied=terminal.winner is None and not terminal.capped,
+        capped=terminal.capped,
         decision_rounds=decision_round,
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
@@ -2184,6 +2235,7 @@ async def _run_single_game(
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_fallback_categories=root_fallback_categories,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
+        policy_elapsed_seconds=policy_elapsed,
     )
 
 
@@ -2483,12 +2535,20 @@ async def _handle_decision_boundary(
             ),
             requested_observations=dict(observations),
         )
-        decisions[pokezero_player] = await asyncio.to_thread(
+        policy_start = time.perf_counter()
+        policy_decision = await asyncio.to_thread(
             _select_policy_decision,
             policy,
             observations[pokezero_player],
             pokezero_context,
             seed=state.seed,
+        )
+        decisions[pokezero_player] = replace(
+            policy_decision,
+            metadata={
+                **dict(policy_decision.metadata),
+                "policy_elapsed_seconds": time.perf_counter() - policy_start,
+            },
         )
         choices[pokezero_player] = showdown_choice_for_action(
             player_states[pokezero_player],
