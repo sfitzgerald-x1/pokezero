@@ -5,6 +5,8 @@ import unittest
 from pokezero.capstone_analysis import (
     CapstoneArmEvidence,
     CapstoneGameOutcome,
+    CapstonePairedArmEvidence,
+    analyze_paired_capstone_arms,
     analyze_primary_capstone,
     paired_capstone_delta,
 )
@@ -218,6 +220,56 @@ class CapstoneAnalysisTest(unittest.TestCase):
                 outcomes=candidate_outcomes,
                 uses_value_leaves=True,
             )
+
+    def test_per_arm_raw_controls_keep_external_opponent_pairs_honest(self) -> None:
+        expected = (
+            outcome(band="a", seed=1, seat="p1", score=0.0),
+            outcome(band="a", seed=1, seat="p2", score=0.0),
+        )
+        pair = CapstonePairedArmEvidence(
+            arm_id="value-24",
+            baseline=CapstoneArmEvidence(arm_id="raw", outcomes=expected, uses_value_leaves=False),
+            candidate=CapstoneArmEvidence(
+                arm_id="value-24",
+                outcomes=tuple(
+                    outcome(band=item.band, seed=item.seed, seat=item.seat, score=1.0)
+                    for item in expected
+                ),
+                uses_value_leaves=True,
+                calibrated_value_copy="frozen-isotonic",
+            ),
+        )
+
+        report = analyze_paired_capstone_arms(
+            (pair,),
+            expected_keys=tuple(item.key for item in expected),
+            bootstrap_replicates=100,
+            bootstrap_seed=7,
+        )
+
+        self.assertEqual(report["analysis_method"], "primary_capstone_per_arm_raw_controls_paired_bootstrap")
+        self.assertEqual(report["primary_arms"][0]["arm_id"], "value-24")
+        self.assertEqual(
+            report["primary_arms"][0]["paired_delta_vs_baseline"]["overall"][
+                "candidate_minus_baseline_score_rate"
+            ],
+            1.0,
+        )
+
+    def test_per_arm_raw_control_rejects_mislabeled_or_partial_pairs(self) -> None:
+        baseline = CapstoneArmEvidence(
+            arm_id="not-raw",
+            outcomes=(outcome(band="a", seed=1, seat="p1", score=0.0),),
+            uses_value_leaves=False,
+        )
+        candidate = CapstoneArmEvidence(
+            arm_id="value-0",
+            outcomes=(outcome(band="a", seed=1, seat="p1", score=1.0),),
+            uses_value_leaves=True,
+            calibrated_value_copy="frozen-isotonic",
+        )
+        with self.assertRaisesRegex(ValueError, "baseline arm_id"):
+            CapstonePairedArmEvidence(arm_id="value-0", baseline=baseline, candidate=candidate)
 
 
 if __name__ == "__main__":

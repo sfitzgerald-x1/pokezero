@@ -606,6 +606,27 @@ class CollectionTest(unittest.TestCase):
             },
         )
 
+    def test_benchmark_rollouts_records_full_policy_dispatch_timing_only_when_requested(self) -> None:
+        report = benchmark_rollouts(
+            games=1,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5, record_policy_timing=True),
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct vs random",
+                    MetadataPolicy(policy_id="root-puct", root_total_visits=11),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        timing = report.to_dict()["matchups"][0]["game_results"][0]["policy_elapsed_seconds_by_player"]
+        self.assertEqual(set(timing), {"p1", "p2"})
+        self.assertEqual(len(timing["p1"]), 1)
+        self.assertEqual(len(timing["p2"]), 1)
+        self.assertGreaterEqual(timing["p1"][0], 0.0)
+        self.assertGreaterEqual(timing["p2"][0], 0.0)
+
     def test_per_seed_benchmark_search_diagnostics_sanitize_fallback_reasons(self) -> None:
         report = benchmark_rollouts(
             games=1,

@@ -18,6 +18,13 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 class RolloutConfig:
     max_decision_rounds: int = 250
     format_id: BattleFormat = "gen3randombattle"
+    # Benchmark-only provenance opt-in. Normal collection keeps trajectories
+    # deterministic and free of wall-clock values.
+    record_policy_timing: bool = False
+    # Search benchmark opt-in: the acting policy receives only its own
+    # request-local observation and legal mask, never simultaneous-opponent
+    # request state.
+    hide_opponent_legal_action_masks: bool = False
 
     def __post_init__(self) -> None:
         if self.max_decision_rounds <= 0:
@@ -160,6 +167,7 @@ def continue_rollout_from_current_state(
         metadata={
             "max_decision_rounds": config.max_decision_rounds,
             "starting_decision_round_index": starting_decision_round_index,
+            "opponent_legal_action_masks_hidden": config.hide_opponent_legal_action_masks,
         },
     )
     requested_players = env.requested_players()
@@ -216,8 +224,13 @@ def continue_rollout_from_current_state(
                 requested_legal_action_masks={
                     requested_player: tuple(requested_observation.legal_action_mask)
                     for requested_player, requested_observation in observations.items()
+                    if not config.hide_opponent_legal_action_masks or requested_player == player_id
                 },
-                requested_observations=dict(observations),
+                requested_observations={
+                    requested_player: requested_observation
+                    for requested_player, requested_observation in observations.items()
+                    if not config.hide_opponent_legal_action_masks or requested_player == player_id
+                },
             )
             policy_started = perf_counter()
             decision = _select_policy_decision(
@@ -226,7 +239,19 @@ def continue_rollout_from_current_state(
                 context=context,
                 rng=_rng_for_player(seed, player_id, player_rngs),
             )
-            timing.add_policy_select(perf_counter() - policy_started)
+            policy_elapsed_seconds = perf_counter() - policy_started
+            timing.add_policy_select(policy_elapsed_seconds)
+            if config.record_policy_timing:
+                decision = PolicyDecision(
+                    action_index=decision.action_index,
+                    policy_id=decision.policy_id,
+                    action_probability=decision.action_probability,
+                    value_estimate=decision.value_estimate,
+                    metadata={
+                        **dict(decision.metadata),
+                        "policy_elapsed_seconds": policy_elapsed_seconds,
+                    },
+                )
             decisions[player_id] = decision
 
         step_started = perf_counter()

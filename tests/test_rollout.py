@@ -210,6 +210,23 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(len(second.trajectory.steps), 1)
         self.assertEqual(result.trajectory.steps[0].metadata["policy_id"], "context-recorder")
 
+    def test_hidden_request_context_excludes_simultaneous_opponent_observation_and_mask(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
+        p1_policy = ContextRecordingPolicy(action_index=0)
+        p2_policy = ContextRecordingPolicy(action_index=0)
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": p1_policy, "p2": p2_policy},
+            config=RolloutConfig(max_decision_rounds=2, hide_opponent_legal_action_masks=True),
+        )
+
+        driver.run(seed=23)
+
+        self.assertEqual(set(p1_policy.contexts[0].requested_observations), {"p1"})
+        self.assertEqual(set(p1_policy.contexts[0].requested_legal_action_masks), {"p1"})
+        self.assertEqual(set(p2_policy.contexts[0].requested_observations), {"p2"})
+        self.assertEqual(set(p2_policy.contexts[0].requested_legal_action_masks), {"p2"})
+
     def test_rollout_rejects_missing_policy_for_requested_player(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
         driver = RolloutDriver(env=env, policies={"p1": RandomLegalPolicy()})
