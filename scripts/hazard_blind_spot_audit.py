@@ -44,6 +44,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="Step 2 pokezero.public-decision-corpus.v1 JSONL. When set, fixed-driver capture is skipped.",
     )
+    parser.add_argument(
+        "--max-public-decisions",
+        type=int,
+        default=None,
+        help="Optional deterministic prefix cap when reading --public-corpus.",
+    )
     parser.add_argument("--games", type=int, default=60, help="fixed-driver games used to build the corpus")
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--max-states", type=int, default=800)
@@ -70,12 +76,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         env_config_kwargs["feature_masks"] = feature_masks
     env_config = LocalShowdownConfig(**env_config_kwargs)
     if args.public_corpus is not None:
-        public_corpus = load_public_decision_corpus(args.public_corpus)
+        public_corpus = load_public_decision_corpus(
+            args.public_corpus,
+            max_decisions=args.max_public_decisions,
+        )
         corpus = hazard_audit_decisions_from_public_corpus(public_corpus)
         corpus_config = {
             "source": "pokezero.public-decision-corpus.v1",
             "path": str(args.public_corpus),
-            "sha256": sha256_file(args.public_corpus),
+            "source_file_sha256": public_corpus.source_file_sha256,
+            "selected_content_sha256": public_corpus.selected_content_sha256,
+            "selection": {
+                "max_decisions": args.max_public_decisions,
+                "selected_decision_count": len(public_corpus.decisions),
+            },
             "schema_version": public_corpus.manifest.get("schema_version"),
         }
     else:

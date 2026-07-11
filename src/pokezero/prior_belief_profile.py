@@ -397,7 +397,9 @@ def profile_public_decisions(
         "profile_config": profile_config,
         "profile_config_sha256": canonical_json_sha256(profile_config),
         "checkpoint_sha256": provenance_payload.get("checkpoint_sha256"),
-        "corpus_sha256": provenance_payload.get("corpus_sha256"),
+        "corpus_sha256": provenance_payload.get("corpus_source_sha256"),
+        "selected_content_sha256": provenance_payload.get("selected_content_sha256"),
+        "corpus_selection": provenance_payload.get("corpus_selection"),
         "public_corpus_schema_sha256": PUBLIC_DECISION_CORPUS_SCHEMA_SHA256,
         "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
         "opponent_legal_mask_mode": "hidden",
@@ -447,7 +449,12 @@ def profile_public_corpus(
         belief_set_source=belief_set_source,
         provenance={
             **dict(provenance or {}),
-            "corpus_sha256": corpus.corpus_sha256,
+            "corpus_source_sha256": corpus.source_file_sha256,
+            "selected_content_sha256": corpus.selected_content_sha256,
+            "corpus_selection": {
+                "max_decisions": corpus.selected_decision_limit,
+                "selected_decision_count": len(corpus.decisions),
+            },
             "corpus_manifest": dict(corpus.manifest),
         },
     )
