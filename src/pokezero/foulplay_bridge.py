@@ -47,6 +47,7 @@ from .neural_policy import (
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     observation_spec_from_model_config,
+    require_compatible_transformer_value_checkpoint,
 )
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -65,6 +66,8 @@ from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .rollout import RolloutConfig
 from .search_policy import (
+    EntropyMarginVisitBudgetSelector,
+    FixedExtraVisitBudgetSelector,
     RootPUCTSearchPolicy,
     greedy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
@@ -98,6 +101,7 @@ _COMPARISON_MODES = {"per-seed", "per-arm"}
 class ControlledFoulPlayConfig:
     checkpoint: Path
     showdown_root: Path
+    value_checkpoint: Path | None = None
     foulplay_root: Path = DEFAULT_FOULPLAY_ROOT
     foulplay_python: Path | None = None
     games: int = 1
@@ -116,6 +120,11 @@ class ControlledFoulPlayConfig:
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
     root_visit_budget: int | None = 16
+    root_extra_visits: int | None = None
+    adaptive_root_contested_extra_visits: int | None = None
+    adaptive_root_uncontested_extra_visits: int = 0
+    adaptive_root_policy_entropy_threshold: float | None = None
+    adaptive_root_value_margin_threshold: float | None = None
     root_time_budget_ms: int | None = None
     root_opponent_action_scenarios: int = 1
     root_opponent_action_candidate_scenarios: int = ACTION_COUNT
@@ -171,8 +180,39 @@ class ControlledFoulPlayConfig:
             raise ValueError("minimum_score_improvement must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
+        if self.root_extra_visits is not None and self.root_extra_visits < 0:
+            raise ValueError("root_extra_visits must be non-negative when set.")
+        adaptive_configured = self.adaptive_root_contested_extra_visits is not None
+        adaptive_threshold_configured = (
+            self.adaptive_root_policy_entropy_threshold is not None
+            or self.adaptive_root_value_margin_threshold is not None
+        )
+        if self.root_extra_visits is not None and (
+            adaptive_configured
+            or adaptive_threshold_configured
+            or self.adaptive_root_uncontested_extra_visits != 0
+        ):
+            raise ValueError("root_extra_visits cannot be combined with adaptive root budgeting.")
+        if not adaptive_configured and (
+            adaptive_threshold_configured or self.adaptive_root_uncontested_extra_visits != 0
+        ):
+            raise ValueError(
+                "adaptive root thresholds and uncontested extra visits require "
+                "adaptive_root_contested_extra_visits."
+            )
+        if adaptive_configured:
+            EntropyMarginVisitBudgetSelector(
+                contested_extra_visits=self.adaptive_root_contested_extra_visits,
+                uncontested_extra_visits=self.adaptive_root_uncontested_extra_visits,
+                minimum_policy_entropy=self.adaptive_root_policy_entropy_threshold,
+                maximum_value_margin=self.adaptive_root_value_margin_threshold,
+            )
         if self.root_time_budget_ms is not None and self.root_time_budget_ms <= 0:
             raise ValueError("root_time_budget_ms must be positive when set.")
+        if self.root_time_budget_ms is not None and (self.root_extra_visits is not None or adaptive_configured):
+            raise ValueError(
+                "root_time_budget_ms cannot be combined with fixed or adaptive post-sweep visit budgets."
+            )
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.root_opponent_action_candidate_scenarios <= 0:
@@ -225,6 +265,20 @@ class ControlledFoulPlayConfig:
         if self.root_prior_temperature is not None:
             return self.root_prior_temperature
         return self.temperature
+
+    def root_visit_budget_selector(
+        self,
+    ) -> FixedExtraVisitBudgetSelector | EntropyMarginVisitBudgetSelector | None:
+        if self.root_extra_visits is not None:
+            return FixedExtraVisitBudgetSelector(extra_visits=self.root_extra_visits)
+        if self.adaptive_root_contested_extra_visits is None:
+            return None
+        return EntropyMarginVisitBudgetSelector(
+            contested_extra_visits=self.adaptive_root_contested_extra_visits,
+            uncontested_extra_visits=self.adaptive_root_uncontested_extra_visits,
+            minimum_policy_entropy=self.adaptive_root_policy_entropy_threshold,
+            maximum_value_margin=self.adaptive_root_value_margin_threshold,
+        )
 
     @property
     def foulplay_player(self) -> PlayerId:
@@ -425,6 +479,7 @@ class ControlledFoulPlayBenchmarkResult:
     policy_id: str
     games: tuple[ControlledFoulPlayGameResult, ...]
     foulplay_random_seed_schedule: tuple[int, ...] | None = None
+    value_leaf_provenance: Mapping[str, object] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -569,6 +624,11 @@ class ControlledFoulPlayBenchmarkResult:
                 "minimum_override_prior_ratio": self.config.minimum_override_prior_ratio,
                 "minimum_score_improvement": self.config.minimum_score_improvement,
                 "root_visit_budget": self.config.root_visit_budget,
+                "root_extra_visits": self.config.root_extra_visits,
+                "adaptive_root_contested_extra_visits": self.config.adaptive_root_contested_extra_visits,
+                "adaptive_root_uncontested_extra_visits": self.config.adaptive_root_uncontested_extra_visits,
+                "adaptive_root_policy_entropy_threshold": self.config.adaptive_root_policy_entropy_threshold,
+                "adaptive_root_value_margin_threshold": self.config.adaptive_root_value_margin_threshold,
                 "root_time_budget_ms": self.config.root_time_budget_ms,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "root_opponent_action_candidate_scenarios": self.config.root_opponent_action_candidate_scenarios,
@@ -603,6 +663,8 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if self.value_leaf_provenance is not None:
+            payload["value_leaf"] = dict(self.value_leaf_provenance)
         if policy_elapsed_values:
             payload["policy_timing"] = {
                 "decision_count": len(policy_elapsed_values),
@@ -1300,6 +1362,19 @@ async def run_controlled_foulplay_benchmark(
 
     _validate_external_paths(config)
     model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
+    value_model, value_result = model, result
+    value_leaf_provenance: Mapping[str, object] | None = None
+    if config.value_checkpoint is not None:
+        value_model, value_result = load_transformer_checkpoint(
+            config.value_checkpoint,
+            map_location=config.device,
+        )
+        value_leaf_provenance = require_compatible_transformer_value_checkpoint(
+            policy_checkpoint=config.checkpoint,
+            policy_result=result,
+            value_checkpoint=config.value_checkpoint,
+            value_result=value_result,
+        )
     _warn_on_belief_provenance_mismatch(config, result)
     policy_id = str(result.model_config.policy_id)
     # Schema + widths from the checkpoint's stamped provenance (dual-schema resolution): a v2
@@ -1333,6 +1408,8 @@ async def run_controlled_foulplay_benchmark(
         config=config,
         model=model,
         result=result,
+        value_model=value_model,
+        value_result=value_result,
         env_config=env_config,
         rollout_config=rollout_config,
         policy_id=policy_id,
@@ -1383,6 +1460,7 @@ async def run_controlled_foulplay_benchmark(
                         config=config,
                         policy_id=benchmark_policy_id,
                         games=tuple(game_results),
+                        value_leaf_provenance=value_leaf_provenance,
                     )
                 )
     finally:
@@ -1402,6 +1480,7 @@ async def run_controlled_foulplay_benchmark(
         config=config,
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
+        value_leaf_provenance=value_leaf_provenance,
     )
 
 
@@ -1664,6 +1743,8 @@ async def _run_controlled_foulplay_comparison_per_seed(
     root_puct_offsets: list[int] = []
     raw_policy_id: str | None = None
     root_puct_policy_id: str | None = None
+    raw_value_leaf_provenance: Mapping[str, object] | None = None
+    root_puct_value_leaf_provenance: Mapping[str, object] | None = None
     opponent_crashes: list[ControlledFoulPlayOpponentCrash] = []
 
     def raw_result() -> ControlledFoulPlayBenchmarkResult | None:
@@ -1677,6 +1758,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
                 config,
                 offsets=raw_offsets,
             ),
+            value_leaf_provenance=raw_value_leaf_provenance,
         )
 
     def root_puct_result() -> ControlledFoulPlayBenchmarkResult | None:
@@ -1690,6 +1772,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
                 config,
                 offsets=root_puct_offsets,
             ),
+            value_leaf_provenance=root_puct_value_leaf_provenance,
         )
 
     def emit_progress() -> None:
@@ -1719,6 +1802,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             continue
         assert raw_single is not None
         raw_policy_id = raw_single.policy_id
+        raw_value_leaf_provenance = raw_single.value_leaf_provenance
         raw_games.extend(raw_single.games)
         raw_offsets.extend([offset] * len(raw_single.games))
         emit_progress()
@@ -1738,6 +1822,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             continue
         assert root_puct_single is not None
         root_puct_policy_id = root_puct_single.policy_id
+        root_puct_value_leaf_provenance = root_puct_single.value_leaf_provenance
         root_puct_games.extend(root_puct_single.games)
         root_puct_offsets.extend([offset] * len(root_puct_single.games))
         emit_progress()
@@ -1794,6 +1879,8 @@ def _single_seed_comparison_config(
 def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
     if not config.checkpoint.exists():
         raise FileNotFoundError(f"checkpoint not found: {config.checkpoint}")
+    if config.value_checkpoint is not None and not config.value_checkpoint.exists():
+        raise FileNotFoundError(f"value checkpoint not found: {config.value_checkpoint}")
     if not (config.showdown_root / "dist" / "sim" / "index.js").exists():
         raise FileNotFoundError(
             f"built Pokemon Showdown simulator not found under {config.showdown_root}; "
@@ -1824,6 +1911,8 @@ def _build_policy(
     config: ControlledFoulPlayConfig,
     model: Any,
     result: Any,
+    value_model: Any,
+    value_result: Any,
     env_config: LocalShowdownConfig,
     rollout_config: RolloutConfig,
     policy_id: str,
@@ -1849,8 +1938,8 @@ def _build_policy(
 
     def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
         return evaluate_transformer_observation_value(
-            model=model,
-            result=result,
+            model=value_model,
+            result=value_result,
             observations=history,
             device=config.device,
         )
@@ -1892,6 +1981,7 @@ def _build_policy(
         set_source = load_gen3_randbat_source_cached(config.showdown_root)
         start_override_planner = gen3_randbat_belief_start_override_planner(set_source)
 
+    root_visit_budget_selector = config.root_visit_budget_selector()
     return RootPUCTSearchPolicy(
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=rollout_config,
@@ -1909,6 +1999,7 @@ def _build_policy(
         minimum_override_prior_ratio=config.minimum_override_prior_ratio,
         minimum_score_improvement=config.minimum_score_improvement,
         root_visit_budget=config.root_visit_budget,
+        root_visit_budget_selector=root_visit_budget_selector,
         root_time_budget_seconds=(
             None if config.root_time_budget_ms is None else config.root_time_budget_ms / 1000.0
         ),
@@ -2948,6 +3039,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--checkpoint", type=Path, required=True, help="Transformer checkpoint path.")
     parser.add_argument(
+        "--value-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional compatible checkpoint used only for root-PUCT leaf values. "
+            "Use a frozen calibrated copy while --checkpoint supplies raw policy priors."
+        ),
+    )
+    parser.add_argument(
         "--showdown-root",
         type=Path,
         default=Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT", "")) if os.environ.get("POKEZERO_SHOWDOWN_ROOT") else None,
@@ -3029,6 +3129,39 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Root visits per opponent-action scenario; defaults to 16. "
             "With multiple scenarios, total decision visits scale by the searched scenario count."
         ),
+    )
+    parser.add_argument(
+        "--root-extra-visits",
+        type=int,
+        default=None,
+        help=(
+            "Fixed visits added after the mandatory legal-action sweep. Mutually exclusive "
+            "with adaptive root budgeting; use 0 for the sweep-only arm."
+        ),
+    )
+    parser.add_argument(
+        "--adaptive-root-contested-extra-visits",
+        type=int,
+        default=None,
+        help="Extra post-sweep visits for contested decisions; enables adaptive root budgeting.",
+    )
+    parser.add_argument(
+        "--adaptive-root-uncontested-extra-visits",
+        type=int,
+        default=0,
+        help="Extra post-sweep visits for uncontested decisions when adaptive budgeting is enabled.",
+    )
+    parser.add_argument(
+        "--adaptive-root-policy-entropy-threshold",
+        type=float,
+        default=None,
+        help="Mark a decision contested when normalized legal-action policy entropy reaches this value.",
+    )
+    parser.add_argument(
+        "--adaptive-root-value-margin-threshold",
+        type=float,
+        default=None,
+        help="Mark a decision contested when the initial top-two leaf-value margin is at most this value.",
     )
     parser.add_argument(
         "--root-time-budget-ms",
@@ -3204,6 +3337,7 @@ def _config_from_args(
     return ControlledFoulPlayConfig(
         checkpoint=args.checkpoint,
         showdown_root=args.showdown_root,
+        value_checkpoint=args.value_checkpoint,
         foulplay_root=args.foulplay_root,
         foulplay_python=args.foulplay_python,
         games=args.games,
@@ -3222,6 +3356,11 @@ def _config_from_args(
         minimum_override_prior_ratio=args.minimum_override_prior_ratio,
         minimum_score_improvement=args.minimum_score_improvement,
         root_visit_budget=args.root_visit_budget,
+        root_extra_visits=args.root_extra_visits,
+        adaptive_root_contested_extra_visits=args.adaptive_root_contested_extra_visits,
+        adaptive_root_uncontested_extra_visits=args.adaptive_root_uncontested_extra_visits,
+        adaptive_root_policy_entropy_threshold=args.adaptive_root_policy_entropy_threshold,
+        adaptive_root_value_margin_threshold=args.adaptive_root_value_margin_threshold,
         root_time_budget_ms=args.root_time_budget_ms,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         root_opponent_action_candidate_scenarios=args.root_opponent_action_candidate_scenarios,

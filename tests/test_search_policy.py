@@ -10,6 +10,7 @@ from pokezero.rollout import RolloutConfig, RolloutDriver
 from pokezero.search import puct_branch_search
 from pokezero.search_policy import (
     EntropyMarginVisitBudgetSelector,
+    FixedExtraVisitBudgetSelector,
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
@@ -2257,6 +2258,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
         self.assertEqual(entropy_selector(selector_context, budget_context), 5)
         self.assertEqual(margin_selector(selector_context, budget_context), 5)
+
+        fixed_selector = FixedExtraVisitBudgetSelector(extra_visits=3)
+        self.assertEqual(fixed_selector(selector_context, budget_context), 5)
+        self.assertEqual(
+            fixed_selector.to_dict(),
+            {"selector_id": "fixed-extra-visits", "extra_visits": 3},
+        )
 
     def test_puct_visit_budget_resolver_rejects_budgets_below_mandatory_sweep(self) -> None:
         with self.assertRaisesRegex(ValueError, "root_visit_budget_resolver.*legal root actions"):
