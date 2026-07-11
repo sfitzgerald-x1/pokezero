@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass
 import math
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .determinization import BeliefWorldSamplingProfile, belief_world_sampling_profile
@@ -19,6 +19,7 @@ from .policy import PolicyContext
 from .public_decision_corpus import (
     PUBLIC_DECISION_CORPUS_SCHEMA_SHA256,
     PublicDecisionCorpus,
+    PublicDecisionCorpusStream,
     PublicDecisionRecord,
     canonical_json_sha256,
 )
@@ -219,13 +220,14 @@ def public_belief_sampling_profile(
 
 
 def profile_public_decisions(
-    records: Sequence[PublicDecisionRecord],
+    records: Iterable[PublicDecisionRecord],
     *,
     prior_evaluator: PriorEvaluator,
     candidate_value_evaluator: CandidateValueEvaluator,
     config: PriorBeliefProfileConfig = PriorBeliefProfileConfig(),
     belief_set_source: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
+    provenance_factory: Callable[[], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Profile public decisions with raw priors and initial candidate values.
 
@@ -234,11 +236,17 @@ def profile_public_decisions(
     values are likewise injected from a public-prefix hidden-mode evaluator.
     """
 
-    if not records:
-        raise ValueError("prior/belief profile requires at least one public decision.")
+    if provenance is not None and provenance_factory is not None:
+        raise ValueError("provide either provenance or provenance_factory, not both.")
     decision_rows: list[dict[str, Any]] = []
     selection_context_rows: list[dict[str, Any]] = []
     skipped_decision_rows: list[dict[str, Any]] = []
+    corpus_decision_count = 0
+    corpus_by_phase: Counter[str] = Counter()
+    event_bearing_by_phase: Counter[str] = Counter()
+    public_events_by_phase: Counter[str] = Counter()
+    unsupported_prefixes_by_phase: Counter[str] = Counter()
+    unsupported_events_by_phase: Counter[str] = Counter()
     for record in records:
         phase = phase_for_turn(
             record.turn_index,
@@ -246,6 +254,12 @@ def profile_public_decisions(
             mid_phase_max_turn=config.mid_phase_max_turn,
         )
         event_summary = public_event_prefix_summary(record.public_resolved_action_rounds)
+        corpus_decision_count += 1
+        corpus_by_phase[phase] += 1
+        event_bearing_by_phase[phase] += int(event_summary["public_event_count"] > 0)
+        public_events_by_phase[phase] += int(event_summary["public_event_count"])
+        unsupported_prefixes_by_phase[phase] += int(event_summary["unsupported_public_event_count"] > 0)
+        unsupported_events_by_phase[phase] += int(event_summary["unsupported_public_event_count"])
         legal_actions = tuple(index for index, legal in enumerate(record.current_legal_action_mask) if legal)
         if not legal_actions:
             skipped_decision_rows.append(
@@ -390,8 +404,10 @@ def profile_public_decisions(
                 **event_summary,
             }
         )
+    if corpus_decision_count == 0:
+        raise ValueError("prior/belief profile requires at least one public decision.")
     profile_config = config.to_dict()
-    provenance_payload = dict(provenance or {})
+    provenance_payload = dict(provenance_factory() if provenance_factory is not None else provenance or {})
     report_core = {
         "schema_version": PRIOR_BELIEF_PROFILE_SCHEMA_VERSION,
         "profile_config": profile_config,
@@ -403,7 +419,7 @@ def profile_public_decisions(
         "public_corpus_schema_sha256": PUBLIC_DECISION_CORPUS_SCHEMA_SHA256,
         "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
         "opponent_legal_mask_mode": "hidden",
-        "corpus_decision_count": len(records),
+        "corpus_decision_count": corpus_decision_count,
         "decision_count": len(decision_rows),
         "skipped_decision_count": len(skipped_decision_rows),
         "skipped_decision_rows": skipped_decision_rows,
@@ -416,14 +432,22 @@ def profile_public_decisions(
             config=config,
             unit="decision",
         ),
-        "representativeness": _representativeness_summary(records, decision_rows, skipped_decision_rows, config=config),
+        "representativeness": _representativeness_summary(
+            corpus_by_phase=corpus_by_phase,
+            event_bearing_by_phase=event_bearing_by_phase,
+            public_events_by_phase=public_events_by_phase,
+            unsupported_prefixes_by_phase=unsupported_prefixes_by_phase,
+            unsupported_events_by_phase=unsupported_events_by_phase,
+            decision_rows=decision_rows,
+            skipped_decision_rows=skipped_decision_rows,
+        ),
         "provenance": provenance_payload,
     }
     return {**report_core, "profile_sha256": canonical_json_sha256(report_core)}
 
 
 def profile_public_corpus(
-    corpus: PublicDecisionCorpus,
+    corpus: PublicDecisionCorpus | PublicDecisionCorpusStream,
     *,
     prior_evaluator: PriorEvaluator,
     candidate_value_evaluator: CandidateValueEvaluator,
@@ -436,19 +460,39 @@ def profile_public_corpus(
 
     if minimum_decisions < MINIMUM_PROFILE_DECISIONS:
         raise ValueError(f"minimum_decisions may not be lower than {MINIMUM_PROFILE_DECISIONS}.")
-    if len(corpus.decisions) < minimum_decisions:
-        raise ValueError(
-            f"prior/belief profiling requires at least {minimum_decisions} valid p1 decisions; "
-            f"corpus contains {len(corpus.decisions)}."
-        )
-    report = profile_public_decisions(
-        corpus.decisions,
-        prior_evaluator=prior_evaluator,
-        candidate_value_evaluator=candidate_value_evaluator,
-        config=config,
-        belief_set_source=belief_set_source,
-        provenance={
-            **dict(provenance or {}),
+    base_provenance = dict(provenance or {})
+    if isinstance(corpus, PublicDecisionCorpusStream):
+        records = corpus.iter_decisions()
+
+        def streaming_provenance() -> Mapping[str, Any]:
+            selected_count = corpus.selected_decision_count
+            if selected_count < minimum_decisions:
+                raise ValueError(
+                    f"prior/belief profiling requires at least {minimum_decisions} valid p1 decisions; "
+                    f"corpus contains {selected_count}."
+                )
+            return {
+                **base_provenance,
+                "corpus_source_sha256": corpus.source_file_sha256,
+                "selected_content_sha256": corpus.selected_content_sha256,
+                "corpus_selection": {
+                    "max_decisions": corpus.selected_decision_limit,
+                    "selected_decision_count": selected_count,
+                },
+                "corpus_manifest": dict(corpus.manifest),
+            }
+
+        provenance_factory = streaming_provenance
+        corpus_count = lambda: corpus.selected_decision_count
+    else:
+        if len(corpus.decisions) < minimum_decisions:
+            raise ValueError(
+                f"prior/belief profiling requires at least {minimum_decisions} valid p1 decisions; "
+                f"corpus contains {len(corpus.decisions)}."
+            )
+        records = corpus.decisions
+        provenance_factory = lambda: {
+            **base_provenance,
             "corpus_source_sha256": corpus.source_file_sha256,
             "selected_content_sha256": corpus.selected_content_sha256,
             "corpus_selection": {
@@ -456,12 +500,20 @@ def profile_public_corpus(
                 "selected_decision_count": len(corpus.decisions),
             },
             "corpus_manifest": dict(corpus.manifest),
-        },
+        }
+        corpus_count = lambda: len(corpus.decisions)
+    report = profile_public_decisions(
+        records,
+        prior_evaluator=prior_evaluator,
+        candidate_value_evaluator=candidate_value_evaluator,
+        config=config,
+        belief_set_source=belief_set_source,
+        provenance_factory=provenance_factory,
     )
     if report["decision_count"] < minimum_decisions:
         raise ValueError(
             f"prior/belief profiling requires at least {minimum_decisions} successfully profiled p1 decisions; "
-            f"corpus contains {len(corpus.decisions)} rows but only {report['decision_count']} produced public replay contexts."
+            f"corpus contains {corpus_count()} rows but only {report['decision_count']} produced public replay contexts."
         )
     return report
 
@@ -638,13 +690,20 @@ def _sweep_row(
 
 
 def _representativeness_summary(
-    records: Sequence[PublicDecisionRecord],
+    *,
+    corpus_by_phase: Mapping[str, int],
+    event_bearing_by_phase: Mapping[str, int],
+    public_events_by_phase: Mapping[str, int],
+    unsupported_prefixes_by_phase: Mapping[str, int],
+    unsupported_events_by_phase: Mapping[str, int],
     decision_rows: Sequence[Mapping[str, Any]],
     skipped_decision_rows: Sequence[Mapping[str, Any]],
-    *,
-    config: PriorBeliefProfileConfig,
 ) -> dict[str, Any]:
-    """Report which public prefix classes survived evaluation in each phase."""
+    """Report which public prefix classes survived evaluation in each phase.
+
+    The counters are accumulated while records are streamed so profiling does not
+    retain the full history-heavy corpus just to build this summary.
+    """
 
     profiled_by_phase = Counter(str(row["phase"]) for row in decision_rows)
     skipped_by_phase: dict[str, list[Mapping[str, Any]]] = {phase: [] for phase in ("early", "mid", "late")}
@@ -652,32 +711,17 @@ def _representativeness_summary(
         skipped_by_phase[str(row["phase"])].append(row)
     rows: list[dict[str, Any]] = []
     for phase in ("early", "mid", "late"):
-        phase_records = [
-            record
-            for record in records
-            if phase_for_turn(
-                record.turn_index,
-                early_phase_max_turn=config.early_phase_max_turn,
-                mid_phase_max_turn=config.mid_phase_max_turn,
-            )
-            == phase
-        ]
-        summaries = [public_event_prefix_summary(record.public_resolved_action_rounds) for record in phase_records]
         skipped = skipped_by_phase[phase]
         rows.append(
             {
                 "phase": phase,
-                "corpus_decision_count": len(phase_records),
+                "corpus_decision_count": int(corpus_by_phase.get(phase, 0)),
                 "profiled_decision_count": profiled_by_phase[phase],
                 "skipped_decision_count": len(skipped),
-                "event_bearing_prefix_count": sum(summary["public_event_count"] > 0 for summary in summaries),
-                "public_event_count": sum(int(summary["public_event_count"]) for summary in summaries),
-                "unsupported_event_prefix_count": sum(
-                    summary["unsupported_public_event_count"] > 0 for summary in summaries
-                ),
-                "unsupported_public_event_count": sum(
-                    int(summary["unsupported_public_event_count"]) for summary in summaries
-                ),
+                "event_bearing_prefix_count": int(event_bearing_by_phase.get(phase, 0)),
+                "public_event_count": int(public_events_by_phase.get(phase, 0)),
+                "unsupported_event_prefix_count": int(unsupported_prefixes_by_phase.get(phase, 0)),
+                "unsupported_public_event_count": int(unsupported_events_by_phase.get(phase, 0)),
                 "skip_reason_counts": dict(sorted(Counter(str(row["reason"]) for row in skipped).items())),
             }
         )

@@ -52,7 +52,7 @@ from .prior_belief_profile import (
     PriorBeliefProfileConfig,
     profile_public_corpus,
 )
-from .public_decision_corpus import load_public_decision_corpus, sha256_file
+from .public_decision_corpus import open_public_decision_corpus, sha256_file
 from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from .observation import (
@@ -2164,12 +2164,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
 
     if args.opponent_legal_mask_mode != "hidden":
         raise ValueError("prior-belief-profile refuses privileged opponent legal-mask mode.")
-    corpus = load_public_decision_corpus(args.corpus, max_decisions=args.max_decisions)
-    if len(corpus.decisions) < MINIMUM_PROFILE_DECISIONS:
-        raise ValueError(
-            f"prior/belief profiling requires at least {MINIMUM_PROFILE_DECISIONS} valid p1 decisions; "
-            f"corpus contains {len(corpus.decisions)}."
-        )
+    corpus = open_public_decision_corpus(args.corpus, max_decisions=args.max_decisions)
     checkpoint_sha256 = sha256_file(args.checkpoint)
     captured_checkpoint_sha256 = corpus.manifest.get("checkpoint_sha256")
     if captured_checkpoint_sha256 != checkpoint_sha256:

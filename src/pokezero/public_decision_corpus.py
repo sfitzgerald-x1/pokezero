@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .observation import PokeZeroObservationV0
@@ -440,6 +440,132 @@ class PublicDecisionCorpus:
         """Compatibility alias for the complete source-file digest, never a capped selection hash."""
 
         return self.source_file_sha256
+
+
+@dataclass
+class PublicDecisionCorpusStream:
+    """One-pass, validated reader for a bounded public-corpus prefix.
+
+    Public decisions retain complete actor histories, so eagerly decoding a large
+    audit prefix can require far more memory than profiling needs. This reader
+    keeps the corpus contract intact while making selection provenance available
+    after a single deterministic pass.
+    """
+
+    path: Path
+    manifest: Mapping[str, Any]
+    selected_decision_limit: int | None
+    _iterated: bool = False
+    _selected_decision_count: int | None = None
+    _selected_content_sha256: str | None = None
+
+    @property
+    def source_file_sha256(self) -> str | None:
+        """Match eager-corpus semantics: capped selections expose only their selected digest."""
+
+        if self.selected_decision_limit is not None:
+            return None
+        return sha256_file(self.path)
+
+    @property
+    def selected_decision_count(self) -> int:
+        if self._selected_decision_count is None:
+            raise RuntimeError("public corpus stream has not completed its selection pass.")
+        return self._selected_decision_count
+
+    @property
+    def selected_content_sha256(self) -> str | None:
+        if self._selected_decision_count is None:
+            raise RuntimeError("public corpus stream has not completed its selection pass.")
+        return self._selected_content_sha256
+
+    def iter_decisions(self) -> Iterator[PublicDecisionRecord]:
+        """Yield each selected record once and commit its selection metadata last."""
+
+        if self._iterated:
+            raise RuntimeError("public corpus stream may be consumed only once.")
+        self._iterated = True
+        manifest: Mapping[str, Any] | None = None
+        seen_ids: set[str] = set()
+        selected_digest = hashlib.sha256() if self.selected_decision_limit is not None else None
+        selected_count = 0
+        completed = False
+        try:
+            with self.path.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        payload = json.loads(text)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(f"invalid public corpus JSON at line {line_number}: {exc}") from exc
+                    if not isinstance(payload, Mapping):
+                        raise ValueError(f"public corpus line {line_number} must be a JSON object.")
+                    if payload.get("record_type") == "manifest":
+                        if manifest is not None or selected_count:
+                            raise ValueError("public corpus manifest must be the first non-empty record.")
+                        manifest = _validated_manifest(payload)
+                        if manifest != self.manifest:
+                            raise ValueError("public corpus manifest changed between stream reads.")
+                        if selected_digest is not None:
+                            selected_digest.update(_canonical_json_line(manifest))
+                        continue
+                    if manifest is None:
+                        raise ValueError("public corpus is missing its manifest.")
+                    record = PublicDecisionRecord.from_dict(payload)
+                    if record.decision_id in seen_ids:
+                        raise ValueError(f"public corpus contains duplicate decision_id {record.decision_id!r}.")
+                    seen_ids.add(record.decision_id)
+                    selected_count += 1
+                    if selected_digest is not None:
+                        selected_digest.update(_canonical_json_line(record.to_dict()))
+                    yield record
+                    if self.selected_decision_limit is not None and selected_count >= self.selected_decision_limit:
+                        completed = True
+                        break
+                else:
+                    completed = True
+            if manifest is None:
+                raise ValueError("public corpus is empty or missing its manifest.")
+        finally:
+            if completed:
+                self._selected_decision_count = selected_count
+                self._selected_content_sha256 = selected_digest.hexdigest() if selected_digest is not None else None
+
+
+def open_public_decision_corpus(
+    path: Path,
+    *,
+    max_decisions: int | None = None,
+) -> PublicDecisionCorpusStream:
+    """Open a validated public corpus for one bounded, streaming selection pass."""
+
+    if max_decisions is not None and max_decisions <= 0:
+        raise ValueError("max_decisions must be positive when provided.")
+    manifest: Mapping[str, Any] | None = None
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid public corpus JSON at line {line_number}: {exc}") from exc
+            if not isinstance(payload, Mapping):
+                raise ValueError(f"public corpus line {line_number} must be a JSON object.")
+            if payload.get("record_type") != "manifest":
+                raise ValueError("public corpus manifest must be the first non-empty record.")
+            manifest = _validated_manifest(payload)
+            break
+    if manifest is None:
+        raise ValueError("public corpus is empty or missing its manifest.")
+    return PublicDecisionCorpusStream(
+        path=path,
+        manifest=manifest,
+        selected_decision_limit=max_decisions,
+    )
 
 
 def public_decision_id(record: PublicDecisionRecord) -> str:
