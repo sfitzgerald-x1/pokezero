@@ -26,6 +26,8 @@ from pokezero.foulplay_bridge import (
     _build_policy,
     _foulplay_command,
     _foulplay_env,
+    _handle_decision_boundary,
+    _handle_stream_event,
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
     _observation_with_search_metadata,
@@ -66,6 +68,159 @@ class FoulPlayBridgeTest(unittest.TestCase):
             parser.parse_args(
                 ["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl", "--policy-mode", "root-puct"]
             )
+
+    def test_config_exposes_the_opposing_foulplay_seat(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            pokezero_player="p2",
+        )
+
+        self.assertEqual(config.foulplay_player, "p1")
+
+    def test_stream_forwards_requests_for_the_configured_foulplay_seat(self) -> None:
+        class Server:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, list[str]]] = []
+
+            async def send_room_lines(self, battle_id: str, lines: list[str]) -> None:
+                self.messages.append((battle_id, lines))
+
+        state = _ControlledBattleState(battle_id="controlled-7", seed=7, format_id="gen3randombattle")
+        server = Server()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            pokezero_player="p2",
+        )
+
+        asyncio.run(
+            _handle_stream_event(
+                state,
+                server,  # type: ignore[arg-type]
+                {"stream": "p1", "lines": ['|request|{"side":{"id":"p1"}}']},
+                config=config,
+            )
+        )
+
+        self.assertIn("p1", state.request_lines)
+        self.assertEqual(server.messages[0][0], "controlled-7")
+        self.assertIn('"rqid":1', server.messages[0][1][0])
+
+    def test_stream_never_forwards_the_configured_pokezero_seat(self) -> None:
+        class Server:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, list[str]]] = []
+
+            async def send_room_lines(self, battle_id: str, lines: list[str]) -> None:
+                self.messages.append((battle_id, lines))
+
+        state = _ControlledBattleState(battle_id="controlled-7", seed=7, format_id="gen3randombattle")
+        server = Server()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            pokezero_player="p2",
+        )
+
+        asyncio.run(
+            _handle_stream_event(
+                state,
+                server,  # type: ignore[arg-type]
+                {"stream": "p2", "lines": ['|request|{"side":{"id":"p2"}}']},
+                config=config,
+            )
+        )
+
+        self.assertIn("p2", state.request_lines)
+        self.assertEqual(server.messages, [])
+
+    def test_decision_boundary_selects_and_records_the_configured_pokezero_seat(self) -> None:
+        class PlayerState:
+            def __init__(self, slot: str) -> None:
+                self.slot = slot
+
+        class Bridge:
+            def __init__(self) -> None:
+                self.messages: list[dict] = []
+
+            async def send(self, payload: dict) -> None:
+                self.messages.append(payload)
+
+        def observation(slot: str) -> PokeZeroObservationV0:
+            return PokeZeroObservationV0(
+                categorical_ids=(),
+                numeric_features=(),
+                token_type_ids=(),
+                attention_mask=(),
+                legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
+                metadata={"slot": slot},
+            )
+
+        state = _ControlledBattleState(
+            battle_id="controlled-7",
+            seed=7,
+            format_id="gen3randombattle",
+            trajectory=BattleTrajectory(battle_id="controlled-7", format_id="gen3randombattle", seed=7),
+        )
+        bridge = Bridge()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            pokezero_player="p2",
+        )
+        contexts = []
+
+        def select(_policy, _observation, context, *, seed):
+            self.assertEqual(seed, 7)
+            contexts.append(context)
+            return PolicyDecision(action_index=0, policy_id="pokezero-p2")
+
+        async def foulplay_choice(**_kwargs) -> str:
+            return "move 1"
+
+        def decode(player_state, _choice) -> int:
+            self.assertEqual(player_state.slot, "p1")
+            return 0
+
+        with (
+            patch("pokezero.foulplay_bridge._player_state", side_effect=lambda _state, slot, **_kwargs: PlayerState(slot)),
+            patch(
+                "pokezero.foulplay_bridge.observation_from_player_state",
+                side_effect=lambda player_state, **_kwargs: observation(player_state.slot),
+            ),
+            patch("pokezero.foulplay_bridge._observation_with_search_metadata", side_effect=lambda value, _state: value),
+            patch("pokezero.foulplay_bridge._select_policy_decision", side_effect=select),
+            patch(
+                "pokezero.foulplay_bridge.showdown_choice_for_action",
+                side_effect=lambda player_state, action: f"{player_state.slot}:{action}",
+            ),
+            patch("pokezero.foulplay_bridge._wait_for_foulplay_choice_or_exit", side_effect=foulplay_choice),
+            patch("pokezero.foulplay_bridge.action_index_from_choice_string", side_effect=decode),
+        ):
+            terminal = asyncio.run(
+                _handle_decision_boundary(
+                    config=config,
+                    bridge=bridge,  # type: ignore[arg-type]
+                    server=object(),
+                    state=state,
+                    policy=object(),
+                    vocab=object(),
+                    dex=object(),
+                    observation_spec=SimpleNamespace(schema_version="v2.2"),
+                    decision_round=0,
+                    requested_players=("p1", "p2"),
+                    foulplay_process=object(),
+                    foulplay_logs=object(),
+                )
+            )
+
+        self.assertIsNone(terminal)
+        self.assertEqual(contexts[0].player_id, "p2")
+        self.assertEqual(contexts[0].requested_legal_action_masks, {"p2": (True,) + (False,) * 8})
+        self.assertEqual([step.player_id for step in state.trajectory.steps], ["p1", "p2"])
+        self.assertEqual([decision.policy_id for decision in state.decisions], ["pokezero-p2"])
+        self.assertEqual(bridge.messages[0]["choices"], {"p1": "move 1", "p2": "p2:0"})
 
     def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
         state = _ControlledBattleState(
@@ -310,6 +465,19 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     capture_controlled_foulplay_rollouts(config, out_path=Path(tmp_dir) / "pool.jsonl")
                 )
 
+    def test_capture_rejects_the_p2_mirrored_seat(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="raw",
+            pokezero_player="p2",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(ValueError, "pokezero_player='p1'"):
+                asyncio.run(
+                    capture_controlled_foulplay_rollouts(config, out_path=Path(tmp_dir) / "pool.jsonl")
+                )
+
     def test_split_outgoing_showdown_message_handles_room_and_global(self) -> None:
         self.assertEqual(
             _split_outgoing_showdown_message("battle-gen3randombattle-1|/choose move surf|7"),
@@ -403,6 +571,19 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(
             _terminal_line_for_foulplay(TerminalState(winner=None, turn_count=250, capped=True), config),
             "|tie|",
+        )
+        mirrored = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            pokezero_player="p2",
+        )
+        self.assertEqual(
+            _terminal_line_for_foulplay(TerminalState(winner="p1", turn_count=10), mirrored),
+            "|win|FoulPlayBot",
+        )
+        self.assertEqual(
+            _terminal_line_for_foulplay(TerminalState(winner="p2", turn_count=10), mirrored),
+            "|win|PokeZeroBot",
         )
 
     def test_is_terminal_protocol_line_detects_win_and_tie(self) -> None:
