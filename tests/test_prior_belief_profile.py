@@ -5,13 +5,15 @@ import json
 from dataclasses import replace
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.belief import PlayerBeliefView, RevealedPokemonBelief
 from pokezero.foulplay_capture import build_capture_arg_parser
-from pokezero.neural_cli import main as neural_main
-from pokezero.observation import PokeZeroObservationV0
+from pokezero.neural_cli import _prior_belief_profile, main as neural_main
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2, PokeZeroObservationV0
 from pokezero.prior_belief_profile import (
     CandidateValueEvaluation,
     MINIMUM_PROFILE_DECISIONS,
@@ -91,6 +93,46 @@ def _record(*, turn_index: int = 1, variants: int = 1) -> PublicDecisionRecord:
 
 
 class PublicCorpusTest(unittest.TestCase):
+    def test_prior_belief_profile_constructs_schema_matched_category_vocabulary(self) -> None:
+        corpus = SimpleNamespace(
+            decisions=tuple(range(MINIMUM_PROFILE_DECISIONS)),
+            manifest={"checkpoint_sha256": "checkpoint", "belief_set_source_hash": "source"},
+        )
+        args = SimpleNamespace(
+            opponent_legal_mask_mode="hidden",
+            corpus=Path("public.jsonl"),
+            max_decisions=MINIMUM_PROFILE_DECISIONS,
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            device="cpu",
+            node_binary="node",
+            entropy_thresholds="0.5",
+            margin_thresholds="0.1",
+            world_sample_cap=1,
+            opponent_scenarios=1,
+            out=None,
+            json=False,
+        )
+        model_config = SimpleNamespace()
+        result = SimpleNamespace(model_config=model_config)
+        observation_spec = SimpleNamespace(schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        set_source = SimpleNamespace(metadata=SimpleNamespace(source_hash="source"))
+        report = {"decision_count": MINIMUM_PROFILE_DECISIONS, "selection_context_count": 1}
+
+        with (
+            patch("pokezero.neural_cli.load_public_decision_corpus", return_value=corpus),
+            patch("pokezero.neural_cli.sha256_file", return_value="checkpoint"),
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), result)),
+            patch("pokezero.neural_cli.observation_spec_from_model_config", return_value=observation_spec),
+            patch("pokezero.neural_cli.gen3_category_vocabulary", return_value=object()) as vocabulary,
+            patch("pokezero.neural_cli.feature_masks_from_model_config", return_value=object()),
+            patch("pokezero.neural_cli.load_gen3_randbat_source_cached", return_value=set_source),
+            patch("pokezero.neural_cli.profile_public_corpus", return_value=report),
+        ):
+            self.assertEqual(_prior_belief_profile(args), 0)
+
+        vocabulary.assert_called_once_with(Path("/showdown"), include_turn_merged=True)
+
     def test_public_roundtrip_and_private_opponent_leakage_invariance(self) -> None:
         p1_observation = _observation(0, 1, metadata={"self_team": []})
         private_p2_observation = _observation(
