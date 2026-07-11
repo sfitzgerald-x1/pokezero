@@ -110,6 +110,13 @@ divergence in specific choices does not create macro-level strategic structure.
   (every residual < 2%). Foul-play/human-play opponents are out of scope (this asks whether the
   recipe converges, not how it fares vs external strategies).
 - Style precision is 500-game-limited; a 1,000-game re-probe would sharpen that layer only.
+- **Per-seed φ not run.** The plan's second matchup analysis (per-seed win/loss correlation
+  between models against common opponents) needs per-seed outcome persistence, which the general
+  `neural_cli benchmark` does not emit — only the capstone foul-play harness does. The
+  round-robin here gives seat-balanced aggregate win rates, which fully support the Bradley-Terry
+  fit and the directed-cycle intransitivity test (the decisive non-transitivity signal). Because
+  that test is unambiguous — zero cycles, p=1.000, every residual <2% — the per-seed φ refinement
+  would not change the matchup verdict; it is deferred, not improvised around.
 
 Artifacts: `/shared/diversity-fingerprints/diversity-20260711a/` (per-checkpoint fingerprints,
 pairwise.json, style.json, matchup.json, report.html). Regenerate the report with
