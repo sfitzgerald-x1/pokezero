@@ -52,6 +52,38 @@ RootVisitBudgetSelector = Callable[[PolicyContext, RootPUCTVisitBudgetContext], 
 
 
 @dataclass(frozen=True)
+class FixedExtraVisitBudgetSelector:
+    """Spend a fixed number of visits after the mandatory legal-action sweep.
+
+    Root-PUCT always evaluates each legal action once.  Fixed experiment budgets
+    therefore need to be expressed relative to that sweep rather than as an
+    absolute visit cap whose effective extra work changes with legal-action
+    count.
+    """
+
+    extra_visits: int
+    selector_id: str = "fixed-extra-visits"
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.extra_visits, bool)
+            or not isinstance(self.extra_visits, int)
+            or self.extra_visits < 0
+        ):
+            raise ValueError("extra_visits must be a non-negative integer.")
+
+    def __call__(self, context: PolicyContext, budget_context: RootPUCTVisitBudgetContext) -> int:
+        del context
+        return len(budget_context.action_priors) + self.extra_visits
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "selector_id": self.selector_id,
+            "extra_visits": self.extra_visits,
+        }
+
+
+@dataclass(frozen=True)
 class EntropyMarginVisitBudgetSelector:
     """Spend additional root visits only at policy- or value-contested decisions."""
 

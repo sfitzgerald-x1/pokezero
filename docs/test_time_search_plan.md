@@ -162,8 +162,12 @@ Hazards remain diagnostic targets, not rewards or terminal objectives.
 `checkpoints/pz-v2-2-1m.pt`); belief-determinized worlds (K per Step 2's
 uncertainty gating); **deterministic root priors**; and seeds fixed and shared
 across arms. The selected isotonic calibrated value copy is named on every
-value-leaf row. A Dirichlet row is secondary-only and exists only when Step 3's
-pre-registered routing rule selects it.
+value-leaf row and is passed as a leaf-only checkpoint: the raw checkpoint
+continues to supply policy priors, action selection, and rollout behavior.
+Fixed search rows use post-sweep extra visits, never an absolute visit cap, so
+the actual budget is `legal_action_count + extra_visits` on every decision. A
+Dirichlet row is secondary-only and exists only when Step 3's pre-registered
+routing rule selects it.
 
 **Honest hidden-information mode (pre-registered, primary)**: no real opponent
 action, no requested-opponent legal mask, no privileged fallback — opponent

@@ -2187,6 +2187,27 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     return model, result
 
 
+def require_compatible_transformer_value_checkpoint(
+    *,
+    policy_checkpoint: str | PathLike[str] | Path,
+    policy_result: TransformerTrainingResult,
+    value_checkpoint: str | PathLike[str] | Path,
+    value_result: TransformerTrainingResult,
+) -> None:
+    """Ensure a leaf-only checkpoint cannot change the policy observation contract."""
+
+    if policy_result.model_config != value_result.model_config:
+        raise ValueError(
+            "value checkpoint model config must exactly match the policy checkpoint: "
+            f"{value_checkpoint} is incompatible with {policy_checkpoint}."
+        )
+    if policy_result.belief_set_source_hash != value_result.belief_set_source_hash:
+        raise ValueError(
+            "value checkpoint belief-set provenance must match the policy checkpoint: "
+            f"{value_checkpoint} is incompatible with {policy_checkpoint}."
+        )
+
+
 @dataclass
 class _TorchMetricTotals:
     examples: int = 0

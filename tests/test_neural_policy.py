@@ -26,6 +26,7 @@ from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
     _adaptive_root_visit_budget_selector,
+    _root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
     _refutation_cache_training_contract,
@@ -53,6 +54,7 @@ from pokezero.neural_policy import (
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
+    require_compatible_transformer_value_checkpoint,
     resolve_torch_device,
     save_transformer_checkpoint,
     observation_window_to_torch,
@@ -3460,6 +3462,159 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "entropy or value-margin threshold"):
             _adaptive_root_visit_budget_selector(missing_threshold_args)
+
+    def test_neural_cli_root_puct_play_benchmark_builds_fixed_extra_budget_selector(self) -> None:
+        parser = build_neural_arg_parser()
+        args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--root-extra-visits",
+                "24",
+            ]
+        )
+
+        selector = _root_visit_budget_selector(args)
+
+        self.assertIsNotNone(selector)
+        self.assertEqual(
+            selector.to_dict(),
+            {"selector_id": "fixed-extra-visits", "extra_visits": 24},
+        )
+        incompatible_args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--root-extra-visits",
+                "24",
+                "--adaptive-root-contested-extra-visits",
+                "120",
+                "--adaptive-root-policy-entropy-threshold",
+                "0.7",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            _root_visit_budget_selector(incompatible_args)
+
+    def test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        policy_model = object()
+        value_model = object()
+        model_config = SimpleNamespace(
+            policy_id="neural-smoke",
+            window_size=1,
+            format_id="gen3randombattle",
+            observation_schema_version="pokezero.observation.v2.1",
+            categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+            numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+            stats_block_enabled=True,
+            exact_state_enabled=True,
+            transition_token_budget=128,
+            tier2_residuals=True,
+            tier2_investment=False,
+        )
+        raw_result = SimpleNamespace(
+            model_config=model_config,
+            belief_set_source_hash=None,
+            value_calibration_transform=None,
+        )
+        calibrated_transform = ValueCalibrationTransform(
+            method="isotonic",
+            points=((-1.0, -0.5), (1.0, 0.75)),
+        )
+        value_result = SimpleNamespace(
+            model_config=model_config,
+            belief_set_source_hash=None,
+            value_calibration_transform=calibrated_transform,
+        )
+        captured: dict[str, Any] = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            search_policy = tuple(kwargs["matchups"])[2].p1_policy
+            self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
+            self.assertEqual(search_policy.value_fn((observation(1),)), 0.5)
+            self.assertEqual(search_policy.root_visit_budget_selector.to_dict(), {
+                "selector_id": "fixed-extra-visits",
+                "extra_visits": 24,
+            })
+            captured["search_policy"] = search_policy
+            return SimpleNamespace(to_dict=lambda: {"matchups": 4}, matchups=())
+
+        stdout = io.StringIO()
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                side_effect=((policy_model, raw_result), (value_model, value_result)),
+            ) as load,
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.5) as value_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "policy.pt",
+                    "--value-checkpoint",
+                    "calibrated.pt",
+                    "--allow-legacy-checkpoints",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--root-extra-visits",
+                    "24",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load.call_args_list[0].args[0], Path("policy.pt"))
+        self.assertEqual(load.call_args_list[1].args[0], Path("calibrated.pt"))
+        self.assertIs(value_eval.call_args.kwargs["model"], value_model)
+        self.assertIs(prior_eval.call_args.kwargs["model"], policy_model)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "matchups": 4,
+                "root_visit_budget_selector": {
+                    "selector_id": "fixed-extra-visits",
+                    "extra_visits": 24,
+                },
+                "value_leaf": {
+                    "checkpoint": "calibrated.pt",
+                    "calibration_transform": calibrated_transform.to_dict(),
+                },
+            },
+        )
+
+    def test_value_checkpoint_requires_matching_observation_and_belief_provenance(self) -> None:
+        policy_result = SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-a")
+        matching_result = SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-a")
+        require_compatible_transformer_value_checkpoint(
+            policy_checkpoint=Path("policy.pt"),
+            policy_result=policy_result,
+            value_checkpoint=Path("calibrated.pt"),
+            value_result=matching_result,
+        )
+        with self.assertRaisesRegex(ValueError, "model config"):
+            require_compatible_transformer_value_checkpoint(
+                policy_checkpoint=Path("policy.pt"),
+                policy_result=policy_result,
+                value_checkpoint=Path("wrong-shape.pt"),
+                value_result=SimpleNamespace(model_config="v2.1", belief_set_source_hash="source-a"),
+            )
+        with self.assertRaisesRegex(ValueError, "belief-set provenance"):
+            require_compatible_transformer_value_checkpoint(
+                policy_checkpoint=Path("policy.pt"),
+                policy_result=policy_result,
+                value_checkpoint=Path("wrong-belief.pt"),
+                value_result=SimpleNamespace(model_config="v2.2", belief_set_source_hash="source-b"),
+            )
 
     def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
         if not torch_available():

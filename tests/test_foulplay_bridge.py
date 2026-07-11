@@ -989,6 +989,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
 
         self.assertEqual(config.selection_mode, "visits")
         self.assertEqual(config.root_visit_budget, 16)
+        self.assertIsNone(config.root_extra_visits)
+        self.assertIsNone(config.value_checkpoint)
         self.assertIsNone(config.root_prior_temperature)
         self.assertEqual(config.effective_root_prior_temperature, 1.0)
         self.assertEqual(config.root_opponent_action_scenarios, 1)
@@ -997,6 +999,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(config.belief_start_override_samples, 1)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
+        self.assertIsNone(args.root_extra_visits)
+        self.assertIsNone(args.value_checkpoint)
         self.assertIsNone(args.root_prior_temperature)
         self.assertEqual(args.root_opponent_action_scenarios, 1)
         self.assertEqual(args.root_opponent_action_candidate_scenarios, ACTION_COUNT)
@@ -1023,6 +1027,43 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
         self.assertEqual(warmed_config.effective_root_prior_temperature, 1.75)
 
+    def test_controlled_foulplay_supports_fixed_extra_and_adaptive_root_budgets(self) -> None:
+        fixed = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            value_checkpoint=Path("calibrated.pt"),
+            showdown_root=Path("/showdown"),
+            root_extra_visits=24,
+        )
+        self.assertEqual(
+            fixed.root_visit_budget_selector().to_dict(),
+            {"selector_id": "fixed-extra-visits", "extra_visits": 24},
+        )
+
+        adaptive = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            adaptive_root_contested_extra_visits=120,
+            adaptive_root_policy_entropy_threshold=0.7,
+        )
+        self.assertEqual(
+            adaptive.root_visit_budget_selector().to_dict(),
+            {
+                "selector_id": "entropy-or-value-margin",
+                "contested_extra_visits": 120,
+                "uncontested_extra_visits": 0,
+                "minimum_policy_entropy": 0.7,
+                "maximum_value_margin": None,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_extra_visits=24,
+                adaptive_root_contested_extra_visits=120,
+                adaptive_root_policy_entropy_threshold=0.7,
+            )
+
     def test_build_policy_uses_full_action_default_opponent_candidate_reserve(self) -> None:
         class FakePolicy:
             def __init__(self, policy_id: str | None = None, **_: object) -> None:
@@ -1043,6 +1084,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 config=config,
                 model=object(),
                 result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
                 env_config=object(),
                 rollout_config=object(),
                 policy_id="fake-base",
@@ -1054,6 +1097,60 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
         self.assertEqual(policy.max_opponent_action_scenarios, 1)
         self.assertEqual(policy.start_override_samples_per_scenario, 1)
+
+    def test_build_policy_uses_separate_calibrated_value_model_and_relative_budget(self) -> None:
+        class FakePolicy:
+            def __init__(self, policy_id: str | None = None, **_: object) -> None:
+                self.policy_id = policy_id or "fake-transformer"
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        policy_model = object()
+        value_model = object()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            value_checkpoint=Path("calibrated.pt"),
+            showdown_root=Path("/showdown"),
+            root_extra_visits=24,
+        )
+
+        with (
+            patch("pokezero.foulplay_bridge.TransformerSoftmaxPolicy", side_effect=FakePolicy),
+            patch("pokezero.foulplay_bridge.evaluate_transformer_observation_value", return_value=0.5) as value_eval,
+        ):
+            policy = _build_policy(
+                config=config,
+                model=policy_model,
+                result=fake_result,
+                value_model=value_model,
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+            self.assertEqual(
+                policy.value_fn(
+                    (
+                        PokeZeroObservationV0(
+                            categorical_ids=(),
+                            numeric_features=(),
+                            token_type_ids=(),
+                            attention_mask=(),
+                            legal_action_mask=(),
+                        ),
+                    )
+                ),
+                0.5,
+            )
+
+        self.assertIs(value_eval.call_args.kwargs["model"], value_model)
+        self.assertEqual(
+            policy.root_visit_budget_selector.to_dict(),
+            {"selector_id": "fixed-extra-visits", "extra_visits": 24},
+        )
 
     def test_build_policy_wires_belief_start_override_samples(self) -> None:
         class FakePolicy:
@@ -1083,6 +1180,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 config=config,
                 model=object(),
                 result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
                 env_config=object(),
                 rollout_config=object(),
                 policy_id="fake-base",
