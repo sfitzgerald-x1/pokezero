@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
@@ -6,6 +8,7 @@ from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig
 from pokezero.search_benchmark import benchmark_root_puct_counterfactual_rollouts, benchmark_root_puct_search
+from pokezero.search import RootPUCTSearchTiming
 
 
 def _mask(*legal_indices: int) -> tuple[bool, ...]:
@@ -207,6 +210,31 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual(timing["opponent_scenario_planning_count"], 0)
         self.assertEqual(timing["opponent_scenario_planning_seconds"], 0.0)
         self.assertTrue(envs[0].closed)
+
+    def test_benchmark_root_puct_search_selects_the_most_visited_candidate(self) -> None:
+        score_winner = SimpleNamespace(action_index=0, visits=1, prior=0.8, value=0.9, score=1.5)
+        visit_winner = SimpleNamespace(action_index=1, visits=3, prior=0.2, value=0.1, score=0.2)
+        search = SimpleNamespace(
+            candidates=(score_winner, visit_winner),
+            most_visited_candidate=visit_winner,
+            total_visits=4,
+            timing=RootPUCTSearchTiming(),
+        )
+
+        with patch("pokezero.search_benchmark.puct_branch_search", return_value=search):
+            report = benchmark_root_puct_search(
+                env_factory=TwoRoundBranchEnv,
+                policies={"p1": FixedPolicy(0, policy_id="fixed-p1"), "p2": FixedPolicy(0, policy_id="fixed-p2")},
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                games=1,
+                prefixes_per_game=2,
+                value_fn=lambda _history: 0.0,
+                prior_fn=lambda _history: (0.5, 0.5) + (0.0,) * 7,
+            )
+
+        self.assertEqual([decision.selected_action_index for decision in report.decisions], [1, 1])
+        self.assertEqual([decision.selected_value for decision in report.decisions], [0.1, 0.1])
+        self.assertEqual([decision.selected_score for decision in report.decisions], [0.2, 0.2])
 
     def test_benchmark_root_puct_search_supports_fixed_extra_visits(self) -> None:
         def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:

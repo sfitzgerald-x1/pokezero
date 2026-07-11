@@ -402,6 +402,7 @@ def benchmark_root_puct_search(
                 timing = search.timing.with_policy_evaluation(policy_evaluation_seconds).with_total(
                     _timing_perf_counter() - timing_started_at
                 )
+                selected_candidate = search.most_visited_candidate
                 decisions.append(
                     RootPUCTSearchDecision(
                         seed=seed,
@@ -409,9 +410,9 @@ def benchmark_root_puct_search(
                         player_id=search_player,
                         prefix_decision_round_count=prefix_decision_round_count,
                         recorded_action_index=player_step.action_index,
-                        selected_action_index=search.action_index,
-                        selected_value=search.best_candidate.value,
-                        selected_score=search.best_candidate.score,
+                        selected_action_index=selected_candidate.action_index,
+                        selected_value=selected_candidate.value,
+                        selected_score=selected_candidate.score,
                         candidate_count=len(search.candidates),
                         total_visits=search.total_visits,
                         elapsed_seconds=elapsed,
