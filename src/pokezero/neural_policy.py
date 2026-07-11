@@ -2226,6 +2226,12 @@ def require_compatible_transformer_value_checkpoint(
             "value checkpoint belief-set provenance must match the policy checkpoint: "
             f"{value_checkpoint} is incompatible with {policy_checkpoint}."
         )
+    transform = value_result.value_calibration_transform
+    if transform is None:
+        raise ValueError(
+            "value checkpoint has no calibration transform; explicit leaf checkpoints must be "
+            "frozen calibrated copies."
+        )
     policy_sha256 = checkpoint_file_sha256(policy_checkpoint)
     source_sha256 = value_result.value_calibration_source_checkpoint_sha256
     if source_sha256 is None:
@@ -2239,7 +2245,6 @@ def require_compatible_transformer_value_checkpoint(
             f"{value_checkpoint} is incompatible with {policy_checkpoint}."
         )
     value_sha256 = checkpoint_file_sha256(value_checkpoint)
-    transform = value_result.value_calibration_transform
     return {
         "policy_checkpoint": str(Path(policy_checkpoint).resolve(strict=False)),
         "policy_checkpoint_sha256": policy_sha256,

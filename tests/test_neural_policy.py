@@ -3611,7 +3611,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             model_config="v2.2",
             belief_set_source_hash="source-a",
             value_calibration_source_checkpoint_sha256="raw-sha",
-            value_calibration_transform=None,
+            value_calibration_transform=ValueCalibrationTransform(),
         )
         with patch("pokezero.neural_policy.checkpoint_file_sha256", side_effect=("raw-sha", "leaf-sha")):
             provenance = require_compatible_transformer_value_checkpoint(
@@ -3654,6 +3654,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         model_config="v2.2",
                         belief_set_source_hash="source-a",
                         value_calibration_source_checkpoint_sha256=None,
+                        value_calibration_transform=ValueCalibrationTransform(),
                     ),
                 )
         with patch("pokezero.neural_policy.checkpoint_file_sha256", return_value="raw-sha"):
@@ -3666,8 +3667,21 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         model_config="v2.2",
                         belief_set_source_hash="source-a",
                         value_calibration_source_checkpoint_sha256="other-sha",
+                        value_calibration_transform=ValueCalibrationTransform(),
                     ),
                 )
+        with self.assertRaisesRegex(ValueError, "no calibration transform"):
+            require_compatible_transformer_value_checkpoint(
+                policy_checkpoint=Path("policy.pt"),
+                policy_result=policy_result,
+                value_checkpoint=Path("uncalibrated.pt"),
+                value_result=SimpleNamespace(
+                    model_config="v2.2",
+                    belief_set_source_hash="source-a",
+                    value_calibration_source_checkpoint_sha256="raw-sha",
+                    value_calibration_transform=None,
+                ),
+            )
 
     def test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds(self) -> None:
         if not torch_available():
