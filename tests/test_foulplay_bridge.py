@@ -22,6 +22,7 @@ from pokezero.foulplay_bridge import (
     FoulPlayProcessExitError,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
+    _config_from_args,
     _capture_resolved_public_action_round,
     _build_policy,
     _foulplay_command,
@@ -1123,6 +1124,27 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 root_extra_visits=24,
                 root_time_budget_ms=100,
             )
+        time_bounded = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            root_time_budget_ms=100,
+        )
+        self.assertIsNone(time_bounded.root_visit_budget)
+        parsed_time_bounded = _config_from_args(
+            build_arg_parser().parse_args(
+                [
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--showdown-root",
+                    "/showdown",
+                    "--root-visit-budget",
+                    "32",
+                    "--root-time-budget-ms",
+                    "100",
+                ]
+            )
+        )
+        self.assertIsNone(parsed_time_bounded.root_visit_budget)
 
     def test_build_policy_uses_full_action_default_opponent_candidate_reserve(self) -> None:
         class FakePolicy:
@@ -1611,7 +1633,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["minimum_override_prior_ratio"], 0.5)
         self.assertEqual(payload["root_puct"]["minimum_score_improvement"], 0.1)
         self.assertEqual(payload["root_puct"]["root_prior_temperature"], 2.5)
-        self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
+        self.assertIsNone(payload["root_puct"]["root_visit_budget"])
         self.assertEqual(payload["root_puct"]["root_time_budget_ms"], 250)
         self.assertEqual(payload["root_puct"]["root_opponent_action_scenarios"], 2)
         self.assertEqual(payload["root_puct"]["root_opponent_action_candidate_scenarios"], 5)
