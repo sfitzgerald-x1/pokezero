@@ -146,6 +146,15 @@ the hypothesis says lategame/endgame decisions are the contested ones.
 Gate: none (descriptive), but the number feeds Step 4's adaptive arm and the
 ladder-budget arithmetic.
 
+For the capstone's one adaptive arm, aggregate the decision-normalized
+`entropy_or_margin` sweep across phases and choose the threshold pair closest
+to a 20% contested rate. With legal+120 on contested decisions and no extra
+visits otherwise, this matches legal+24's expected post-sweep work. An exact
+rate tie resolves toward the lower contested rate, then the stricter threshold
+pair. The frozen plan records the selected thresholds, full decision coverage,
+and observed rate and rejects hand-entered values that do not reproduce this
+rule from the profile artifact.
+
 ## Step 3 — Blind-spot entrenchment audit (half day; requires P-2)
 
 From the hazard-probe state corpus (states where hazard/spin actions are
