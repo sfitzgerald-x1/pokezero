@@ -280,6 +280,22 @@ class ControlledFoulPlayGameResult:
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
+    # Wall-clock policy selection time for every PokeZero decision, including raw-policy arms.
+    # This deliberately includes the dispatch boundary, so capstone reports measure the cost a
+    # caller observes rather than only root-PUCT's internal timer.
+    policy_elapsed_seconds: tuple[float, ...] = ()
+    tied: bool = False
+    capped: bool = False
+
+    @property
+    def outcome_score(self) -> float:
+        """Capstone score: wins are one point; ties and decision caps split the point."""
+
+        if self.pokezero_won:
+            return 1.0
+        if self.tied or self.capped:
+            return 0.5
+        return 0.0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -287,6 +303,9 @@ class ControlledFoulPlayGameResult:
             "seed": self.seed,
             "winner": self.winner,
             "pokezero_won": self.pokezero_won,
+            "pokezero_score": self.outcome_score,
+            "tied": self.tied,
+            "capped": self.capped,
             "decision_rounds": self.decision_rounds,
             "pokezero_decisions": self.pokezero_decisions,
             "root_puct_searches": self.root_puct_searches,
@@ -354,6 +373,8 @@ class ControlledFoulPlayGameResult:
             )
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
+        if self.policy_elapsed_seconds:
+            payload["policy_elapsed_seconds"] = list(self.policy_elapsed_seconds)
         if self.root_puct_prior_action_change_details:
             payload["root_puct_prior_action_change_details"] = [
                 dict(detail)
@@ -406,6 +427,22 @@ class ControlledFoulPlayBenchmarkResult:
     @property
     def wins(self) -> int:
         return sum(1 for game in self.games if game.pokezero_won)
+
+    @property
+    def ties(self) -> int:
+        return sum(1 for game in self.games if game.tied)
+
+    @property
+    def capped_games(self) -> int:
+        return sum(1 for game in self.games if game.capped)
+
+    @property
+    def score(self) -> float:
+        return sum(game.outcome_score for game in self.games)
+
+    @property
+    def score_rate(self) -> float:
+        return self.score / self.completed_games if self.completed_games else 0.0
 
     @property
     def win_rate(self) -> float:
@@ -489,6 +526,11 @@ class ControlledFoulPlayBenchmarkResult:
             for game in self.games
             if game.root_puct_average_elapsed_seconds is not None
         ]
+        policy_elapsed_values = [
+            elapsed
+            for game in self.games
+            for elapsed in game.policy_elapsed_seconds
+        ]
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(self.config.checkpoint),
@@ -504,6 +546,11 @@ class ControlledFoulPlayBenchmarkResult:
             "status": "complete" if self.completed_games >= self.config.games else "partial",
             "wins": self.wins,
             "win_rate": self.win_rate,
+            "ties": self.ties,
+            "capped_games": self.capped_games,
+            "score": self.score,
+            "score_rate": self.score_rate,
+            "outcome_scoring": _OUTCOME_SCORING,
             "seed_start": self.config.seed_start,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
@@ -550,6 +597,13 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if policy_elapsed_values:
+            payload["policy_timing"] = {
+                "decision_count": len(policy_elapsed_values),
+                "total_elapsed_seconds": sum(policy_elapsed_values),
+                "average_elapsed_seconds": sum(policy_elapsed_values) / len(policy_elapsed_values),
+                "p95_elapsed_seconds": _nearest_rank_percentile(policy_elapsed_values, percentile=0.95),
+            }
         if self.foulplay_random_seed_schedule is not None:
             payload["foulplay_random_seed_schedule"] = _foulplay_random_seed_schedule_payload(
                 self.foulplay_random_seed_schedule
@@ -706,6 +760,8 @@ def _comparison_readout(
     matched_seeds = tuple(sorted(raw_by_seed.keys() & search_by_seed.keys()))
     raw_paired_wins = sum(1 for seed in matched_seeds if raw_by_seed[seed].pokezero_won)
     search_paired_wins = sum(1 for seed in matched_seeds if search_by_seed[seed].pokezero_won)
+    raw_paired_score = sum(raw_by_seed[seed].outcome_score for seed in matched_seeds)
+    search_paired_score = sum(search_by_seed[seed].outcome_score for seed in matched_seeds)
     both_won = sum(
         1
         for seed in matched_seeds
@@ -731,6 +787,8 @@ def _comparison_readout(
     search_completed_games = root_puct.completed_games if root_puct is not None else 0
     raw_wins = raw.wins if raw is not None else 0
     search_wins = root_puct.wins if root_puct is not None else 0
+    raw_score = raw.score if raw is not None else 0.0
+    search_score = root_puct.score if root_puct is not None else 0.0
 
     crashed_seeds = sorted({crash.seed for crash in opponent_crashes})
 
@@ -759,6 +817,18 @@ def _comparison_readout(
             "delta_interpretation": (
                 "descriptive_only_when_both_prefixes_have_equal_nonzero_completed_games"
             ),
+            "scored_outcomes": {
+                "scoring": _OUTCOME_SCORING,
+                "raw": _score_rate_readout(raw_score, raw_completed_games),
+                "root_puct": _score_rate_readout(search_score, search_completed_games),
+                "root_puct_minus_raw_score_rate": _delta_score_rate(
+                    search_score,
+                    search_completed_games,
+                    raw_score,
+                    raw_completed_games,
+                    require_equal_games=True,
+                ),
+            },
         },
         "paired_by_seed": {
             "pairing_method": _pairing_method_for_comparison_mode(comparison_mode),
@@ -775,6 +845,17 @@ def _comparison_readout(
                 raw_paired_wins,
                 paired_games,
             ),
+            "scored_outcomes": {
+                "scoring": _OUTCOME_SCORING,
+                "raw": _score_rate_readout(raw_paired_score, paired_games),
+                "root_puct": _score_rate_readout(search_paired_score, paired_games),
+                "root_puct_minus_raw_score_rate": _delta_score_rate(
+                    search_paired_score,
+                    paired_games,
+                    raw_paired_score,
+                    paired_games,
+                ),
+            },
             "discordant_pairs": {
                 "both_won": both_won,
                 "raw_only_won": raw_only_won,
@@ -890,6 +971,34 @@ def _rate(wins: int, games: int) -> float:
     return wins / games if games else 0.0
 
 
+_OUTCOME_SCORING = {
+    "win": 1.0,
+    "tie": 0.5,
+    "capped": 0.5,
+    "loss": 0.0,
+}
+
+
+def _score_rate_readout(score: float, games: int) -> dict[str, Any]:
+    return {
+        "games": games,
+        "score": score,
+        "score_rate": score / games if games else 0.0,
+    }
+
+
+def _nearest_rank_percentile(values: Sequence[float], *, percentile: float) -> float:
+    """Return a deterministic nearest-rank percentile for a non-empty timing sample."""
+
+    if not values:
+        raise ValueError("percentile requires at least one value.")
+    if not 0.0 < percentile <= 1.0:
+        raise ValueError("percentile must be in (0, 1].")
+    ordered = sorted(float(value) for value in values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return ordered[index]
+
+
 def _delta_rate(
     first_wins: int,
     first_games: int,
@@ -903,6 +1012,21 @@ def _delta_rate(
     if require_equal_games and first_games != second_games:
         return None
     return _rate(first_wins, first_games) - _rate(second_wins, second_games)
+
+
+def _delta_score_rate(
+    first_score: float,
+    first_games: int,
+    second_score: float,
+    second_games: int,
+    *,
+    require_equal_games: bool = False,
+) -> float | None:
+    if first_games <= 0 or second_games <= 0:
+        return None
+    if require_equal_games and first_games != second_games:
+        return None
+    return (first_score / first_games) - (second_score / second_games)
 
 
 def _wilson_interval(wins: int, games: int, *, z: float) -> tuple[float, float]:
@@ -1916,9 +2040,6 @@ async def _run_single_game(
     terminal: TerminalState | None = None
 
     while terminal is None:
-        if decision_round >= config.max_decision_rounds:
-            terminal = TerminalState(winner=None, turn_count=config.max_decision_rounds, capped=True)
-            break
         event = await bridge.next_event()
         if event.get("battleId") != battle_id:
             continue
@@ -1931,6 +2052,11 @@ async def _run_single_game(
             requested_players = tuple(str(player) for player in event.get("requested") or ())
             if not requested_players:
                 continue
+            # Let protocol output from the final permitted choice settle before deciding this
+            # battle exceeded the cap. A terminal win/tie follows that choice as a later event.
+            if decision_round >= config.max_decision_rounds:
+                terminal = TerminalState(winner=None, turn_count=config.max_decision_rounds, capped=True)
+                break
             terminal = await _handle_decision_boundary(
                 config=config,
                 bridge=bridge,
@@ -1969,6 +2095,11 @@ async def _run_single_game(
         for decision in state.decisions
         if "root_puct_elapsed_seconds" in decision.metadata
     ]
+    policy_elapsed = tuple(
+        float(decision.metadata["policy_elapsed_seconds"])
+        for decision in state.decisions
+        if "policy_elapsed_seconds" in decision.metadata
+    )
     root_searches = sum(
         1
         for decision in state.decisions
@@ -2141,6 +2272,8 @@ async def _run_single_game(
         seed=seed,
         winner=winner_name,
         pokezero_won=winner_name == config.pokezero_username,
+        tied=terminal.winner is None and not terminal.capped,
+        capped=terminal.capped,
         decision_rounds=decision_round,
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
@@ -2184,6 +2317,7 @@ async def _run_single_game(
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_fallback_categories=root_fallback_categories,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
+        policy_elapsed_seconds=policy_elapsed,
     )
 
 
@@ -2437,6 +2571,11 @@ async def _handle_decision_boundary(
     foulplay_logs: _ProcessLogBuffer,
 ) -> TerminalState | None:
     assert state.trajectory is not None
+    pokezero_player = config.pokezero_player
+    foulplay_player = config.foulplay_player
+    # This begins at the ready boundary and ends when PokeZero's serialized choice is available.
+    # Waiting for the external opponent or submitting joint choices is intentionally excluded.
+    pokezero_choice_wall_start = time.perf_counter() if pokezero_player in requested_players else None
     _capture_resolved_public_action_round(state, decision_round)
     state.previous_requested_players = requested_players
     belief_set_source = _resolved_belief_set_source(config)
@@ -2464,8 +2603,6 @@ async def _handle_decision_boundary(
     }
     choices: dict[PlayerId, str] = {}
     decisions: dict[PlayerId, PolicyDecision] = {}
-    pokezero_player = config.pokezero_player
-    foulplay_player = config.foulplay_player
     if pokezero_player in requested_players:
         pokezero_context = PolicyContext(
             player_id=pokezero_player,
@@ -2483,7 +2620,7 @@ async def _handle_decision_boundary(
             ),
             requested_observations=dict(observations),
         )
-        decisions[pokezero_player] = await asyncio.to_thread(
+        policy_decision = await asyncio.to_thread(
             _select_policy_decision,
             policy,
             observations[pokezero_player],
@@ -2492,7 +2629,15 @@ async def _handle_decision_boundary(
         )
         choices[pokezero_player] = showdown_choice_for_action(
             player_states[pokezero_player],
-            decisions[pokezero_player].action_index,
+            policy_decision.action_index,
+        )
+        assert pokezero_choice_wall_start is not None
+        decisions[pokezero_player] = replace(
+            policy_decision,
+            metadata={
+                **dict(policy_decision.metadata),
+                "policy_elapsed_seconds": time.perf_counter() - pokezero_choice_wall_start,
+            },
         )
     if foulplay_player in requested_players:
         choice = await _wait_for_foulplay_choice_or_exit(
