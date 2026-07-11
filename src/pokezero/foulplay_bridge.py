@@ -295,6 +295,9 @@ class ControlledFoulPlayGameResult:
     pokezero_decisions: int
     root_puct_searches: int
     root_puct_fallbacks: int
+    # Actual planner identities emitted by executed Root-PUCT decisions. This
+    # is evidence for the primary hidden-information capstone contract.
+    root_puct_opponent_action_policies: Mapping[str, int] = field(default_factory=dict)
     root_puct_total_visits: int = 0
     root_puct_effective_total_visits: int = 0
     root_puct_opponent_action_scenarios_generated: int = 0
@@ -370,6 +373,9 @@ class ControlledFoulPlayGameResult:
             "pokezero_decisions": self.pokezero_decisions,
             "root_puct_searches": self.root_puct_searches,
             "root_puct_fallbacks": self.root_puct_fallbacks,
+            "root_puct_opponent_action_policies": dict(
+                sorted(self.root_puct_opponent_action_policies.items())
+            ),
             "root_puct_total_visits": self.root_puct_total_visits,
             "root_puct_opponent_action_scenarios_generated": self.root_puct_opponent_action_scenarios_generated,
             "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
@@ -478,6 +484,7 @@ class ControlledFoulPlayBenchmarkResult:
     config: ControlledFoulPlayConfig
     policy_id: str
     games: tuple[ControlledFoulPlayGameResult, ...]
+    checkpoint_sha256: str | None = None
     foulplay_random_seed_schedule: tuple[int, ...] | None = None
     value_leaf_provenance: Mapping[str, object] | None = None
 
@@ -574,6 +581,7 @@ class ControlledFoulPlayBenchmarkResult:
         )
         root_fallback_reasons: dict[str, int] = {}
         root_fallback_categories: dict[str, int] = {}
+        root_opponent_action_policies: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
                 root_fallback_reasons[reason] = root_fallback_reasons.get(reason, 0) + count
@@ -582,6 +590,10 @@ class ControlledFoulPlayBenchmarkResult:
                 game.root_puct_fallback_categories,
             ).items():
                 root_fallback_categories[category] = root_fallback_categories.get(category, 0) + count
+            for planner_id, count in game.root_puct_opponent_action_policies.items():
+                root_opponent_action_policies[planner_id] = (
+                    root_opponent_action_policies.get(planner_id, 0) + count
+                )
         elapsed_values = [
             game.root_puct_average_elapsed_seconds
             for game in self.games
@@ -595,6 +607,7 @@ class ControlledFoulPlayBenchmarkResult:
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(self.config.checkpoint),
+            "checkpoint_sha256": self.checkpoint_sha256,
             "format_id": self.config.format_id,
             "policy_id": self.policy_id,
             "policy_mode": self.config.policy_mode,
@@ -639,6 +652,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "belief_start_override_samples": self.config.belief_start_override_samples,
                 "start_override_hp_fraction_tolerance": self.config.start_override_hp_fraction_tolerance,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
+                "opponent_action_policies": dict(sorted(root_opponent_action_policies.items())),
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
                 "searches": root_searches,
@@ -1361,6 +1375,7 @@ async def run_controlled_foulplay_benchmark(
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
     _validate_external_paths(config)
+    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
     model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
     value_model, value_result = model, result
     value_leaf_provenance: Mapping[str, object] | None = None
@@ -1460,6 +1475,7 @@ async def run_controlled_foulplay_benchmark(
                         config=config,
                         policy_id=benchmark_policy_id,
                         games=tuple(game_results),
+                        checkpoint_sha256=checkpoint_sha256,
                         value_leaf_provenance=value_leaf_provenance,
                     )
                 )
@@ -1480,6 +1496,7 @@ async def run_controlled_foulplay_benchmark(
         config=config,
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
+        checkpoint_sha256=checkpoint_sha256,
         value_leaf_provenance=value_leaf_provenance,
     )
 
@@ -1517,7 +1534,7 @@ async def capture_controlled_foulplay_rollouts(
 
     source = _resolved_belief_set_source(config)
     belief_set_source_hash = source.metadata.source_hash if source is not None else None
-    checkpoint_sha256 = _sha256_file(config.checkpoint)
+    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
     handle = None
     captured_games = 0
     skipped_capped_games = 0
@@ -1743,6 +1760,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
     root_puct_offsets: list[int] = []
     raw_policy_id: str | None = None
     root_puct_policy_id: str | None = None
+    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
     raw_value_leaf_provenance: Mapping[str, object] | None = None
     root_puct_value_leaf_provenance: Mapping[str, object] | None = None
     opponent_crashes: list[ControlledFoulPlayOpponentCrash] = []
@@ -1754,6 +1772,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="raw"),
             policy_id=raw_policy_id,
             games=tuple(raw_games),
+            checkpoint_sha256=checkpoint_sha256,
             foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule_for_offsets(
                 config,
                 offsets=raw_offsets,
@@ -1768,6 +1787,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="root-puct"),
             policy_id=root_puct_policy_id,
             games=tuple(root_puct_games),
+            checkpoint_sha256=checkpoint_sha256,
             foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule_for_offsets(
                 config,
                 offsets=root_puct_offsets,
@@ -2208,6 +2228,7 @@ async def _run_single_game(
     root_fallbacks = sum(1 for decision in state.decisions if decision.metadata.get("root_puct_fallback"))
     root_fallback_reasons: dict[str, int] = {}
     root_fallback_categories: dict[str, int] = {}
+    root_opponent_action_policies: dict[str, int] = {}
     for decision in state.decisions:
         if not decision.metadata.get("root_puct_fallback"):
             continue
@@ -2218,6 +2239,15 @@ async def _run_single_game(
             or root_puct_fallback_category(reason)
         )
         root_fallback_categories[category] = root_fallback_categories.get(category, 0) + 1
+    for decision in state.decisions:
+        if (
+            decision.metadata.get("policy_family") != "root-puct-search"
+            or decision.metadata.get("root_puct_fallback")
+        ):
+            continue
+        planner_id = decision.metadata.get("root_puct_opponent_action_policy")
+        if isinstance(planner_id, str) and planner_id:
+            root_opponent_action_policies[planner_id] = root_opponent_action_policies.get(planner_id, 0) + 1
     root_total_visits = sum(
         int(decision.metadata.get("root_puct_total_visits") or 0)
         for decision in state.decisions
@@ -2377,6 +2407,7 @@ async def _run_single_game(
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
         root_puct_fallbacks=root_fallbacks,
+        root_puct_opponent_action_policies=root_opponent_action_policies,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
         root_puct_opponent_action_scenarios_generated=root_scenarios_generated,
@@ -2677,9 +2708,6 @@ async def _handle_decision_boundary(
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
     foulplay_player = config.foulplay_player
-    # This begins at the ready boundary and ends when PokeZero's serialized choice is available.
-    # Waiting for the external opponent or submitting joint choices is intentionally excluded.
-    pokezero_choice_wall_start = time.perf_counter() if pokezero_player in requested_players else None
     _capture_resolved_public_action_round(state, decision_round)
     state.previous_requested_players = requested_players
     belief_set_source = _resolved_belief_set_source(config)
@@ -2723,8 +2751,15 @@ async def _handle_decision_boundary(
                 acting_player=pokezero_player,
                 opponent_legal_mask_mode=config.opponent_legal_mask_mode,
             ),
-            requested_observations=dict(observations),
+            requested_observations=_requested_observations_for_context(
+                observations,
+                acting_player=pokezero_player,
+                opponent_legal_mask_mode=config.opponent_legal_mask_mode,
+            ),
         )
+        # Match the local benchmark boundary: policy selection begins after the
+        # observation/context are ready and ends at the returned decision.
+        pokezero_choice_wall_start = time.perf_counter()
         policy_decision = await asyncio.to_thread(
             _select_policy_decision,
             policy,
@@ -2732,16 +2767,16 @@ async def _handle_decision_boundary(
             pokezero_context,
             seed=state.seed,
         )
+        policy_elapsed_seconds = time.perf_counter() - pokezero_choice_wall_start
         choices[pokezero_player] = showdown_choice_for_action(
             player_states[pokezero_player],
             policy_decision.action_index,
         )
-        assert pokezero_choice_wall_start is not None
         decisions[pokezero_player] = replace(
             policy_decision,
             metadata={
                 **dict(policy_decision.metadata),
-                "policy_elapsed_seconds": time.perf_counter() - pokezero_choice_wall_start,
+                "policy_elapsed_seconds": policy_elapsed_seconds,
             },
         )
         # Capture the actual controller context that selected the decision. This is distinct from
@@ -2885,6 +2920,19 @@ def _requested_legal_action_masks_for_context(
             continue
         masks[player] = tuple(observation.legal_action_mask)
     return masks
+
+
+def _requested_observations_for_context(
+    observations: Mapping[PlayerId, PokeZeroObservationV0],
+    *,
+    acting_player: PlayerId,
+    opponent_legal_mask_mode: str,
+) -> dict[PlayerId, PokeZeroObservationV0]:
+    return {
+        player: observation
+        for player, observation in observations.items()
+        if player == acting_player or opponent_legal_mask_mode != "hidden"
+    }
 
 
 def _resolved_belief_set_source(config: ControlledFoulPlayConfig):

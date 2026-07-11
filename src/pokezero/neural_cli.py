@@ -3491,6 +3491,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
+        record_policy_timing=True,
+        hide_opponent_legal_action_masks=True,
     )
     leaf_rollout_rounds_values = _root_puct_leaf_rollout_rounds_values(args)
     tag_leaf_policy_ids = args.leaf_rollout_rounds_sweep is not None
@@ -3521,6 +3523,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             world_sample_cap=args.belief_world_sample_cap,
         )
     raw_policy_id = str(result.model_config.policy_id)
+    raw_policy_checkpoint = str(args.checkpoint.resolve(strict=False))
+    # Explicit value leaves already prove the raw-file hash through the
+    # compatibility latch. Preserve the old no-leaf benchmark seam without
+    # forcing synthetic/unit-test checkpoint paths to exist just for reporting.
+    raw_policy_checkpoint_sha256 = (
+        str(value_leaf_provenance["policy_checkpoint_sha256"])
+        if value_leaf_provenance is not None
+        else None
+    )
 
     root_dirichlet_enabled = args.root_dirichlet_alpha is not None
     root_puct_variants = (False, True) if root_dirichlet_enabled else (False,)
@@ -3548,6 +3559,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             sampling_temperature=args.temperature,
             device=args.device,
             policy_id=policy_id,
+            checkpoint_path=raw_policy_checkpoint,
+            weights_sha256=raw_policy_checkpoint_sha256,
         )
 
     def make_leaf_rollout_policy(

@@ -89,6 +89,30 @@ class CapstoneArmEvidence:
 
 
 @dataclass(frozen=True)
+class CapstonePairedArmEvidence:
+    """One candidate arm and its seed-paired raw-policy control.
+
+    External opponents can retain wall-clock or process-local nondeterminism even
+    when the BattleStream seed is fixed.  A candidate therefore owns the raw
+    control collected beside it, rather than borrowing a raw result from a
+    different search configuration.  The caller still supplies one complete
+    roster and this type requires every pair to cover it exactly.
+    """
+
+    arm_id: str
+    baseline: CapstoneArmEvidence
+    candidate: CapstoneArmEvidence
+
+    def __post_init__(self) -> None:
+        if not self.arm_id.strip():
+            raise ValueError("arm_id must be non-empty.")
+        if self.baseline.arm_id != "raw":
+            raise ValueError("paired capstone baseline arm_id must be 'raw'.")
+        if self.candidate.arm_id != self.arm_id:
+            raise ValueError("paired capstone candidate arm_id must match the pair arm_id.")
+
+
+@dataclass(frozen=True)
 class _PairedGame:
     baseline: CapstoneGameOutcome
     candidate: CapstoneGameOutcome
@@ -237,6 +261,69 @@ def analyze_primary_capstone(
             "fallback_count": baseline.fallback_count,
             "privileged_fallback_count": baseline.privileged_fallback_count,
         },
+        "primary_arms": rows,
+    }
+
+
+def analyze_paired_capstone_arms(
+    paired_arms: Iterable[CapstonePairedArmEvidence],
+    *,
+    expected_keys: Iterable[tuple[str, int, str]],
+    bootstrap_replicates: int = 10_000,
+    bootstrap_seed: int = 20260710,
+) -> dict[str, Any]:
+    """Analyze independently controlled candidate arms against one fixed roster.
+
+    This is the external-opponent counterpart of :func:`analyze_primary_capstone`.
+    Each candidate is compared only with the raw arm run on the same seed/seat
+    roster and under the same opponent startup schedule.  It intentionally does
+    not compare raw controls across arms as if they were deterministic
+    counterfactuals.
+    """
+
+    expected = tuple(sorted(set(expected_keys)))
+    if not expected:
+        raise ValueError("expected_keys must contain the complete capstone seed roster.")
+    _validate_mirrored_roster(expected)
+    pairs = tuple(paired_arms)
+    if not pairs:
+        raise ValueError("at least one paired capstone arm is required.")
+    arm_ids = [pair.arm_id for pair in pairs]
+    if len(set(arm_ids)) != len(arm_ids):
+        raise ValueError("paired capstone arm ids must be unique.")
+
+    rows: list[dict[str, Any]] = []
+    for index, pair in enumerate(pairs):
+        _validate_primary_arm(pair.baseline, expected_keys=expected)
+        _validate_primary_arm(pair.candidate, expected_keys=expected)
+        rows.append(
+            {
+                "arm_id": pair.arm_id,
+                "baseline": {
+                    "arm_id": pair.baseline.arm_id,
+                    "fallback_count": pair.baseline.fallback_count,
+                    "privileged_fallback_count": pair.baseline.privileged_fallback_count,
+                },
+                "candidate": {
+                    "arm_id": pair.candidate.arm_id,
+                    "uses_value_leaves": pair.candidate.uses_value_leaves,
+                    "calibrated_value_copy": pair.candidate.calibrated_value_copy,
+                    "fallback_count": pair.candidate.fallback_count,
+                    "privileged_fallback_count": pair.candidate.privileged_fallback_count,
+                },
+                "paired_delta_vs_baseline": paired_capstone_delta(
+                    pair.baseline.outcomes,
+                    pair.candidate.outcomes,
+                    expected_keys=expected,
+                    bootstrap_replicates=bootstrap_replicates,
+                    bootstrap_seed=_scoped_seed(bootstrap_seed, f"{pair.arm_id}:{index}"),
+                ),
+            }
+        )
+    return {
+        "analysis_method": "primary_capstone_per_arm_raw_controls_paired_bootstrap",
+        "outcome_scoring": dict(OUTCOME_SCORING),
+        "shared_seed_roster": _roster_readout(expected),
         "primary_arms": rows,
     }
 
