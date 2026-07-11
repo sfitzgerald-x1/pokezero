@@ -2561,8 +2561,11 @@ def _public_action_identifiers_from_protocol_lines(
             move_id = _public_protocol_identifier(parts[3])
             if move_id:
                 actions[player] = PublicActionIdentifier(kind="move", move_id=move_id)
-        elif event_type in {"switch", "drag"} and len(parts) >= 5:
-            species = _public_protocol_identifier(parts[4].split(",", 1)[0])
+        elif event_type in {"switch", "drag"} and len(parts) >= 4:
+            # Showdown protocol uses |switch|slot|species, level|condition. The
+            # condition is parts[4], not the switch target; persisting it here
+            # made every later sampled-world switch identifier unreplayable.
+            species = _public_protocol_identifier(parts[3].split(",", 1)[0])
             if species:
                 actions[player] = PublicActionIdentifier(kind="switch", switched_species=species)
         elif event_type == "cant" and len(parts) >= 4:
