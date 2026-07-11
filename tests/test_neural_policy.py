@@ -4471,6 +4471,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True, tier2_investment=False,
             )
         )
+        value_leaf_provenance = {
+            "policy_checkpoint": "/checkpoint.pt",
+            "policy_checkpoint_sha256": "raw-sha",
+            "value_checkpoint": "/calibrated.pt",
+            "value_checkpoint_sha256": "leaf-sha",
+            "value_calibration_source_checkpoint_sha256": "raw-sha",
+            "model_config_match": True,
+            "belief_set_source_hash_match": True,
+            "value_calibration_transform": {"method": "isotonic"},
+        }
         captured = {}
 
         def fake_benchmark_root_puct_search(**kwargs):
@@ -4486,6 +4496,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 "pokezero.neural_cli.load_transformer_checkpoint",
                 side_effect=((fake_model, fake_training_result), (fake_value_model, fake_training_result)),
             ) as load,
+            patch(
+                "pokezero.neural_cli.require_compatible_transformer_value_checkpoint",
+                return_value=value_leaf_provenance,
+            ) as require_compatible,
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25) as value_eval,
             patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
             patch("pokezero.neural_cli.benchmark_root_puct_search", side_effect=fake_benchmark_root_puct_search),
@@ -4546,16 +4560,61 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(value_eval.call_args.kwargs["result"], fake_training_result)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
+        require_compatible.assert_called_once_with(
+            policy_checkpoint=Path("checkpoint.pt"),
+            policy_result=fake_training_result,
+            value_checkpoint=Path("calibrated.pt"),
+            value_result=fake_training_result,
+        )
         self.assertEqual(
             json.loads(stdout.getvalue()),
             {
                 "evaluated_prefixes": 2,
                 "value_leaf": {
-                    "policy_checkpoint": "checkpoint.pt",
-                    "value_checkpoint": "calibrated.pt",
+                    **value_leaf_provenance,
                     "uses_distinct_value_checkpoint": True,
                 },
             },
+        )
+
+    def test_neural_cli_root_puct_benchmark_rejects_incompatible_value_leaf(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+        raw_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke"))
+        incompatible = ValueError("value checkpoint calibrated-copy source hash does not match policy checkpoint")
+
+        stderr = io.StringIO()
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                side_effect=((fake_model, raw_result), (object(), raw_result)),
+            ),
+            patch(
+                "pokezero.neural_cli.require_compatible_transformer_value_checkpoint",
+                side_effect=incompatible,
+            ) as require_compatible,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--value-checkpoint",
+                    "uncalibrated.pt",
+                    "--allow-legacy-checkpoints",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("source hash does not match", stderr.getvalue())
+        require_compatible.assert_called_once_with(
+            policy_checkpoint=Path("checkpoint.pt"),
+            policy_result=raw_result,
+            value_checkpoint=Path("uncalibrated.pt"),
+            value_result=raw_result,
         )
 
     def test_neural_cli_root_puct_counterfactual_wires_continuation_policies(self) -> None:

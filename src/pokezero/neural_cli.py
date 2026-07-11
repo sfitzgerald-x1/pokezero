@@ -4038,8 +4038,19 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     if value_checkpoint == args.checkpoint:
         value_model, value_result = model, result
+        value_leaf_provenance: Mapping[str, object] | None = None
     else:
         value_model, value_result = load_transformer_checkpoint(value_checkpoint, map_location=args.device)
+        # A distinct value leaf is only meaningful for the capstone when it is
+        # a calibrated copy of these exact policy priors. Keep ordinary
+        # same-checkpoint mechanics benchmarks available, but never silently
+        # substitute an unrelated current-family checkpoint for leaf values.
+        value_leaf_provenance = require_compatible_transformer_value_checkpoint(
+            policy_checkpoint=args.checkpoint,
+            policy_result=result,
+            value_checkpoint=value_checkpoint,
+            value_result=value_result,
+        )
     # HIGH-1 latch: encode-time masks come from the checkpoint(s) observing through this env.
     env_config = _env_config_with_spec_masks(
         env_config,
@@ -4080,11 +4091,18 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
     )
     if args.json:
         payload = report.to_dict()
-        payload["value_leaf"] = {
-            "policy_checkpoint": str(args.checkpoint),
-            "value_checkpoint": str(value_checkpoint),
-            "uses_distinct_value_checkpoint": value_checkpoint != args.checkpoint,
-        }
+        payload["value_leaf"] = (
+            {
+                **value_leaf_provenance,
+                "uses_distinct_value_checkpoint": True,
+            }
+            if value_leaf_provenance is not None
+            else {
+                "policy_checkpoint": str(args.checkpoint),
+                "value_checkpoint": str(value_checkpoint),
+                "uses_distinct_value_checkpoint": False,
+            }
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_root_puct_benchmark_report(report)
