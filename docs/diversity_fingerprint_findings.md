@@ -50,29 +50,66 @@ threshold and making style verdicts conservative. Notable dissociation: **seqL20
 read style-SAME despite being action/value-DIVERSE** — the two matched-strength 200M runs
 reach similar aggregate playstyle via different specific decisions.
 
-### Matchup layer — round-robin (Bradley-Terry + intransitivity)
-_[filled when the round-robin lands: BT strengths, win matrix, and whether the outcomes are
-non-transitive (rock-paper-scissors ⇒ strategic diversity the strength axis can't explain) or
-transitive (a single strength axis)._]
+### Matchup layer — TRANSITIVE, NOT diverse (round-robin, 150 games/matchup seat-balanced)
+Neural round-robin over all pairs (benchmark auto-plays both seats). Bradley-Terry fit:
+**ref10m +0.22 ≈ clean50m +0.20 > orig200m +0.05 > lr15L200m −0.19 > seqL200m −0.41.**
+A single latent strength axis explains **every** head-to-head to within ~1% (all residuals
+≤ 0.019). The directed-3-cycle intransitivity statistic is **0.0000**, versus a bootstrap null
+mean of 0.0000 (p = 1.000): **no rock-paper-scissors structure, no non-transitivity.** The win
+matrix is exactly what one strength dimension predicts — there is no matchup-layer diversity.
 
 ## The matched-strength natural experiment (seqL200m vs lr15L200m)
 
 The purest test in the roster: identical 200M architecture and schedule family, both pinned at
 md≈0.85, but radically different training histories (seq-L spiralled into passivity and
-recovered; lr15 warmed up cleanly at half peak LR). If trajectory history imprints strategy,
-these two should differ. **Action layer: diverse (JS 0.134). Value layer: diverse (Pearson 0.83).
-Style layer: same.** So the two histories produce policies that *choose differently and value
-positions differently* while landing on *similar aggregate playstyle* — trajectory history
-imprints the fine-grained policy, not the coarse behavioral signature.
+recovered; lr15 warmed up cleanly at half peak LR). **Action: diverse (JS 0.134). Value: diverse
+(Pearson 0.83). Style: same. Matchup: same — lr15 beats seq-L 53.7%, exactly its Bradley-Terry
+prediction (0.556) from a −0.19 vs −0.41 strength gap.** The two histories produce policies that
+*choose and value positions differently* but sit on the *same transitive strength axis* with
+*similar aggregate playstyle*. Trajectory history imprints fine-grained policy noise, not a
+distinct, exploitable strategy.
 
-## Preliminary verdict (Stages A complete; matchup pending)
+## Verdict
 
-On the fixed-corpus fingerprint layers (action + value), these equal-strength self-play
-checkpoints are **diverse, not a single strategy** — every cross-run pair diverges beyond the
-within-run drift baseline, with the recipe family clustering tightest. Style is a weaker,
-noisier signal that partly agrees. The matchup layer (below) tests whether that fingerprint
-diversity manifests as game-theoretic non-transitivity or collapses onto one strength axis —
-the decisive read for whether a population buys anything over a single checkpoint.
+**These equal-strength v2.2 self-play checkpoints are the SAME strategy with diverse
+micro-behavior — they are NOT diverse strategies of equal strength.**
+
+The four layers agree on a single coherent picture:
+- **Action + value: diverse everywhere.** Every cross-run pair picks different moves and prices
+  positions differently, 2–3× beyond the within-run training-drift baseline.
+- **Style: mixed/noisy.** Aggregate behavioral signatures partly overlap; the 500-game null
+  band is sampling-noise-limited.
+- **Matchup: perfectly transitive, zero cycles.** One strength axis explains all head-to-heads;
+  no rock-paper-scissors.
+
+The reconciliation: the fingerprint differences are **variation around a common strategy —
+different stochastic paths up the same hill, or strategically-equivalent local optima — not
+distinct viable strategies.** If the runs were genuinely diverse strategies, the matchup layer
+would show non-transitivity (something that beats A but loses to B); it shows none. Micro-level
+divergence in specific choices does not create macro-level strategic structure.
+
+### What this routes
+- **Monoculture confirmed at the game-theoretic level.** A population/ensemble of these
+  checkpoints buys little in matchup terms — there is no non-transitivity to exploit and no
+  matchup-aware advantage to capture. Pool anchors and ensemble value heads gain only whatever
+  the (real but strategically-inert) action/value variance provides.
+- **Refutation mining (G4) is the critical path**, not passive ensembling: genuine strategic
+  diversity has to be *manufactured* (actively finding and training against refutations),
+  because self-play alone converges to one strategy here.
+- **The shared blind spot follows.** One strategy means one set of blind spots — consistent with
+  the hazard-mispricing (ΔV) signature seen across the family.
+
+### Caveats
+- lr15/seq-L are mid-training md≈0.85 snapshots (strength-matched but less mature than the
+  finals); part of their action/value distance from the finals reflects maturity. Their matchup
+  transitivity and the seq-L↔lr15 comparison are clean regardless.
+- The within-run null (roster vs its own self 30k games earlier) folds in genuine training
+  drift, so it is a *conservative* "same-strategy" bar; cross-run pairs exceed it anyway on
+  action/value.
+- n=5 roster ⇒ 10 triples for cycle detection — modest, but the transitivity is unambiguous
+  (every residual < 2%). Foul-play/human-play opponents are out of scope (this asks whether the
+  recipe converges, not how it fares vs external strategies).
+- Style precision is 500-game-limited; a 1,000-game re-probe would sharpen that layer only.
 
 Artifacts: `/shared/diversity-fingerprints/diversity-20260711a/` (per-checkpoint fingerprints,
 pairwise.json, style.json, matchup.json, report.html). Regenerate the report with
