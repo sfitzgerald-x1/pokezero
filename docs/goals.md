@@ -14,6 +14,12 @@ agent playing itself, not from imitating a teacher or from hand-built strategy.
 - Use parallel self-play collection to increase sample generation throughput.
 - Prefer an eventual model and runtime that can run on smaller consumer-grade GPUs when feasible.
 
+## Long-Running Execution
+
+Long-running evaluations must be controlled by persistent cluster jobs, not by a Codex foreground
+session. Codex should not poll continuously; use job-produced artifacts or notifications and resume
+meaningful work when prompted.
+
 ## Non-Goals
 
 - **Imitation as the source of strategy.** The scripted teacher, behavior cloning, and DAgger are at
