@@ -33,6 +33,7 @@ from .prior_belief_profile import public_policy_context
 from .public_decision_corpus import (
     PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
     PublicDecisionCorpus,
+    PublicDecisionCorpusStream,
     PublicDecisionRecord,
     PublicResolvedActionRound,
     load_public_decision_corpus,
@@ -483,27 +484,42 @@ def hazard_audit_decisions_from_public_corpus(
     return _hazard_decisions_from_public_records(loaded.decisions, driver_id="public-decision-corpus")
 
 
+def iter_hazard_audit_decisions_from_public_corpus(
+    corpus: PublicDecisionCorpus | PublicDecisionCorpusStream,
+) -> Iterable[HazardAuditDecision]:
+    """Yield Step 3 targets without retaining non-target public corpus records."""
+
+    if corpus.manifest.get("schema_version") != PUBLIC_DECISION_CORPUS_SCHEMA_VERSION:
+        raise ValueError(f"hazard audit requires {PUBLIC_DECISION_CORPUS_SCHEMA_VERSION!r}.")
+    records = corpus.iter_decisions() if isinstance(corpus, PublicDecisionCorpusStream) else corpus.decisions
+    return _iter_hazard_decisions_from_public_records(records, driver_id="public-decision-corpus")
+
+
 def _hazard_decisions_from_public_records(
     records: Sequence[PublicDecisionRecord],
     *,
     driver_id: str,
 ) -> tuple[HazardAuditDecision, ...]:
-    decisions: list[HazardAuditDecision] = []
+    return tuple(sorted(_iter_hazard_decisions_from_public_records(records, driver_id=driver_id), key=lambda decision: decision.state_id))
+
+
+def _iter_hazard_decisions_from_public_records(
+    records: Iterable[PublicDecisionRecord],
+    *,
+    driver_id: str,
+) -> Iterable[HazardAuditDecision]:
     for record in records:
         observation = record.observation.to_observation(belief_view=record.public_belief_view)
         for target_action_index, target_move_id in _hazard_target_moves(
             observation,
             record.current_legal_action_mask,
         ):
-            decisions.append(
-                HazardAuditDecision(
-                    public_record=record,
-                    driver_id=driver_id,
-                    target_action_index=target_action_index,
-                    target_move_id=target_move_id,
-                )
+            yield HazardAuditDecision(
+                public_record=record,
+                driver_id=driver_id,
+                target_action_index=target_action_index,
+                target_move_id=target_move_id,
             )
-    return tuple(sorted(decisions, key=lambda decision: decision.state_id))
 
 
 def run_hazard_blind_spot_audit(
@@ -515,9 +531,12 @@ def run_hazard_blind_spot_audit(
     world_provider: WorldProvider,
     config: AuditConfig = AuditConfig(),
     provenance: Mapping[str, object] | None = None,
+    provenance_factory: Callable[[], Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """Run deterministic/noise PUCT sweeps and return a JSON-ready audit payload."""
 
+    if provenance is not None and provenance_factory is not None:
+        raise ValueError("provide either provenance or provenance_factory, not both.")
     decision_list = tuple(sorted(decisions, key=lambda decision: decision.state_id))
     config_payload = config.to_dict()
     records: list[dict[str, object]] = []
@@ -574,7 +593,7 @@ def run_hazard_blind_spot_audit(
         },
     )
     corpus_hash = canonical_hash(corpus_states)
-    provenance_payload = dict(provenance or {})
+    provenance_payload = dict(provenance_factory() if provenance_factory is not None else provenance or {})
     _assert_public_payload(provenance_payload)
     payload = {
         "schema_version": HAZARD_AUDIT_SCHEMA_VERSION,

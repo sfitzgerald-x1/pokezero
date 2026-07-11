@@ -17,6 +17,7 @@ from pokezero.hazard_audit import (
     aggregate_hazard_audit_records,
     hazard_audit_decisions_from_trajectory,
     hazard_audit_decisions_from_public_corpus,
+    iter_hazard_audit_decisions_from_public_corpus,
     run_hazard_blind_spot_audit,
 )
 from pokezero.observation import PokeZeroObservationV0
@@ -27,6 +28,7 @@ from pokezero.public_decision_corpus import (
     PublicDecisionRecord,
     PublicObservation,
     PublicResolvedActionRound,
+    open_public_decision_corpus,
     public_corpus_manifest,
     public_decision_id,
 )
@@ -445,6 +447,25 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(decisions[0].public_record, source.public_record)
         with self.assertRaisesRegex(ValueError, "canonical PublicDecisionCorpus"):
             hazard_audit_decisions_from_public_corpus({})
+
+    def test_streaming_hazard_adapter_keeps_only_hazard_targets(self) -> None:
+        source = _decision()
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint-hash",
+            belief_set_source_hash=None,
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "step2-public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                writer.append(source.public_record)
+            stream = open_public_decision_corpus(path)
+            decisions = tuple(iter_hazard_audit_decisions_from_public_corpus(stream))
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].target_move_id, source.target_move_id)
+        self.assertEqual(decisions[0].public_record, source.public_record)
+        self.assertEqual(stream.selected_decision_count, 1)
 
     def test_public_belief_provider_replays_sampled_world_and_uses_its_own_opponent_observation(self) -> None:
         decision = _decision()

@@ -18,7 +18,7 @@ from pokezero.hazard_audit import (
     PublicBeliefWorldProvider,
     canonical_hash,
     capture_hazard_audit_corpus,
-    hazard_audit_decisions_from_public_corpus,
+    iter_hazard_audit_decisions_from_public_corpus,
     run_hazard_blind_spot_audit,
     sha256_file,
 )
@@ -30,7 +30,7 @@ from pokezero.neural_policy import (
 from pokezero.online_client import build_agent
 from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.policy import MaxDamagePolicy
-from pokezero.public_decision_corpus import load_public_decision_corpus
+from pokezero.public_decision_corpus import open_public_decision_corpus
 from pokezero.randbat import load_gen3_randbat_source_cached
 
 
@@ -76,22 +76,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         env_config_kwargs["feature_masks"] = feature_masks
     env_config = LocalShowdownConfig(**env_config_kwargs)
     if args.public_corpus is not None:
-        public_corpus = load_public_decision_corpus(
+        public_corpus = open_public_decision_corpus(
             args.public_corpus,
             max_decisions=args.max_public_decisions,
         )
-        corpus = hazard_audit_decisions_from_public_corpus(public_corpus)
-        corpus_config = {
-            "source": "pokezero.public-decision-corpus.v1",
-            "path": str(args.public_corpus),
-            "source_file_sha256": public_corpus.source_file_sha256,
-            "selected_content_sha256": public_corpus.selected_content_sha256,
-            "selection": {
-                "max_decisions": args.max_public_decisions,
-                "selected_decision_count": len(public_corpus.decisions),
-            },
-            "schema_version": public_corpus.manifest.get("schema_version"),
-        }
+        corpus = iter_hazard_audit_decisions_from_public_corpus(public_corpus)
     else:
         corpus = capture_hazard_audit_corpus(
             env_config=env_config,
@@ -100,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_states=args.max_states,
             max_decision_rounds=args.max_decision_rounds,
         )
-        corpus_config = {
+        fixed_driver_corpus_config = {
             "source": "fixed-checkpoint-independent-drivers",
             "drivers": [
                 "max-damage-vs-max-damage",
@@ -140,6 +129,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     set_source = load_gen3_randbat_source_cached(args.showdown_root)
+
+    def audit_provenance() -> dict[str, object]:
+        if args.public_corpus is not None:
+            corpus_config: dict[str, object] = {
+                "source": "pokezero.public-decision-corpus.v1",
+                "path": str(args.public_corpus),
+                "source_file_sha256": public_corpus.source_file_sha256,
+                "selected_content_sha256": public_corpus.selected_content_sha256,
+                "selection": {
+                    "max_decisions": args.max_public_decisions,
+                    "selected_decision_count": public_corpus.selected_decision_count,
+                },
+                "schema_version": public_corpus.manifest.get("schema_version"),
+            }
+        else:
+            corpus_config = fixed_driver_corpus_config
+        return {
+            "checkpoint": str(args.checkpoint),
+            "checkpoint_sha256": sha256_file(args.checkpoint),
+            "checkpoint_model_config_hash": canonical_hash(agent.policy.result.model_config),
+            "showdown_root": str(args.showdown_root.resolve()),
+            "randbat_source_hash": set_source.metadata.source_hash,
+            "sampled_world_opponent_policy": "max-damage",
+            "corpus_config": corpus_config,
+        }
+
     payload = run_hazard_blind_spot_audit(
         decisions=corpus,
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -152,15 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             world_sample_cap=args.belief_world_sample_cap,
         ),
         config=config,
-        provenance={
-            "checkpoint": str(args.checkpoint),
-            "checkpoint_sha256": sha256_file(args.checkpoint),
-            "checkpoint_model_config_hash": canonical_hash(agent.policy.result.model_config),
-            "showdown_root": str(args.showdown_root.resolve()),
-            "randbat_source_hash": set_source.metadata.source_hash,
-            "sampled_world_opponent_policy": "max-damage",
-            "corpus_config": corpus_config,
-        },
+        provenance_factory=audit_provenance,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

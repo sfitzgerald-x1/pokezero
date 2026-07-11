@@ -34,6 +34,7 @@ from pokezero.public_decision_corpus import (
     PublicObservation,
     PublicResolvedActionRound,
     load_public_decision_corpus,
+    open_public_decision_corpus,
     public_corpus_manifest,
     public_decision_id,
     public_decision_records_from_trajectory,
@@ -120,7 +121,7 @@ class PublicCorpusTest(unittest.TestCase):
         report = {"decision_count": MINIMUM_PROFILE_DECISIONS, "selection_context_count": 1}
 
         with (
-            patch("pokezero.neural_cli.load_public_decision_corpus", return_value=corpus),
+            patch("pokezero.neural_cli.open_public_decision_corpus", return_value=corpus),
             patch("pokezero.neural_cli.sha256_file", return_value="checkpoint"),
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), result)),
             patch("pokezero.neural_cli.observation_spec_from_model_config", return_value=observation_spec),
@@ -132,6 +133,59 @@ class PublicCorpusTest(unittest.TestCase):
             self.assertEqual(_prior_belief_profile(args), 0)
 
         vocabulary.assert_called_once_with(Path("/showdown"), include_turn_merged=True)
+
+    def test_streamed_prefix_matches_eager_selection_and_commits_metadata_last(self) -> None:
+        record = _record()
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint",
+            belief_set_source_hash="source",
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                writer.append(record)
+
+            streamed = open_public_decision_corpus(path, max_decisions=1)
+            with self.assertRaisesRegex(RuntimeError, "has not completed"):
+                _ = streamed.selected_decision_count
+            self.assertEqual([item.decision_id for item in streamed.iter_decisions()], [record.decision_id])
+
+            eager = load_public_decision_corpus(path, max_decisions=1)
+            self.assertEqual(streamed.selected_decision_count, len(eager.decisions))
+            self.assertEqual(streamed.selected_content_sha256, eager.selected_content_sha256)
+            with self.assertRaisesRegex(RuntimeError, "only once"):
+                list(streamed.iter_decisions())
+
+    def test_profile_public_corpus_streams_the_required_two_thousand_decisions(self) -> None:
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint",
+            belief_set_source_hash="source",
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                for index in range(MINIMUM_PROFILE_DECISIONS):
+                    prototype = replace(_record(), battle_id=f"stream-{index}")
+                    writer.append(replace(prototype, decision_id=public_decision_id(prototype)))
+
+            def profile(corpus):
+                return profile_public_corpus(
+                    corpus,
+                    prior_evaluator=lambda _history: (0.5, 0.3, 0.2) + (0.0,) * (ACTION_COUNT - 3),
+                    candidate_value_evaluator=lambda _record: (
+                        WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.5, 1: 0.4, 2: 0.3}),
+                    ),
+                )
+
+            report = profile(open_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS))
+            eager_report = profile(load_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS))
+
+        self.assertEqual(report["corpus_decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(report["decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(report["provenance"]["corpus_selection"]["selected_decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(report, eager_report)
 
     def test_public_roundtrip_and_private_opponent_leakage_invariance(self) -> None:
         p1_observation = _observation(0, 1, metadata={"self_team": []})
