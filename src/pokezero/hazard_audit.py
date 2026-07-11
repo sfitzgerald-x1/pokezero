@@ -16,7 +16,9 @@ import hashlib
 import json
 from pathlib import Path
 import random
-from typing import Any, Callable, Iterable, Mapping, Sequence
+import sqlite3
+import tempfile
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .determinization import (
@@ -484,6 +486,51 @@ def hazard_audit_decisions_from_public_corpus(
     return _hazard_decisions_from_public_records(loaded.decisions, driver_id="public-decision-corpus")
 
 
+def fixed_driver_hazard_audit_decisions_from_public_corpus(
+    corpus: PublicDecisionCorpus | Path,
+) -> tuple[HazardAuditDecision, ...]:
+    """Rebuild an exact fixed-driver capture from its canonical public corpus.
+
+    Fixed-driver captures encode their driver in the public battle ID and retain
+    the selected hazard-state IDs in the corpus manifest.  That makes the
+    compact Step 3 artifact independently replayable without embedding full
+    records in the audit result itself.
+    """
+
+    loaded = load_public_decision_corpus(corpus) if isinstance(corpus, Path) else corpus
+    if not isinstance(loaded, PublicDecisionCorpus):
+        raise ValueError("fixed-driver hazard audit requires a canonical PublicDecisionCorpus or its JSONL path.")
+    if loaded.manifest.get("schema_version") != PUBLIC_DECISION_CORPUS_SCHEMA_VERSION:
+        raise ValueError(f"fixed-driver hazard audit requires {PUBLIC_DECISION_CORPUS_SCHEMA_VERSION!r}.")
+    capture_config = loaded.manifest.get("capture_config")
+    if (
+        not isinstance(capture_config, Mapping)
+        or capture_config.get("source") != "fixed-checkpoint-independent-drivers"
+    ):
+        raise ValueError("fixed-driver hazard corpus is missing fixed-driver capture provenance.")
+    selected_state_ids = capture_config.get("selected_hazard_state_ids")
+    if (
+        not isinstance(selected_state_ids, Sequence)
+        or isinstance(selected_state_ids, str)
+        or any(not isinstance(state_id, str) for state_id in selected_state_ids)
+    ):
+        raise ValueError("fixed-driver hazard corpus is missing selected_hazard_state_ids.")
+    expected_ids = set(selected_state_ids)
+    decisions: list[HazardAuditDecision] = []
+    for record in loaded.decisions:
+        driver_id = _fixed_driver_id_from_battle_id(record)
+        decisions.extend(_iter_hazard_decisions_from_public_records((record,), driver_id=driver_id))
+    selected = tuple(
+        sorted(
+            (decision for decision in decisions if decision.state_id in expected_ids),
+            key=lambda decision: decision.state_id,
+        )
+    )
+    if {decision.state_id for decision in selected} != expected_ids:
+        raise ValueError("fixed-driver hazard corpus cannot reconstruct every selected hazard state.")
+    return selected
+
+
 def iter_hazard_audit_decisions_from_public_corpus(
     corpus: PublicDecisionCorpus | PublicDecisionCorpusStream,
 ) -> Iterable[HazardAuditDecision]:
@@ -493,6 +540,18 @@ def iter_hazard_audit_decisions_from_public_corpus(
         raise ValueError(f"hazard audit requires {PUBLIC_DECISION_CORPUS_SCHEMA_VERSION!r}.")
     records = corpus.iter_decisions() if isinstance(corpus, PublicDecisionCorpusStream) else corpus.decisions
     return _iter_hazard_decisions_from_public_records(records, driver_id="public-decision-corpus")
+
+
+def _fixed_driver_id_from_battle_id(record: PublicDecisionRecord) -> str:
+    prefix = "hazard-audit-"
+    suffix = f"-{record.seed}"
+    battle_id = record.battle_id
+    if not battle_id.startswith(prefix) or not battle_id.endswith(suffix):
+        raise ValueError("fixed-driver hazard corpus has an unexpected battle ID.")
+    driver_id = battle_id[len(prefix) : -len(suffix)]
+    if not driver_id:
+        raise ValueError("fixed-driver hazard corpus battle ID has no driver ID.")
+    return driver_id
 
 
 def _hazard_decisions_from_public_records(
@@ -544,7 +603,7 @@ def run_hazard_blind_spot_audit(
     low_prior_state_ids: set[str] = set()
     low_prior_available_world_state_ids: set[str] = set()
     low_prior_available_world_pairs: set[tuple[str, str]] = set()
-    for decision in decisions:
+    for decision in _iter_decisions_in_canonical_state_order(decisions):
         state_id = decision.state_id
         target_state_ids.add(state_id)
         state_descriptors.append(_state_descriptor(decision, state_id=state_id))
@@ -634,6 +693,74 @@ def _state_descriptor(decision: HazardAuditDecision, *, state_id: str) -> dict[s
         "target_move_id": decision.target_move_id,
         "target_action_index": decision.target_action_index,
     }
+
+
+def _iter_decisions_in_canonical_state_order(
+    decisions: Iterable[HazardAuditDecision],
+) -> Iterator[HazardAuditDecision]:
+    """Spool public decisions to disk, then replay them in the historical state-ID order.
+
+    Step 3 callback functions are public but may retain local diagnostic state, so
+    processing order is part of the reproducibility contract.  SQLite keeps the
+    full public replay payload off the Python heap while preserving that order.
+    """
+
+    with tempfile.TemporaryDirectory(prefix="pokezero-hazard-audit-") as temporary_directory:
+        database_path = Path(temporary_directory) / "decisions.sqlite3"
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute("PRAGMA journal_mode=OFF")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute(
+                "CREATE TABLE decisions (state_id TEXT NOT NULL, insertion_index INTEGER NOT NULL, payload_json TEXT NOT NULL)"
+            )
+            for insertion_index, decision in enumerate(decisions):
+                payload = decision.public_payload()
+                _assert_public_payload(payload)
+                connection.execute(
+                    "INSERT INTO decisions (state_id, insertion_index, payload_json) VALUES (?, ?, ?)",
+                    (
+                        decision.state_id,
+                        insertion_index,
+                        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    ),
+                )
+            connection.commit()
+            cursor = connection.execute(
+                "SELECT state_id, payload_json FROM decisions ORDER BY state_id ASC, insertion_index ASC"
+            )
+            for state_id, payload_json in cursor:
+                payload = json.loads(payload_json)
+                if not isinstance(payload, Mapping):
+                    raise ValueError("spooled hazard audit payload must be a JSON object.")
+                decision = _hazard_audit_decision_from_public_payload(payload)
+                if decision.state_id != state_id:
+                    raise ValueError("spooled hazard audit state ID did not round-trip.")
+                yield decision
+        finally:
+            connection.close()
+
+
+def _hazard_audit_decision_from_public_payload(payload: Mapping[str, object]) -> HazardAuditDecision:
+    public_decision = payload.get("public_decision")
+    target = payload.get("target")
+    driver_id = payload.get("driver_id")
+    if not isinstance(public_decision, Mapping):
+        raise ValueError("hazard audit decision payload is missing public_decision.")
+    if not isinstance(target, Mapping):
+        raise ValueError("hazard audit decision payload is missing target.")
+    if not isinstance(driver_id, str):
+        raise ValueError("hazard audit decision payload is missing driver_id.")
+    target_action_index = target.get("action_index")
+    target_move_id = target.get("move_id")
+    if not isinstance(target_action_index, int) or not isinstance(target_move_id, str):
+        raise ValueError("hazard audit decision target is malformed.")
+    return HazardAuditDecision(
+        public_record=PublicDecisionRecord.from_dict(public_decision),
+        driver_id=driver_id,
+        target_action_index=target_action_index,
+        target_move_id=target_move_id,
+    )
 
 
 def aggregate_hazard_audit_records(

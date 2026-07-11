@@ -31,7 +31,11 @@ from pokezero.neural_policy import (
 from pokezero.online_client import build_agent
 from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.policy import MaxDamagePolicy
-from pokezero.public_decision_corpus import open_public_decision_corpus
+from pokezero.public_decision_corpus import (
+    PublicDecisionCorpusWriter,
+    open_public_decision_corpus,
+    public_corpus_manifest,
+)
 from pokezero.randbat import load_gen3_randbat_source_cached
 
 
@@ -44,6 +48,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--public-corpus",
         type=Path,
         help="Step 2 pokezero.public-decision-corpus.v1 JSONL. When set, fixed-driver capture is skipped.",
+    )
+    parser.add_argument(
+        "--fixed-driver-corpus-out",
+        type=Path,
+        help="Canonical public JSONL sidecar for fixed-driver capture; defaults beside --out.",
     )
     parser.add_argument(
         "--max-public-decisions",
@@ -77,6 +86,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         env_config_kwargs["feature_masks"] = feature_masks
     env_config = LocalShowdownConfig(**env_config_kwargs)
     if args.public_corpus is not None:
+        if args.fixed_driver_corpus_out is not None:
+            parser.error("--fixed-driver-corpus-out is only valid without --public-corpus")
         public_corpus = open_public_decision_corpus(
             args.public_corpus,
             max_decisions=args.max_public_decisions,
@@ -130,6 +141,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     set_source = load_gen3_randbat_source_cached(args.showdown_root)
+    fixed_driver_corpus_path: Path | None = None
+    if args.public_corpus is None:
+        fixed_driver_corpus_path = args.fixed_driver_corpus_out or args.out.with_name(
+            f"{args.out.stem}.public-decisions.jsonl"
+        )
+        if fixed_driver_corpus_path == args.out:
+            parser.error("--fixed-driver-corpus-out must not equal --out")
+        fixed_driver_corpus_config = {
+            **fixed_driver_corpus_config,
+            "opponent_legal_mask_mode": "hidden",
+            "root_dirichlet_alpha": None,
+            "selected_hazard_state_ids": [decision.state_id for decision in corpus],
+        }
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="fixed-checkpoint-independent",
+            belief_set_source_hash=set_source.metadata.source_hash,
+            capture_config=fixed_driver_corpus_config,
+        )
+        with PublicDecisionCorpusWriter(fixed_driver_corpus_path, manifest=manifest) as writer:
+            for decision in corpus:
+                writer.append(decision.public_record)
 
     def audit_provenance() -> dict[str, object]:
         if args.public_corpus is not None:
@@ -145,7 +177,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "schema_version": public_corpus.manifest.get("schema_version"),
             }
         else:
-            corpus_config = fixed_driver_corpus_config
+            assert fixed_driver_corpus_path is not None
+            corpus_config = {
+                "source": "pokezero.public-decision-corpus.v1",
+                "path": str(fixed_driver_corpus_path),
+                "source_file_sha256": sha256_file(fixed_driver_corpus_path),
+                "selection": {
+                    "selected_hazard_state_count": len(corpus),
+                },
+                "capture": fixed_driver_corpus_config,
+            }
         return {
             "checkpoint": str(args.checkpoint),
             "checkpoint_sha256": sha256_file(args.checkpoint),

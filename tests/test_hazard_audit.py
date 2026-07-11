@@ -15,6 +15,7 @@ from pokezero.hazard_audit import (
     PUBLIC_DECISION_CORPUS_SCHEMA_VERSION,
     PublicBeliefWorldProvider,
     aggregate_hazard_audit_records,
+    fixed_driver_hazard_audit_decisions_from_public_corpus,
     hazard_audit_decisions_from_trajectory,
     hazard_audit_decisions_from_public_corpus,
     iter_hazard_audit_decisions_from_public_corpus,
@@ -448,6 +449,33 @@ class HazardAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canonical PublicDecisionCorpus"):
             hazard_audit_decisions_from_public_corpus({})
 
+    def test_fixed_driver_corpus_round_trips_exact_selected_hazard_states(self) -> None:
+        source = _decision()
+        prototype = replace(
+            source.public_record,
+            battle_id="hazard-audit-fixed-driver-7",
+            decision_id="pending",
+        )
+        record = replace(prototype, decision_id=public_decision_id(prototype))
+        decision = replace(source, public_record=record)
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="fixed-checkpoint-independent",
+            belief_set_source_hash="set-source-hash",
+            capture_config={
+                "source": "fixed-checkpoint-independent-drivers",
+                "opponent_legal_mask_mode": "hidden",
+                "root_dirichlet_alpha": None,
+                "selected_hazard_state_ids": [decision.state_id],
+            },
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "fixed-driver-public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                writer.append(decision.public_record)
+            rebuilt = fixed_driver_hazard_audit_decisions_from_public_corpus(path)
+
+        self.assertEqual(tuple(item.to_dict() for item in rebuilt), (decision.to_dict(),))
+
     def test_streaming_hazard_adapter_keeps_only_hazard_targets(self) -> None:
         source = _decision()
         manifest = public_corpus_manifest(
@@ -625,6 +653,38 @@ class HazardAuditTest(unittest.TestCase):
         self.assertNotIn('"opponent_actions"', serialized)
         self.assertNotIn('"start_override"', serialized)
         self.assertNotIn('"true_opponent_request"', serialized)
+
+    def test_streamed_decisions_restore_canonical_callback_order(self) -> None:
+        first = _decision()
+        prototype = replace(first.public_record, battle_id="audit-battle-second", decision_id="pending")
+        second_record = replace(prototype, decision_id=public_decision_id(prototype))
+        second = replace(first, public_record=second_record)
+        config = AuditConfig()
+
+        def run(decisions):
+            world_order: list[str] = []
+
+            def provider(state):
+                world_order.append(state.state_id)
+                return (AuditWorld(f"{state.state_id}-w0", {"p2": 0}),)
+
+            payload = run_hazard_blind_spot_audit(
+                decisions=decisions,
+                env_factory=AuditEnv,
+                action_priors=lambda history: (0.99, 0.01) + (0.0,) * 7,
+                value_fn=lambda history: 0.0,
+                world_provider=provider,
+                config=config,
+            )
+            return world_order, payload
+
+        forward_order, forward = run((first, second))
+        reversed_order, reversed_payload = run((second, first))
+
+        self.assertEqual(forward_order, sorted((first.state_id, second.state_id)))
+        self.assertEqual(reversed_order, forward_order)
+        self.assertEqual(reversed_payload["records"], forward["records"])
+        self.assertEqual(reversed_payload["hashes"], forward["hashes"])
 
 
 if __name__ == "__main__":
