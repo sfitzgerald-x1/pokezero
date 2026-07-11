@@ -47,7 +47,7 @@ from .search_policy import OpponentActionScenario, _root_dirichlet_action_priors
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
-HAZARD_AUDIT_SCHEMA_VERSION = "pokezero.hazard-blind-spot-audit.v1"
+HAZARD_AUDIT_SCHEMA_VERSION = "pokezero.hazard-blind-spot-audit.v2"
 DEFAULT_EXTRA_VISITS = (0, 24, 120)
 DEFAULT_LOW_PRIOR_THRESHOLD = 0.01
 DEFAULT_DIRICHLET_ALPHA = 0.3
@@ -537,14 +537,17 @@ def run_hazard_blind_spot_audit(
 
     if provenance is not None and provenance_factory is not None:
         raise ValueError("provide either provenance or provenance_factory, not both.")
-    decision_list = tuple(sorted(decisions, key=lambda decision: decision.state_id))
     config_payload = config.to_dict()
     records: list[dict[str, object]] = []
-    corpus_states = [decision.to_dict() for decision in decision_list]
+    state_descriptors: list[dict[str, object]] = []
+    target_state_ids: set[str] = set()
     low_prior_state_ids: set[str] = set()
     low_prior_available_world_state_ids: set[str] = set()
     low_prior_available_world_pairs: set[tuple[str, str]] = set()
-    for decision in decision_list:
+    for decision in decisions:
+        state_id = decision.state_id
+        target_state_ids.add(state_id)
+        state_descriptors.append(_state_descriptor(decision, state_id=state_id))
         priors = _validated_priors(action_priors(decision.actor_history))
         target_prior = _normalized_target_prior(
             priors,
@@ -553,12 +556,12 @@ def run_hazard_blind_spot_audit(
         )
         low_prior = target_prior <= config.low_prior_threshold
         if low_prior:
-            low_prior_state_ids.add(decision.state_id)
+            low_prior_state_ids.add(state_id)
         worlds = tuple(sorted(world_provider(decision), key=lambda world: world.world_id))
         for world in worlds:
             if low_prior and world.available:
-                low_prior_available_world_state_ids.add(decision.state_id)
-                low_prior_available_world_pairs.add((decision.state_id, world.world_id))
+                low_prior_available_world_state_ids.add(state_id)
+                low_prior_available_world_pairs.add((state_id, world.world_id))
             for arm in ("deterministic", "dirichlet_audit_only"):
                 search_priors, noise_metadata = _arm_priors(
                     arm=arm,
@@ -583,16 +586,17 @@ def run_hazard_blind_spot_audit(
                         )
                     )
     records.sort(key=lambda record: (str(record["state_id"]), str(record["world_id"]), str(record["arm"]), int(record["extra_visits"])))
+    state_descriptors.sort(key=lambda descriptor: str(descriptor["state_id"]))
     aggregate = aggregate_hazard_audit_records(
         records,
         eligibility_funnel={
-            "hazard_legal_target_states": len({decision.state_id for decision in decision_list}),
+            "hazard_legal_target_states": len(target_state_ids),
             "low_prior_target_states": len(low_prior_state_ids),
             "low_prior_target_states_with_available_belief_worlds": len(low_prior_available_world_state_ids),
             "low_prior_state_world_pairs_with_available_belief_worlds": len(low_prior_available_world_pairs),
         },
     )
-    corpus_hash = canonical_hash(corpus_states)
+    corpus_hash = canonical_hash(state_descriptors)
     provenance_payload = dict(provenance_factory() if provenance_factory is not None else provenance or {})
     _assert_public_payload(provenance_payload)
     payload = {
@@ -606,8 +610,8 @@ def run_hazard_blind_spot_audit(
             "provenance_hash": canonical_hash(provenance_payload),
         },
         "corpus": {
-            "state_count": len(decision_list),
-            "states": corpus_states,
+            "state_count": len(state_descriptors),
+            "state_descriptors": state_descriptors,
         },
         "records": records,
         "aggregate": aggregate,
@@ -616,6 +620,20 @@ def run_hazard_blind_spot_audit(
     # persisted artifact must never carry either private simulation input.
     _assert_public_payload(payload)
     return payload
+
+
+def _state_descriptor(decision: HazardAuditDecision, *, state_id: str) -> dict[str, object]:
+    """Persist a compact public identity; the canonical JSONL corpus remains the replay source."""
+
+    return {
+        "state_id": state_id,
+        "public_state_hash": canonical_hash(decision.public_payload()),
+        "seed": decision.seed,
+        "actor": decision.player_id,
+        "decision_round": decision.decision_round,
+        "target_move_id": decision.target_move_id,
+        "target_action_index": decision.target_action_index,
+    }
 
 
 def aggregate_hazard_audit_records(

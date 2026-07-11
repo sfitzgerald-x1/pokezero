@@ -1,9 +1,10 @@
 """Run the public-only Step 3 Spikes/Rapid Spin blind-spot audit.
 
-The output contains replayable public corpus states, paired deterministic and
-explicit audit-only Dirichlet PUCT sweeps at legal+{0,24,120}, and the
-predefined E, R_off, and DeltaChoice_on metrics. It never reads the source
-battle's opponent request or opponent legal-action mask.
+The output contains compact public state descriptors bound to the canonical
+replay corpus, paired deterministic and explicit audit-only Dirichlet PUCT
+sweeps at legal+{0,24,120}, and the predefined E, R_off, and DeltaChoice_on
+metrics. It never reads the source battle's opponent request or opponent legal
+action mask.
 """
 
 from __future__ import annotations

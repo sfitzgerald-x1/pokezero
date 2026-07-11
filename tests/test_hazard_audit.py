@@ -606,6 +606,12 @@ class HazardAuditTest(unittest.TestCase):
 
         self.assertEqual(first["records"], second["records"])
         self.assertEqual(first["hashes"], second["hashes"])
+        self.assertNotIn("states", first["corpus"])
+        self.assertEqual(first["corpus"]["state_count"], 1)
+        self.assertEqual(
+            first["corpus"]["state_descriptors"][0]["state_id"],
+            decision.state_id,
+        )
         target_rows = [row for row in first["records"] if row["target_action_index"] == 1]
         self.assertTrue(all(row["target_visits"] >= 1 for row in target_rows if row["status"] == "searched"))
         self.assertTrue(all(row["dirichlet_audit_only"] == (row["arm"] == "dirichlet_audit_only") for row in target_rows))
@@ -615,6 +621,7 @@ class HazardAuditTest(unittest.TestCase):
             all(row["total_visits"] == row["mandatory_sweep_candidate_count"] + row["extra_visits"] for row in searched)
         )
         serialized = json.dumps(first, sort_keys=True)
+        self.assertNotIn('"public_decision"', serialized)
         self.assertNotIn('"opponent_actions"', serialized)
         self.assertNotIn('"start_override"', serialized)
         self.assertNotIn('"true_opponent_request"', serialized)
