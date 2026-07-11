@@ -1,3 +1,4 @@
+from dataclasses import replace
 import io
 import json
 import os
@@ -16,6 +17,7 @@ from pokezero.local_showdown import (
     requested_players_from_requests,
     showdown_seed_from_int,
 )
+from pokezero.observation import ObservationFeatureMasks
 from pokezero.env import BattleStartOverride
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
@@ -309,6 +311,38 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             restored_branch_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
 
         self.assertEqual(restored_branch_suffix, first_branch_suffix)
+
+    def test_snapshot_restore_rebuilds_investment_trackers(self) -> None:
+        config = integration_config()
+        assert config is not None
+        config = replace(
+            config,
+            set_belief_source=True,
+            feature_masks=ObservationFeatureMasks(tier2_investment=True),
+        )
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=19, start_override=start_override)
+            env.observe("p1")
+            self.assertIn("p1", env._investment_trackers)
+            snapshot = env.snapshot()
+            env.step({"p1": 0, "p2": 0})
+            self.assertIn("p1", env._investment_trackers)
+
+            env.restore(snapshot)
+            self.assertEqual(env._investment_trackers, {})
+            env.observe("p1")
+            self.assertIn("p1", env._investment_trackers)
 
     def test_snapshot_restore_after_terminal_branch_keeps_stream_usable(self) -> None:
         config = integration_config()
