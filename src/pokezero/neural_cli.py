@@ -3583,6 +3583,48 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         for dirichlet_enabled in root_puct_variants
     )
 
+    def root_search_config_for(leaf_rollout_rounds: int, *, dirichlet_enabled: bool) -> dict[str, object]:
+        return {
+            "max_decision_rounds": args.max_decision_rounds,
+            "temperature": args.temperature,
+            "cpuct": args.cpuct,
+            "selection_mode": args.selection_mode,
+            "root_prior_temperature": (
+                args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
+            ),
+            "minimum_value_improvement": args.min_value_improvement,
+            "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
+            "root_extra_visits": args.root_extra_visits,
+            "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
+            "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
+            "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
+            "adaptive_root_value_margin_threshold": args.adaptive_root_value_margin_threshold,
+            "root_time_budget_ms": args.root_time_budget_ms,
+            "root_opponent_action_policy": args.root_opponent_action_policy,
+            "root_opponent_action_scenarios": args.root_opponent_action_scenarios,
+            "root_opponent_action_candidate_scenarios": root_opponent_action_candidate_scenarios,
+            "leaf_rollout_rounds": leaf_rollout_rounds,
+            "leaf_rollout_sampling": False,
+            "leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
+            "belief_start_overrides": args.belief_start_overrides,
+            "belief_world_sample_cap": args.belief_world_sample_cap,
+            "belief_start_override_attempts": args.belief_start_override_attempts,
+            "belief_start_override_hp_fraction_tolerance": args.belief_start_override_hp_fraction_tolerance,
+            "allow_search_fallback": not args.no_search_fallback,
+            "root_dirichlet_alpha": args.root_dirichlet_alpha if dirichlet_enabled else None,
+            "root_dirichlet_mix": args.root_dirichlet_mix if dirichlet_enabled else None,
+            "root_dirichlet_seed": args.root_dirichlet_seed if dirichlet_enabled else None,
+        }
+
+    root_search_policy_configs = {
+        search_policy_id_for(leaf_rollout_rounds, dirichlet_enabled=dirichlet_enabled): root_search_config_for(
+            leaf_rollout_rounds,
+            dirichlet_enabled=dirichlet_enabled,
+        )
+        for leaf_rollout_rounds in leaf_rollout_rounds_values
+        for dirichlet_enabled in root_puct_variants
+    }
+
     def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
             model=model,
@@ -3775,37 +3817,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         raw_policy_id=raw_policy_id,
         search_policy_ids=search_policy_ids,
         root_time_budget_ms=args.root_time_budget_ms,
-        root_search_config={
-            "max_decision_rounds": args.max_decision_rounds,
-            "temperature": args.temperature,
-            "cpuct": args.cpuct,
-            "selection_mode": args.selection_mode,
-            "root_prior_temperature": (
-                args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
-            ),
-            "minimum_value_improvement": args.min_value_improvement,
-            "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
-            "root_extra_visits": args.root_extra_visits,
-            "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
-            "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
-            "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
-            "adaptive_root_value_margin_threshold": args.adaptive_root_value_margin_threshold,
-            "root_time_budget_ms": args.root_time_budget_ms,
-            "root_opponent_action_policy": args.root_opponent_action_policy,
-            "root_opponent_action_scenarios": args.root_opponent_action_scenarios,
-            "root_opponent_action_candidate_scenarios": root_opponent_action_candidate_scenarios,
-            "leaf_rollout_rounds": list(leaf_rollout_rounds_values),
-            "leaf_rollout_sampling": False,
-            "leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
-            "belief_start_overrides": args.belief_start_overrides,
-            "belief_world_sample_cap": args.belief_world_sample_cap,
-            "belief_start_override_attempts": args.belief_start_override_attempts,
-            "belief_start_override_hp_fraction_tolerance": args.belief_start_override_hp_fraction_tolerance,
-            "allow_search_fallback": not args.no_search_fallback,
-            "root_dirichlet_alpha": args.root_dirichlet_alpha,
-            "root_dirichlet_mix": args.root_dirichlet_mix if args.root_dirichlet_alpha is not None else None,
-            "root_dirichlet_seed": args.root_dirichlet_seed if args.root_dirichlet_alpha is not None else None,
-        },
+        root_search_policy_configs=root_search_policy_configs,
         root_dirichlet_config=(
             {
                 "enabled": True,
@@ -3864,7 +3876,7 @@ def _root_puct_play_payload(
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
     root_time_budget_ms: int | None,
-    root_search_config: Mapping[str, object],
+    root_search_policy_configs: Mapping[str, Mapping[str, object]],
     root_dirichlet_config: Mapping[str, object] | None = None,
     value_leaf_provenance: Mapping[str, object] | None,
     root_visit_budget_selector_config: Mapping[str, object] | None = None,
@@ -3881,7 +3893,11 @@ def _root_puct_play_payload(
         payload["root_dirichlet"] = dict(root_dirichlet_config)
     if root_time_budget_ms is not None:
         payload["root_time_budget_ms"] = root_time_budget_ms
-    payload["root_puct_config"] = dict(root_search_config)
+    payload["root_puct_policy_configs"] = {
+        policy_id: dict(config) for policy_id, config in sorted(root_search_policy_configs.items())
+    }
+    if len(root_search_policy_configs) == 1:
+        payload["root_puct_config"] = dict(next(iter(root_search_policy_configs.values())))
     if value_leaf_provenance is not None:
         payload["value_leaf"] = dict(value_leaf_provenance)
     if root_visit_budget_selector_config is not None:
