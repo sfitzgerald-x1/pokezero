@@ -417,6 +417,7 @@ class LocalShowdownEnv:
         # immutable within a battle, which is all the trackers read from it).
         self._first_requests = dict(self._latest_requests)
         self._tier2_trackers = {}
+        self._investment_trackers = {}
         self._latest_turn = snapshot.latest_turn
         self._terminal = snapshot.terminal
         self._last_step_had_error = False
