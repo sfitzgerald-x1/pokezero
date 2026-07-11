@@ -353,8 +353,40 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(delta["away_from_low_prior_target_states"], 0)
         self.assertEqual(delta["interpretation"], "noise_only_choice_sensitivity")
         self.assertEqual(delta["delta_choice_on"], 0.5)
+        funnel = aggregate["eligibility_funnel"]
+        self.assertEqual(funnel["hazard_legal_target_states"], 3)
+        self.assertEqual(funnel["low_prior_target_states"], 2)
+        self.assertEqual(funnel["low_prior_target_states_with_available_belief_worlds"], 2)
+        self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 2)
+        self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
+        self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
         self.assertEqual(aggregate["coverage"]["status_counts"], {"searched": 18})
         self.assertEqual(aggregate["coverage"]["invalid_records"], 0)
+
+    def test_funnel_retains_low_prior_targets_when_no_belief_world_is_available(self) -> None:
+        decision = _decision()
+        payload = run_hazard_blind_spot_audit(
+            decisions=(decision,),
+            env_factory=AuditEnv,
+            action_priors=lambda history: (0.99, 0.01) + (0.0,) * 7,
+            value_fn=lambda history: 0.0,
+            world_provider=lambda state: (),
+            config=AuditConfig(low_prior_threshold=0.02),
+        )
+
+        funnel = payload["aggregate"]["eligibility_funnel"]
+        self.assertEqual(payload["records"], [])
+        self.assertEqual(
+            payload["aggregate"]["E"],
+            {"low_prior_lines": 1, "legal_target_lines": 1, "rate": 1.0},
+        )
+        self.assertEqual(payload["aggregate"]["coverage"]["unique_target_lines"], 1)
+        self.assertEqual(funnel["hazard_legal_target_states"], 1)
+        self.assertEqual(funnel["low_prior_target_states"], 1)
+        self.assertEqual(funnel["low_prior_target_states_with_available_belief_worlds"], 0)
+        self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 0)
+        self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
+        self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
 
     def test_delta_choice_collapses_paired_worlds_to_one_conservative_state_vote(self) -> None:
         records = []
