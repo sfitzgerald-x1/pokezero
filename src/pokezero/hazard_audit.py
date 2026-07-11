@@ -522,6 +522,9 @@ def run_hazard_blind_spot_audit(
     config_payload = config.to_dict()
     records: list[dict[str, object]] = []
     corpus_states = [decision.to_dict() for decision in decision_list]
+    low_prior_state_ids: set[str] = set()
+    low_prior_available_world_state_ids: set[str] = set()
+    low_prior_available_world_pairs: set[tuple[str, str]] = set()
     for decision in decision_list:
         priors = _validated_priors(action_priors(decision.actor_history))
         target_prior = _normalized_target_prior(
@@ -530,8 +533,13 @@ def run_hazard_blind_spot_audit(
             target_action_index=decision.target_action_index,
         )
         low_prior = target_prior <= config.low_prior_threshold
+        if low_prior:
+            low_prior_state_ids.add(decision.state_id)
         worlds = tuple(sorted(world_provider(decision), key=lambda world: world.world_id))
         for world in worlds:
+            if low_prior and world.available:
+                low_prior_available_world_state_ids.add(decision.state_id)
+                low_prior_available_world_pairs.add((decision.state_id, world.world_id))
             for arm in ("deterministic", "dirichlet_audit_only"):
                 search_priors, noise_metadata = _arm_priors(
                     arm=arm,
@@ -556,7 +564,15 @@ def run_hazard_blind_spot_audit(
                         )
                     )
     records.sort(key=lambda record: (str(record["state_id"]), str(record["world_id"]), str(record["arm"]), int(record["extra_visits"])))
-    aggregate = aggregate_hazard_audit_records(records)
+    aggregate = aggregate_hazard_audit_records(
+        records,
+        eligibility_funnel={
+            "hazard_legal_target_states": len({decision.state_id for decision in decision_list}),
+            "low_prior_target_states": len(low_prior_state_ids),
+            "low_prior_target_states_with_available_belief_worlds": len(low_prior_available_world_state_ids),
+            "low_prior_state_world_pairs_with_available_belief_worlds": len(low_prior_available_world_pairs),
+        },
+    )
     corpus_hash = canonical_hash(corpus_states)
     provenance_payload = dict(provenance or {})
     _assert_public_payload(provenance_payload)
@@ -583,7 +599,11 @@ def run_hazard_blind_spot_audit(
     return payload
 
 
-def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict[str, object]:
+def aggregate_hazard_audit_records(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    eligibility_funnel: Mapping[str, int] | None = None,
+) -> dict[str, object]:
     """Aggregate the Step 3 metrics with the mandatory-sweep semantics made explicit."""
 
     rows = tuple(records)
@@ -596,6 +616,61 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
         state_low_prior[state_id] = low_prior
     low_prior_count = sum(state_low_prior.values())
     total_states = len(state_low_prior)
+
+    paired_search_by_budget: dict[str, dict[str, int]] = {}
+    for budget in DEFAULT_EXTRA_VISITS:
+        paired_rows: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for row in rows:
+            if (
+                int(row.get("extra_visits", -1)) == budget
+                and row.get("status") == "searched"
+                and bool(row.get("low_prior"))
+                and str(row.get("arm")) in {"deterministic", "dirichlet_audit_only"}
+            ):
+                paired_rows[(str(row["state_id"]), str(row["world_id"]))].add(str(row["arm"]))
+        complete_pairs = {
+            pair for pair, arms in paired_rows.items() if arms == {"deterministic", "dirichlet_audit_only"}
+        }
+        paired_search_by_budget[str(budget)] = {
+            "target_states": len({state_id for state_id, _world_id in complete_pairs}),
+            "state_world_pairs": len(complete_pairs),
+        }
+
+    derived_available_pairs = {
+        (str(row["state_id"]), str(row["world_id"]))
+        for row in rows
+        if bool(row.get("low_prior"))
+        and (
+            not isinstance(row.get("world"), Mapping)
+            or bool(row["world"].get("available", False))
+        )
+    }
+    funnel = {
+        "hazard_legal_target_states": total_states,
+        "low_prior_target_states": low_prior_count,
+        "low_prior_target_states_with_available_belief_worlds": len(
+            {state_id for state_id, _world_id in derived_available_pairs}
+        ),
+        "low_prior_state_world_pairs_with_available_belief_worlds": len(derived_available_pairs),
+    }
+    if eligibility_funnel is not None:
+        funnel.update({key: int(value) for key, value in eligibility_funnel.items()})
+    funnel.update(
+        {
+            "paired_searched_target_states_by_extra_visits": {
+                budget: values["target_states"] for budget, values in paired_search_by_budget.items()
+            },
+            "paired_searched_state_world_pairs_by_extra_visits": {
+                budget: values["state_world_pairs"] for budget, values in paired_search_by_budget.items()
+            },
+            "interpretation": (
+                "Counts are a stage-by-stage eligibility funnel: legal hazard/spin targets, low-prior "
+                "targets, sampled public-belief worlds, then complete deterministic/Dirichlet search pairs."
+            ),
+        }
+    )
+    eligibility_low_prior_count = int(funnel["low_prior_target_states"])
+    eligibility_total_states = int(funnel["hazard_legal_target_states"])
 
     off_rescue: dict[str, dict[str, object]] = {}
     for budget in (24, 120):
@@ -696,12 +771,13 @@ def aggregate_hazard_audit_records(records: Iterable[Mapping[str, Any]]) -> dict
             "entrenchment": "target_revisits == 0. Each legal target receives one mandatory initial-sweep visit per valid world, so entrenchment is never defined as target_visits == 0.",
         },
         "E": {
-            "low_prior_lines": low_prior_count,
-            "legal_target_lines": total_states,
-            "rate": _rate(low_prior_count, total_states),
+            "low_prior_lines": eligibility_low_prior_count,
+            "legal_target_lines": eligibility_total_states,
+            "rate": _rate(eligibility_low_prior_count, eligibility_total_states),
         },
         "R_off": off_rescue,
         "DeltaChoice_on": choice_delta,
+        "eligibility_funnel": funnel,
         "coverage": {
             "records": len(rows),
             "searched_records": len(searched),
