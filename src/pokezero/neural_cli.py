@@ -1056,6 +1056,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct.add_argument("--p2-policy", default="random-legal", help="Source rollout policy for p2.")
     root_puct.add_argument("--search-player", choices=("p1", "p2"), default="p1", help="Player side whose recorded decisions are re-scored.")
     root_puct.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
+    root_puct.add_argument(
+        "--value-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional checkpoint used only for leaf values; defaults to --checkpoint for policy priors and values.",
+    )
+    root_puct.add_argument(
+        "--root-extra-visits",
+        type=int,
+        default=None,
+        help="Fixed visits added after the mandatory one-visit-per-legal-action sweep.",
+    )
     root_puct.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
     root_puct.add_argument("--temperature", type=float, default=1.0, help="Policy-prior softmax temperature.")
     root_puct.add_argument(
@@ -2249,6 +2261,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             "belief_set_source_hash": set_source.metadata.source_hash,
             "root_noise_enabled": False,
             "opponent_legal_mask_mode": "hidden",
+            "opponent_scenarios": args.opponent_scenarios,
         },
     )
     if args.out is not None:
@@ -3999,11 +4012,16 @@ def _root_puct_leaf_rollout_rounds_values(args: argparse.Namespace) -> tuple[int
 
 def _root_puct_benchmark(args: argparse.Namespace) -> int:
     require_torch()
+    value_checkpoint = args.value_checkpoint or args.checkpoint
     if not args.allow_legacy_checkpoints:
         _require_current_family_benchmark_checkpoints(
             args.checkpoint,
             reference_specs=(args.p1_policy, args.p2_policy),
             context="root-puct benchmark",
+        )
+        require_current_family_checkpoint_paths(
+            (value_checkpoint,),
+            context="root-puct benchmark value checkpoint",
         )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -4019,18 +4037,33 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
         format_id=args.format_id,
     )
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    if value_checkpoint == args.checkpoint:
+        value_model, value_result = model, result
+        value_leaf_provenance: Mapping[str, object] | None = None
+    else:
+        value_model, value_result = load_transformer_checkpoint(value_checkpoint, map_location=args.device)
+        # A distinct value leaf is only meaningful for the capstone when it is
+        # a calibrated copy of these exact policy priors. Keep ordinary
+        # same-checkpoint mechanics benchmarks available, but never silently
+        # substitute an unrelated current-family checkpoint for leaf values.
+        value_leaf_provenance = require_compatible_transformer_value_checkpoint(
+            policy_checkpoint=args.checkpoint,
+            policy_result=result,
+            value_checkpoint=value_checkpoint,
+            value_result=value_result,
+        )
     # HIGH-1 latch: encode-time masks come from the checkpoint(s) observing through this env.
     env_config = _env_config_with_spec_masks(
         env_config,
         (args.p1_policy, args.p2_policy),
-        extra_model_configs=(result.model_config,),
+        extra_model_configs=(result.model_config, value_result.model_config),
         context="root-puct benchmark",
     )
 
     def value_fn(history):
         return evaluate_transformer_observation_value(
-            model=model,
-            result=result,
+            model=value_model,
+            result=value_result,
             observations=history,
             device=args.device,
         )
@@ -4053,11 +4086,29 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         search_player=args.search_player,
         cpuct=args.cpuct,
+        root_extra_visits=args.root_extra_visits,
         value_fn=value_fn,
         prior_fn=prior_fn,
     )
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        payload = report.to_dict()
+        payload["search_config"] = {
+            "prior_temperature": args.temperature,
+            "selection_mode": "visits",
+        }
+        payload["value_leaf"] = (
+            {
+                **value_leaf_provenance,
+                "uses_distinct_value_checkpoint": True,
+            }
+            if value_leaf_provenance is not None
+            else {
+                "policy_checkpoint": str(args.checkpoint),
+                "value_checkpoint": str(value_checkpoint),
+                "uses_distinct_value_checkpoint": False,
+            }
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_root_puct_benchmark_report(report)
     return 0

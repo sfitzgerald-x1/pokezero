@@ -105,12 +105,15 @@ the isotonic copy described above. If ranking fails, the
 capstone is re-pointed at the best value-ready checkpoint and the plan's title
 claim changes accordingly.
 
-## Step 1 — Mechanics + cost profile (hours; no new code)
+## Step 1 — Mechanics + capstone-equivalent cost profile
 
-Run `neural_cli root_puct` (recorded-decision re-scoring) with the 1M checkpoint
-on ~50 recorded games (its own eval games are fine). This is a cost/profile
-probe; use `root-puct-play-benchmark --belief-start-overrides` for the P-1
-end-to-end determinization validation.
+Run `neural_cli root_puct-benchmark` with the raw 1M checkpoint for policy
+priors, the frozen isotonic copy as `--value-checkpoint`, and
+`--root-extra-visits 24` on ~50 recorded games. This is the arm-2 comparator
+used to derive arm 3's rollout-tail wall budget. A sweep-only timing read is
+still useful for mechanics attribution, but cannot size a legal+24 tail match.
+Use `root-puct-play-benchmark --belief-start-overrides` for the P-1 end-to-end
+determinization validation.
 
 Validates: the checkpoint loads under search (v2.2 latch), and — the measured
 numbers this plan's cost claims depend on — the per-move wall split into {prefix
@@ -120,6 +123,11 @@ replay, per-branch sim stepping, NN evals, rollout tails}. The scoping estimates
 Gate: any component >3× its estimate → update this doc's budget math before
 proceeding (measure-don't-assume; twice this month the finer measurement
 overturned the confident model).
+
+The frozen capstone plan records the timing artifact and the selected
+legal+24 statistic used to round `root_time_budget_ms`. It must reject a
+sweep-only, rollout-tail, or wrong value-leaf timing artifact rather than
+silently accepting a hand-entered wall budget.
 
 ## Step 2 — Prior-quality profile of the 1M net (hours)
 
@@ -137,6 +145,15 @@ the hypothesis says lategame/endgame decisions are the contested ones.
 
 Gate: none (descriptive), but the number feeds Step 4's adaptive arm and the
 ladder-budget arithmetic.
+
+For the capstone's one adaptive arm, aggregate the decision-normalized
+`entropy_or_margin` sweep across phases and choose the threshold pair closest
+to a 20% contested rate. With legal+120 on contested decisions and no extra
+visits otherwise, this matches legal+24's expected post-sweep work. An exact
+rate tie resolves toward the lower contested rate, then the stricter threshold
+pair. The frozen plan records the selected thresholds, full decision coverage,
+and observed rate and rejects hand-entered values that do not reproduce this
+rule from the profile artifact.
 
 ## Step 3 — Blind-spot entrenchment audit (half day; requires P-2)
 

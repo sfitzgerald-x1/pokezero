@@ -388,6 +388,21 @@ class PUCTBranchSearchResult:
         return max(self.candidates, key=lambda candidate: (candidate.score, candidate.value, -candidate.action_index))
 
     @property
+    def most_visited_candidate(self) -> PUCTBranchSearchCandidate:
+        if not self.candidates:
+            raise ValueError("PUCT branch search produced no candidates.")
+        return max(
+            self.candidates,
+            key=lambda candidate: (
+                candidate.visits,
+                candidate.prior,
+                candidate.value,
+                candidate.score,
+                -candidate.action_index,
+            ),
+        )
+
+    @property
     def action_index(self) -> int:
         return self.best_candidate.action_index
 
