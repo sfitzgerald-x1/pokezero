@@ -3775,6 +3775,23 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         raw_policy_id=raw_policy_id,
         search_policy_ids=search_policy_ids,
         root_time_budget_ms=args.root_time_budget_ms,
+        root_search_config={
+            "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
+            "root_extra_visits": args.root_extra_visits,
+            "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
+            "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
+            "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
+            "adaptive_root_value_margin_threshold": args.adaptive_root_value_margin_threshold,
+            "root_time_budget_ms": args.root_time_budget_ms,
+            "root_opponent_action_policy": args.root_opponent_action_policy,
+            "root_opponent_action_scenarios": args.root_opponent_action_scenarios,
+            "root_opponent_action_candidate_scenarios": root_opponent_action_candidate_scenarios,
+            "leaf_rollout_rounds": list(leaf_rollout_rounds_values),
+            "leaf_rollout_sampling": False,
+            "belief_start_overrides": args.belief_start_overrides,
+            "belief_world_sample_cap": args.belief_world_sample_cap,
+            "allow_search_fallback": not args.no_search_fallback,
+        },
         root_dirichlet_config=(
             {
                 "enabled": True,
@@ -3833,6 +3850,7 @@ def _root_puct_play_payload(
     raw_policy_id: str,
     search_policy_ids: Sequence[str],
     root_time_budget_ms: int | None,
+    root_search_config: Mapping[str, object],
     root_dirichlet_config: Mapping[str, object] | None = None,
     value_leaf_provenance: Mapping[str, object] | None,
     root_visit_budget_selector_config: Mapping[str, object] | None = None,
@@ -3849,6 +3867,7 @@ def _root_puct_play_payload(
         payload["root_dirichlet"] = dict(root_dirichlet_config)
     if root_time_budget_ms is not None:
         payload["root_time_budget_ms"] = root_time_budget_ms
+    payload["root_puct_config"] = dict(root_search_config)
     if value_leaf_provenance is not None:
         payload["value_leaf"] = dict(value_leaf_provenance)
     if root_visit_budget_selector_config is not None:

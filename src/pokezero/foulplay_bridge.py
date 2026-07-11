@@ -213,6 +213,9 @@ class ControlledFoulPlayConfig:
             raise ValueError(
                 "root_time_budget_ms cannot be combined with fixed or adaptive post-sweep visit budgets."
             )
+        if self.root_time_budget_ms is not None:
+            # Time-bounded search must not inherit the default 16-visit cap.
+            object.__setattr__(self, "root_visit_budget", None)
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.root_opponent_action_candidate_scenarios <= 0:
@@ -3222,7 +3225,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "PokeZero-side wall-clock budget for extra post-sweep root visits. With multiple "
             "opponent-action scenarios, each scenario receives the remaining decision budget at "
             "the time it is searched. The mandatory initial legal-action sweep is always completed "
-            "and can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
+            "and can exceed the configured budget. Time-bounded searches clear the legacy "
+            "--root-visit-budget cap."
         ),
     )
     parser.add_argument(
