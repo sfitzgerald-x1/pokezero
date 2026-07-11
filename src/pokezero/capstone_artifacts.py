@@ -606,7 +606,8 @@ def _require_root_primary_diagnostics(
             diagnostics["root_puct_time_budget_exhaustions"],
             field="root_puct_time_budget_exhaustions",
         )
-        if checks <= 0 or exhaustions > checks:
+        searches = _nonnegative_int(diagnostics["root_puct_searches"], field="root_puct_searches")
+        if checks != searches or exhaustions > checks:
             raise ValueError("candidate root-PUCT artifact has invalid time-budget diagnostics.")
     leaf_policies = diagnostics.get("root_puct_leaf_rollout_opponent_policies")
     if leaf_policies is not None:

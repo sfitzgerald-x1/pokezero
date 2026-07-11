@@ -2588,6 +2588,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             captured.update(kwargs)
             return FakeReport()
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()) as load_checkpoint,
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
@@ -3487,6 +3488,28 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("root time budget cannot be combined", stderr.getvalue())
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_time_budget_with_explicit_visit_cap(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--root-time-budget-ms",
+                    "125",
+                    "--root-visit-budget",
+                    "16",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("explicit root visit budget", stderr.getvalue())
 
     def test_neural_cli_root_puct_play_benchmark_builds_adaptive_budget_selector(self) -> None:
         parser = build_neural_arg_parser()

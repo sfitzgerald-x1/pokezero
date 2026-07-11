@@ -887,10 +887,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Q+U score and is diagnostic."
         ),
     )
+    root_puct_play.set_defaults(root_visit_budget_explicit=False)
     root_puct_play.add_argument(
         "--root-visit-budget",
         type=int,
         default=16,
+        action=_StoreExplicitArgument,
         help=(
             "Root visits per accepted opponent-action scenario; defaults to 16. "
             "With multiple accepted scenarios, total decision visits scale by searched scenario count."
@@ -3364,6 +3366,20 @@ def _is_checkpoint_policy_spec(policy_spec: str) -> bool:
     return any(body.startswith(prefix) for prefix in CHECKPOINT_POLICY_SPEC_PREFIXES)
 
 
+class _StoreExplicitArgument(argparse.Action):
+    """Retain whether an option was supplied instead of only resolving its value."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
 @dataclass
 class _PolicyIdAlias:
     policy: Policy
@@ -3486,6 +3502,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             raise ValueError("root time budget must be positive when set.")
         if root_visit_budget_selector is not None:
             raise ValueError("root time budget cannot be combined with fixed or adaptive root budgeting.")
+        if args.root_visit_budget_explicit:
+            raise ValueError("root time budget cannot be combined with an explicit root visit budget.")
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,

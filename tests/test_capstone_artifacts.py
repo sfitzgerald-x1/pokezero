@@ -179,6 +179,17 @@ class CapstoneArtifactsTest(unittest.TestCase):
                 band="a",
                 seat="p1",
             )
+        payload = root_payload(seat="p1", root_time_budget_ms=125)
+        diagnostics = payload["matchups"][1]["game_results"][0]["root_puct_by_player"]["p1"]
+        diagnostics["root_puct_time_budget_checks"] = 1
+        with self.assertRaisesRegex(ValueError, "invalid time-budget diagnostics"):
+            normalize_root_puct_play_artifact(
+                payload,
+                opponent_id="max-damage",
+                arm_id="rollout-tail",
+                band="a",
+                seat="p1",
+            )
 
     def test_normalizes_controlled_foulplay_with_hidden_seat_proof(self) -> None:
         pair = normalize_controlled_foulplay_artifact(
