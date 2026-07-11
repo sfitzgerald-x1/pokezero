@@ -102,6 +102,7 @@ from .search_policy import (
     prior_top_k_opponent_action_scenario_planner,
 )
 from .randbat import load_gen3_randbat_source_cached
+from .randbat_vocab import gen3_category_vocabulary
 from .value_calibration import (
     VALUE_SELECTION_METRICS,
     ValueCalibrationReport,

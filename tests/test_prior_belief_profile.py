@@ -10,7 +10,7 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.belief import PlayerBeliefView, RevealedPokemonBelief
 from pokezero.foulplay_capture import build_capture_arg_parser
-from pokezero.neural_cli import main as neural_main
+from pokezero.neural_cli import gen3_category_vocabulary, main as neural_main
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.prior_belief_profile import (
     CandidateValueEvaluation,
@@ -91,6 +91,10 @@ def _record(*, turn_index: int = 1, variants: int = 1) -> PublicDecisionRecord:
 
 
 class PublicCorpusTest(unittest.TestCase):
+    def test_prior_belief_cli_imports_the_category_vocabulary_loader(self) -> None:
+        # The runtime profile must select the vocabulary family from checkpoint schema provenance.
+        self.assertTrue(callable(gen3_category_vocabulary))
+
     def test_public_roundtrip_and_private_opponent_leakage_invariance(self) -> None:
         p1_observation = _observation(0, 1, metadata={"self_team": []})
         private_p2_observation = _observation(
