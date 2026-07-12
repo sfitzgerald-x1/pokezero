@@ -107,11 +107,13 @@ claim changes accordingly.
 
 ## Step 1 — Mechanics + capstone-equivalent cost profile
 
-Run `neural_cli root_puct-benchmark` with the raw 1M checkpoint for policy
-priors, the frozen isotonic copy as `--value-checkpoint`, and
-`--root-extra-visits 24` on ~50 recorded games. This is the arm-2 comparator
-used to derive arm 3's rollout-tail wall budget. A sweep-only timing read is
-still useful for mechanics attribution, but cannot size a legal+24 tail match.
+Submit the persistent timing-audit job configured to run
+`neural_cli root_puct-benchmark` with raw 1M policy priors, the frozen isotonic
+copy as `--value-checkpoint`, and `--root-extra-visits 24` on ~50 recorded
+games. This is the arm-2 comparator used to derive arm 3's rollout-tail wall
+budget. A sweep-only timing read is still useful for mechanics attribution, but
+cannot size a legal+24 tail match. Its durable timing artifact and terminal
+marker, not a foreground command's exit status, are the record of this probe.
 Use `root-puct-play-benchmark --belief-start-overrides` for the P-1 end-to-end
 determinization validation.
 
@@ -273,6 +275,12 @@ privileged-fallback rates per row (must be zero in primary rows).
 
 ## Standing constraints
 
+- **Persistent evaluation control:** long-running audits and capstone evaluations
+  run under persistent cluster jobs, never an interactive Codex foreground
+  session. The job owns progress, writes durable terminal artifacts, and emits
+  its own notification. Codex submits the job and consumes those artifacts; it
+  must not continuously poll a live evaluation. Resume follow-on work only
+  after a job-produced artifact/notification or an explicit user prompt.
 - Search stays OUT of the collection loop (the roadmap's load-bearing lesson:
   the simulator is too slow to generate search-improved training targets at
   scale). Test-time, refutation mining, and reanalyze targets only.
