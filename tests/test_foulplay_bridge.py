@@ -21,6 +21,7 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayGameResult,
     FoulPlayProcessExitError,
     _ControlledBattleState,
+    _FoulPlayWebsocketServer,
     _choice_body_from_outgoing_message,
     _config_from_args,
     _capture_resolved_public_action_round,
@@ -2397,10 +2398,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
         class FakeProcess:
             stdout = None
             stderr = None
-            returncode = 0
+
+            def __init__(self) -> None:
+                self.returncode: int | None = None
 
             def terminate(self) -> None:
-                raise AssertionError("completed fake process should not be terminated")
+                self.returncode = -15
+
+            async def wait(self) -> int:
+                self.returncode = 0
+                return self.returncode
 
         class FakeServer:
             def __init__(self, **_: object) -> None:
@@ -2456,10 +2463,24 @@ class FoulPlayBridgeTest(unittest.TestCase):
         async def wait_for_challenge(**_: object) -> None:
             return None
 
-        async def run_single_game(**_: object) -> ControlledFoulPlayGameResult:
+        async def run_single_game(**kwargs: object) -> ControlledFoulPlayGameResult:
+            # Mirrors foul-play exiting during its post-game websocket cleanup.
+            process = kwargs["foulplay_process"]
+            assert isinstance(process, FakeProcess)
+            process.returncode = 0
             return next(game_results)
 
-        async def spawn_foulplay(*_: object, **__: object) -> FakeProcess:
+        spawned_run_counts: list[int | None] = []
+        spawned_foulplay_seeds: list[int | None] = []
+
+        async def spawn_foulplay(
+            spawned_config: ControlledFoulPlayConfig,
+            *_: object,
+            run_count: int | None = None,
+            **__: object,
+        ) -> FakeProcess:
+            spawned_run_counts.append(run_count)
+            spawned_foulplay_seeds.append(spawned_config.foulplay_random_seed)
             return FakeProcess()
 
         with (
@@ -2485,6 +2506,46 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual([payload["completed_games"] for payload in progress_payloads], [1, 2])
         self.assertEqual([payload["status"] for payload in progress_payloads], ["partial", "complete"])
         self.assertEqual([payload["complete"] for payload in progress_payloads], [False, True])
+        self.assertEqual(spawned_run_counts, [1, 1])
+        self.assertEqual(spawned_foulplay_seeds, [1, 2])
+        self.assertEqual(result.to_dict()["foulplay_random_seed_schedule"]["seeds"], [1, 2])
+
+    def test_stale_foulplay_connection_cannot_clear_successor_socket(self) -> None:
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.sent: list[str] = []
+                self.entered = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                self.entered.set()
+
+            def __aiter__(self) -> "FakeSocket":
+                return self
+
+            async def __anext__(self) -> str:
+                await self.release.wait()
+                raise RuntimeError("simulated disconnect")
+
+        async def exercise() -> None:
+            server = _FoulPlayWebsocketServer(username="FoulPlayBot", host="127.0.0.1")
+            old_socket = FakeSocket()
+            new_socket = FakeSocket()
+            old_task = asyncio.create_task(server._handle_connection(old_socket))
+            await old_socket.entered.wait()
+            new_task = asyncio.create_task(server._handle_connection(new_socket))
+            await new_socket.entered.wait()
+
+            old_socket.release.set()
+            await old_task
+            self.assertIs(server.websocket, new_socket)
+
+            new_socket.release.set()
+            await new_task
+            self.assertIsNone(server.websocket)
+
+        asyncio.run(exercise())
 
     def test_async_main_summary_out_preserves_partial_progress_on_failure(self) -> None:
         class FakeModelConfig:
