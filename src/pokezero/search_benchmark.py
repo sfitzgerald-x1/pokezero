@@ -23,6 +23,7 @@ from .search import (
 )
 
 ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
+ROOT_PUCT_SEARCH_BENCHMARK_SCHEMA_VERSION = "pokezero.root-puct-search-benchmark.v2"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class RootPUCTSearchDecision:
     selected_value: float
     selected_score: float
     candidate_count: int
+    total_visits: int
     elapsed_seconds: float
     timing: RootPUCTSearchTiming
 
@@ -63,6 +65,7 @@ class RootPUCTSearchDecision:
             "selected_value": self.selected_value,
             "selected_score": self.selected_score,
             "candidate_count": self.candidate_count,
+            "total_visits": self.total_visits,
             "elapsed_seconds": self.elapsed_seconds,
             "timing": self.timing.to_dict(),
         }
@@ -80,6 +83,7 @@ class RootPUCTSearchBenchmarkReport:
     source_decision_rounds: tuple[int, ...]
     decisions: tuple[RootPUCTSearchDecision, ...]
     skipped_prefixes: int = 0
+    root_extra_visits: int | None = None
 
     @property
     def evaluated_prefixes(self) -> int:
@@ -115,12 +119,14 @@ class RootPUCTSearchBenchmarkReport:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "schema_version": ROOT_PUCT_SEARCH_BENCHMARK_SCHEMA_VERSION,
             "format_id": self.format_id,
             "max_decision_rounds": self.max_decision_rounds,
             "games": self.games,
             "prefixes_per_game": self.prefixes_per_game,
             "search_player": self.search_player,
             "cpuct": self.cpuct,
+            "root_extra_visits": self.root_extra_visits,
             "source_policy_ids": dict(self.source_policy_ids),
             "source_decision_rounds": list(self.source_decision_rounds),
             "average_source_decision_rounds": self.average_source_decision_rounds,
@@ -328,6 +334,7 @@ def benchmark_root_puct_search(
     seed_start: int = 1,
     search_player: PlayerId = "p1",
     cpuct: float = 1.25,
+    root_extra_visits: int | None = None,
 ) -> RootPUCTSearchBenchmarkReport:
     if games <= 0:
         raise ValueError("games must be positive.")
@@ -335,6 +342,8 @@ def benchmark_root_puct_search(
         raise ValueError("prefixes_per_game must be positive.")
     if search_player not in policies:
         raise ValueError(f"search_player {search_player!r} is not present in source policies.")
+    if root_extra_visits is not None and root_extra_visits < 0:
+        raise ValueError("root_extra_visits must be non-negative when set.")
 
     env = env_factory()
     source_decision_rounds: list[int] = []
@@ -383,11 +392,17 @@ def benchmark_root_puct_search(
                     value_fn=value_fn,
                     action_priors=priors,
                     cpuct=cpuct,
+                    root_visit_budget_resolver=(
+                        None
+                        if root_extra_visits is None
+                        else lambda budget_context: len(budget_context.action_priors) + root_extra_visits
+                    ),
                 )
                 elapsed = perf_counter() - start
                 timing = search.timing.with_policy_evaluation(policy_evaluation_seconds).with_total(
                     _timing_perf_counter() - timing_started_at
                 )
+                selected_candidate = search.most_visited_candidate
                 decisions.append(
                     RootPUCTSearchDecision(
                         seed=seed,
@@ -395,10 +410,11 @@ def benchmark_root_puct_search(
                         player_id=search_player,
                         prefix_decision_round_count=prefix_decision_round_count,
                         recorded_action_index=player_step.action_index,
-                        selected_action_index=search.action_index,
-                        selected_value=search.best_candidate.value,
-                        selected_score=search.best_candidate.score,
+                        selected_action_index=selected_candidate.action_index,
+                        selected_value=selected_candidate.value,
+                        selected_score=selected_candidate.score,
                         candidate_count=len(search.candidates),
+                        total_visits=search.total_visits,
                         elapsed_seconds=elapsed,
                         timing=timing,
                     )
@@ -419,6 +435,7 @@ def benchmark_root_puct_search(
         source_decision_rounds=tuple(source_decision_rounds),
         decisions=tuple(decisions),
         skipped_prefixes=skipped_prefixes,
+        root_extra_visits=root_extra_visits,
     )
 
 

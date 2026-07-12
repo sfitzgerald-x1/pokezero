@@ -128,11 +128,12 @@ class PublicCorpusTest(unittest.TestCase):
             patch("pokezero.neural_cli.gen3_category_vocabulary", return_value=object()) as vocabulary,
             patch("pokezero.neural_cli.feature_masks_from_model_config", return_value=object()),
             patch("pokezero.neural_cli.load_gen3_randbat_source_cached", return_value=set_source),
-            patch("pokezero.neural_cli.profile_public_corpus", return_value=report),
+            patch("pokezero.neural_cli.profile_public_corpus", return_value=report) as profile_public_corpus,
         ):
             self.assertEqual(_prior_belief_profile(args), 0)
 
         vocabulary.assert_called_once_with(Path("/showdown"), include_turn_merged=True)
+        self.assertEqual(profile_public_corpus.call_args.kwargs["provenance"]["opponent_scenarios"], 1)
 
     def test_streamed_prefix_matches_eager_selection_and_commits_metadata_last(self) -> None:
         record = _record()
