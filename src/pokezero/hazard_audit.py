@@ -782,6 +782,7 @@ def aggregate_hazard_audit_records(
     total_states = len(state_low_prior)
 
     paired_search_by_budget: dict[str, dict[str, int]] = {}
+    paired_search_pairs_by_budget: dict[str, set[tuple[str, str]]] = {}
     for budget in DEFAULT_EXTRA_VISITS:
         paired_rows: dict[tuple[str, str], set[str]] = defaultdict(set)
         for row in rows:
@@ -795,10 +796,12 @@ def aggregate_hazard_audit_records(
         complete_pairs = {
             pair for pair, arms in paired_rows.items() if arms == {"deterministic", "dirichlet_audit_only"}
         }
+        paired_search_pairs_by_budget[str(budget)] = complete_pairs
         paired_search_by_budget[str(budget)] = {
             "target_states": len({state_id for state_id, _world_id in complete_pairs}),
             "state_world_pairs": len(complete_pairs),
         }
+    paired_search_pairs_across_sweep = set.intersection(*paired_search_pairs_by_budget.values())
 
     derived_available_pairs = {
         (str(row["state_id"]), str(row["world_id"]))
@@ -827,15 +830,15 @@ def aggregate_hazard_audit_records(
             "paired_searched_state_world_pairs_by_extra_visits": {
                 budget: values["state_world_pairs"] for budget, values in paired_search_by_budget.items()
             },
+            "paired_searched_target_states_across_extra_visit_sweep": len(
+                {state_id for state_id, _world_id in paired_search_pairs_across_sweep}
+            ),
+            "paired_searched_state_world_pairs_across_extra_visit_sweep": len(paired_search_pairs_across_sweep),
             "interpretation": (
                 "Counts are a stage-by-stage eligibility funnel: legal hazard/spin targets, low-prior "
                 "targets, sampled public-belief worlds, then complete deterministic/Dirichlet search pairs."
             ),
         }
-    )
-    paired_search_complete = all(
-        int(funnel["paired_searched_state_world_pairs_by_extra_visits"][str(budget)]) > 0
-        for budget in DEFAULT_EXTRA_VISITS
     )
     eligibility_low_prior_count = int(funnel["low_prior_target_states"])
     eligibility_total_states = int(funnel["hazard_legal_target_states"])
@@ -844,7 +847,7 @@ def aggregate_hazard_audit_records(
         coverage_status = "inconclusive_no_low_prior_targets"
     elif candidate_world_pair_count == 0:
         coverage_status = "inconclusive_no_materialized_belief_worlds"
-    elif not paired_search_complete:
+    elif not paired_search_pairs_across_sweep:
         coverage_status = "inconclusive_no_paired_search_coverage"
     else:
         coverage_status = "paired_search_coverage_available"
@@ -969,7 +972,7 @@ def aggregate_hazard_audit_records(
             ),
             "interpretation": (
                 "Dirichlet is eligible for its pre-registered Step 3 metric read only after every "
-                "configured budget has at least one paired searched low-prior public-belief world."
+                "configured budget has the same paired searched low-prior public-belief world."
             ),
         },
         "coverage": {

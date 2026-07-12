@@ -363,6 +363,8 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 2)
         self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
         self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
+        self.assertEqual(funnel["paired_searched_target_states_across_extra_visit_sweep"], 2)
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 2)
         self.assertEqual(
             aggregate["routing"],
             {
@@ -370,7 +372,7 @@ class HazardAuditTest(unittest.TestCase):
                 "secondary_dirichlet_decision": "requires_pre_registered_metric_read",
                 "interpretation": (
                     "Dirichlet is eligible for its pre-registered Step 3 metric read only after every "
-                    "configured budget has at least one paired searched low-prior public-belief world."
+                    "configured budget has the same paired searched low-prior public-belief world."
                 ),
             },
         )
@@ -401,6 +403,8 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 0)
         self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
         self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
+        self.assertEqual(funnel["paired_searched_target_states_across_extra_visit_sweep"], 0)
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 0)
         self.assertEqual(payload["aggregate"]["routing"]["coverage_status"], "inconclusive_no_materialized_belief_worlds")
         self.assertEqual(payload["aggregate"]["routing"]["secondary_dirichlet_decision"], "not_assessable")
 
@@ -435,6 +439,42 @@ class HazardAuditTest(unittest.TestCase):
             aggregate["coverage"]["search_rejection_code_counts"],
             {"branch_point_observation_mismatch": 6},
         )
+
+    def test_routing_requires_one_paired_world_across_the_full_budget_sweep(self) -> None:
+        records = []
+        for budget, world_id in ((0, "w0"), (24, "w1"), (120, "w2")):
+            records.extend(
+                (
+                    {
+                        "state_id": f"state-{budget}",
+                        "world_id": world_id,
+                        "arm": "deterministic",
+                        "extra_visits": budget,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": False,
+                    },
+                    {
+                        "state_id": f"state-{budget}",
+                        "world_id": world_id,
+                        "arm": "dirichlet_audit_only",
+                        "extra_visits": budget,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": False,
+                    },
+                )
+            )
+
+        aggregate = aggregate_hazard_audit_records(records)
+
+        funnel = aggregate["eligibility_funnel"]
+        self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 1, "24": 1, "120": 1})
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 0)
+        self.assertEqual(aggregate["routing"]["coverage_status"], "inconclusive_no_paired_search_coverage")
+        self.assertEqual(aggregate["routing"]["secondary_dirichlet_decision"], "not_assessable")
 
     def test_delta_choice_collapses_paired_worlds_to_one_conservative_state_vote(self) -> None:
         records = []
