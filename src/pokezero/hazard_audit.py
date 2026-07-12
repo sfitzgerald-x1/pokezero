@@ -49,7 +49,7 @@ from .search_policy import OpponentActionScenario, _root_dirichlet_action_priors
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
-HAZARD_AUDIT_SCHEMA_VERSION = "pokezero.hazard-blind-spot-audit.v2"
+HAZARD_AUDIT_SCHEMA_VERSION = "pokezero.hazard-blind-spot-audit.v3"
 DEFAULT_EXTRA_VISITS = (0, 24, 120)
 DEFAULT_LOW_PRIOR_THRESHOLD = 0.01
 DEFAULT_DIRICHLET_ALPHA = 0.3
@@ -782,6 +782,7 @@ def aggregate_hazard_audit_records(
     total_states = len(state_low_prior)
 
     paired_search_by_budget: dict[str, dict[str, int]] = {}
+    paired_search_pairs_by_budget: dict[str, set[tuple[str, str]]] = {}
     for budget in DEFAULT_EXTRA_VISITS:
         paired_rows: dict[tuple[str, str], set[str]] = defaultdict(set)
         for row in rows:
@@ -795,10 +796,12 @@ def aggregate_hazard_audit_records(
         complete_pairs = {
             pair for pair, arms in paired_rows.items() if arms == {"deterministic", "dirichlet_audit_only"}
         }
+        paired_search_pairs_by_budget[str(budget)] = complete_pairs
         paired_search_by_budget[str(budget)] = {
             "target_states": len({state_id for state_id, _world_id in complete_pairs}),
             "state_world_pairs": len(complete_pairs),
         }
+    paired_search_pairs_across_sweep = set.intersection(*paired_search_pairs_by_budget.values())
 
     derived_available_pairs = {
         (str(row["state_id"]), str(row["world_id"]))
@@ -827,6 +830,10 @@ def aggregate_hazard_audit_records(
             "paired_searched_state_world_pairs_by_extra_visits": {
                 budget: values["state_world_pairs"] for budget, values in paired_search_by_budget.items()
             },
+            "paired_searched_target_states_across_extra_visit_sweep": len(
+                {state_id for state_id, _world_id in paired_search_pairs_across_sweep}
+            ),
+            "paired_searched_state_world_pairs_across_extra_visit_sweep": len(paired_search_pairs_across_sweep),
             "interpretation": (
                 "Counts are a stage-by-stage eligibility funnel: legal hazard/spin targets, low-prior "
                 "targets, sampled public-belief worlds, then complete deterministic/Dirichlet search pairs."
@@ -835,6 +842,15 @@ def aggregate_hazard_audit_records(
     )
     eligibility_low_prior_count = int(funnel["low_prior_target_states"])
     eligibility_total_states = int(funnel["hazard_legal_target_states"])
+    candidate_world_pair_count = int(funnel["low_prior_state_world_pairs_with_available_belief_worlds"])
+    if eligibility_low_prior_count == 0:
+        coverage_status = "inconclusive_no_low_prior_targets"
+    elif candidate_world_pair_count == 0:
+        coverage_status = "inconclusive_no_materialized_belief_worlds"
+    elif not paired_search_pairs_across_sweep:
+        coverage_status = "inconclusive_no_paired_search_coverage"
+    else:
+        coverage_status = "paired_search_coverage_available"
 
     off_rescue: dict[str, dict[str, object]] = {}
     for budget in (24, 120):
@@ -925,6 +941,11 @@ def aggregate_hazard_audit_records(
     )
     world_unavailable_records = status_counts["world_unavailable"]
     rejected_records = status_counts["search_rejected"] + status_counts["target_branch_unavailable"]
+    search_rejection_code_counts = Counter(
+        str(row.get("search_rejection_code") or "unspecified_search_value_error")
+        for row in rows
+        if row.get("status") == "search_rejected"
+    )
     invalid_records = status_counts["search_invalid"]
     other_non_search_records = len(rows) - len(searched) - world_unavailable_records - rejected_records - invalid_records
     return {
@@ -942,12 +963,25 @@ def aggregate_hazard_audit_records(
         "R_off": off_rescue,
         "DeltaChoice_on": choice_delta,
         "eligibility_funnel": funnel,
+        "routing": {
+            "coverage_status": coverage_status,
+            "secondary_dirichlet_decision": (
+                "requires_pre_registered_metric_read"
+                if coverage_status == "paired_search_coverage_available"
+                else "not_assessable"
+            ),
+            "interpretation": (
+                "Dirichlet is eligible for its pre-registered Step 3 metric read only after every "
+                "configured budget has the same paired searched low-prior public-belief world."
+            ),
+        },
         "coverage": {
             "records": len(rows),
             "searched_records": len(searched),
             "status_counts": dict(sorted(status_counts.items())),
             "world_unavailable_records": world_unavailable_records,
             "rejected_records": rejected_records,
+            "search_rejection_code_counts": dict(sorted(search_rejection_code_counts.items())),
             "invalid_records": invalid_records,
             "invalid_reason_counts": dict(sorted(invalid_reason_counts.items())),
             "other_non_search_records": other_non_search_records,
@@ -969,6 +1003,25 @@ def sha256_file(path: Path | str) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _search_rejection_code(error: ValueError) -> str:
+    """Project replay failures to stable public-safe diagnostic categories."""
+
+    message = str(error)
+    if message.startswith("start override does not reproduce recorded replay prefix observations"):
+        return "branch_point_observation_mismatch"
+    if message.startswith("replay actions for decision round"):
+        return "replay_request_shape_mismatch"
+    if message.startswith("value branch search found no replay-legal root actions"):
+        return "no_replay_legal_root_actions"
+    if message.startswith("root PUCT search produced no candidates"):
+        return "no_root_candidates"
+    if message.startswith("cannot branch from a terminal replay prefix"):
+        return "terminal_replay_prefix"
+    # Exception text can include implementation details or state-derived values;
+    # retain only a fixed category in the public audit artifact.
+    return "unspecified_search_value_error"
 
 
 def _run_record(
@@ -1008,6 +1061,7 @@ def _run_record(
         "mandatory_sweep_candidate_count": None,
         "expected_total_visits": None,
         "noise": dict(noise_metadata),
+        "search_rejection_code": None,
     }
     if not world.available:
         return {**base, "status": "world_unavailable", "target_visits": None, "target_revisits": None, "entrenched": None, "target_selected": None}
@@ -1027,8 +1081,16 @@ def _run_record(
             start_override=world.start_override,
             expected_current_observation=decision.observation if world.start_override is not None else None,
         )
-    except ValueError:
-        return {**base, "status": "search_rejected", "target_visits": None, "target_revisits": None, "entrenched": None, "target_selected": None}
+    except ValueError as exc:
+        return {
+            **base,
+            "status": "search_rejected",
+            "search_rejection_code": _search_rejection_code(exc),
+            "target_visits": None,
+            "target_revisits": None,
+            "entrenched": None,
+            "target_selected": None,
+        }
     finally:
         _close_env(env)
     target = next((candidate for candidate in result.candidates if candidate.action_index == decision.target_action_index), None)

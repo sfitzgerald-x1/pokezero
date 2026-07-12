@@ -174,6 +174,14 @@ on the audit corpus, never capstone seeds. If R_off is low without a material
 choice change, do not add a noise arm and route the finding to training/G4.
 Hazards remain diagnostic targets, not rewards or terminal objectives.
 
+An audit may resolve that routing only when the same low-prior state/world pair
+reaches paired deterministic/Dirichlet search at every configured budget. A corpus with legal
+targets or materialized belief worlds but zero paired searched worlds is
+**inconclusive**, not evidence that there is no blind spot and not a basis for
+either enabling or rejecting a secondary noise arm. The artifact records only
+public-safe replay-rejection categories; recapture a replayable public probe
+before drawing an H3 conclusion.
+
 ## Step 4 — CAPSTONE: strength test, 1M checkpoint as the value head
 
 **Config**: `RootPUCTSearchPolicy` with priors AND leaf values from

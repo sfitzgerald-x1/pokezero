@@ -363,6 +363,19 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 2)
         self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
         self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 2, "24": 2, "120": 2})
+        self.assertEqual(funnel["paired_searched_target_states_across_extra_visit_sweep"], 2)
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 2)
+        self.assertEqual(
+            aggregate["routing"],
+            {
+                "coverage_status": "paired_search_coverage_available",
+                "secondary_dirichlet_decision": "requires_pre_registered_metric_read",
+                "interpretation": (
+                    "Dirichlet is eligible for its pre-registered Step 3 metric read only after every "
+                    "configured budget has the same paired searched low-prior public-belief world."
+                ),
+            },
+        )
         self.assertEqual(aggregate["coverage"]["status_counts"], {"searched": 18})
         self.assertEqual(aggregate["coverage"]["invalid_records"], 0)
 
@@ -390,6 +403,78 @@ class HazardAuditTest(unittest.TestCase):
         self.assertEqual(funnel["low_prior_state_world_pairs_with_available_belief_worlds"], 0)
         self.assertEqual(funnel["paired_searched_target_states_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
         self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 0, "24": 0, "120": 0})
+        self.assertEqual(funnel["paired_searched_target_states_across_extra_visit_sweep"], 0)
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 0)
+        self.assertEqual(payload["aggregate"]["routing"]["coverage_status"], "inconclusive_no_materialized_belief_worlds")
+        self.assertEqual(payload["aggregate"]["routing"]["secondary_dirichlet_decision"], "not_assessable")
+
+    def test_search_rejection_is_public_safe_and_marks_coverage_inconclusive(self) -> None:
+        decision = _decision()
+        with patch(
+            "pokezero.hazard_audit.puct_branch_search",
+            side_effect=ValueError(
+                "start override does not reproduce recorded replay prefix observations for decision round 3: p1.private"
+            ),
+        ):
+            payload = run_hazard_blind_spot_audit(
+                decisions=(decision,),
+                env_factory=AuditEnv,
+                action_priors=lambda history: (0.99, 0.01) + (0.0,) * 7,
+                value_fn=lambda history: 0.0,
+                world_provider=lambda state: (AuditWorld(f"{state.state_id}-w0", {"p2": 0}),),
+                config=AuditConfig(low_prior_threshold=0.02),
+            )
+
+        records = payload["records"]
+        self.assertEqual(len(records), 6)
+        self.assertTrue(all(record["status"] == "search_rejected" for record in records))
+        self.assertTrue(
+            all(record["search_rejection_code"] == "branch_point_observation_mismatch" for record in records)
+        )
+        self.assertNotIn("private", json.dumps(records, sort_keys=True))
+        aggregate = payload["aggregate"]
+        self.assertEqual(aggregate["routing"]["coverage_status"], "inconclusive_no_paired_search_coverage")
+        self.assertEqual(aggregate["routing"]["secondary_dirichlet_decision"], "not_assessable")
+        self.assertEqual(
+            aggregate["coverage"]["search_rejection_code_counts"],
+            {"branch_point_observation_mismatch": 6},
+        )
+
+    def test_routing_requires_one_paired_world_across_the_full_budget_sweep(self) -> None:
+        records = []
+        for budget, world_id in ((0, "w0"), (24, "w1"), (120, "w2")):
+            records.extend(
+                (
+                    {
+                        "state_id": f"state-{budget}",
+                        "world_id": world_id,
+                        "arm": "deterministic",
+                        "extra_visits": budget,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": False,
+                    },
+                    {
+                        "state_id": f"state-{budget}",
+                        "world_id": world_id,
+                        "arm": "dirichlet_audit_only",
+                        "extra_visits": budget,
+                        "status": "searched",
+                        "low_prior": True,
+                        "target_revisits": 0,
+                        "target_selected": False,
+                    },
+                )
+            )
+
+        aggregate = aggregate_hazard_audit_records(records)
+
+        funnel = aggregate["eligibility_funnel"]
+        self.assertEqual(funnel["paired_searched_state_world_pairs_by_extra_visits"], {"0": 1, "24": 1, "120": 1})
+        self.assertEqual(funnel["paired_searched_state_world_pairs_across_extra_visit_sweep"], 0)
+        self.assertEqual(aggregate["routing"]["coverage_status"], "inconclusive_no_paired_search_coverage")
+        self.assertEqual(aggregate["routing"]["secondary_dirichlet_decision"], "not_assessable")
 
     def test_delta_choice_collapses_paired_worlds_to_one_conservative_state_vote(self) -> None:
         records = []
