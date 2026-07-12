@@ -1203,15 +1203,19 @@ class _FoulPlayWebsocketServer:
 
     async def _handle_connection(self, websocket: Any) -> None:
         self.websocket = websocket
-        await websocket.send("|challstr|1|pokezero-controlled")
         try:
+            await websocket.send("|challstr|1|pokezero-controlled")
             async for message in websocket:
                 await self._handle_message(str(message))
         except Exception:
             # The caller monitors the foul-play process and will report its stderr/stdout. Avoid
             # leaking a noisy websocket traceback as the primary error.
-            self.websocket = None
             return
+        finally:
+            # A game-scoped client can disconnect after its successor has already connected.
+            # Never let that stale handler clear the successor's active websocket.
+            if self.websocket is websocket:
+                self.websocket = None
 
     async def _handle_message(self, message: str) -> None:
         room, body = _split_outgoing_showdown_message(message)
@@ -1433,45 +1437,54 @@ async def run_controlled_foulplay_benchmark(
         policy_id=policy_id,
     )
     benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
+    foulplay_random_seed_schedule = _per_seed_foulplay_random_seed_schedule(config, count=config.games)
 
     server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
     bridge = _BattleBridge(showdown_root=config.showdown_root, node_binary=config.node_binary)
-    foulplay_process: asyncio.subprocess.Process | None = None
-    foulplay_logs = _ProcessLogBuffer()
-    foulplay_log_tasks: list[asyncio.Task[None]] = []
     game_results: list[ControlledFoulPlayGameResult] = []
     try:
         await server.start()
-        foulplay_process = await _spawn_foulplay(config, server.uri)
-        foulplay_log_tasks = [
-            asyncio.create_task(_drain_process_stream(foulplay_process.stdout, foulplay_logs.append_stdout)),
-            asyncio.create_task(_drain_process_stream(foulplay_process.stderr, foulplay_logs.append_stderr)),
-        ]
         await bridge.start()
         for offset in range(config.games):
             seed = config.seed_start + offset
-            await _wait_for_foulplay_challenge_or_exit(
-                server=server,
-                expected_target=config.pokezero_username,
-                process=foulplay_process,
-                logs=foulplay_logs,
+            # Foul-play's websocket cleanup can terminate its process after a completed game.
+            # Give every controlled battle an isolated client process so a completed result is
+            # never reclassified as a failure while waiting for the next challenge.
+            game_config = replace(
+                config,
+                foulplay_random_seed=foulplay_random_seed_schedule[offset],
             )
-            game_results.append(
-                await _run_single_game(
-                    config=config,
-                    bridge=bridge,
+            foulplay_process = await _spawn_foulplay(game_config, server.uri, run_count=1)
+            foulplay_logs = _ProcessLogBuffer()
+            foulplay_log_tasks = [
+                asyncio.create_task(_drain_process_stream(foulplay_process.stdout, foulplay_logs.append_stdout)),
+                asyncio.create_task(_drain_process_stream(foulplay_process.stderr, foulplay_logs.append_stderr)),
+            ]
+            try:
+                await _wait_for_foulplay_challenge_or_exit(
                     server=server,
-                    policy=policy,
-                    vocab=vocab,
-                    dex=dex,
-                    observation_spec=observation_spec,
-                    feature_masks=feature_masks,
-                    seed=seed,
-                    foulplay_process=foulplay_process,
-                    foulplay_logs=foulplay_logs,
-                    trajectory_callback=trajectory_callback,
+                    expected_target=config.pokezero_username,
+                    process=foulplay_process,
+                    logs=foulplay_logs,
                 )
-            )
+                game_results.append(
+                    await _run_single_game(
+                        config=config,
+                        bridge=bridge,
+                        server=server,
+                        policy=policy,
+                        vocab=vocab,
+                        dex=dex,
+                        observation_spec=observation_spec,
+                        feature_masks=feature_masks,
+                        seed=seed,
+                        foulplay_process=foulplay_process,
+                        foulplay_logs=foulplay_logs,
+                        trajectory_callback=trajectory_callback,
+                    )
+                )
+            finally:
+                await _stop_foulplay_process(foulplay_process, foulplay_log_tasks)
             if progress_callback is not None:
                 progress_callback(
                     ControlledFoulPlayBenchmarkResult(
@@ -1479,20 +1492,12 @@ async def run_controlled_foulplay_benchmark(
                         policy_id=benchmark_policy_id,
                         games=tuple(game_results),
                         checkpoint_sha256=checkpoint_sha256,
+                        foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
                         value_leaf_provenance=value_leaf_provenance,
                     )
                 )
     finally:
         await bridge.close()
-        if foulplay_process is not None and foulplay_process.returncode is None:
-            foulplay_process.terminate()
-            try:
-                await asyncio.wait_for(foulplay_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                foulplay_process.kill()
-                await foulplay_process.wait()
-        for task in foulplay_log_tasks:
-            task.cancel()
         await server.close()
 
     return ControlledFoulPlayBenchmarkResult(
@@ -1500,6 +1505,7 @@ async def run_controlled_foulplay_benchmark(
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
         checkpoint_sha256=checkpoint_sha256,
+        foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
         value_leaf_provenance=value_leaf_provenance,
     )
 
@@ -2045,10 +2051,12 @@ def _build_policy(
 async def _spawn_foulplay(
     config: ControlledFoulPlayConfig,
     websocket_uri: str,
+    *,
+    run_count: int | None = None,
 ) -> asyncio.subprocess.Process:
     env = _foulplay_env(config)
     return await asyncio.create_subprocess_exec(
-        *_foulplay_command(config, websocket_uri),
+        *_foulplay_command(config, websocket_uri, run_count=run_count),
         cwd=str(config.foulplay_root),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -2067,7 +2075,15 @@ def _foulplay_env(config: ControlledFoulPlayConfig) -> dict[str, str]:
     }
 
 
-def _foulplay_command(config: ControlledFoulPlayConfig, websocket_uri: str) -> tuple[str, ...]:
+def _foulplay_command(
+    config: ControlledFoulPlayConfig,
+    websocket_uri: str,
+    *,
+    run_count: int | None = None,
+) -> tuple[str, ...]:
+    resolved_run_count = config.games if run_count is None else run_count
+    if resolved_run_count <= 0:
+        raise ValueError("run_count must be positive when set.")
     run_path = str(config.foulplay_root / "run.py")
     seed_wrapper = (
         "import os, random, runpy, sys; "
@@ -2092,7 +2108,7 @@ def _foulplay_command(config: ControlledFoulPlayConfig, websocket_uri: str) -> t
         "--pokemon-format",
         config.format_id,
         "--run-count",
-        str(config.games),
+        str(resolved_run_count),
         "--search-time-ms",
         str(config.search_time_ms),
     )
@@ -2106,6 +2122,25 @@ async def _drain_process_stream(
         return
     async for raw in stream:
         append(raw.decode("utf-8", errors="replace").rstrip())
+
+
+async def _stop_foulplay_process(
+    process: asyncio.subprocess.Process,
+    log_tasks: Sequence[asyncio.Task[None]],
+) -> None:
+    """Stop one game-scoped foul-play client and drain its background readers."""
+
+    if process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+    for task in log_tasks:
+        task.cancel()
+    if log_tasks:
+        await asyncio.gather(*log_tasks, return_exceptions=True)
 
 
 async def _run_single_game(
