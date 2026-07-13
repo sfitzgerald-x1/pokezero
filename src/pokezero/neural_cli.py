@@ -50,7 +50,9 @@ from .determinization import (
 from .prior_belief_profile import (
     MINIMUM_PROFILE_DECISIONS,
     PriorBeliefProfileConfig,
+    merge_public_corpus_profile_shards,
     profile_public_corpus,
+    profile_public_corpus_shard,
 )
 from .public_decision_corpus import open_public_decision_corpus, sha256_file
 from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
@@ -1147,6 +1149,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "the entire source file."
         ),
     )
+    prior_belief_profile.add_argument(
+        "--start-decision",
+        type=int,
+        default=0,
+        help="Zero-based public-decision offset. Requires --shard and a bounded --max-decisions.",
+    )
+    prior_belief_profile.add_argument(
+        "--shard",
+        action="store_true",
+        help="Write a bounded map-stage report. Shards are not capstone-eligible until merged.",
+    )
     prior_belief_profile.add_argument("--checkpoint", type=Path, required=True, help="Checkpoint used for raw priors and value sweeps.")
     prior_belief_profile.add_argument("--showdown-root", type=Path, required=True, help="Built Pokemon Showdown checkout used for public-world replay.")
     prior_belief_profile.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
@@ -1182,6 +1195,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     prior_belief_profile.add_argument("--out", type=Path, default=None, help="Optional JSON report path.")
     prior_belief_profile.add_argument("--json", action="store_true", help="Print the full JSON report.")
     prior_belief_profile.set_defaults(func=_prior_belief_profile)
+
+    prior_belief_profile_merge = subparsers.add_parser(
+        "prior-belief-profile-merge",
+        help="Merge contiguous bounded prior/belief profile shards into one capstone-eligible report.",
+    )
+    prior_belief_profile_merge.add_argument(
+        "--shards",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Shard JSON reports ordered by their zero-based public-decision range.",
+    )
+    prior_belief_profile_merge.add_argument("--out", type=Path, required=True, help="Merged JSON report path.")
+    prior_belief_profile_merge.add_argument("--json", action="store_true", help="Print the merged JSON report.")
+    prior_belief_profile_merge.set_defaults(func=_prior_belief_profile_merge)
 
     value_calibration = subparsers.add_parser(
         "value-calibration",
@@ -2176,7 +2204,19 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
 
     if args.opponent_legal_mask_mode != "hidden":
         raise ValueError("prior-belief-profile refuses privileged opponent legal-mask mode.")
-    corpus = open_public_decision_corpus(args.corpus, max_decisions=args.max_decisions)
+    shard_mode = bool(getattr(args, "shard", False))
+    start_decision = int(getattr(args, "start_decision", 0))
+    if start_decision < 0:
+        raise ValueError("--start-decision must be non-negative.")
+    if shard_mode and args.max_decisions is None:
+        raise ValueError("--shard requires a bounded --max-decisions.")
+    if not shard_mode and start_decision:
+        raise ValueError("--start-decision requires --shard.")
+    corpus = open_public_decision_corpus(
+        args.corpus,
+        max_decisions=args.max_decisions,
+        start_decision=start_decision,
+    )
     checkpoint_sha256 = sha256_file(args.checkpoint)
     captured_checkpoint_sha256 = corpus.manifest.get("checkpoint_sha256")
     if captured_checkpoint_sha256 != checkpoint_sha256:
@@ -2247,13 +2287,12 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
         world_sample_cap=profile_config.world_sample_cap,
         scenario_count=args.opponent_scenarios,
     )
-    report = profile_public_corpus(
-        corpus,
-        prior_evaluator=prior_evaluator,
-        candidate_value_evaluator=candidate_value_evaluator,
-        config=profile_config,
-        belief_set_source=set_source,
-        provenance={
+    profile_kwargs = {
+        "prior_evaluator": prior_evaluator,
+        "candidate_value_evaluator": candidate_value_evaluator,
+        "config": profile_config,
+        "belief_set_source": set_source,
+        "provenance": {
             "checkpoint": str(args.checkpoint),
             "checkpoint_sha256": checkpoint_sha256,
             "corpus_source_path": str(args.corpus),
@@ -2263,6 +2302,11 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             "opponent_legal_mask_mode": "hidden",
             "opponent_scenarios": args.opponent_scenarios,
         },
+    }
+    report = (
+        profile_public_corpus_shard(corpus, **profile_kwargs)
+        if shard_mode
+        else profile_public_corpus(corpus, **profile_kwargs)
     )
     if args.out is not None:
         _write_json(args.out, report)
@@ -2274,6 +2318,23 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             f"profiled {report['decision_count']} public decisions and "
             f"{report['selection_context_count']} hidden-mode selection contexts"
         )
+    return 0
+
+
+def _prior_belief_profile_merge(args: argparse.Namespace) -> int:
+    """Merge validated map-stage reports without reopening the public corpus."""
+
+    shards: list[dict[str, Any]] = []
+    for path in args.shards:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"profile shard must be a JSON object: {path}")
+        shards.append(payload)
+    report = merge_public_corpus_profile_shards(shards)
+    _write_json(args.out, report)
+    print(f"prior_belief_profile: {args.out}")
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 

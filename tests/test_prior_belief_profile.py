@@ -20,8 +20,10 @@ from pokezero.prior_belief_profile import (
     PriorBeliefProfileConfig,
     WorldScenarioEvaluation,
     initial_candidate_value_top_two_margin,
+    merge_public_corpus_profile_shards,
     phase_for_turn,
     profile_public_corpus,
+    profile_public_corpus_shard,
     profile_public_decisions,
     public_belief_sampling_profile,
     public_policy_context,
@@ -33,6 +35,7 @@ from pokezero.public_decision_corpus import (
     PublicDecisionRecord,
     PublicObservation,
     PublicResolvedActionRound,
+    canonical_json_sha256,
     load_public_decision_corpus,
     open_public_decision_corpus,
     public_corpus_manifest,
@@ -157,6 +160,29 @@ class PublicCorpusTest(unittest.TestCase):
             self.assertEqual(streamed.selected_content_sha256, eager.selected_content_sha256)
             with self.assertRaisesRegex(RuntimeError, "only once"):
                 list(streamed.iter_decisions())
+
+    def test_streamed_range_selects_only_its_requested_decision_rows(self) -> None:
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint",
+            belief_set_source_hash="source",
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "public.jsonl"
+            records = []
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                for index in range(5):
+                    prototype = replace(_record(turn_index=index), battle_id=f"range-{index}", seed=index)
+                    record = replace(prototype, decision_id=public_decision_id(prototype))
+                    writer.append(record)
+                    records.append(record)
+
+            ranged = open_public_decision_corpus(path, start_decision=2, max_decisions=2)
+            self.assertEqual([record.decision_id for record in ranged.iter_decisions()], [record.decision_id for record in records[2:4]])
+
+        self.assertEqual(ranged.selected_decision_count, 2)
+        self.assertIsNotNone(ranged.selected_content_sha256)
+        self.assertIsNone(ranged.source_file_sha256)
 
     def test_profile_public_corpus_streams_the_required_two_thousand_decisions(self) -> None:
         manifest = public_corpus_manifest(
@@ -362,6 +388,78 @@ class PublicCorpusTest(unittest.TestCase):
 
 
 class PriorBeliefProfileTest(unittest.TestCase):
+    def test_contiguous_profile_shards_merge_to_the_same_metrics_as_one_profile(self) -> None:
+        manifest = public_corpus_manifest(
+            checkpoint_sha256="checkpoint",
+            belief_set_source_hash="source",
+            capture_config={"opponent_legal_mask_mode": "hidden", "root_dirichlet_alpha": None},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "public.jsonl"
+            with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
+                for index in range(MINIMUM_PROFILE_DECISIONS):
+                    prototype = replace(_record(turn_index=index % 20), battle_id=f"profile-shard-{index}", seed=index)
+                    writer.append(replace(prototype, decision_id=public_decision_id(prototype)))
+
+            profile_kwargs = {
+                "prior_evaluator": lambda _history: (0.6, 0.3, 0.1) + (0.0,) * (ACTION_COUNT - 3),
+                "candidate_value_evaluator": lambda _record: (
+                    WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.5, 1: 0.4, 2: 0.3}),
+                ),
+                "provenance": {
+                    "checkpoint_sha256": "checkpoint",
+                    "belief_set_source_hash": "source",
+                    "root_noise_enabled": False,
+                    "opponent_legal_mask_mode": "hidden",
+                    "opponent_scenarios": 1,
+                },
+            }
+            full = profile_public_corpus(
+                open_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS),
+                **profile_kwargs,
+            )
+            shards = [
+                profile_public_corpus_shard(
+                    open_public_decision_corpus(path, start_decision=start, max_decisions=1_000),
+                    **profile_kwargs,
+                )
+                for start in (0, 1_000)
+            ]
+
+        merged = merge_public_corpus_profile_shards(shards)
+
+        self.assertEqual(merged["profile_scope"], {"kind": "merged-shards", "shard_count": 2})
+        self.assertEqual(merged["decision_rows"], full["decision_rows"])
+        self.assertEqual(merged["selection_context_rows"], full["selection_context_rows"])
+        self.assertEqual(merged["skipped_decision_rows"], full["skipped_decision_rows"])
+        self.assertEqual(merged["threshold_sweeps"], full["threshold_sweeps"])
+        self.assertEqual(merged["decision_normalized_threshold_sweeps"], full["decision_normalized_threshold_sweeps"])
+        self.assertEqual(merged["representativeness"], full["representativeness"])
+        self.assertEqual(merged["decision_count"], MINIMUM_PROFILE_DECISIONS)
+
+    def test_profile_shard_merge_rejects_non_contiguous_ranges(self) -> None:
+        base = profile_public_decisions(
+            [_record()],
+            prior_evaluator=lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            candidate_value_evaluator=lambda _record: (WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.1}),),
+            profile_scope={"kind": "shard", "start_decision": 1, "requested_decision_count": 1},
+            provenance={
+                "checkpoint_sha256": "checkpoint",
+                "belief_set_source_hash": "source",
+                "root_noise_enabled": False,
+                "opponent_legal_mask_mode": "hidden",
+                "opponent_scenarios": 1,
+                "corpus_manifest": {"checkpoint_sha256": "checkpoint"},
+            },
+        )
+        base["corpus_selection"] = {"max_decisions": 1, "selected_decision_count": 1}
+        base["selected_content_sha256"] = "a" * 64
+        core = {name: value for name, value in base.items() if name != "profile_sha256"}
+        base["profile_sha256"] = canonical_json_sha256(core)
+
+        with self.assertRaisesRegex(ValueError, "not contiguous"):
+            merge_public_corpus_profile_shards([base])
+
     def test_metrics_and_selection_context_rows_use_raw_priors(self) -> None:
         record = _record(variants=2)
         report = profile_public_decisions(

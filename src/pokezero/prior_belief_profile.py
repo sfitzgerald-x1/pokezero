@@ -228,6 +228,7 @@ def profile_public_decisions(
     belief_set_source: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
     provenance_factory: Callable[[], Mapping[str, Any]] | None = None,
+    profile_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Profile public decisions with raw priors and initial candidate values.
 
@@ -443,6 +444,8 @@ def profile_public_decisions(
         ),
         "provenance": provenance_payload,
     }
+    if profile_scope is not None:
+        report_core["profile_scope"] = dict(profile_scope)
     return {**report_core, "profile_sha256": canonical_json_sha256(report_core)}
 
 
@@ -460,13 +463,74 @@ def profile_public_corpus(
 
     if minimum_decisions < MINIMUM_PROFILE_DECISIONS:
         raise ValueError(f"minimum_decisions may not be lower than {MINIMUM_PROFILE_DECISIONS}.")
+    return _profile_public_corpus(
+        corpus,
+        prior_evaluator=prior_evaluator,
+        candidate_value_evaluator=candidate_value_evaluator,
+        config=config,
+        belief_set_source=belief_set_source,
+        provenance=provenance,
+        minimum_decisions=minimum_decisions,
+        profile_scope=None,
+    )
+
+
+def profile_public_corpus_shard(
+    corpus: PublicDecisionCorpusStream,
+    *,
+    prior_evaluator: PriorEvaluator,
+    candidate_value_evaluator: CandidateValueEvaluator,
+    config: PriorBeliefProfileConfig = PriorBeliefProfileConfig(),
+    belief_set_source: Any | None = None,
+    provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Profile one deterministic corpus range without treating it as capstone-ready.
+
+    A replay-from-root value sweep is intentionally expensive. This helper is a
+    map-stage primitive: each shard records its own bounded selection and may
+    contain fewer than 2,000 valid replay contexts. Only
+    :func:`merge_public_corpus_profile_shards` can re-establish the Step 2
+    floor for capstone use.
+    """
+
+    if corpus.selected_decision_limit is None:
+        raise ValueError("profile shards require a bounded corpus range.")
+    requested_count = corpus.selected_decision_limit
+    scope = {
+        "kind": "shard",
+        "start_decision": corpus.selected_decision_start,
+        "requested_decision_count": requested_count,
+    }
+    return _profile_public_corpus(
+        corpus,
+        prior_evaluator=prior_evaluator,
+        candidate_value_evaluator=candidate_value_evaluator,
+        config=config,
+        belief_set_source=belief_set_source,
+        provenance=provenance,
+        minimum_decisions=None,
+        profile_scope=scope,
+    )
+
+
+def _profile_public_corpus(
+    corpus: PublicDecisionCorpus | PublicDecisionCorpusStream,
+    *,
+    prior_evaluator: PriorEvaluator,
+    candidate_value_evaluator: CandidateValueEvaluator,
+    config: PriorBeliefProfileConfig,
+    belief_set_source: Any | None,
+    provenance: Mapping[str, Any] | None,
+    minimum_decisions: int | None,
+    profile_scope: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     base_provenance = dict(provenance or {})
     if isinstance(corpus, PublicDecisionCorpusStream):
         records = corpus.iter_decisions()
 
         def streaming_provenance() -> Mapping[str, Any]:
             selected_count = corpus.selected_decision_count
-            if selected_count < minimum_decisions:
+            if minimum_decisions is not None and selected_count < minimum_decisions:
                 raise ValueError(
                     f"prior/belief profiling requires at least {minimum_decisions} valid p1 decisions; "
                     f"corpus contains {selected_count}."
@@ -485,7 +549,7 @@ def profile_public_corpus(
         provenance_factory = streaming_provenance
         corpus_count = lambda: corpus.selected_decision_count
     else:
-        if len(corpus.decisions) < minimum_decisions:
+        if minimum_decisions is not None and len(corpus.decisions) < minimum_decisions:
             raise ValueError(
                 f"prior/belief profiling requires at least {minimum_decisions} valid p1 decisions; "
                 f"corpus contains {len(corpus.decisions)}."
@@ -509,13 +573,245 @@ def profile_public_corpus(
         config=config,
         belief_set_source=belief_set_source,
         provenance_factory=provenance_factory,
+        profile_scope=profile_scope,
     )
-    if report["decision_count"] < minimum_decisions:
+    if minimum_decisions is not None and report["decision_count"] < minimum_decisions:
         raise ValueError(
             f"prior/belief profiling requires at least {minimum_decisions} successfully profiled p1 decisions; "
             f"corpus contains {corpus_count()} rows but only {report['decision_count']} produced public replay contexts."
         )
     return report
+
+
+def merge_public_corpus_profile_shards(
+    shards: Sequence[Mapping[str, Any]],
+    *,
+    minimum_decisions: int = MINIMUM_PROFILE_DECISIONS,
+) -> dict[str, Any]:
+    """Merge contiguous profile-map outputs into one capstone-eligible report.
+
+    The merge refuses gaps, overlap, incompatible model/configuration inputs,
+    or tampered shard hashes. It recomputes aggregate sweeps and phase coverage
+    from the persisted per-decision rows instead of averaging shard summaries.
+    """
+
+    if minimum_decisions < MINIMUM_PROFILE_DECISIONS:
+        raise ValueError(f"minimum_decisions may not be lower than {MINIMUM_PROFILE_DECISIONS}.")
+    if not shards:
+        raise ValueError("at least one profile shard is required.")
+
+    first = _validated_profile_shard(shards[0])
+    profile_config = _profile_mapping(first, "profile_config")
+    provenance = _profile_mapping(first, "provenance")
+    expected_start = 0
+    decision_rows: list[dict[str, Any]] = []
+    selection_context_rows: list[dict[str, Any]] = []
+    skipped_decision_rows: list[dict[str, Any]] = []
+    corpus_by_phase: Counter[str] = Counter()
+    event_bearing_by_phase: Counter[str] = Counter()
+    public_events_by_phase: Counter[str] = Counter()
+    unsupported_prefixes_by_phase: Counter[str] = Counter()
+    unsupported_events_by_phase: Counter[str] = Counter()
+    shard_digests: list[str] = []
+
+    for index, raw_shard in enumerate(shards):
+        shard = _validated_profile_shard(raw_shard)
+        if shard.get("profile_config") != profile_config:
+            raise ValueError(f"profile shard {index} configuration does not match shard 0.")
+        if _profile_input_identity(shard) != _profile_input_identity(first):
+            raise ValueError(f"profile shard {index} checkpoint or public-corpus provenance does not match shard 0.")
+        scope = _profile_mapping(shard, "profile_scope")
+        start = _profile_nonnegative_int(scope.get("start_decision"), field=f"profile shard {index} start_decision")
+        requested = _profile_positive_int(
+            scope.get("requested_decision_count"), field=f"profile shard {index} requested_decision_count"
+        )
+        selection = _profile_mapping(shard, "corpus_selection")
+        selected = _profile_nonnegative_int(
+            selection.get("selected_decision_count"), field=f"profile shard {index} selected_decision_count"
+        )
+        if start != expected_start:
+            raise ValueError(f"profile shard {index} is not contiguous with the preceding range.")
+        if selected != requested:
+            raise ValueError(f"profile shard {index} did not complete its requested corpus range.")
+        expected_start += selected
+        selection_digest = shard.get("selected_content_sha256")
+        if not isinstance(selection_digest, str) or len(selection_digest) != 64:
+            raise ValueError(f"profile shard {index} is missing its selected-content digest.")
+        shard_digests.append(selection_digest)
+        decision_rows.extend(dict(row) for row in _profile_sequence(shard, "decision_rows"))
+        selection_context_rows.extend(dict(row) for row in _profile_sequence(shard, "selection_context_rows"))
+        skipped_decision_rows.extend(dict(row) for row in _profile_sequence(shard, "skipped_decision_rows"))
+        _merge_representativeness_counters(
+            shard,
+            corpus_by_phase=corpus_by_phase,
+            event_bearing_by_phase=event_bearing_by_phase,
+            public_events_by_phase=public_events_by_phase,
+            unsupported_prefixes_by_phase=unsupported_prefixes_by_phase,
+            unsupported_events_by_phase=unsupported_events_by_phase,
+        )
+
+    if len(decision_rows) < minimum_decisions:
+        raise ValueError(
+            f"merged profile requires at least {minimum_decisions} successfully profiled p1 decisions; "
+            f"shards produced {len(decision_rows)}."
+        )
+    merged_selection = {
+        "max_decisions": expected_start,
+        "selected_decision_count": expected_start,
+        "selection_kind": "contiguous_shards",
+        "shard_count": len(shards),
+    }
+    merged_provenance = {
+        **provenance,
+        "corpus_selection": merged_selection,
+        "shard_profile_sha256": [str(shard["profile_sha256"]) for shard in shards],
+    }
+    report_core = {
+        "schema_version": PRIOR_BELIEF_PROFILE_SCHEMA_VERSION,
+        "profile_config": dict(profile_config),
+        "profile_config_sha256": canonical_json_sha256(profile_config),
+        "checkpoint_sha256": first.get("checkpoint_sha256"),
+        "corpus_sha256": first.get("corpus_sha256"),
+        "selected_content_sha256": canonical_json_sha256(shard_digests),
+        "corpus_selection": merged_selection,
+        "public_corpus_schema_sha256": PUBLIC_DECISION_CORPUS_SCHEMA_SHA256,
+        "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+        "opponent_legal_mask_mode": "hidden",
+        "corpus_decision_count": expected_start,
+        "decision_count": len(decision_rows),
+        "skipped_decision_count": len(skipped_decision_rows),
+        "skipped_decision_rows": skipped_decision_rows,
+        "selection_context_count": len(selection_context_rows),
+        "decision_rows": decision_rows,
+        "selection_context_rows": selection_context_rows,
+        "threshold_sweeps": _threshold_sweeps(selection_context_rows, config=_profile_config_from_payload(profile_config)),
+        "decision_normalized_threshold_sweeps": _threshold_sweeps(
+            decision_rows,
+            config=_profile_config_from_payload(profile_config),
+            unit="decision",
+        ),
+        "representativeness": _representativeness_summary(
+            corpus_by_phase=corpus_by_phase,
+            event_bearing_by_phase=event_bearing_by_phase,
+            public_events_by_phase=public_events_by_phase,
+            unsupported_prefixes_by_phase=unsupported_prefixes_by_phase,
+            unsupported_events_by_phase=unsupported_events_by_phase,
+            decision_rows=decision_rows,
+            skipped_decision_rows=skipped_decision_rows,
+        ),
+        "provenance": merged_provenance,
+        "profile_scope": {"kind": "merged-shards", "shard_count": len(shards)},
+    }
+    return {**report_core, "profile_sha256": canonical_json_sha256(report_core)}
+
+
+def _validated_profile_shard(raw_shard: Mapping[str, Any]) -> Mapping[str, Any]:
+    shard = dict(raw_shard)
+    if shard.get("schema_version") != PRIOR_BELIEF_PROFILE_SCHEMA_VERSION:
+        raise ValueError("profile shard has an unsupported schema version.")
+    scope = _profile_mapping(shard, "profile_scope")
+    if scope.get("kind") != "shard":
+        raise ValueError("profile merge accepts only explicit shard reports.")
+    profile_sha256 = shard.get("profile_sha256")
+    report_core = {name: value for name, value in shard.items() if name != "profile_sha256"}
+    if not isinstance(profile_sha256, str) or profile_sha256 != canonical_json_sha256(report_core):
+        raise ValueError("profile shard hash does not match its payload.")
+    return shard
+
+
+def _profile_input_identity(profile: Mapping[str, Any]) -> tuple[object, ...]:
+    provenance = _profile_mapping(profile, "provenance")
+    return (
+        profile.get("checkpoint_sha256"),
+        profile.get("public_corpus_schema_sha256"),
+        profile.get("root_noise"),
+        profile.get("opponent_legal_mask_mode"),
+        provenance.get("checkpoint_sha256"),
+        provenance.get("belief_set_source_hash"),
+        provenance.get("opponent_legal_mask_mode"),
+        provenance.get("root_noise_enabled"),
+        provenance.get("opponent_scenarios"),
+        provenance.get("corpus_manifest"),
+    )
+
+
+def _merge_representativeness_counters(
+    shard: Mapping[str, Any],
+    *,
+    corpus_by_phase: Counter[str],
+    event_bearing_by_phase: Counter[str],
+    public_events_by_phase: Counter[str],
+    unsupported_prefixes_by_phase: Counter[str],
+    unsupported_events_by_phase: Counter[str],
+) -> None:
+    representativeness = _profile_mapping(shard, "representativeness")
+    for row in _profile_sequence(representativeness, "by_phase"):
+        phase = str(row.get("phase"))
+        if phase not in {"early", "mid", "late"}:
+            raise ValueError("profile shard representativeness has an unknown phase.")
+        corpus_by_phase[phase] += _profile_nonnegative_int(row.get("corpus_decision_count"), field="corpus_decision_count")
+        event_bearing_by_phase[phase] += _profile_nonnegative_int(
+            row.get("event_bearing_prefix_count"), field="event_bearing_prefix_count"
+        )
+        public_events_by_phase[phase] += _profile_nonnegative_int(row.get("public_event_count"), field="public_event_count")
+        unsupported_prefixes_by_phase[phase] += _profile_nonnegative_int(
+            row.get("unsupported_event_prefix_count"), field="unsupported_event_prefix_count"
+        )
+        unsupported_events_by_phase[phase] += _profile_nonnegative_int(
+            row.get("unsupported_public_event_count"), field="unsupported_public_event_count"
+        )
+
+
+def _profile_config_from_payload(payload: Mapping[str, Any]) -> PriorBeliefProfileConfig:
+    return PriorBeliefProfileConfig(
+        entropy_thresholds=tuple(float(value) for value in _profile_value_sequence(payload, "entropy_thresholds")),
+        margin_thresholds=tuple(float(value) for value in _profile_value_sequence(payload, "margin_thresholds")),
+        world_sample_cap=_profile_positive_int(payload.get("world_sample_cap"), field="world_sample_cap"),
+        early_phase_max_turn=_profile_nonnegative_int(payload.get("early_phase_max_turn"), field="early_phase_max_turn"),
+        mid_phase_max_turn=_profile_nonnegative_int(payload.get("mid_phase_max_turn"), field="mid_phase_max_turn"),
+        opponent_legal_mask_mode=str(payload.get("opponent_legal_mask_mode")),
+        root_noise_enabled=bool(payload.get("root_noise_enabled")),
+    )
+
+
+def _profile_mapping(payload: Mapping[str, Any], field: str) -> Mapping[str, Any]:
+    value = payload.get(field)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"profile {field} must be a mapping.")
+    return value
+
+
+def _profile_sequence(payload: Mapping[str, Any], field: str) -> Sequence[Mapping[str, Any]]:
+    value = _profile_value_sequence(payload, field)
+    if any(not isinstance(row, Mapping) for row in value):
+        raise ValueError(f"profile {field} must contain mappings.")
+    return value
+
+
+def _profile_value_sequence(payload: Mapping[str, Any], field: str) -> Sequence[Any]:
+    value = payload.get(field)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError(f"profile {field} must be a sequence.")
+    return value
+
+
+def _profile_nonnegative_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"profile {field} must be a non-negative integer.")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"profile {field} must be a non-negative integer.") from exc
+    if result < 0:
+        raise ValueError(f"profile {field} must be a non-negative integer.")
+    return result
+
+
+def _profile_positive_int(value: Any, *, field: str) -> int:
+    result = _profile_nonnegative_int(value, field=field)
+    if result <= 0:
+        raise ValueError(f"profile {field} must be a positive integer.")
+    return result
 
 
 def initial_candidate_value_top_two_margin(candidate_values: Mapping[int, float]) -> tuple[float | None, float, float | None]:
