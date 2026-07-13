@@ -455,6 +455,7 @@ class PublicDecisionCorpusStream:
     path: Path
     manifest: Mapping[str, Any]
     selected_decision_limit: int | None
+    selected_decision_start: int = 0
     _iterated: bool = False
     _selected_decision_count: int | None = None
     _selected_content_sha256: str | None = None
@@ -463,7 +464,7 @@ class PublicDecisionCorpusStream:
     def source_file_sha256(self) -> str | None:
         """Match eager-corpus semantics: capped selections expose only their selected digest."""
 
-        if self.selected_decision_limit is not None:
+        if self.selected_decision_limit is not None or self.selected_decision_start:
             return None
         return sha256_file(self.path)
 
@@ -487,8 +488,10 @@ class PublicDecisionCorpusStream:
         self._iterated = True
         manifest: Mapping[str, Any] | None = None
         seen_ids: set[str] = set()
-        selected_digest = hashlib.sha256() if self.selected_decision_limit is not None else None
+        bounded_selection = self.selected_decision_limit is not None or self.selected_decision_start > 0
+        selected_digest = hashlib.sha256() if bounded_selection else None
         selected_count = 0
+        source_decision_count = 0
         completed = False
         try:
             with self.path.open(encoding="utf-8") as handle:
@@ -517,6 +520,10 @@ class PublicDecisionCorpusStream:
                     if record.decision_id in seen_ids:
                         raise ValueError(f"public corpus contains duplicate decision_id {record.decision_id!r}.")
                     seen_ids.add(record.decision_id)
+                    if source_decision_count < self.selected_decision_start:
+                        source_decision_count += 1
+                        continue
+                    source_decision_count += 1
                     selected_count += 1
                     if selected_digest is not None:
                         selected_digest.update(_canonical_json_line(record.to_dict()))
@@ -538,11 +545,19 @@ def open_public_decision_corpus(
     path: Path,
     *,
     max_decisions: int | None = None,
+    start_decision: int = 0,
 ) -> PublicDecisionCorpusStream:
-    """Open a validated public corpus for one bounded, streaming selection pass."""
+    """Open a validated public corpus for one bounded, streaming selection pass.
+
+    ``start_decision`` is a zero-based offset over decision rows (the manifest
+    never counts as a decision). It makes independently processed profile
+    shards deterministic without requiring a materialized corpus copy.
+    """
 
     if max_decisions is not None and max_decisions <= 0:
         raise ValueError("max_decisions must be positive when provided.")
+    if start_decision < 0:
+        raise ValueError("start_decision must be non-negative.")
     manifest: Mapping[str, Any] | None = None
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -565,6 +580,7 @@ def open_public_decision_corpus(
         path=path,
         manifest=manifest,
         selected_decision_limit=max_decisions,
+        selected_decision_start=start_decision,
     )
 
 
