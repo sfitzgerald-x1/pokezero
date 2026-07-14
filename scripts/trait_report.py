@@ -238,10 +238,8 @@ def _pearson(xs, ys):
     return sxy / (sxx * syy) ** 0.5
 
 
-# extra correlation traits beyond the trajectory accessors
+# extra correlation traits NOT already among the trajectory accessors (avoid duplicate bars)
 _CORR_EXTRA = [
-    ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "cat_batonpass")),
-    ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
     ("timeout rate %", lambda r: _pct(r.get("timeout_rate"))),
     ("avg turns (decided)", lambda r: r.get("avg_turns")),
     ("avg pivots", lambda r: r.get("avg_pivots")),
