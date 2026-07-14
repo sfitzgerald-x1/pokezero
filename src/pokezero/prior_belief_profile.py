@@ -502,6 +502,7 @@ def profile_public_corpus_shard(
     provenance: Mapping[str, Any] | None = None,
     progress_callback: ProfileProgressCallback | None = None,
     source_start_decision: int | None = None,
+    source_corpus_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Profile one deterministic corpus range without treating it as capstone-ready.
 
@@ -516,6 +517,10 @@ def profile_public_corpus_shard(
         raise ValueError("profile shards require a bounded corpus range.")
     if source_start_decision is not None and source_start_decision < 0:
         raise ValueError("source_start_decision must be non-negative when provided.")
+    if source_corpus_sha256 is not None and (
+        len(source_corpus_sha256) != 64 or any(character not in "0123456789abcdef" for character in source_corpus_sha256)
+    ):
+        raise ValueError("source_corpus_sha256 must be a lowercase SHA-256 digest when provided.")
     requested_count = corpus.selected_decision_limit
     scope = {
         "kind": "shard",
@@ -532,7 +537,10 @@ def profile_public_corpus_shard(
         candidate_value_evaluator=candidate_value_evaluator,
         config=config,
         belief_set_source=belief_set_source,
-        provenance=provenance,
+        provenance={
+            **dict(provenance or {}),
+            **({"source_corpus_sha256": source_corpus_sha256} if source_corpus_sha256 is not None else {}),
+        },
         minimum_decisions=None,
         profile_scope=scope,
         progress_callback=progress_callback,
@@ -564,7 +572,7 @@ def _profile_public_corpus(
                 )
             return {
                 **base_provenance,
-                "corpus_source_sha256": corpus.source_file_sha256,
+                "corpus_source_sha256": base_provenance.get("source_corpus_sha256", corpus.source_file_sha256),
                 "selected_content_sha256": corpus.selected_content_sha256,
                 "corpus_selection": {
                     "max_decisions": corpus.selected_decision_limit,
@@ -584,7 +592,7 @@ def _profile_public_corpus(
         records = corpus.decisions
         provenance_factory = lambda: {
             **base_provenance,
-            "corpus_source_sha256": corpus.source_file_sha256,
+            "corpus_source_sha256": base_provenance.get("source_corpus_sha256", corpus.source_file_sha256),
             "selected_content_sha256": corpus.selected_content_sha256,
             "corpus_selection": {
                 "max_decisions": corpus.selected_decision_limit,
@@ -641,6 +649,7 @@ def merge_public_corpus_profile_shards(
     unsupported_prefixes_by_phase: Counter[str] = Counter()
     unsupported_events_by_phase: Counter[str] = Counter()
     shard_digests: list[str] = []
+    decision_ids: set[str] = set()
 
     for index, raw_shard in enumerate(shards):
         shard = _validated_profile_shard(raw_shard)
@@ -666,9 +675,18 @@ def merge_public_corpus_profile_shards(
         if not isinstance(selection_digest, str) or len(selection_digest) != 64:
             raise ValueError(f"profile shard {index} is missing its selected-content digest.")
         shard_digests.append(selection_digest)
-        decision_rows.extend(dict(row) for row in _profile_sequence(shard, "decision_rows"))
+        shard_decision_rows = [dict(row) for row in _profile_sequence(shard, "decision_rows")]
+        shard_skipped_rows = [dict(row) for row in _profile_sequence(shard, "skipped_decision_rows")]
+        for row in (*shard_decision_rows, *shard_skipped_rows):
+            decision_id = row.get("decision_id")
+            if not isinstance(decision_id, str) or not decision_id:
+                raise ValueError(f"profile shard {index} contains a row without a decision_id.")
+            if decision_id in decision_ids:
+                raise ValueError(f"profile shard {index} duplicates a decision covered by an earlier shard.")
+            decision_ids.add(decision_id)
+        decision_rows.extend(shard_decision_rows)
         selection_context_rows.extend(dict(row) for row in _profile_sequence(shard, "selection_context_rows"))
-        skipped_decision_rows.extend(dict(row) for row in _profile_sequence(shard, "skipped_decision_rows"))
+        skipped_decision_rows.extend(shard_skipped_rows)
         _merge_representativeness_counters(
             shard,
             corpus_by_phase=corpus_by_phase,

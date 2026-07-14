@@ -1165,6 +1165,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     prior_belief_profile.add_argument(
+        "--source-corpus-sha256",
+        default=None,
+        help=(
+            "Verified full-source SHA-256 recorded by --shard when CORPUS is a bounded snapshot. "
+            "This preserves source provenance through the merged profile."
+        ),
+    )
+    prior_belief_profile.add_argument(
         "--shard",
         action="store_true",
         help="Write a bounded map-stage report. Shards are not capstone-eligible until merged.",
@@ -2216,6 +2224,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
     shard_mode = bool(getattr(args, "shard", False))
     start_decision = int(getattr(args, "start_decision", 0))
     source_start_decision = getattr(args, "source_start_decision", None)
+    source_corpus_sha256 = getattr(args, "source_corpus_sha256", None)
     if start_decision < 0:
         raise ValueError("--start-decision must be non-negative.")
     if shard_mode and args.max_decisions is None:
@@ -2227,6 +2236,15 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             raise ValueError("--source-start-decision requires --shard.")
         if source_start_decision < 0:
             raise ValueError("--source-start-decision must be non-negative.")
+        if start_decision:
+            raise ValueError("--source-start-decision cannot be combined with --start-decision.")
+    if source_corpus_sha256 is not None:
+        if not shard_mode:
+            raise ValueError("--source-corpus-sha256 requires --shard.")
+        if len(source_corpus_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in source_corpus_sha256
+        ):
+            raise ValueError("--source-corpus-sha256 must be a lowercase SHA-256 digest.")
     corpus = open_public_decision_corpus(
         args.corpus,
         max_decisions=args.max_decisions,
@@ -2330,6 +2348,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             corpus,
             **profile_kwargs,
             source_start_decision=source_start_decision,
+            source_corpus_sha256=source_corpus_sha256,
         )
         if shard_mode
         else profile_public_corpus(corpus, **profile_kwargs)
