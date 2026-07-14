@@ -130,6 +130,93 @@ def phase1_moves_table(by_lin, lineages):
     return "".join(parts)
 
 
+# ---- per-checkpoint accessors (used by the trajectory charts) ----
+def _catrate(r, c):
+    mc = (r.get("move_categories") or {}).get(c)
+    return mc.get("uses_per_seat_game_present") if mc else None
+
+
+def _cattotal(r, c):
+    return (r.get("move_categories") or {}).get(c, {}).get("total_uses", 0)
+
+
+def _extra(r, k):
+    return (r.get("move_category_extras") or {}).get(k, 0)
+
+
+def _fracpct(r, num_key, total, in_extras=False):
+    n = _extra(r, num_key)
+    t = _extra(r, total) if in_extras else _cattotal(r, total)
+    return (100.0 * n / t) if t else None
+
+
+def _switchrate(r, k):
+    return (r.get("switch_behavior") or {}).get(k, {}).get("per_seat_game")
+
+
+# (label, accessor) — each becomes a small-multiple line chart over the milestone axis
+TRAJECTORY_CHARTS = [
+    ("category use / seat-game", [
+        ("stat-boost", lambda r: _catrate(r, "cat_stat_boost")),
+        ("toxic", lambda r: _catrate(r, "cat_toxic")),
+        ("substitute", lambda r: _catrate(r, "cat_substitute")),
+        ("spikes", lambda r: _catrate(r, "cat_spikes")),
+        ("heal (excl Rest)", lambda r: _catrate(r, "cat_heal")),
+        ("phaze", lambda r: _catrate(r, "cat_phaze")),
+        ("rest", lambda r: _catrate(r, "cat_rest")),
+        ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
+    ]),
+    ("conditional breakdowns (%)", [
+        ("phaze: enemy boosted/sub %", lambda r: _fracpct(r, "cat_phaze_justified", "cat_phaze")),
+        ("rapid spin: spikes-down %", lambda r: _fracpct(r, "cat_rapidspin_spikesdown", "cat_rapidspin_total")),
+        ("solar beam: in sun %", lambda r: _fracpct(r, "cat_solarbeam_sun", "cat_solarbeam")),
+        ("focus punch success", lambda r: (r.get("focus_punch_success_rate") or 0) * 100 if r.get("focus_punch_success_rate") is not None else None),
+    ]),
+    ("switch behavior / seat-game", [
+        ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
+        ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
+        ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
+    ]),
+    ("resource / endgame", [
+        ("bot PP exhaust/game", lambda r: r.get("pp_exhaustion_bot_per_game")),
+        ("opp PP exhaust/game", lambda r: r.get("pp_exhaustion_opp_per_game")),
+        ("mons alive on win", lambda r: r.get("avg_bot_mons_alive_on_win")),
+        ("opp mons alive on loss", lambda r: r.get("avg_opp_mons_alive_on_loss")),
+    ]),
+]
+
+
+def _series(rows, fn):
+    by = defaultdict(list)
+    for r in rows:
+        if r.get("milestone") is None:
+            continue
+        v = fn(r)
+        if v is not None:
+            by[r.get("lineage")].append((r["milestone"], v))
+    return by
+
+
+def phase2_trajectories(rows_self):
+    """Per-checkpoint breakdowns: every trait as a line over the milestone axis (one line per
+    lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate."""
+    checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows_self if r.get("milestone") is not None}
+    lineages = sorted({l for l, _ in checkpoints}, key=lambda l: LINEAGE_ORDER.index(l) if l in LINEAGE_ORDER else 99)
+    if not checkpoints:
+        return ""
+    multi = any(sum(1 for l2, m in checkpoints if l2 == l) > 1 for l in lineages)
+    note = "" if multi else ('<p class="sub">Only 500k checkpoints present so far — each line is a single '
+                             'point until the milestone sweep fills in the trajectory.</p>')
+    blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
+              f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
+              f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
+    for group_title, charts in TRAJECTORY_CHARTS:
+        cards = "".join(f'<div class="card">{svg_lines(_series(rows_self, fn), label)}</div>' for label, fn in charts)
+        blocks.append(f'<h3>{esc(group_title)}</h3><div class="grid3">{cards}</div>')
+    blocks.append("</section>")
+    return "".join(blocks)
+
+
 def _fmt(v, nd=3):
     if v is None:
         return "—"
@@ -236,7 +323,10 @@ def build_html(rows):
             f'<p class="sub">{len(rows)} metric sets · {n_self} self-play · {n_foul} foul-play · '
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})))}</p>']
     body.append(phase1_section(rows_self))
-    body.append('<section><h2>Phase 2 — 500k trait panel</h2>'
+    body.append(phase2_trajectories(rows_self))
+    body.append('<section><h2>Phase 2 — 500k detailed panel (self vs foul-play)</h2>'
+                '<p class="sub">Full breakdown for the flagship 500k checkpoints, including foul-play '
+                '(kept separate). The trajectories above show these traits per checkpoint over training.</p>'
                 '<div class="cols2">'
                 f'<div>{phase2_panel(rows, "self")}</div>'
                 f'<div>{phase2_panel(rows, "foulplay")}</div>'

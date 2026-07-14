@@ -61,8 +61,10 @@ def _active_species(request):
     return None
 
 
-def play_self_play_game(agent, env_kwargs, seed):
-    env = LocalShowdownEnv(LocalShowdownConfig(**env_kwargs))
+def play_self_play_game(agent, env, seed):
+    # The env's bridge process is a warm pool reused across battles; reset() ends the previous
+    # battle, drains it, and clears protocol_lines. One env per shard (not per game) — spawning a
+    # fresh env per game leaks the node subprocess and OOMs after a few hundred games.
     env.reset(seed=seed)
     pp_track = []
     movesets = {}
@@ -135,18 +137,24 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     n = 0
-    with gzip.open(args.out, "wt") as f:
-        f.write(json.dumps({"record": "manifest", "checkpoint": str(args.checkpoint),
-                            "lineage": args.lineage, "milestone": args.milestone,
-                            "opponent": args.opponent, "shard": args.shard, "num_shards": args.num_shards,
-                            "seed_start": args.seed_start, "games_requested": args.games,
-                            "capture_version": "trait_eval.v1"}) + "\n")
-        for seed in my_seeds:
-            rec = play_self_play_game(agent, env_kwargs, seed)
-            f.write(json.dumps(rec) + "\n")
-            n += 1
-            if n % 100 == 0:
-                print(f"  shard {args.shard}: {n}/{len(my_seeds)} ({time.time()-t0:.0f}s)", flush=True)
+    # one env for the whole shard — its bridge process is a warm pool reused across resets.
+    env = LocalShowdownEnv(LocalShowdownConfig(**env_kwargs))
+    try:
+        with gzip.open(args.out, "wt") as f:
+            f.write(json.dumps({"record": "manifest", "checkpoint": str(args.checkpoint),
+                                "lineage": args.lineage, "milestone": args.milestone,
+                                "opponent": args.opponent, "shard": args.shard, "num_shards": args.num_shards,
+                                "seed_start": args.seed_start, "games_requested": args.games,
+                                "capture_version": "trait_eval.v1"}) + "\n")
+            for seed in my_seeds:
+                rec = play_self_play_game(agent, env, seed)
+                f.write(json.dumps(rec) + "\n")
+                f.flush()
+                n += 1
+                if n % 100 == 0:
+                    print(f"  shard {args.shard}: {n}/{len(my_seeds)} ({time.time()-t0:.0f}s)", flush=True)
+    finally:
+        env.close()
     print(f"WROTE {args.out} games={n} ({time.time()-t0:.0f}s)", flush=True)
 
 
