@@ -167,6 +167,27 @@ def phase2_panel(rows, opponent):
                 return "—"
             return f'{mc["uses_per_seat_game_present"]:.2f} <span class="dim">({mc["carrier_rate"]:.2f})</span>'
         out.append(row(c.replace("cat_", ""), fn))
+
+    # conditional breakdowns — the "only when it matters" splits, surfaced explicitly
+    def ex(r, k):
+        return (r.get("move_category_extras") or {}).get(k, 0)
+
+    def cat_total(r, k):
+        return (r.get("move_categories") or {}).get(k, {}).get("total_uses", 0)
+
+    def cond(c, t):
+        if not t:
+            return f"{c}" if c else "—"
+        return f'{c}/{t} <span class="dim">({c / t * 100:.0f}%)</span>'
+
+    out.append('<tr class="grp"><td colspan="%d">conditional breakdowns — occurrences meeting the condition / category total</td></tr>' % (len(lineages) + 1))
+    out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), cat_total(r, "cat_rapidspin_total"))))
+    out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), cat_total(r, "cat_phaze"))))
+    out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), cat_total(r, "cat_solarbeam"))))
+    out.append(row("baton pass: actual BP switches", lambda r: cond(ex(r, "bp_switch"), cat_total(r, "cat_batonpass"))))
+    out.append(row("explosion / self-destruct", lambda r: f'{ex(r, "cat_boom_explosion")} / {ex(r, "cat_boom_selfdestruct")}'))
+    out.append(row("focus punch: executed / disrupted", lambda r: f'{ex(r, "focuspunch_executed")} / {ex(r, "focuspunch_disrupted")}'))
+
     out.append('<tr class="grp"><td colspan="%d">switch behavior — per seat-game</td></tr>' % (len(lineages) + 1))
     for s in switches:
         out.append(row(s, lambda r, s=s: _fmt((r.get("switch_behavior") or {}).get(s, {}).get("per_seat_game"))))
