@@ -28,6 +28,11 @@ from pokezero.online_client import build_agent
 from pokezero.showdown import observation_from_player_state
 
 MAX_STEPS = 1000
+# gen3 randbats games resolve well under this; a game still going past it is a stall (a weak
+# checkpoint that can't close). We end such games as timeouts (capped) rather than letting them
+# run to Showdown's turn-1000 tie — which both skews avg-turns and balloons memory (~13k protocol
+# lines/game). Timeouts are kept for behavioral metrics but excluded from avg_turns downstream.
+TURN_CAP = 200
 SEATS = ("p1", "p2")
 # recreate the warm env every N games as a backstop: reset() reuse fixes the per-game subprocess
 # leak; the env also grows a never-cleared stderr list (cleared per game below), and there is a
@@ -83,16 +88,19 @@ def play_self_play_game(agent, env, seed):
     env.reset(seed=seed)
     pp_track = []
     movesets = {}
+    timed_out = False
     for _ in range(MAX_STEPS):
         if env.terminal() is not None:
             break
         actions = {}
+        cur_turn = 0
         for player in env.requested_players():
             state = env._state_for_player(player)
             if state.request is None or state.request_kind in {"wait", "none", "team_preview"}:
                 continue
             if not any(state.legal_action_mask):
                 continue
+            cur_turn = max(cur_turn, state.turn_number or 0)
             if player not in movesets:
                 movesets[player] = _team_movesets(state.request)
             obs = observation_from_player_state(
@@ -105,16 +113,20 @@ def play_self_play_game(agent, env, seed):
             if pp is not None:
                 pp_track.append({"turn": state.turn_number, "seat": player,
                                  "mon": _active_species(state.request), "moves": pp})
+        if cur_turn > TURN_CAP:
+            timed_out = True
+            break
         if not actions:
             break
         env.step(actions)
     term = env.terminal()
+    natural = term is not None and not timed_out
     return {
         "seed": seed,
         "opponent": "self",
-        "winner": (term.winner if term else None),
-        "turn_count": (term.turn_count if term else None),
-        "capped": (bool(term.capped) if term else False),
+        "winner": (term.winner if natural else None),
+        "turn_count": (term.turn_count if natural else (term.turn_count if term else TURN_CAP)),
+        "capped": bool(timed_out or (term.capped if term else False)),
         "protocol": list(env.protocol_lines),
         "movesets": movesets,
         "pp_track": pp_track,

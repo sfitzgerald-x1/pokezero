@@ -100,17 +100,19 @@ def phase1_section(rows_self):
     lineages = [l for l in LINEAGE_ORDER if l in by_lin] + [l for l in by_lin if l not in LINEAGE_ORDER]
     turns = {l: [(r["milestone"], r.get("avg_turns")) for r in by_lin[l]] for l in lineages}
     pivots = {l: [(r["milestone"], r.get("avg_pivots")) for r in by_lin[l]] for l in lineages}
-    # top-move stability: share of each lineage's frontier top move over milestones
     winr = {l: [(r["milestone"], r.get("bot_win_rate")) for r in by_lin[l]] for l in lineages}
+    # timeout rate: fraction of games that stalled to the turn cap (a checkpoint that can't close)
+    timeout = {l: [(r["milestone"], (r.get("timeout_rate") or 0) * 100) for r in by_lin[l]] for l in lineages}
     if not lineages:
         return '<section><h2>Phase 1 — basics over training</h2><div class="empty">no milestone metrics yet</div></section>'
     return f"""<section>
       <h2>Phase 1 — self-play basics over training</h2>
       {legend(lineages)}
       <div class="grid3">
-        <div class="card">{svg_lines(turns, "avg turns/game")}</div>
+        <div class="card">{svg_lines(turns, "avg turns/game (decided)")}</div>
         <div class="card">{svg_lines(pivots, "avg pivots/seat-game")}</div>
         <div class="card">{svg_lines(winr, "bot win rate")}</div>
+        <div class="card">{svg_lines(timeout, "timeout rate % (stalled to cap)")}</div>
       </div>
       {phase1_moves_table(by_lin, lineages)}
     </section>"""
@@ -243,6 +245,7 @@ def phase2_panel(rows, opponent):
 
     out = [f'<div class="tablewrap"><table><caption>opponent = {esc(opponent)}</caption>', header()]
     out.append(row("games", lambda r: r.get("n_games")))
+    out.append(row("timeout rate", lambda r: _fmt(r.get("timeout_rate"))))
     out.append(row("bot win rate", lambda r: _fmt(r.get("bot_win_rate"))))
     out.append(row("avg turns", lambda r: _fmt(r.get("avg_turns"), 1)))
     out.append(row("avg pivots", lambda r: _fmt(r.get("avg_pivots"), 2)))

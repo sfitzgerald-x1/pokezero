@@ -192,11 +192,40 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["seat_games"], 2)
         self.assertEqual(m["lineage"], "testlin")
         self.assertEqual(m["avg_turns"], 2.0)
+        self.assertEqual(m["timeout_rate"], 0.0)
+        self.assertEqual(m["decided_games"], 1)
         # Toxic used once (p1); Softboiled once (p2) — both behavioral in self-play
         mc = m["move_categories"]
         self.assertEqual(mc["cat_toxic"]["total_uses"], 1)
         self.assertEqual(mc["cat_heal"]["total_uses"], 1)
         self.assertEqual(m["bot_win_rate"], 1.0)
+
+    def test_timeout_excluded_from_avg_turns(self):
+        # one decided 30-turn game + one 200-turn timeout: avg_turns is 30 (decided only),
+        # timeout_rate 0.5, and the timeout still contributes its moves to the categories.
+        proto_decided = ["|player|p1|Bot p1|", "|player|p2|Bot p2|", "|turn|1",
+                         "|move|p1a: X|Toxic|p2a: Y", "|win|Bot p1"]
+        proto_timeout = ["|player|p1|Bot p1|", "|player|p2|Bot p2|", "|turn|1",
+                         "|move|p1a: X|Toxic|p2a: Y"]  # no |win| — stalled
+        ms = {"p1": [{"species": "X", "moves": ["Toxic"]}], "p2": [{"species": "Y", "moves": ["Toxic"]}]}
+        games = [
+            {"seed": 1, "opponent": "self", "winner": "p1", "turn_count": 30, "capped": False,
+             "protocol": proto_decided, "movesets": ms, "pp_track": []},
+            {"seed": 2, "opponent": "self", "winner": None, "turn_count": 200, "capped": True,
+             "protocol": proto_timeout, "movesets": ms, "pp_track": []},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in games:
+                    f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["n_games"], 2)
+        self.assertEqual(m["avg_turns"], 30.0)       # timeout's 200 excluded
+        self.assertEqual(m["decided_games"], 1)
+        self.assertEqual(m["timeout_rate"], 0.5)
+        self.assertEqual(m["move_categories"]["cat_toxic"]["total_uses"], 2)  # timeout still counted
 
 
 if __name__ == "__main__":

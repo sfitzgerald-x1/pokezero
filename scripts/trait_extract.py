@@ -302,9 +302,12 @@ def extract(files, lineage=None, milestone=None):
     for g in games:
         gp = GameParse(g.get("movesets", {}))
         gp.walk(g["protocol"])
+        # avg_turns is over DECIDED games only; a timeout (stall that hit the turn cap) is not a
+        # game that "lasted N turns", it's a game that never resolved — count it as a timeout.
         if g.get("capped"):
             caps += 1
-        turns.append(g.get("turn_count") or 0)
+        else:
+            turns.append(g.get("turn_count") or 0)
         winner = g.get("winner")
         bot_won = (winner == "p1")  # p1 is the bot seat in both modes
         if bot_won:
@@ -362,7 +365,9 @@ def extract(files, lineage=None, milestone=None):
         "top5_moves": [{"move": m, "share": round(c / total_moves, 4), "uses_per_game": round(c / (n or 1), 3)}
                        for m, c in move_counts.most_common(5)],
         "move_distribution": {m: c for m, c in move_counts.most_common()},
-        "avg_turns": per_game(turns),
+        "avg_turns": per_game(turns),            # decided games only (timeouts excluded)
+        "decided_games": len(turns),
+        "timeout_rate": round(caps / n, 4) if n else 0.0,
         "avg_pivots": per_game(pivots),
         # Phase 2 move categories. Denominator is seat-games in which the acting side carried a
         # category move (games-present), separating "not dealt the move" from "policy ignores it".
