@@ -10,11 +10,13 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.determinization import (
     _gen3_randbat_fixture_spread,
+    _self_team_from_metadata,
     belief_world_sampling_profile,
     gen3_randbat_belief_start_override,
     gen3_randbat_belief_start_override_planner,
     player_belief_view_from_payload,
 )
+from pokezero.showdown_fixture import pack_team
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext
@@ -486,6 +488,45 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(umbreon_spread["ivs"]["spa"], 30)
         self.assertEqual(umbreon_spread["ivs"]["spd"], 30)
         self.assertEqual(umbreon_spread["ivs"]["atk"], 31)
+
+    def test_gen3_spread_accepts_dynamic_power_return_request_id(self) -> None:
+        set_source = Gen3RandbatSource.from_data(
+            {},
+            move_metadata={"return": {"type": "Normal", "category": "Physical"}},
+            species_metadata={
+                "noctowl": {
+                    "baseStats": {"hp": 100, "atk": 50, "def": 50, "spa": 76, "spd": 96, "spe": 70}
+                }
+            },
+        )
+
+        row = {
+            "species": "Noctowl",
+            "details": "Noctowl, L93",
+            "moves": ["hypnosis", "whirlwind", "toxic", "return102"],
+            "item": "Leftovers",
+            "stats": {"hp": 337, "atk": 146, "def": 146, "spa": 194, "spd": 231, "spe": 183},
+        }
+        spread = _gen3_randbat_fixture_spread(
+            row,
+            species="Noctowl",
+            moves=("hypnosis", "whirlwind", "toxic", "return102"),
+            item="Leftovers",
+            level=93,
+            set_source=set_source,
+        )
+
+        self.assertIsNotNone(spread)
+        assert spread is not None
+        self.assertEqual(spread["evs"]["atk"], 85)
+        self.assertEqual(spread["ivs"]["atk"], 31)
+
+        team = _self_team_from_metadata([row], team_size=1, set_source=set_source)
+        self.assertIsNotNone(team)
+        assert team is not None
+        self.assertEqual(team[0].moves[-1], "return")
+        self.assertIn("hypnosis,whirlwind,toxic,return", pack_team(team))
+        self.assertNotIn("return102", pack_team(team))
 
     def test_revealed_opponent_absolute_hp_filters_sampled_variants(self) -> None:
         metadata = {

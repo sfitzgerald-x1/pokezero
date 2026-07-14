@@ -24,6 +24,7 @@ from .randbat import Gen3RandbatSource, Gen3RandbatVariant, canonical_gen3_randb
 from .search import StartOverrideSource
 from .search_policy import OpponentActionScenario, StartOverridePlanner
 from .showdown_fixture import FixturePokemon, pack_team
+from .tier2 import canonical_move_id
 
 
 DEFAULT_RANDBAT_TEAM_SIZE = 6
@@ -772,9 +773,12 @@ def _self_team_from_metadata(
         if not isinstance(row, Mapping):
             return None
         species = _optional_text(row.get("species"))
-        moves = _moves_from_payload(row.get("moves"))
-        if species is None or not moves:
+        request_moves = _moves_from_payload(row.get("moves"))
+        if species is None or not request_moves:
             return None
+        # Showdown uses resolved-power request IDs such as ``return102``. Custom
+        # replay teams require the canonical move ID (``return``) instead.
+        moves = tuple(canonical_move_id(move) for move in request_moves)
         level = _level_from_details(_optional_text(row.get("details"))) or 100
         spread = _gen3_randbat_fixture_spread(
             row,
@@ -817,7 +821,9 @@ def _gen3_randbat_fixture_spread(
 
     evs = {stat: 85 for stat in _STAT_ORDER}
     ivs = {stat: 31 for stat in _STAT_ORDER}
-    normalized_moves = tuple(_normalize_id(move) for move in moves)
+    # Request payloads encode dynamic-power moves as ids such as ``return102``.
+    # Normalize aliases before applying Showdown's Gen 3 stat rules.
+    normalized_moves = tuple(canonical_move_id(move) for move in moves)
     hidden_power_type = _hidden_power_type(normalized_moves)
     if hidden_power_type is not None:
         for stat, value in _HIDDEN_POWER_IVS.get(hidden_power_type, {}).items():
