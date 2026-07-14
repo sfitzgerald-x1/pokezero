@@ -64,6 +64,27 @@ class ScriptedEnv:
         return None
 
 
+class ProtocolScriptedEnv(ScriptedEnv):
+    def __init__(self, *, protocol_rounds: list[tuple[str, ...]], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.protocol_rounds = protocol_rounds
+        self._protocol_lines: list[str] = []
+
+    @property
+    def protocol_lines(self) -> tuple[str, ...]:
+        return tuple(self._protocol_lines)
+
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        super().reset(seed=seed, format_id=format_id)
+        self._protocol_lines.clear()
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        result = super().step(actions)
+        round_index = len(self.step_calls) - 1
+        self._protocol_lines.extend(self.protocol_rounds[round_index])
+        return result
+
+
 class RolloutDriverTest(unittest.TestCase):
     def test_rollout_records_simultaneous_turn_steps_and_terminal(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
@@ -209,6 +230,41 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(second.decision_round_index, 1)
         self.assertEqual(len(second.trajectory.steps), 1)
         self.assertEqual(result.trajectory.steps[0].metadata["policy_id"], "context-recorder")
+
+    def test_rollout_captures_public_actions_before_the_next_policy_decision(self) -> None:
+        env = ProtocolScriptedEnv(
+            requested_sequence=[("p1",), ("p1",)],
+            terminal_after_steps=2,
+            protocol_rounds=[
+                (
+                    "|move|p1a: Lead|Thunderbolt|p2a: Rival",
+                    "|move|p2a: Rival|Earthquake|p1a: Lead",
+                ),
+                ("|move|p1a: Lead|Thunderbolt|p2a: Rival",),
+            ],
+        )
+        policy = ContextRecordingPolicy(action_index=0)
+
+        result = RolloutDriver(
+            env=env,
+            policies={"p1": policy},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=27)
+
+        captured = policy.contexts[1].trajectory.metadata["public_resolved_action_rounds"]
+        self.assertEqual(
+            captured,
+            [
+                {
+                    "turn_index": 0,
+                    "actions": {
+                        "p1": {"kind": "move", "move_id": "thunderbolt"},
+                        "p2": {"kind": "move", "move_id": "earthquake"},
+                    },
+                }
+            ],
+        )
+        self.assertEqual(len(result.trajectory.metadata["public_resolved_action_rounds"]), 2)
 
     def test_hidden_request_context_excludes_simultaneous_opponent_observation_and_mask(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)

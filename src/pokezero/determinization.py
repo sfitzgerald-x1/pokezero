@@ -19,6 +19,7 @@ from .belief import (
 from .env import BattleStartOverride
 from .observation import PokeZeroObservationV0
 from .policy import PolicyContext
+from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .randbat import Gen3RandbatSource, Gen3RandbatVariant, canonical_gen3_randbat_species_id
 from .search import StartOverrideSource
 from .search_policy import OpponentActionScenario, StartOverridePlanner
@@ -413,6 +414,7 @@ def _public_opponent_move_slot_constraints(
     """
 
     own_observations = _own_observations_by_decision_round(context)
+    public_rounds = public_action_rounds_from_trajectory_metadata(context.trajectory)
     active_species_by_turn = {
         turn_index: species
         for turn_index, observation in own_observations.items()
@@ -425,13 +427,17 @@ def _public_opponent_move_slot_constraints(
         species = active_species_by_turn.get(step.turn_index)
         if species is None:
             continue
-        move = _public_move_after_decision_round(
-            own_observations,
-            opponent_slot=opponent_slot,
-            self_slot=context.player_id,
-            species=species,
-            turn_index=step.turn_index,
-        )
+        identifier = public_rounds.get(step.turn_index, None)
+        public_action = identifier.actions.get(opponent_slot) if identifier is not None else None
+        move = public_action.move_id if public_action is not None and public_action.kind == "move" else None
+        if move is None:
+            move = _public_move_after_decision_round(
+                own_observations,
+                opponent_slot=opponent_slot,
+                self_slot=context.player_id,
+                species=species,
+                turn_index=step.turn_index,
+            )
         if move is None:
             continue
         species_key = _normalize_species_id(species)
@@ -461,6 +467,7 @@ def _public_opponent_team_index_constraints(
     if team_size <= 0:
         return None
     own_observations = _own_observations_by_decision_round(context)
+    public_rounds = public_action_rounds_from_trajectory_metadata(context.trajectory)
     constraints: dict[str, int] = {}
     current_order = list(range(team_size))
     active_position: int | None = None
@@ -496,12 +503,20 @@ def _public_opponent_team_index_constraints(
             except ValueError:
                 switch_targets = ()
             if switch_slot < len(switch_targets):
-                switch_species = _public_switch_after_decision_round(
-                    own_observations,
-                    opponent_slot=opponent_slot,
-                    self_slot=context.player_id,
-                    turn_index=step.turn_index,
+                identifier = public_rounds.get(step.turn_index, None)
+                public_action = identifier.actions.get(opponent_slot) if identifier is not None else None
+                switch_species = (
+                    public_action.switched_species
+                    if public_action is not None and public_action.kind == "switch"
+                    else None
                 )
+                if switch_species is None:
+                    switch_species = _public_switch_after_decision_round(
+                        own_observations,
+                        opponent_slot=opponent_slot,
+                        self_slot=context.player_id,
+                        turn_index=step.turn_index,
+                    )
                 if switch_species is not None:
                     target_position = switch_targets[switch_slot]
                     target_index = current_order[target_position]
