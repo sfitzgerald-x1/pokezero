@@ -497,7 +497,7 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertIn("profile_sha256", report)
 
     def test_progress_callback_reports_each_completed_decision(self) -> None:
-        records = [_record(), _record()]
+        records = [_record(turn_index=1), _record(turn_index=2)]
         progress: list[tuple[int, str]] = []
 
         profile_public_decisions(
