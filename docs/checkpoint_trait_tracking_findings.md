@@ -32,6 +32,30 @@ These are the clearest per-checkpoint trajectories; each point is one checkpoint
   them, later ones fold them in.
 - **v22-lr3m is the frontier outlier.** The 3M-LR lineage keeps climbing on Sleep-move and Spikes
   usage past 1M games where the others have plateaued or stopped.
+- **The weakest checkpoints can't close games.** v22-lr3m@100k times out (stalls to the turn cap)
+  in **~50%** of its self-play games; its *decided* games average ~57 turns. Timeout rate falls to
+  ~0 by 300k. avg-turns is reported over decided games only, with the timeout rate as its own
+  trajectory (a checkpoint that can't win is a distinct failure mode from one that wins slowly).
+
+## Trait ↔ foul-play win-rate correlation
+
+Pearson r of each lineage's 500k self-play trait against its 500k foul-play win rate (n=5
+lineages, win rates 0.20–0.34). The checkpoints that beat FoulPlay lean on **tempo** — Substitute
+(r=+0.80), landing Focus Punches (+0.68), immunity switch-ins (+0.65), pivoting sleepers (+0.60),
+meaningful Baton Pass (+0.55). Those that fare worse lean on **stall** — Rest (−0.99), Spikes
+(−0.97), grinding opponent PP (−0.97), and long games (avg-turns −0.96). This matches the search
+opponent: FoulPlay punishes passive stall and rewards proactive tempo. **Caveat: n=5 with a narrow
+win-rate spread — directional/hypothesis-generating, not significant.** Extending foul-play across
+milestones would turn this into a per-checkpoint correlation with real power.
+
+## New per-trait conditional definitions (as of the review pass)
+
+- **explosion/self-destruct**: one combined "boom" category (not split by move).
+- **focus punch success rate**: landed (not disrupted) / total bot attempts.
+- **opp focus-punch disrupted**: opponent Focus Punches the bot broke / opponent attempts — in
+  foul-play the bot lands ~90% of its own Focus Punches but disrupts only ~12% of FoulPlay's.
+- **BP w/ stat or sub**: Baton Passes that actually carry a stat boost or Substitute (checked on
+  the outgoing mon at pass time), not every BP switch.
 
 ## Foul-play (500k)
 
