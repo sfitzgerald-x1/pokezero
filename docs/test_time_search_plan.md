@@ -126,6 +126,22 @@ Gate: any component >3× its estimate → update this doc's budget math before
 proceeding (measure-don't-assume; twice this month the finer measurement
 overturned the confident model).
 
+### Recorded timing evidence
+
+The first capstone-equivalent timing read completed with raw policy priors, the
+frozen calibrated value leaf, and `legal+24` root search over 50 games / 222
+decisions. Mean wall time was 1.431 seconds per decision. The observed split
+reversed H4's initial expectation: branch simulator steps consumed 235.193
+seconds across 6,790 steps (34.64 ms per step), while policy-value evaluation
+consumed 29.030 seconds across 5,848 evaluations (4.96 ms per evaluation).
+Prefix replay added 40.292 seconds total (181.50 ms per decision).
+
+The branch-step cost is above the initial 5–20 ms scoping range but below the
+3x replan tripwire, so the frozen wall-budget procedure remains valid. H4 is
+therefore currently **disconfirmed**: replay/simulation, not neural evaluation,
+is the dominant root-search cost at this checkpoint and configuration. This is
+mechanics evidence only; it does not claim a strength gain from search.
+
 The frozen capstone plan records the timing artifact and the selected
 legal+24 statistic used to round `root_time_budget_ms`. It must reject a
 sweep-only, rollout-tail, or wrong value-leaf timing artifact rather than
