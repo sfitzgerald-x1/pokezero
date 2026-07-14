@@ -73,6 +73,7 @@ class GameParse:
         self.active = {"p1": None, "p2": None}
         self.boosts = {"p1": defaultdict(int), "p2": defaultdict(int)}
         self.status = {"p1": {}, "p2": {}}    # species -> status
+        self.rest_sleep = {"p1": set(), "p2": set()}  # species whose slp came from their own Rest
         self.sub = {"p1": False, "p2": False}
         self.spikes = {"p1": 0, "p2": 0}      # layers on that side
         self.weather = None
@@ -98,10 +99,11 @@ class GameParse:
                         self.ev[seat]["bp_switch"] += 1
                     elif voluntary:
                         self.ev[seat]["pivot"] += 1
-                        # sleeping/frozen switch-out of the OUTGOING mon
+                        # sleeping/frozen switch-out of the OUTGOING mon. Rest-induced sleep is a
+                        # self-chosen heal, not the enemy-sleep-preservation behavior we track here.
                         prev = self.active[seat]
                         st = self.status[seat].get(prev)
-                        if st == "slp":
+                        if st == "slp" and prev not in self.rest_sleep[seat]:
                             self.ev[seat]["switch_out_sleeping"] += 1
                         elif st == "frz":
                             self.ev[seat]["switch_out_frozen"] += 1
@@ -142,11 +144,20 @@ class GameParse:
             elif tag == "-status":
                 seat = seat_of(a[0])
                 if seat:
-                    self.status[seat][species_of(a[0])] = a[1] if len(a) > 1 else None
+                    sp = species_of(a[0])
+                    self.status[seat][sp] = a[1] if len(a) > 1 else None
+                    if len(a) > 1 and a[1] == "slp":
+                        # sleep from the mon's own Rest, flagged by the protocol's [from] tag
+                        # (fallback: the seat's last resolved move was Rest, and Rest is self-target).
+                        from_rest = any("move: rest" in str(x).lower() for x in a[2:]) or \
+                            (self.last_move[seat] == REST and sp == self.active[seat])
+                        (self.rest_sleep[seat].add if from_rest else self.rest_sleep[seat].discard)(sp)
             elif tag == "-curestatus":
                 seat = seat_of(a[0])
                 if seat:
-                    self.status[seat].pop(species_of(a[0]), None)
+                    sp = species_of(a[0])
+                    self.status[seat].pop(sp, None)
+                    self.rest_sleep[seat].discard(sp)
             elif tag == "-start":
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == SUBSTITUTE:

@@ -126,11 +126,23 @@ class SwitchBehavior(unittest.TestCase):
         gp = parse([
             "|turn|1",
             "|switch|p1a: Snorlax|Snorlax|500/500",
-            "|-status|p1a: Snorlax|slp",
+            "|-status|p1a: Snorlax|slp",              # enemy-inflicted sleep
             "|turn|2",
-            "|switch|p1a: Gengar|Gengar|260/260",   # sleeping Snorlax pivoted out
+            "|switch|p1a: Gengar|Gengar|260/260",     # sleeping Snorlax pivoted out
         ])
         self.assertEqual(gp.ev["p1"]["switch_out_sleeping"], 1)
+
+    def test_rest_sleeper_switch_out_not_counted(self):
+        # Rest is a self-chosen heal; pivoting the Rest-sleeper is not the tracked behavior.
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Snorlax|Snorlax|500/500",
+            "|move|p1a: Snorlax|Rest|p1a: Snorlax",
+            "|-status|p1a: Snorlax|slp|[from] move: Rest",
+            "|turn|2",
+            "|switch|p1a: Gengar|Gengar|260/260",     # Rest-sleeper pivoted out -> NOT counted
+        ])
+        self.assertEqual(gp.ev["p1"]["switch_out_sleeping"], 0)
 
 
 class PPAndSpecies(unittest.TestCase):
