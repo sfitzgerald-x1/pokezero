@@ -25,13 +25,25 @@ game counts are already lineage-global).
 |---|---|---|---|---|
 | `m50-ep7` | `metamon-m50-.*-lr10m-ep7` | `metamon-m50-2m-lr10m-ep7` | 0→2M (running) | 50M, ep7, 10M-LR runway |
 | `l200-ep7-wu75` | `metamon-l200-.*-lr10m-ep7-wu75` | `…-500k-lr10m-ep7-wu75`, `…-2m-lr10m-ep7-wu75` | 0→2M (running) | 200M, ep7, 75k warmup |
-| `v22-lr3m` | `emeta-v2-2-lr3m-.*` | `…-500k-belief`, `…-1m-belief`, `…-2m-belief` | 0→2M (running) | 10M small, hot 3M schedule |
+| `v22-lr3m` | `emeta-v2-2-lr3m-.*` + explicit 500k leg (see below) | `foundation-emetamon-v2-2-lr3m-500k-belief`, `emeta-v2-2-lr3m-1m-belief`, `emeta-v2-2-lr3m-2m-belief` | 0→2M (running) | 10M small, hot 3M schedule |
 | `m50-seq` | `metamon-m-50m-.*-seq-20260710` | `…-500k-seq-…`, `…-1m-seq-…` | 0→1M (complete) | 50M, ep5, 3M schedule |
 | `l200-seq` | `metamon-l-200m-.*-seq-20260710` | `…-500k-seq-…`, `…-1m-seq-…` | 0→1M (complete) | 200M, ep5, spiral-then-recovery |
 
-Phase 0 resolves the patterns against shared experiment storage authoritatively
-(naming eras vary); the table above is the expected resolution. Lineages still
-training grow new milestones; the pipeline appends rather than recomputes.
+Phase 0 resolves the patterns against shared experiment storage authoritatively;
+the table above is the expected resolution (verified against storage
+2026-07-13). Two naming-era traps are handled by explicit id, not pattern:
+
+- The v22-lr3m 500k leg is named `foundation-emetamon-v2-2-lr3m-500k-belief` —
+  the `emeta-v2-2-lr3m-.*` pattern does **not** match it (naming changed
+  between the 500k run and its continuations). It is pinned into the lineage
+  by explicit run id; without it the lineage would start at 1M with no 500k
+  checkpoint, silently voiding a Phase 2 target and Gate G0.
+- `foundation-fpbc-v2-2-lr3m-500k-belief` (foul-play behavior-cloned variant)
+  sits adjacent on storage and is **excluded** — it is a different lineage and
+  must not be swept in by any loosened glob.
+
+Lineages still training grow new milestones; the pipeline appends rather than
+recomputes.
 
 ## Conventions
 
@@ -71,8 +83,12 @@ Outputs: `traits/inventory.json` — per lineage: resolved legs, games/iteration
 retained iteration list, milestone→(leg, iteration, sha256) table, and for each
 milestone a data-source verdict for Phase 1 (see below).
 
-1. Resolve the five patterns to concrete legs; verify continuity (leg N+1's
-   `--completed-games` equals leg N's terminal games; same architecture flags).
+1. Resolve the five patterns to concrete legs, folding in the explicit-id legs
+   from the lineage table (the v22-lr3m 500k leg,
+   `foundation-emetamon-v2-2-lr3m-500k-belief`, is outside its pattern) and
+   asserting the fpbc variant is absent from every lineage; verify continuity
+   (leg N+1's `--completed-games` equals leg N's terminal games; same
+   architecture flags).
 2. Enumerate retained iteration checkpoints per leg; emit the milestone map with
    substitutions marked.
 3. Probe archived self-play data recoverability for Phase 1: for one iteration
