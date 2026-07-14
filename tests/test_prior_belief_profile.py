@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -396,10 +397,13 @@ class PriorBeliefProfileTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "public.jsonl"
+            records = []
             with PublicDecisionCorpusWriter(path, manifest=manifest) as writer:
                 for index in range(MINIMUM_PROFILE_DECISIONS):
                     prototype = replace(_record(turn_index=index % 20), battle_id=f"profile-shard-{index}", seed=index)
-                    writer.append(replace(prototype, decision_id=public_decision_id(prototype)))
+                    record = replace(prototype, decision_id=public_decision_id(prototype))
+                    writer.append(record)
+                    records.append(record)
 
             profile_kwargs = {
                 "prior_evaluator": lambda _history: (0.6, 0.3, 0.1) + (0.0,) * (ACTION_COUNT - 3),
@@ -418,12 +422,22 @@ class PriorBeliefProfileTest(unittest.TestCase):
                 open_public_decision_corpus(path, max_decisions=MINIMUM_PROFILE_DECISIONS),
                 **profile_kwargs,
             )
+            source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            snapshots = []
+            for start in (0, 1_000):
+                snapshot = Path(temp_dir) / f"snapshot-{start}.jsonl"
+                with PublicDecisionCorpusWriter(snapshot, manifest=manifest) as writer:
+                    for record in records[start : start + 1_000]:
+                        writer.append(record)
+                snapshots.append((start, snapshot))
             shards = [
                 profile_public_corpus_shard(
-                    open_public_decision_corpus(path, start_decision=start, max_decisions=1_000),
+                    open_public_decision_corpus(snapshot, max_decisions=1_000),
+                    source_start_decision=start,
+                    source_corpus_sha256=source_sha256,
                     **profile_kwargs,
                 )
-                for start in (0, 1_000)
+                for start, snapshot in snapshots
             ]
 
         merged = merge_public_corpus_profile_shards(shards)
@@ -436,6 +450,23 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertEqual(merged["decision_normalized_threshold_sweeps"], full["decision_normalized_threshold_sweeps"])
         self.assertEqual(merged["representativeness"], full["representativeness"])
         self.assertEqual(merged["decision_count"], MINIMUM_PROFILE_DECISIONS)
+        self.assertEqual(merged["corpus_sha256"], source_sha256)
+        self.assertEqual(shards[1]["profile_scope"]["start_decision"], 1_000)
+
+        duplicate = copy.deepcopy(shards[0])
+        duplicate["profile_scope"]["start_decision"] = 1_000
+        duplicate_core = {name: value for name, value in duplicate.items() if name != "profile_sha256"}
+        duplicate["profile_sha256"] = canonical_json_sha256(duplicate_core)
+        with self.assertRaisesRegex(ValueError, "duplicates a decision"):
+            merge_public_corpus_profile_shards([shards[0], duplicate])
+
+        conflicting_source = copy.deepcopy(shards[1])
+        conflicting_source["corpus_sha256"] = "b" * 64
+        conflicting_source["provenance"]["source_corpus_sha256"] = "b" * 64
+        conflicting_core = {name: value for name, value in conflicting_source.items() if name != "profile_sha256"}
+        conflicting_source["profile_sha256"] = canonical_json_sha256(conflicting_core)
+        with self.assertRaisesRegex(ValueError, "public-corpus provenance does not match"):
+            merge_public_corpus_profile_shards([shards[0], conflicting_source])
 
     def test_profile_shard_merge_rejects_non_contiguous_ranges(self) -> None:
         base = profile_public_decisions(
@@ -712,6 +743,49 @@ class PriorBeliefProfileTest(unittest.TestCase):
                 ]
             )
         self.assertEqual(exit_code, 1)
+
+    def test_cli_rejects_logical_shard_offset_without_shard_mode(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_main(
+                [
+                    "prior-belief-profile",
+                    "--corpus",
+                    "missing.jsonl",
+                    "--checkpoint",
+                    "missing.pt",
+                    "--showdown-root",
+                    "missing-showdown",
+                    "--source-start-decision",
+                    "1000",
+                ]
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--source-start-decision requires --shard", stderr.getvalue())
+
+    def test_cli_rejects_combined_local_and_logical_shard_offsets(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_main(
+                [
+                    "prior-belief-profile",
+                    "--corpus",
+                    "missing.jsonl",
+                    "--checkpoint",
+                    "missing.pt",
+                    "--showdown-root",
+                    "missing-showdown",
+                    "--shard",
+                    "--start-decision",
+                    "1",
+                    "--source-start-decision",
+                    "1000",
+                    "--max-decisions",
+                    "1000",
+                ]
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("cannot be combined", stderr.getvalue())
 
 
 if __name__ == "__main__":
