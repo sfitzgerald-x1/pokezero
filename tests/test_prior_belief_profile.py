@@ -582,6 +582,19 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertAlmostEqual(profile.uncertainty_bits, 1.584962500721156)
         self.assertEqual(profile.uncertain_slot_count, 1)
 
+    def test_public_policy_context_supports_set_backed_belief_profiling(self) -> None:
+        # A source activates the hidden-backline path, which reads the normal
+        # trajectory metadata adapter even when no public opponent slots exist.
+        profile = public_belief_sampling_profile(
+            _record(),
+            sample_cap=2,
+            set_source=SimpleNamespace(universes={}),
+        )
+
+        self.assertEqual(profile.combination_count, 1)
+        self.assertEqual(profile.sample_count, 1)
+        self.assertEqual(profile.uncertain_slot_count, 5)
+
     def test_empty_replay_contexts_are_skipped_and_forced_margin_is_unavailable(self) -> None:
         record = _record()
         skipped = profile_public_decisions(
