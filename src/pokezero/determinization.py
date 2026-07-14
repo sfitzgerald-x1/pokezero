@@ -24,6 +24,7 @@ from .randbat import Gen3RandbatSource, Gen3RandbatVariant, canonical_gen3_randb
 from .search import StartOverrideSource
 from .search_policy import OpponentActionScenario, StartOverridePlanner
 from .showdown_fixture import FixturePokemon, pack_team
+from .tier2 import canonical_move_id
 
 
 DEFAULT_RANDBAT_TEAM_SIZE = 6
@@ -817,7 +818,10 @@ def _gen3_randbat_fixture_spread(
 
     evs = {stat: 85 for stat in _STAT_ORDER}
     ivs = {stat: 31 for stat in _STAT_ORDER}
-    normalized_moves = tuple(_normalize_id(move) for move in moves)
+    # Request payloads encode dynamic-power moves as ids such as ``return102``.
+    # Canonicalize only for stat reconstruction; the original ids still go into
+    # the packed team sent back to Showdown.
+    normalized_moves = tuple(canonical_move_id(move) for move in moves)
     hidden_power_type = _hidden_power_type(normalized_moves)
     if hidden_power_type is not None:
         for stat, value in _HIDDEN_POWER_IVS.get(hidden_power_type, {}).items():

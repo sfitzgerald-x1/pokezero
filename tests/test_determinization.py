@@ -487,6 +487,33 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(umbreon_spread["ivs"]["spd"], 30)
         self.assertEqual(umbreon_spread["ivs"]["atk"], 31)
 
+    def test_gen3_spread_accepts_dynamic_power_return_request_id(self) -> None:
+        set_source = Gen3RandbatSource.from_data(
+            {},
+            move_metadata={"return": {"type": "Normal", "category": "Physical"}},
+            species_metadata={
+                "noctowl": {
+                    "baseStats": {"hp": 100, "atk": 50, "def": 50, "spa": 76, "spd": 96, "spe": 70}
+                }
+            },
+        )
+
+        spread = _gen3_randbat_fixture_spread(
+            {
+                "stats": {"hp": 337, "atk": 146, "def": 146, "spa": 194, "spd": 231, "spe": 183},
+            },
+            species="Noctowl",
+            moves=("hypnosis", "whirlwind", "toxic", "return102"),
+            item="Leftovers",
+            level=93,
+            set_source=set_source,
+        )
+
+        self.assertIsNotNone(spread)
+        assert spread is not None
+        self.assertEqual(spread["evs"]["atk"], 85)
+        self.assertEqual(spread["ivs"]["atk"], 31)
+
     def test_revealed_opponent_absolute_hp_filters_sampled_variants(self) -> None:
         metadata = {
             "self_team": [
