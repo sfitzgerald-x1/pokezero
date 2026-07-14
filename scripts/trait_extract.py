@@ -16,6 +16,7 @@ import glob
 import gzip
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 
 METRICS_VERSION = "trait_extract.v1"
@@ -247,13 +248,20 @@ def extract(files, lineage=None, milestone=None):
     manifest = None
     seats_behavioral = None
     games = []
+    skipped = 0
     for path in files:
-        for i, line in enumerate(gzip.open(path, "rt")):
-            rec = json.loads(line)
-            if rec.get("record") == "manifest":
-                manifest = manifest or rec
-                continue
-            games.append(rec)
+        try:
+            for line in gzip.open(path, "rt"):
+                rec = json.loads(line)
+                if rec.get("record") == "manifest":
+                    manifest = manifest or rec
+                    continue
+                games.append(rec)
+        except (EOFError, OSError, json.JSONDecodeError) as e:
+            # a truncated/corrupt shard (e.g. a killed writer) — keep the games read so far and
+            # move on rather than failing the whole extraction.
+            skipped += 1
+            print(f"WARN: skipped rest of {path} ({type(e).__name__})", file=sys.stderr)
     opponent = (manifest or {}).get("opponent", "self")
     # in self-play both seats are the bot; in foulplay only p1 (bot) is behavioral
     behav_seats = ("p1", "p2") if opponent == "self" else ("p1",)
@@ -347,6 +355,7 @@ def extract(files, lineage=None, milestone=None):
         "lineage": lineage or (manifest or {}).get("lineage"),
         "milestone": milestone if milestone is not None else (manifest or {}).get("milestone"),
         "checkpoint": (manifest or {}).get("checkpoint"),
+        "skipped_shards": skipped,
         "behavioral_seats": list(behav_seats), "seat_games": seat_games, "capped_games": caps,
         "bot_win_rate": round(wins_bot / n, 4) if n else None,
         # Phase 1 basics

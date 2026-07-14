@@ -16,6 +16,7 @@ Output: events-<shard>.jsonl.gz — one JSON object per game.
 from __future__ import annotations
 
 import argparse
+import gc
 import gzip
 import json
 import sys
@@ -28,6 +29,10 @@ from pokezero.showdown import observation_from_player_state
 
 MAX_STEPS = 1000
 SEATS = ("p1", "p2")
+# recreate the warm env every N games as a backstop: reset() reuse fixes the per-game subprocess
+# leak; the env also grows a never-cleared stderr list (cleared per game below), and there is a
+# slower persistent climb, so we recycle occasionally AND run with generous memory.
+ENV_RECYCLE = 200
 
 
 def _request_pp(request):
@@ -50,6 +55,16 @@ def _team_movesets(request):
         species = details.split(",")[0].strip()
         out.append({"species": species, "moves": list(mon.get("moves") or [])})
     return out
+
+
+def _rss_mb():
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        return -1
 
 
 def _active_species(request):
@@ -146,13 +161,22 @@ def main():
                                 "opponent": args.opponent, "shard": args.shard, "num_shards": args.num_shards,
                                 "seed_start": args.seed_start, "games_requested": args.games,
                                 "capture_version": "trait_eval.v1"}) + "\n")
-            for seed in my_seeds:
+            for i, seed in enumerate(my_seeds):
+                if i > 0 and i % ENV_RECYCLE == 0:
+                    env.close()
+                    gc.collect()
+                    env = LocalShowdownEnv(LocalShowdownConfig(**env_kwargs))
                 rec = play_self_play_game(agent, env, seed)
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
+                # the env's node-stderr reader appends to this list forever; drop it per game.
+                try:
+                    env._stderr_lines.clear()
+                except Exception:
+                    pass
                 n += 1
-                if n % 100 == 0:
-                    print(f"  shard {args.shard}: {n}/{len(my_seeds)} ({time.time()-t0:.0f}s)", flush=True)
+                if n % 50 == 0:
+                    print(f"  shard {args.shard}: {n}/{len(my_seeds)} ({time.time()-t0:.0f}s) rss={_rss_mb()}MB", flush=True)
     finally:
         env.close()
     print(f"WROTE {args.out} games={n} ({time.time()-t0:.0f}s)", flush=True)
