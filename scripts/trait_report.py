@@ -19,6 +19,12 @@ from collections import defaultdict
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
 
+# (lineage, milestone) points dropped from the Phase-1 basics charts only. v22-lr3m@100k stalls
+# ~50% of its games to the turn cap; its scale compresses every other lineage's line. The point is
+# real and stays in the by-checkpoint trajectories — it is excluded here for legibility, and the
+# exclusion is stated in the section rather than hidden.
+BASICS_EXCLUDE = {("v22-lr3m", 100000)}
+
 
 def load(metrics_dir):
     rows = []
@@ -94,9 +100,14 @@ def legend(lineages):
 
 def phase1_section(rows_self):
     by_lin = defaultdict(list)
+    dropped = []
     for r in rows_self:
-        if r.get("milestone") is not None:
-            by_lin[r.get("lineage")].append(r)
+        if r.get("milestone") is None:
+            continue
+        if (r.get("lineage"), r.get("milestone")) in BASICS_EXCLUDE:
+            dropped.append(f'{r.get("lineage")}@{r.get("milestone") // 1000}k')
+            continue
+        by_lin[r.get("lineage")].append(r)
     lineages = [l for l in LINEAGE_ORDER if l in by_lin] + [l for l in by_lin if l not in LINEAGE_ORDER]
     turns = {l: [(r["milestone"], r.get("avg_turns")) for r in by_lin[l]] for l in lineages}
     pivots = {l: [(r["milestone"], r.get("avg_pivots")) for r in by_lin[l]] for l in lineages}
@@ -105,8 +116,13 @@ def phase1_section(rows_self):
     timeout = {l: [(r["milestone"], (r.get("timeout_rate") or 0) * 100) for r in by_lin[l]] for l in lineages}
     if not lineages:
         return '<section><h2>Phase 1 — basics over training</h2><div class="empty">no milestone metrics yet</div></section>'
+    drop_note = ('' if not dropped else
+                 f'<p class="sub">Excluded for legibility: {esc(", ".join(sorted(set(dropped))))} '
+                 f'(stalls ~50% of games to the turn cap; its scale compresses the other lineages). '
+                 f'The point is retained in the by-checkpoint trajectories below.</p>')
     return f"""<section>
       <h2>Phase 1 — self-play basics over training</h2>
+      {drop_note}
       {legend(lineages)}
       <div class="grid3">
         <div class="card">{svg_lines(turns, "avg turns/game (decided)")}</div>
