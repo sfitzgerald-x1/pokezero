@@ -460,6 +460,14 @@ class PriorBeliefProfileTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicates a decision"):
             merge_public_corpus_profile_shards([shards[0], duplicate])
 
+        conflicting_source = copy.deepcopy(shards[1])
+        conflicting_source["corpus_sha256"] = "b" * 64
+        conflicting_source["provenance"]["source_corpus_sha256"] = "b" * 64
+        conflicting_core = {name: value for name, value in conflicting_source.items() if name != "profile_sha256"}
+        conflicting_source["profile_sha256"] = canonical_json_sha256(conflicting_core)
+        with self.assertRaisesRegex(ValueError, "public-corpus provenance does not match"):
+            merge_public_corpus_profile_shards([shards[0], conflicting_source])
+
     def test_profile_shard_merge_rejects_non_contiguous_ranges(self) -> None:
         base = profile_public_decisions(
             [_record()],

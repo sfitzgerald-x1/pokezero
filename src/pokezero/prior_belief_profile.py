@@ -769,10 +769,12 @@ def _profile_input_identity(profile: Mapping[str, Any]) -> tuple[object, ...]:
     provenance = _profile_mapping(profile, "provenance")
     return (
         profile.get("checkpoint_sha256"),
+        profile.get("corpus_sha256"),
         profile.get("public_corpus_schema_sha256"),
         profile.get("root_noise"),
         profile.get("opponent_legal_mask_mode"),
         provenance.get("checkpoint_sha256"),
+        provenance.get("source_corpus_sha256"),
         provenance.get("belief_set_source_hash"),
         provenance.get("opponent_legal_mask_mode"),
         provenance.get("root_noise_enabled"),

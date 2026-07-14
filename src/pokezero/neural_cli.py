@@ -1168,8 +1168,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--source-corpus-sha256",
         default=None,
         help=(
-            "Verified full-source SHA-256 recorded by --shard when CORPUS is a bounded snapshot. "
-            "This preserves source provenance through the merged profile."
+            "Full-source SHA-256 asserted by the caller when CORPUS is a bounded snapshot. "
+            "The caller must verify it before use; matching shards preserve that provenance through merge."
         ),
     )
     prior_belief_profile.add_argument(
