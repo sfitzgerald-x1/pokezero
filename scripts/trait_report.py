@@ -248,6 +248,21 @@ def phase2_trajectories(rows_self):
     return "".join(blocks)
 
 
+def paired_checkpoints(rows):
+    """(lineage, milestone) checkpoints that have BOTH self-play and foul-play metrics. Foul-play
+    is run on selected checkpoints (500k + each lineage's frontier), so this is the set the
+    self-vs-foul panel and the correlation can speak to."""
+    def keys(opp):
+        return {(r["lineage"], r["milestone"]) for r in rows
+                if r.get("opponent") == opp and r.get("milestone") is not None and r.get("lineage")}
+    both = keys("self") & keys("foulplay")
+    return sorted(both, key=lambda c: (LINEAGE_ORDER.index(c[0]) if c[0] in LINEAGE_ORDER else 99, c[1]))
+
+
+def ck_label(c):
+    return f"{c[0]}@{c[1] // 1000}k"
+
+
 def _pearson(xs, ys):
     n = len(xs)
     if n < 3:
@@ -273,20 +288,21 @@ def phase2_correlations(rows):
     """Pearson r of each 500k self-play trait vs the bot's foul-play win rate, across lineages.
     We have foul-play only at 500k, so this correlates the five lineages' 500k self-play behavior
     with how they fare against FoulPlay. Small n — read as directional, not precise."""
-    self500 = {r["lineage"]: r for r in rows if r.get("opponent") == "self" and r.get("milestone") == 500000}
-    foul500 = {r["lineage"]: r for r in rows if r.get("opponent") == "foulplay" and r.get("milestone") == 500000}
-    lineages = [l for l in self500 if l in foul500 and l not in CORR_EXCLUDE_LINEAGES]
-    held_out = sorted(l for l in self500 if l in foul500 and l in CORR_EXCLUDE_LINEAGES)
-    if len(lineages) < 3:
+    selfm = {(r["lineage"], r["milestone"]): r for r in rows if r.get("opponent") == "self"}
+    foulm = {(r["lineage"], r["milestone"]): r for r in rows if r.get("opponent") == "foulplay"}
+    cks = [c for c in paired_checkpoints(rows) if c[0] not in CORR_EXCLUDE_LINEAGES]
+    held_out = sorted({c[0] for c in paired_checkpoints(rows) if c[0] in CORR_EXCLUDE_LINEAGES})
+    if len(cks) < 3:
         return ""
-    winr = {l: foul500[l].get("bot_win_rate") for l in lineages}
-    spread = max(winr.values()) - min(winr.values()) if winr else 0.0
+    winr = {c: foulm[c].get("bot_win_rate") for c in cks}
+    vals = [w for w in winr.values() if w is not None]
+    spread = (max(vals) - min(vals)) if vals else 0.0
     traits = [(lbl, fn) for _, charts in TRAJECTORY_CHARTS for lbl, fn in charts] + _CORR_EXTRA
     results = []
     for lbl, fn in traits:
         xs, ys = [], []
-        for l in lineages:
-            v, w = fn(self500[l]), winr[l]
+        for c in cks:
+            v, w = fn(selfm[c]), winr[c]
             if v is not None and w is not None:
                 xs.append(v)
                 ys.append(w)
@@ -295,18 +311,21 @@ def phase2_correlations(rows):
             results.append((lbl, r, len(xs)))
     results.sort(key=lambda t: -t[1])
     held = ('' if not held_out else
-            f'Held out: {esc(", ".join(held_out))} (win rate far below the rest — with n=5 it was a '
-            f'single high-leverage point). ')
+            f'Held out: {esc(", ".join(held_out))} (foul-play win rate far below the rest — a '
+            f'high-leverage point at this n). ')
+    # power warning scales with how much win-rate variance we actually have
+    weak = len(cks) < 8 or spread < 0.08
+    warn = (f'<p class="warn">Low power: n={len(cks)} checkpoints over a {spread:.3f} win-rate spread. '
+            f'With this little variance the r values are unstable — treat as hypothesis-generating '
+            f'only. Foul-play on more checkpoints widens the win-rate axis and fixes this.</p>'
+            if weak else
+            f'<p class="sub">n={len(cks)} checkpoints spanning a {spread:.3f} win-rate range.</p>')
     return (f'<section><h2>Trait &#8596; foul-play win-rate correlation</h2>'
-            f'<p class="sub">Pearson r of each 500k self-play trait against the bot&#39;s foul-play win '
-            f'rate, across {len(lineages)} lineages (win rates '
-            f'{", ".join(f"{l} {winr[l]:.2f}" for l in lineages)}). {held}'
+            f'<p class="sub">Pearson r of each checkpoint&#39;s self-play trait against that same '
+            f'checkpoint&#39;s foul-play win rate, over the {len(cks)} checkpoints with both '
+            f'({", ".join(f"{ck_label(c)} {winr[c]:.2f}" for c in cks if winr[c] is not None)}). {held}'
             f'Green = trait tracks a higher foul-play win rate, red = lower.</p>'
-            f'<p class="warn">Low power: n={len(lineages)} over a {spread:.3f} win-rate spread. With so '
-            f'few points and so little variance, these r values are unstable — treat as '
-            f'hypothesis-generating only. Foul-play across more checkpoints is what would give this '
-            f'real power.</p>'
-            f'{_svg_corr(results)}</section>')
+            f'{warn}{_svg_corr(results)}</section>')
 
 
 def _svg_corr(results, width=700, rowh=24, pad=180):
@@ -341,17 +360,20 @@ def _fmt(v, nd=3):
     return esc(v)
 
 
-def phase2_panel(rows, opponent):
-    rows = [r for r in rows if r.get("opponent") == opponent and r.get("milestone") == 500000]
-    by_lin = {r.get("lineage"): r for r in rows}
-    lineages = [l for l in LINEAGE_ORDER if l in by_lin] + [l for l in by_lin if l not in LINEAGE_ORDER]
+def phase2_panel(rows, opponent, checkpoints):
+    """One column per CHECKPOINT (lineage@milestone) — 500k plus each lineage's frontier — rather
+    than a single pinned milestone, so the panel tracks the recent checkpoints too."""
+    by_ck = {(r["lineage"], r["milestone"]): r for r in rows if r.get("opponent") == opponent}
+    lineages = [c for c in checkpoints if c in by_ck]
     if not lineages:
-        return f'<div class="empty">no {esc(opponent)} 500k metrics</div>'
+        return f'<div class="empty">no {esc(opponent)} metrics</div>'
+    rows = [by_ck[c] for c in lineages]
     cats = sorted({c for r in rows for c in (r.get("move_categories") or {})})
     switches = sorted({k for r in rows for k in (r.get("switch_behavior") or {})})
+    by_lin = by_ck  # rows are addressed by checkpoint key below
 
     def header():
-        return "<tr><th>metric</th>" + "".join(f"<th>{esc(l)}</th>" for l in lineages) + "</tr>"
+        return "<tr><th>metric</th>" + "".join(f"<th>{esc(ck_label(c))}</th>" for c in lineages) + "</tr>"
 
     def row(label, fn):
         cells = "".join(f"<td>{fn(by_lin[l])}</td>" for l in lineages)
@@ -446,12 +468,14 @@ def build_html(rows):
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self))
     body.append(phase2_correlations(rows))
-    body.append('<section><h2>Phase 2 — 500k detailed panel (self vs foul-play)</h2>'
-                '<p class="sub">Full breakdown for the flagship 500k checkpoints, including foul-play '
-                '(kept separate). The trajectories above show these traits per checkpoint over training.</p>'
+    cks = paired_checkpoints(rows)
+    body.append('<section><h2>Phase 2 — detailed panel by checkpoint (self vs foul-play)</h2>'
+                f'<p class="sub">Full breakdown for every checkpoint with both self-play and foul-play '
+                f'({", ".join(ck_label(c) for c in cks) or "none yet"}) — 500k plus each lineage&#39;s '
+                f'most recent checkpoint. Self-play and foul-play are kept separate, never merged.</p>'
                 '<div class="cols2">'
-                f'<div>{phase2_panel(rows, "self")}</div>'
-                f'<div>{phase2_panel(rows, "foulplay")}</div>'
+                f'<div>{phase2_panel(rows, "self", cks)}</div>'
+                f'<div>{phase2_panel(rows, "foulplay", cks)}</div>'
                 '</div></section>')
     body.append("</div>")
     return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>PokeZero trait tracking</title><style>{CSS}</style></head><body>{''.join(body)}</body></html>"
