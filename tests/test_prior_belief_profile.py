@@ -496,6 +496,22 @@ class PriorBeliefProfileTest(unittest.TestCase):
         self.assertAlmostEqual(context["initial_candidate_value_top_two_margin"], 0.3)
         self.assertIn("profile_sha256", report)
 
+    def test_progress_callback_reports_each_completed_decision(self) -> None:
+        records = [_record(turn_index=1), _record(turn_index=2)]
+        progress: list[tuple[int, str]] = []
+
+        profile_public_decisions(
+            records,
+            prior_evaluator=lambda _history: (0.8, 0.15, 0.05) + (0.0,) * (ACTION_COUNT - 3),
+            candidate_value_evaluator=lambda _record: (
+                WorldScenarioEvaluation(0, 0, "world", 1.0, {0: 0.8, 1: 0.5, 2: 0.1}),
+            ),
+            progress_callback=lambda completed, record: progress.append((completed, record.decision_id)),
+        )
+
+        self.assertEqual([completed for completed, _ in progress], [1, 2])
+        self.assertEqual([decision_id for _, decision_id in progress], [record.decision_id for record in records])
+
     def test_phase_boundaries_and_candidate_margin_tie_breaking(self) -> None:
         self.assertEqual(phase_for_turn(0), "early")
         self.assertEqual(phase_for_turn(5), "early")

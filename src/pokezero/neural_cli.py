@@ -2302,6 +2302,13 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
             "opponent_legal_mask_mode": "hidden",
             "opponent_scenarios": args.opponent_scenarios,
         },
+        # The replay-from-root candidate sweep can be slow; leave a durable
+        # heartbeat in the Job stderr log after every consumed corpus decision.
+        "progress_callback": lambda completed, record: print(
+            f"prior_belief_profile_progress consumed={completed} decision_id={record.decision_id}",
+            file=sys.stderr,
+            flush=True,
+        ),
     }
     report = (
         profile_public_corpus_shard(corpus, **profile_kwargs)

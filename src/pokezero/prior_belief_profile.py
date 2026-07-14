@@ -35,6 +35,18 @@ PriorEvaluator = Callable[[tuple[Any, ...]], Sequence[float]]
 CandidateValueEvaluator = Callable[
     [PublicDecisionRecord], Sequence["WorldScenarioEvaluation"] | "CandidateValueEvaluation"
 ]
+ProfileProgressCallback = Callable[[int, PublicDecisionRecord], None]
+
+
+def _records_with_progress(
+    records: Iterable[PublicDecisionRecord],
+    progress_callback: ProfileProgressCallback,
+) -> Iterable[PublicDecisionRecord]:
+    """Report a record only after its profile attempt has completed."""
+
+    for completed_count, record in enumerate(records, start=1):
+        yield record
+        progress_callback(completed_count, record)
 
 
 @dataclass(frozen=True)
@@ -229,6 +241,7 @@ def profile_public_decisions(
     provenance: Mapping[str, Any] | None = None,
     provenance_factory: Callable[[], Mapping[str, Any]] | None = None,
     profile_scope: Mapping[str, Any] | None = None,
+    progress_callback: ProfileProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Profile public decisions with raw priors and initial candidate values.
 
@@ -239,6 +252,8 @@ def profile_public_decisions(
 
     if provenance is not None and provenance_factory is not None:
         raise ValueError("provide either provenance or provenance_factory, not both.")
+    if progress_callback is not None:
+        records = _records_with_progress(records, progress_callback)
     decision_rows: list[dict[str, Any]] = []
     selection_context_rows: list[dict[str, Any]] = []
     skipped_decision_rows: list[dict[str, Any]] = []
@@ -458,6 +473,7 @@ def profile_public_corpus(
     belief_set_source: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
     minimum_decisions: int = MINIMUM_PROFILE_DECISIONS,
+    progress_callback: ProfileProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Profile a corpus only when it satisfies the Step 2 2,000-decision floor."""
 
@@ -472,6 +488,7 @@ def profile_public_corpus(
         provenance=provenance,
         minimum_decisions=minimum_decisions,
         profile_scope=None,
+        progress_callback=progress_callback,
     )
 
 
@@ -483,6 +500,7 @@ def profile_public_corpus_shard(
     config: PriorBeliefProfileConfig = PriorBeliefProfileConfig(),
     belief_set_source: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
+    progress_callback: ProfileProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Profile one deterministic corpus range without treating it as capstone-ready.
 
@@ -510,6 +528,7 @@ def profile_public_corpus_shard(
         provenance=provenance,
         minimum_decisions=None,
         profile_scope=scope,
+        progress_callback=progress_callback,
     )
 
 
@@ -523,6 +542,7 @@ def _profile_public_corpus(
     provenance: Mapping[str, Any] | None,
     minimum_decisions: int | None,
     profile_scope: Mapping[str, Any] | None,
+    progress_callback: ProfileProgressCallback | None,
 ) -> dict[str, Any]:
     base_provenance = dict(provenance or {})
     if isinstance(corpus, PublicDecisionCorpusStream):
@@ -574,6 +594,7 @@ def _profile_public_corpus(
         belief_set_source=belief_set_source,
         provenance_factory=provenance_factory,
         profile_scope=profile_scope,
+        progress_callback=progress_callback,
     )
     if minimum_decisions is not None and report["decision_count"] < minimum_decisions:
         raise ValueError(
