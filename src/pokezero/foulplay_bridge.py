@@ -1368,6 +1368,8 @@ class _ControlledBattleState:
     public_resolved_action_rounds: list[PublicResolvedActionRound] = field(default_factory=list)
     next_foulplay_rqid: int = 1
     foulplay_terminal_sent: bool = False
+    # per-decision request snapshots (both seats), for omniscient trait capture; append-only.
+    request_history: list[tuple[PlayerId, str]] = field(default_factory=list)
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
@@ -1672,12 +1674,16 @@ def _p1_capture_trajectory(trajectory: BattleTrajectory, *, pool_id: str) -> Bat
 
     if trajectory.terminal is None:
         raise ValueError("controlled foul-play trajectory has no terminal state.")
+    src_metadata = {k: v for k, v in dict(trajectory.metadata).items()
+                    # defensively drop any opt-in omniscient trait-capture keys: this artifact is
+                    # p1-only/opponent-hidden and must never carry both-sides protocol/requests.
+                    if k not in ("omniscient_protocol", "request_history")}
     captured = BattleTrajectory(
         battle_id=trajectory.battle_id,
         format_id=trajectory.format_id,
         seed=trajectory.seed,
         metadata={
-            **dict(trajectory.metadata),
+            **src_metadata,
             "capture": "controlled-foulplay/raw",
             "pool": pool_id,
             "sides": "p1-only",
@@ -2433,6 +2439,15 @@ async def _run_single_game(
                 round_.to_dict() for round_ in state.public_resolved_action_rounds
             ],
         }
+        # Opt-in omniscient stash for trait capture (trait_foulplay.py). Gated on an env flag so it
+        # never contaminates the default p1-only/opponent-hidden capture path, which spreads this
+        # metadata into its artifacts (see _p1_capture_trajectory).
+        if os.environ.get("POKEZERO_TRAIT_CAPTURE"):
+            state.trajectory.metadata = {
+                **dict(state.trajectory.metadata),
+                "omniscient_protocol": list(state.public_lines),
+                "request_history": [[seat, line] for seat, line in state.request_history],
+            }
         trajectory_callback(state.trajectory)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
@@ -2576,6 +2591,7 @@ async def _handle_stream_event(
         for line in lines:
             if line.startswith("|request|"):
                 state.request_lines[stream] = line
+                state.request_history.append((stream, line))
         if stream == config.foulplay_player:
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
