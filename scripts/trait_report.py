@@ -473,10 +473,9 @@ def build_html(rows):
                 f'<p class="sub">Full breakdown for every checkpoint with both self-play and foul-play '
                 f'({", ".join(ck_label(c) for c in cks) or "none yet"}) — 500k plus each lineage&#39;s '
                 f'most recent checkpoint. Self-play and foul-play are kept separate, never merged.</p>'
-                '<div class="cols2">'
-                f'<div>{phase2_panel(rows, "self", cks)}</div>'
-                f'<div>{phase2_panel(rows, "foulplay", cks)}</div>'
-                '</div></section>')
+                f'{phase2_panel(rows, "self", cks)}'
+                f'{phase2_panel(rows, "foulplay", cks)}'
+                '</section>')
     body.append("</div>")
     return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>PokeZero trait tracking</title><style>{CSS}</style></head><body>{''.join(body)}</body></html>"
 
