@@ -57,3 +57,19 @@ class PublicActionCaptureTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "captured more than once"):
             append_public_action_round(trajectory, action_round)
+
+    def test_sleep_talk_move_replaces_a_provisional_sleep_event(self) -> None:
+        action_round = public_action_round_from_protocol_lines(
+            (
+                "|cant|p1a: Lead|slp",
+                "|move|p1a: Lead|Sleep Talk|p2a: Rival",
+                "|move|p1a: Lead|Surf|p2a: Rival|[from]move: Sleep Talk",
+            ),
+            turn_index=4,
+            requested_players=("p1",),
+        )
+
+        self.assertEqual(
+            action_round.to_dict()["actions"]["p1"],
+            {"kind": "move", "move_id": "sleeptalk"},
+        )

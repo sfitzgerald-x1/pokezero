@@ -47,17 +47,27 @@ def public_action_identifiers_from_protocol_lines(
             continue
         event_type = parts[1]
         player_id = _protocol_player_id(parts[2])
-        if player_id is None or player_id in actions:
+        if player_id is None:
             continue
         if event_type == "move" and len(parts) >= 4:
+            if _called_move_line(parts):
+                continue
+            existing = actions.get(player_id)
+            if existing is not None and existing.kind != "event":
+                continue
             move_id = _protocol_identifier(parts[3])
             if move_id:
                 actions[player_id] = PublicActionIdentifier(kind="move", move_id=move_id)
         elif event_type == "switch" and len(parts) >= 4:
+            existing = actions.get(player_id)
+            if existing is not None and existing.kind != "event":
+                continue
             species = _protocol_identifier(parts[3].split(",", 1)[0])
             if species:
                 actions[player_id] = PublicActionIdentifier(kind="switch", switched_species=species)
         elif event_type == "cant" and len(parts) >= 4:
+            if player_id in actions:
+                continue
             reason = _protocol_identifier(parts[3])
             actions[player_id] = PublicActionIdentifier(
                 kind="event",
@@ -113,6 +123,16 @@ def _protocol_player_id(value: str) -> str | None:
 
 def _protocol_identifier(value: str) -> str:
     return "".join(character for character in str(value).lower() if character.isalnum())
+
+
+def _called_move_line(parts: Sequence[str]) -> bool:
+    for token in parts[4:]:
+        text = str(token).strip()
+        if not text.startswith("[from]"):
+            continue
+        if "lockedmove" not in _protocol_identifier(text):
+            return True
+    return False
 
 
 def _matches_turn_index(payload: object, turn_index: int) -> bool:
