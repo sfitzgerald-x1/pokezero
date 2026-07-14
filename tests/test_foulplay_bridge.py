@@ -467,6 +467,11 @@ class FoulPlayBridgeTest(unittest.TestCase):
             seed=7,
             format_id="gen3randombattle",
             public_lines=["|switch|p1a: Lead|Pikachu, L100|100/100"],
+            trajectory=BattleTrajectory(
+                battle_id="public-round",
+                format_id="gen3randombattle",
+                seed=7,
+            ),
         )
         _capture_resolved_public_action_round(state, 0)
         state.previous_requested_players = ("p1", "p2")
@@ -486,6 +491,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertNotIn("action_index", serialized)
         self.assertNotIn("move_slot", serialized)
         self.assertNotIn("raw_choice", serialized)
+        assert state.trajectory is not None
+        self.assertEqual(state.trajectory.metadata["public_resolved_action_rounds"], [payload])
 
     def test_public_corpus_switch_identifier_uses_species_not_condition(self) -> None:
         state = _ControlledBattleState(

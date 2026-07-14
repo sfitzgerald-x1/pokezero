@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 import hashlib
 import random
 from time import perf_counter
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision
+from .public_action_capture import append_public_action_round, public_action_round_from_protocol_lines
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -172,6 +173,7 @@ def continue_rollout_from_current_state(
     )
     requested_players = env.requested_players()
     cached_observations = dict(available_observations or {})
+    protocol_line_count = _protocol_line_count(env)
 
     for decision_round_index in range(starting_decision_round_index, config.max_decision_rounds):
         terminal = env.terminal()
@@ -259,6 +261,17 @@ def continue_rollout_from_current_state(
             {player_id: decision.action_index for player_id, decision in decisions.items()}
         )
         timing.add_env_step(perf_counter() - step_started)
+        protocol_lines = _protocol_lines_since(env, protocol_line_count)
+        if protocol_lines is not None:
+            protocol_line_count += len(protocol_lines)
+            append_public_action_round(
+                trajectory,
+                public_action_round_from_protocol_lines(
+                    protocol_lines,
+                    turn_index=decision_round_index,
+                    requested_players=requested_players,
+                ),
+            )
 
         for player_id in requested_players:
             decision = decisions[player_id]
@@ -346,6 +359,24 @@ def _trajectory_snapshot(trajectory: BattleTrajectory) -> BattleTrajectory:
         terminal=trajectory.terminal,
         metadata=dict(trajectory.metadata),
     )
+
+
+def _protocol_line_count(env: PokeZeroEnv) -> int | None:
+    lines = getattr(env, "protocol_lines", None)
+    if not isinstance(lines, Sequence) or isinstance(lines, (str, bytes)):
+        return None
+    return len(lines)
+
+
+def _protocol_lines_since(env: PokeZeroEnv, cursor: int | None) -> tuple[str, ...] | None:
+    if cursor is None:
+        return None
+    lines = getattr(env, "protocol_lines", None)
+    if not isinstance(lines, Sequence) or isinstance(lines, (str, bytes)):
+        return None
+    if len(lines) < cursor:
+        return None
+    return tuple(str(line) for line in lines[cursor:])
 
 
 def _reset_unique_policies(policies: Mapping[PlayerId, Policy]) -> None:

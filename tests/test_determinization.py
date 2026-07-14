@@ -18,6 +18,7 @@ from pokezero.determinization import (
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext
+from pokezero.public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
 from pokezero.randbat import Gen3RandbatSource
 from pokezero.replay_branching import replay_trajectory_branch
 from pokezero.search_policy import OpponentActionScenario
@@ -595,7 +596,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         assert override is not None
         self.assertIn("Xatu", override.player_teams["p1"])
 
-    def test_public_move_events_constrain_replay_move_slots_without_private_moves(self) -> None:
+    def test_persisted_public_moves_constrain_replay_move_slots_without_private_moves(self) -> None:
         metadata = {
             "self_team": [
                 {
@@ -663,12 +664,24 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
             metadata={
                 **metadata,
                 "opponent_active": {"species": "Charizard"},
-                "recent_public_events": [
-                    "|move|opponenta: Charizard|Hidden Power Grass|selfa: Blissey",
-                ],
+                "recent_public_events": [],
             },
         )
         context = replace(context, decision_round_index=1, observation=current_observation)
+        context.trajectory.metadata = {
+            "public_resolved_action_rounds": [
+                PublicResolvedActionRound(
+                    turn_index=0,
+                    actions={
+                        "p1": PublicActionIdentifier(kind="move", move_id="hiddenpowergrass"),
+                        "p2": PublicActionIdentifier(
+                            kind="event",
+                            event_id="unresolved-public-event",
+                        ),
+                    },
+                ).to_dict()
+            ]
+        }
 
         override = gen3_randbat_belief_start_override(
             context=context,
@@ -1186,7 +1199,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(packed_parts[3], "Synchronize")
         self.assertEqual(packed_parts[4].split(",")[1], "thunderwave")
 
-    def test_public_switch_constraints_track_showdown_party_swaps(self) -> None:
+    def test_persisted_public_switch_constraints_track_showdown_party_swaps(self) -> None:
         metadata = {
             "self_team": [
                 {
@@ -1288,9 +1301,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
             metadata={
                 **metadata,
                 "opponent_active": {"species": "Tauros"},
-                "recent_public_events": [
-                    "|switch|opponenta: Tauros|Tauros, L76|100/100",
-                ],
+                "recent_public_events": [],
             },
         )
         round_2_observation = replace(
@@ -1299,10 +1310,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
             metadata={
                 **metadata,
                 "opponent_active": {"species": "Arcanine"},
-                "recent_public_events": [
-                    "|switch|opponenta: Tauros|Tauros, L76|100/100",
-                    "|switch|opponenta: Arcanine|Arcanine, L78|100/100",
-                ],
+                "recent_public_events": [],
             },
         )
         for turn_index, observation, opponent_action in (
@@ -1330,6 +1338,30 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                     action_index=opponent_action,
                 )
             )
+        context.trajectory.metadata = {
+            "public_resolved_action_rounds": [
+                PublicResolvedActionRound(
+                    turn_index=0,
+                    actions={
+                        "p1": PublicActionIdentifier(kind="switch", switched_species="tauros"),
+                        "p2": PublicActionIdentifier(
+                            kind="event",
+                            event_id="unresolved-public-event",
+                        ),
+                    },
+                ).to_dict(),
+                PublicResolvedActionRound(
+                    turn_index=1,
+                    actions={
+                        "p1": PublicActionIdentifier(kind="switch", switched_species="arcanine"),
+                        "p2": PublicActionIdentifier(
+                            kind="event",
+                            event_id="unresolved-public-event",
+                        ),
+                    },
+                ).to_dict(),
+            ]
+        }
         context = replace(context, decision_round_index=2, observation=round_2_observation)
 
         override = gen3_randbat_belief_start_override(

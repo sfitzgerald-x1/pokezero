@@ -56,8 +56,8 @@ from .observation import (
     PokeZeroObservationV0,
 )
 from .policy import Policy, PolicyContext, PolicyDecision
+from .public_action_capture import append_public_action_round, public_action_round_from_protocol_lines
 from .public_decision_corpus import (
-    PublicActionIdentifier,
     PublicDecisionCorpusWriter,
     PublicResolvedActionRound,
     public_corpus_manifest,
@@ -2599,64 +2599,14 @@ def _capture_resolved_public_action_round(
     state.public_line_cursor = len(state.public_lines)
     if decision_round == 0:
         return
-    actions = _public_action_identifiers_from_protocol_lines(lines)
-    for player in state.previous_requested_players:
-        actions.setdefault(
-            player,
-            PublicActionIdentifier(kind="event", event_id="unresolved-public-event"),
-        )
-    if not actions:
-        actions = {
-            "p1": PublicActionIdentifier(kind="event", event_id="unresolved-public-event"),
-        }
-    state.public_resolved_action_rounds.append(
-        PublicResolvedActionRound(turn_index=decision_round - 1, actions=actions)
+    action_round = public_action_round_from_protocol_lines(
+        lines,
+        turn_index=decision_round - 1,
+        requested_players=state.previous_requested_players,
     )
-
-
-def _public_action_identifiers_from_protocol_lines(
-    lines: Sequence[str],
-) -> dict[PlayerId, PublicActionIdentifier]:
-    actions: dict[PlayerId, PublicActionIdentifier] = {}
-    for line in lines:
-        parts = line.split("|")
-        if len(parts) < 3:
-            continue
-        event_type = parts[1]
-        player = _protocol_player_id(parts[2])
-        if player is None or player in actions:
-            continue
-        if event_type == "move" and len(parts) >= 4:
-            move_id = _public_protocol_identifier(parts[3])
-            if move_id:
-                actions[player] = PublicActionIdentifier(kind="move", move_id=move_id)
-        elif event_type == "switch" and len(parts) >= 4:
-            # Showdown protocol uses |switch|slot|species, level|condition. The
-            # condition is parts[4], not the switch target; persisting it here
-            # made every later sampled-world switch identifier unreplayable.
-            species = _public_protocol_identifier(parts[3].split(",", 1)[0])
-            if species:
-                actions[player] = PublicActionIdentifier(kind="switch", switched_species=species)
-        elif event_type == "cant" and len(parts) >= 4:
-            reason = _public_protocol_identifier(parts[3])
-            actions[player] = PublicActionIdentifier(
-                kind="event",
-                event_id=f"cant:{reason or 'unknown'}",
-            )
-    return actions
-
-
-def _protocol_player_id(value: str) -> PlayerId | None:
-    prefix = value.strip().split(":", 1)[0]
-    if prefix.startswith("p1"):
-        return "p1"
-    if prefix.startswith("p2"):
-        return "p2"
-    return None
-
-
-def _public_protocol_identifier(value: str) -> str:
-    return "".join(character for character in value.lower() if character.isalnum())
+    state.public_resolved_action_rounds.append(action_round)
+    if state.trajectory is not None:
+        append_public_action_round(state.trajectory, action_round)
 
 
 async def _notify_foulplay_terminal(
