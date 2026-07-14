@@ -288,10 +288,13 @@ def phase2_correlations(rows):
     """Pearson r of each 500k self-play trait vs the bot's foul-play win rate, across lineages.
     We have foul-play only at 500k, so this correlates the five lineages' 500k self-play behavior
     with how they fare against FoulPlay. Small n — read as directional, not precise."""
-    selfm = {(r["lineage"], r["milestone"]): r for r in rows if r.get("opponent") == "self"}
-    foulm = {(r["lineage"], r["milestone"]): r for r in rows if r.get("opponent") == "foulplay"}
-    cks = [c for c in paired_checkpoints(rows) if c[0] not in CORR_EXCLUDE_LINEAGES]
-    held_out = sorted({c[0] for c in paired_checkpoints(rows) if c[0] in CORR_EXCLUDE_LINEAGES})
+    # Trait AND outcome both come from the foul-play games — the same population. (Correlating a
+    # self-play trait against a foul-play win rate would mix two different game distributions.)
+    foulm = {(r["lineage"], r["milestone"]): r for r in rows
+             if r.get("opponent") == "foulplay" and r.get("milestone") is not None and r.get("lineage")}
+    all_cks = sorted(foulm, key=lambda c: (LINEAGE_ORDER.index(c[0]) if c[0] in LINEAGE_ORDER else 99, c[1]))
+    cks = [c for c in all_cks if c[0] not in CORR_EXCLUDE_LINEAGES]
+    held_out = sorted({c[0] for c in all_cks if c[0] in CORR_EXCLUDE_LINEAGES})
     if len(cks) < 3:
         return ""
     winr = {c: foulm[c].get("bot_win_rate") for c in cks}
@@ -302,7 +305,7 @@ def phase2_correlations(rows):
     for lbl, fn in traits:
         xs, ys = [], []
         for c in cks:
-            v, w = fn(selfm[c]), winr[c]
+            v, w = fn(foulm[c]), winr[c]   # trait and win rate from the same foul-play games
             if v is not None and w is not None:
                 xs.append(v)
                 ys.append(w)
@@ -321,10 +324,15 @@ def phase2_correlations(rows):
             if weak else
             f'<p class="sub">n={len(cks)} checkpoints spanning a {spread:.3f} win-rate range.</p>')
     return (f'<section><h2>Trait &#8596; foul-play win-rate correlation</h2>'
-            f'<p class="sub">Pearson r of each checkpoint&#39;s self-play trait against that same '
-            f'checkpoint&#39;s foul-play win rate, over the {len(cks)} checkpoints with both '
+            f'<p class="sub">Pearson r across {len(cks)} checkpoints. Both the trait and the win rate '
+            f'are measured on the <strong>same foul-play games</strong> '
             f'({", ".join(f"{ck_label(c)} {winr[c]:.2f}" for c in cks if winr[c] is not None)}). {held}'
             f'Green = trait tracks a higher foul-play win rate, red = lower.</p>'
+            f'<p class="warn">One point per <em>checkpoint</em>, not per game: each checkpoint&#39;s '
+            f'1000 foul-play games collapse into a single (trait, win-rate) pair, so n is the number '
+            f'of checkpoints — game volume buys precision within a point, not more points. It is also '
+            f'an aggregate correlation confounded by overall checkpoint strength (better models do more '
+            f'of everything effective <em>and</em> win more), so read it as association, not cause.</p>'
             f'{warn}{_svg_corr(results)}</section>')
 
 
