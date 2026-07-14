@@ -115,9 +115,11 @@ def phase1_section(rows_self):
             continue
         by_lin[r.get("lineage")].append(r)
     lineages = [l for l in LINEAGE_ORDER if l in by_lin] + [l for l in by_lin if l not in LINEAGE_ORDER]
+    # No win-rate chart here: this section is self-play, where the bot drives both seats, so p1's
+    # win rate is ~0.5 by construction. Where it does move it only echoes the tie/timeout rate,
+    # which the timeout chart shows directly. Win rate is meaningful only vs foul-play (500k panel).
     turns = {l: [(r["milestone"], r.get("avg_turns")) for r in by_lin[l]] for l in lineages}
     pivots = {l: [(r["milestone"], r.get("avg_pivots")) for r in by_lin[l]] for l in lineages}
-    winr = {l: [(r["milestone"], r.get("bot_win_rate")) for r in by_lin[l]] for l in lineages}
     # timeout rate: fraction of games that stalled to the turn cap (a checkpoint that can't close)
     timeout = {l: [(r["milestone"], (r.get("timeout_rate") or 0) * 100) for r in by_lin[l]] for l in lineages}
     if not lineages:
@@ -133,7 +135,6 @@ def phase1_section(rows_self):
       <div class="grid3">
         <div class="card">{svg_lines(turns, "avg turns/game (decided)")}</div>
         <div class="card">{svg_lines(pivots, "avg pivots/seat-game")}</div>
-        <div class="card">{svg_lines(winr, "bot win rate")}</div>
         <div class="card">{svg_lines(timeout, "timeout rate % (stalled to cap)")}</div>
       </div>
       {phase1_moves_table(by_lin, lineages)}
@@ -359,7 +360,10 @@ def phase2_panel(rows, opponent):
     out = [f'<div class="tablewrap"><table><caption>opponent = {esc(opponent)}</caption>', header()]
     out.append(row("games", lambda r: r.get("n_games")))
     out.append(row("timeout rate", lambda r: _fmt(r.get("timeout_rate"))))
-    out.append(row("bot win rate", lambda r: _fmt(r.get("bot_win_rate"))))
+    # win rate is only meaningful against a real opponent: in self-play the bot drives both seats,
+    # so p1's rate is ~0.5 by construction and inviting a self-vs-foul comparison would mislead.
+    if opponent != "self":
+        out.append(row("bot win rate", lambda r: _fmt(r.get("bot_win_rate"))))
     out.append(row("avg turns", lambda r: _fmt(r.get("avg_turns"), 1)))
     out.append(row("avg pivots", lambda r: _fmt(r.get("avg_pivots"), 2)))
     out.append('<tr class="grp"><td colspan="%d">move categories — uses / seat-game present (carrier rate)</td></tr>' % (len(lineages) + 1))
