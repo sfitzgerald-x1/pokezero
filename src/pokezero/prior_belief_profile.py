@@ -501,6 +501,7 @@ def profile_public_corpus_shard(
     belief_set_source: Any | None = None,
     provenance: Mapping[str, Any] | None = None,
     progress_callback: ProfileProgressCallback | None = None,
+    source_start_decision: int | None = None,
 ) -> dict[str, Any]:
     """Profile one deterministic corpus range without treating it as capstone-ready.
 
@@ -513,10 +514,16 @@ def profile_public_corpus_shard(
 
     if corpus.selected_decision_limit is None:
         raise ValueError("profile shards require a bounded corpus range.")
+    if source_start_decision is not None and source_start_decision < 0:
+        raise ValueError("source_start_decision must be non-negative when provided.")
     requested_count = corpus.selected_decision_limit
     scope = {
         "kind": "shard",
-        "start_decision": corpus.selected_decision_start,
+        # A locally materialized shard starts at zero in its snapshot file, but
+        # retains its original position for merge-contiguity validation.
+        "start_decision": (
+            corpus.selected_decision_start if source_start_decision is None else source_start_decision
+        ),
         "requested_decision_count": requested_count,
     }
     return _profile_public_corpus(

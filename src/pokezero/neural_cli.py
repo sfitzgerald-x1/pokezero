@@ -1156,6 +1156,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Zero-based public-decision offset. Requires --shard and a bounded --max-decisions.",
     )
     prior_belief_profile.add_argument(
+        "--source-start-decision",
+        type=int,
+        default=None,
+        help=(
+            "Logical source offset recorded by --shard. Use when CORPUS is a verified local snapshot "
+            "whose first decision corresponds to a later source-corpus decision."
+        ),
+    )
+    prior_belief_profile.add_argument(
         "--shard",
         action="store_true",
         help="Write a bounded map-stage report. Shards are not capstone-eligible until merged.",
@@ -2206,12 +2215,18 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
         raise ValueError("prior-belief-profile refuses privileged opponent legal-mask mode.")
     shard_mode = bool(getattr(args, "shard", False))
     start_decision = int(getattr(args, "start_decision", 0))
+    source_start_decision = getattr(args, "source_start_decision", None)
     if start_decision < 0:
         raise ValueError("--start-decision must be non-negative.")
     if shard_mode and args.max_decisions is None:
         raise ValueError("--shard requires a bounded --max-decisions.")
     if not shard_mode and start_decision:
         raise ValueError("--start-decision requires --shard.")
+    if source_start_decision is not None:
+        if not shard_mode:
+            raise ValueError("--source-start-decision requires --shard.")
+        if source_start_decision < 0:
+            raise ValueError("--source-start-decision must be non-negative.")
     corpus = open_public_decision_corpus(
         args.corpus,
         max_decisions=args.max_decisions,
@@ -2311,7 +2326,11 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
         ),
     }
     report = (
-        profile_public_corpus_shard(corpus, **profile_kwargs)
+        profile_public_corpus_shard(
+            corpus,
+            **profile_kwargs,
+            source_start_decision=source_start_decision,
+        )
         if shard_mode
         else profile_public_corpus(corpus, **profile_kwargs)
     )
