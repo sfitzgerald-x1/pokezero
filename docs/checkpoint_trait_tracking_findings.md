@@ -37,16 +37,32 @@ These are the clearest per-checkpoint trajectories; each point is one checkpoint
   ~0 by 300k. avg-turns is reported over decided games only, with the timeout rate as its own
   trajectory (a checkpoint that can't win is a distinct failure mode from one that wins slowly).
 
-## Trait ↔ foul-play win-rate correlation
+## Trait ↔ foul-play win-rate correlation — currently underpowered, do not interpret
 
-Pearson r of each lineage's 500k self-play trait against its 500k foul-play win rate (n=5
-lineages, win rates 0.20–0.34). The checkpoints that beat FoulPlay lean on **tempo** — Substitute
-(r=+0.80), landing Focus Punches (+0.68), immunity switch-ins (+0.65), pivoting sleepers (+0.60),
-meaningful Baton Pass (+0.55). Those that fare worse lean on **stall** — Rest (−0.99), Spikes
-(−0.97), grinding opponent PP (−0.97), and long games (avg-turns −0.96). This matches the search
-opponent: FoulPlay punishes passive stall and rewards proactive tempo. **Caveat: n=5 with a narrow
-win-rate spread — directional/hypothesis-generating, not significant.** Extending foul-play across
-milestones would turn this into a per-checkpoint correlation with real power.
+Pearson r of each lineage's 500k self-play trait against its 500k foul-play win rate. Foul-play
+exists only at 500k, so the correlation has at most **one point per lineage** — n=5.
+
+**This correlation does not currently carry signal, and we can demonstrate it.** With all five
+lineages, m50-ep7 (foul-play win rate 0.198) sits far below the other four (0.308–0.339), so it is
+a single high-leverage point and the fit largely reduces to "m50-ep7 vs the rest". Holding it out
+leaves n=4 over a **0.031** win-rate spread — and the r values *invert*:
+
+| trait | n=5 | n=4 (m50-ep7 held out) |
+|---|---|---|
+| focus punch success % | +0.68 | **−0.79** |
+| sleeping mon out | +0.60 | **−0.75** |
+| spikes | −0.97 | **+0.22** |
+
+Sign flips of that size from removing one point mean the estimator is fitting sampling noise, not
+a behavioral relationship. Neither ranking should be quoted. The report renders the chart with
+`m50-ep7` held out (`CORR_EXCLUDE_LINEAGES`) and a low-power warning; the machinery is correct and
+the numbers are real, there is simply not enough variance on the win-rate axis to correlate
+against.
+
+**What would fix it:** foul-play at every milestone. That turns each lineage's single point into a
+trajectory (≈49 checkpoints spanning weak→strong, so a wide win-rate axis), making this a
+per-checkpoint correlation with actual power. That run is gated on compute (FoulPlay search is
+~40 s/game). Until then, treat this section as machinery-ready and evidence-empty.
 
 ## New per-trait conditional definitions (as of the review pass)
 

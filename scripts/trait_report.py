@@ -25,6 +25,12 @@ PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
 # exclusion is stated in the section rather than hidden.
 BASICS_EXCLUDE = {("v22-lr3m", 100000)}
 
+# Lineages held out of the trait <-> foul-play correlation. m50-ep7 wins only ~0.20 vs FoulPlay
+# while the rest cluster at 0.31-0.34, so with n=5 it is a single high-leverage point and the
+# correlation largely reduces to "m50-ep7 vs the rest". Temporary — reintroduce once foul-play
+# spans more checkpoints and the win-rate axis has real spread.
+CORR_EXCLUDE_LINEAGES = {"m50-ep7"}
+
 
 def load(metrics_dir):
     rows = []
@@ -268,10 +274,12 @@ def phase2_correlations(rows):
     with how they fare against FoulPlay. Small n — read as directional, not precise."""
     self500 = {r["lineage"]: r for r in rows if r.get("opponent") == "self" and r.get("milestone") == 500000}
     foul500 = {r["lineage"]: r for r in rows if r.get("opponent") == "foulplay" and r.get("milestone") == 500000}
-    lineages = [l for l in self500 if l in foul500]
+    lineages = [l for l in self500 if l in foul500 and l not in CORR_EXCLUDE_LINEAGES]
+    held_out = sorted(l for l in self500 if l in foul500 and l in CORR_EXCLUDE_LINEAGES)
     if len(lineages) < 3:
         return ""
     winr = {l: foul500[l].get("bot_win_rate") for l in lineages}
+    spread = max(winr.values()) - min(winr.values()) if winr else 0.0
     traits = [(lbl, fn) for _, charts in TRAJECTORY_CHARTS for lbl, fn in charts] + _CORR_EXTRA
     results = []
     for lbl, fn in traits:
@@ -285,11 +293,18 @@ def phase2_correlations(rows):
         if r is not None:
             results.append((lbl, r, len(xs)))
     results.sort(key=lambda t: -t[1])
+    held = ('' if not held_out else
+            f'Held out: {esc(", ".join(held_out))} (win rate far below the rest — with n=5 it was a '
+            f'single high-leverage point). ')
     return (f'<section><h2>Trait &#8596; foul-play win-rate correlation</h2>'
             f'<p class="sub">Pearson r of each 500k self-play trait against the bot&#39;s foul-play win '
             f'rate, across {len(lineages)} lineages (win rates '
-            f'{", ".join(f"{l} {winr[l]:.2f}" for l in lineages)}). '
-            f'Green = trait tracks a higher foul-play win rate, red = lower. Small n — directional.</p>'
+            f'{", ".join(f"{l} {winr[l]:.2f}" for l in lineages)}). {held}'
+            f'Green = trait tracks a higher foul-play win rate, red = lower.</p>'
+            f'<p class="warn">Low power: n={len(lineages)} over a {spread:.3f} win-rate spread. With so '
+            f'few points and so little variance, these r values are unstable — treat as '
+            f'hypothesis-generating only. Foul-play across more checkpoints is what would give this '
+            f'real power.</p>'
             f'{_svg_corr(results)}</section>')
 
 
@@ -412,6 +427,7 @@ th,td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--line);whit
 th:first-child,td:first-child{text-align:left}.mlabel{color:var(--dim)}
 tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:left}
 .dim{color:var(--dim)}.empty{color:var(--dim);padding:16px;font-style:italic}
+.warn{color:var(--dim);border-left:3px solid #d97706;padding:6px 10px;margin:8px 0;font-size:12.5px;background:var(--card);border-radius:0 6px 6px 0}
 .cols2{display:grid;grid-template-columns:1fr;gap:16px}@media(min-width:900px){.cols2{grid-template-columns:1fr 1fr}}
 """
 
