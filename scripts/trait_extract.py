@@ -98,6 +98,11 @@ class GameParse:
                     # baton pass: previous move by seat was Baton Pass
                     if voluntary and self.last_move[seat] == BATON_PASS:
                         self.ev[seat]["bp_switch"] += 1
+                        # a *meaningful* Baton Pass carries a stat boost or a Substitute to the
+                        # incoming mon. self.boosts/sub still hold the OUTGOING mon's state here
+                        # (reset happens below), so this is what's being passed.
+                        if any(v > 0 for v in self.boosts[seat].values()) or self.sub[seat]:
+                            self.ev[seat]["bp_stat_or_sub"] += 1
                     elif voluntary:
                         self.ev[seat]["pivot"] += 1
                         # sleeping/frozen switch-out of the OUTGOING mon. Rest-induced sleep is a
@@ -282,6 +287,8 @@ def extract(files, lineage=None, milestone=None):
     cat_uses = defaultdict(int)
     cat_extra = defaultdict(int)
     switch_ev = defaultdict(int)
+    opp_fp_attempt = 0
+    opp_fp_disrupted = 0
     pp_exhaust_bot = []
     pp_exhaust_opp = []
     mons_alive_win = []
@@ -325,9 +332,14 @@ def extract(files, lineage=None, milestone=None):
                     cat_uses[cat] += gp.ev[seat][cat]
             for extra in ("cat_rapidspin_spikesdown","cat_phaze_justified","cat_phaze_neutral",
                           "focuspunch_attempt","focuspunch_executed","focuspunch_disrupted",
-                          "cat_boom_" + mid("Explosion"), "cat_boom_" + mid("Self-Destruct"),
-                          "cat_solarbeam_sun","cat_solarbeam_nosun","bp_switch"):
+                          "cat_solarbeam_sun","cat_solarbeam_nosun","bp_switch","bp_stat_or_sub"):
                 cat_extra[extra] += gp.ev[seat][extra]
+        # opponent Focus Punch, for "bot disrupts opponent's Focus Punch": the OTHER seat's
+        # attempts and how many the bot disrupted. In foulplay the opponent is FoulPlay (p2); in
+        # self-play both seats are opponents of each other.
+        for oseat in {OTHER_SEAT[s] for s in behav_seats}:
+            opp_fp_attempt += gp.ev[oseat]["focuspunch_attempt"]
+            opp_fp_disrupted += gp.ev[oseat]["focuspunch_disrupted"]
         # species vector: every behavioral-seat team, each species labeled by whether that seat won.
         # self-play samples both teams (symmetric); foulplay samples only the bot's team.
         for seat in behav_seats:
@@ -376,9 +388,15 @@ def extract(files, lineage=None, milestone=None):
                                    "carrier_rate": round(cat_present_games[cat] / (seat_games or 1), 4),
                                    "total_uses": cat_uses[cat]} for cat in sorted(CATS)},
         "move_category_extras": {k: cat_extra[k] for k in sorted(cat_extra)},
+        # bot's own Focus Punch: fraction of attempts that landed (were not disrupted first).
+        "focus_punch_attempts": cat_extra["focuspunch_attempt"],
         "focus_punch_success_rate": (round(cat_extra["focuspunch_executed"] /
                                      (cat_extra["focuspunch_executed"] + cat_extra["focuspunch_disrupted"]), 4)
                                      if (cat_extra["focuspunch_executed"] + cat_extra["focuspunch_disrupted"]) else None),
+        # bot disrupting the OPPONENT's Focus Punch: fraction of opponent attempts the bot broke.
+        "opp_focus_punch_attempts": opp_fp_attempt,
+        "opp_focus_punch_disruption_rate": (round(opp_fp_disrupted / opp_fp_attempt, 4)
+                                            if opp_fp_attempt else None),
         # Phase 2 switch behavior — per seat-game so self-play and foulplay are comparable
         "switch_behavior": {k: {"total": v, "per_seat_game": round(v / (seat_games or 1), 4)} for k, v in switch_ev.items()},
         # Phase 2 resource / endgame

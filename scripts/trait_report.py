@@ -156,6 +156,10 @@ def _switchrate(r, k):
     return (r.get("switch_behavior") or {}).get(k, {}).get("per_seat_game")
 
 
+def _pct(rate):
+    return rate * 100 if rate is not None else None
+
+
 # (label, accessor) — each becomes a small-multiple line chart over the milestone axis
 TRAJECTORY_CHARTS = [
     ("category use / seat-game", [
@@ -172,7 +176,9 @@ TRAJECTORY_CHARTS = [
         ("phaze: enemy boosted/sub %", lambda r: _fracpct(r, "cat_phaze_justified", "cat_phaze")),
         ("rapid spin: spikes-down %", lambda r: _fracpct(r, "cat_rapidspin_spikesdown", "cat_rapidspin_total")),
         ("solar beam: in sun %", lambda r: _fracpct(r, "cat_solarbeam_sun", "cat_solarbeam")),
-        ("focus punch success", lambda r: (r.get("focus_punch_success_rate") or 0) * 100 if r.get("focus_punch_success_rate") is not None else None),
+        ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "cat_batonpass")),
+        ("focus punch success %", lambda r: _pct(r.get("focus_punch_success_rate"))),
+        ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
@@ -217,6 +223,84 @@ def phase2_trajectories(rows_self):
         blocks.append(f'<h3>{esc(group_title)}</h3><div class="grid3">{cards}</div>')
     blocks.append("</section>")
     return "".join(blocks)
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    return sxy / (sxx * syy) ** 0.5
+
+
+# extra correlation traits beyond the trajectory accessors
+_CORR_EXTRA = [
+    ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "cat_batonpass")),
+    ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
+    ("timeout rate %", lambda r: _pct(r.get("timeout_rate"))),
+    ("avg turns (decided)", lambda r: r.get("avg_turns")),
+    ("avg pivots", lambda r: r.get("avg_pivots")),
+]
+
+
+def phase2_correlations(rows):
+    """Pearson r of each 500k self-play trait vs the bot's foul-play win rate, across lineages.
+    We have foul-play only at 500k, so this correlates the five lineages' 500k self-play behavior
+    with how they fare against FoulPlay. Small n — read as directional, not precise."""
+    self500 = {r["lineage"]: r for r in rows if r.get("opponent") == "self" and r.get("milestone") == 500000}
+    foul500 = {r["lineage"]: r for r in rows if r.get("opponent") == "foulplay" and r.get("milestone") == 500000}
+    lineages = [l for l in self500 if l in foul500]
+    if len(lineages) < 3:
+        return ""
+    winr = {l: foul500[l].get("bot_win_rate") for l in lineages}
+    traits = [(lbl, fn) for _, charts in TRAJECTORY_CHARTS for lbl, fn in charts] + _CORR_EXTRA
+    results = []
+    for lbl, fn in traits:
+        xs, ys = [], []
+        for l in lineages:
+            v, w = fn(self500[l]), winr[l]
+            if v is not None and w is not None:
+                xs.append(v)
+                ys.append(w)
+        r = _pearson(xs, ys)
+        if r is not None:
+            results.append((lbl, r, len(xs)))
+    results.sort(key=lambda t: -t[1])
+    return (f'<section><h2>Trait &#8596; foul-play win-rate correlation</h2>'
+            f'<p class="sub">Pearson r of each 500k self-play trait against the bot&#39;s foul-play win '
+            f'rate, across {len(lineages)} lineages (win rates '
+            f'{", ".join(f"{l} {winr[l]:.2f}" for l in lineages)}). '
+            f'Green = trait tracks a higher foul-play win rate, red = lower. Small n — directional.</p>'
+            f'{_svg_corr(results)}</section>')
+
+
+def _svg_corr(results, width=700, rowh=24, pad=180):
+    if not results:
+        return '<div class="empty">not enough lineages with both self + foul 500k</div>'
+    valw = 46
+    h = rowh * len(results) + 22
+    x0, x1 = pad, width - valw
+    cx, half = (x0 + x1) / 2, (x1 - x0) / 2
+    out = [f'<svg viewBox="0 0 {width} {h}" class="chart" role="img" aria-label="trait correlations">']
+    for frac in (-1, -0.5, 0, 0.5, 1):
+        x = cx + frac * half
+        out.append(f'<line x1="{x:.0f}" y1="2" x2="{x:.0f}" y2="{h-16}" class="{"axis" if frac == 0 else "grid"}"/>')
+        if frac in (-1, 0, 1):
+            out.append(f'<text x="{x:.0f}" y="{h-4}" class="xlab" text-anchor="middle">{frac:+.0f}</text>')
+    for i, (lbl, r, n) in enumerate(results):
+        y = 8 + i * rowh
+        color = "#059669" if r >= 0 else "#dc2626"
+        bx = cx + min(0.0, r) * half
+        out.append(f'<text x="{x0-8}" y="{y+rowh*0.55:.0f}" class="ylab" text-anchor="end">{esc(lbl)}</text>')
+        out.append(f'<rect x="{bx:.1f}" y="{y:.0f}" width="{abs(r)*half:.1f}" height="{rowh*0.55:.0f}" rx="2" fill="{color}" opacity="0.85"/>')
+        out.append(f'<text x="{width-4}" y="{y+rowh*0.55:.0f}" class="ylab" text-anchor="end">{r:+.2f}</text>')
+    out.append("</svg>")
+    return "".join(out)
 
 
 def _fmt(v, nd=3):
@@ -274,9 +358,9 @@ def phase2_panel(rows, opponent):
     out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), cat_total(r, "cat_rapidspin_total"))))
     out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), cat_total(r, "cat_phaze"))))
     out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), cat_total(r, "cat_solarbeam"))))
-    out.append(row("baton pass: actual BP switches", lambda r: cond(ex(r, "bp_switch"), cat_total(r, "cat_batonpass"))))
-    out.append(row("explosion / self-destruct", lambda r: f'{ex(r, "cat_boom_explosion")} / {ex(r, "cat_boom_selfdestruct")}'))
-    out.append(row("focus punch: executed / disrupted", lambda r: f'{ex(r, "focuspunch_executed")} / {ex(r, "focuspunch_disrupted")}'))
+    out.append(row("BP w/ stat or sub", lambda r: cond(ex(r, "bp_stat_or_sub"), cat_total(r, "cat_batonpass"))))
+    out.append(row("focus punch success rate", lambda r: f'{_fmt(r.get("focus_punch_success_rate"))} <span class="dim">(n={ex(r, "focuspunch_attempt") or r.get("focus_punch_attempts", 0)})</span>'))
+    out.append(row("opp focus punch disrupted", lambda r: f'{_fmt(r.get("opp_focus_punch_disruption_rate"))} <span class="dim">(n={r.get("opp_focus_punch_attempts", 0)})</span>'))
 
     out.append('<tr class="grp"><td colspan="%d">switch behavior — per seat-game</td></tr>' % (len(lineages) + 1))
     for s in switches:
@@ -327,6 +411,7 @@ def build_html(rows):
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})))}</p>']
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self))
+    body.append(phase2_correlations(rows))
     body.append('<section><h2>Phase 2 — 500k detailed panel (self vs foul-play)</h2>'
                 '<p class="sub">Full breakdown for the flagship 500k checkpoints, including foul-play '
                 '(kept separate). The trajectories above show these traits per checkpoint over training.</p>'
