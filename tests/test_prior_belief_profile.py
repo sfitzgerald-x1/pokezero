@@ -15,6 +15,7 @@ from pokezero.belief import PlayerBeliefView, RevealedPokemonBelief
 from pokezero.foulplay_capture import build_capture_arg_parser
 from pokezero.neural_cli import _prior_belief_profile, main as neural_main
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2, PokeZeroObservationV0
+from pokezero.public_action_capture import public_action_rounds_from_trajectory_metadata
 from pokezero.prior_belief_profile import (
     CandidateValueEvaluation,
     MINIMUM_PROFILE_DECISIONS,
@@ -312,6 +313,24 @@ class PublicCorpusTest(unittest.TestCase):
         self.assertEqual([step.turn_index for step in context.trajectory.steps], [0, 2])
         self.assertEqual([step.observation.metadata["turn_number"] for step in context.trajectory.steps], [1, 3])
         self.assertEqual(context.observation.metadata["turn_number"], 4)
+        self.assertEqual(
+            context.trajectory.metadata,
+            {
+                "public_resolved_action_rounds": [
+                    action_round.to_dict() for action_round in record.public_resolved_action_rounds
+                ]
+            },
+        )
+        self.assertEqual(
+            {
+                turn_index: action_round.to_dict()
+                for turn_index, action_round in public_action_rounds_from_trajectory_metadata(context.trajectory).items()
+            },
+            {
+                action_round.turn_index: action_round.to_dict()
+                for action_round in record.public_resolved_action_rounds
+            },
+        )
 
     def test_writer_appends_controlled_seed_bands_without_duplicate_decisions(self) -> None:
         record = _record()

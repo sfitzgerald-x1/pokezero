@@ -154,6 +154,7 @@ class _PublicReplayStep:
 @dataclass(frozen=True)
 class _PublicReplayTrajectory:
     steps: tuple[_PublicReplayStep, ...]
+    metadata: Mapping[str, Any]
 
 
 def phase_for_turn(
@@ -198,7 +199,16 @@ def public_policy_context(record: PublicDecisionRecord) -> PolicyContext:
         )
         for entry in record.history
     )
-    trajectory = _PublicReplayTrajectory(steps=own_history)
+    trajectory = _PublicReplayTrajectory(
+        steps=own_history,
+        # Determinization reads this through the normal trajectory adapter.
+        # It is the corpus's public-only representation, never request-local IDs.
+        metadata={
+            "public_resolved_action_rounds": [
+                action_round.to_dict() for action_round in record.public_resolved_action_rounds
+            ]
+        },
+    )
     return PolicyContext(
         player_id=record.acting_player,
         decision_round_index=record.turn_index,
