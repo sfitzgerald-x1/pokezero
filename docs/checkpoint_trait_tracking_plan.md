@@ -99,10 +99,13 @@ hi-fi shard sizing live in the private deploy repo):
    --seed-block <name> --out <dir>`. Drives the local showdown bridge
    (`battle_bridge.mjs`) with a server-side (omniscient) per-turn event tap and
    writes `events-<shard>.jsonl.gz`. Works with **any** checkpoint — the 500k
-   restriction below is scope, not machinery. PP is snapshotted from simulator
-   state each turn (text logs don't carry PP, and Pressure doubles decrement);
-   immunity and Focus Punch outcomes are taken from resolved simulator effects,
-   not inferred.
+   restriction below is scope, not machinery. Inspection is **omniscient
+   oracle**: the tap reads full simulator state for both seats every turn — PP
+   tables (text logs don't carry PP, and Pressure doubles decrement), exact
+   statuses, boosts, and hidden state — and immunity / Focus Punch outcomes
+   come from resolved simulator effects, not inference. Owner has approved
+   storing these higher-fidelity per-game records for trait-eval games; the
+   full event logs are the canonical retained artifact.
 2. **`scripts/trait_extract.py` — pure function events → metrics.**
    Versioned metric definitions (`metrics_version` in output); adding a trait
    later means re-running extraction over stored events, not regenerating
@@ -144,11 +147,11 @@ Metrics per milestone:
    pooled) per move name; report top 5 with share and uses/game, plus the full
    distribution in the artifact (top-5 is presentation, not storage).
 2. **Average turns per game.**
-3. **Average pivots per game** — voluntary switch actions only (switch chosen
-   as the turn's action); forced post-faint replacements excluded; Baton
-   Pass-initiated switches counted under Baton Pass (Phase 2 metric 13), not as
-   pivots. Both definitions are cheap to compute, so the artifact stores
-   pivots-including-BP as a secondary column.
+3. **Average pivots per game** — voluntary switches: switch chosen as the
+   turn's action **plus Baton Pass-initiated switches** (owner: Baton Pass is
+   a switch for pivot purposes); forced post-faint replacements excluded. The
+   artifact stores pivots-excluding-BP as a secondary column since it is free
+   to compute.
 
 Gate G2: every (lineage × milestone) cell has metrics.json with n ≥ 900 games
 (archive cells: n ≥ 1,400); report renders with no empty cells except
@@ -156,10 +159,12 @@ explicitly-marked pruned-checkpoint substitutions.
 
 ## Phase 2 — deep behavioral evals at 500k checkpoints
 
-Scope now: the five 500k checkpoints (one per lineage). Volume: **5,000
-self-play games + 1,000 FoulPlay games** per checkpoint, stats kept separate
-throughout. As lineages pass later 500k multiples (1M, 1.5M, 2M), the same
-battery re-runs at those checkpoints (default cadence; owner can prune).
+Scope for the first pass: **the five 500k checkpoints only** (one per
+lineage). Volume: **5,000 self-play games + 1,000 FoulPlay games** per
+checkpoint, stats kept separate throughout. The machinery is
+checkpoint-generic, so extending to later 500k multiples (1M, 1.5M, 2M) is a
+scheduling decision the owner makes after reading the first-pass results — no
+standing cadence is armed.
 
 ### 2a. Winning-team species vector
 
@@ -183,10 +188,12 @@ and the frozen JSON ships with the artifact:
    Off, Synthesis, Morning Sun, Moonlight; Wish included but broken out as its
    own row (delayed heal). Ingrain excluded (residual). Drain attacks excluded.
 3. **Rest** — its own row.
-4. **Weather moves** — Sunny Day and Rain Dance (primary rows, per owner spec).
-   Sandstorm and Hail also exist as *moves* in gen3; they are tracked as
-   auxiliary rows so the "only sun/rain matter" belief is verified rather than
-   assumed. Ability weather (Drought, Drizzle, Sand Stream) never counts.
+4. **Weather moves** — Sunny Day and Rain Dance only (owner: Hail cannot be
+   set in gen3 randbats, and Sandstorm arrives only via Sand Stream). The
+   Phase 0 pool intersection confirms the absence of move-set Sandstorm/Hail
+   mechanically; if either unexpectedly appears in the pool, flag rather than
+   silently add rows. Ability weather (Drought, Drizzle, Sand Stream) never
+   counts.
 5. **Phazing** (Roar, Whirlwind) — with a breakdown at time-of-use: opponent
    active had ≥1 positive stat stage or an active Substitute ("justified") vs
    neither ("neutral").
@@ -201,7 +208,10 @@ and the frozen JSON ships with the artifact:
     Whistle. Yawn excluded.
 11. **Yawn** — its own row.
 12. **Explosion + Self-Destruct** — combined row plus per-move split.
-13. **Baton Pass.**
+13. **Baton Pass** — with two context breakdowns at time-of-use: (a) caller
+    had ≥1 positive stat stage active (a boost being passed), (b) caller had a
+    Substitute up (a sub being passed). Reported alongside the plain use rate
+    so boost-passing / sub-passing emerge as distinct learned behaviors.
 14. **Substitute.**
 15. **Focus Punch** — attempts, plus breakdown: executed vs disrupted (took a
     damaging hit during focus); success rate = executed/attempts. Executions
@@ -260,17 +270,20 @@ switch-event counts ≤ total switches) all pass.
 Phase 0 → G0 → machinery + G1 (50-game smoke) → **Phase 2 on the five 500k
 checkpoints** (validates the new machinery on the highest-value question) → G3
 → Phase 1 sweep of the 100k grid (archive-first, regen where verdicts say so)
-→ G2 → report publication + standing 100k/500k-multiple cadence for the three
-still-running lineages.
+→ G2 → report publication. The 100k Phase-1 grid keeps appending as the three
+live lineages grow; deep-battery extension past 500k awaits an owner call.
 
 ## Defaults adopted (flag if wrong)
 
-1. Pivot = voluntary switch action; Baton Pass tracked separately (secondary
-   pivots-incl-BP column stored).
-2. Phase 1 regeneration size: 1,000 self-play games per milestone cell.
-3. Sandstorm/Hail tracked as auxiliary weather rows.
-4. Wish counts as healing but broken out; Ingrain excluded.
-5. Ability immunities count in 2c-1 with a type/ability split.
-6. Deep battery re-runs at every 500k multiple as lineages grow.
-7. FoulPlay games at 100 ms search, matching the training/hi-fi convention.
-8. Focus Punch executions into Substitute/immune targets count as executed.
+Owner rulings already incorporated: pivots include Baton Pass switches; Baton
+Pass gets boost-passing and sub-passing breakdowns; weather rows are Sunny
+Day/Rain Dance only (no move-set Hail/Sandstorm in gen3 randbats); PP and all
+hidden state read omnisciently with full event logs retained; first pass runs
+500k checkpoints only.
+
+Remaining defaults:
+1. Phase 1 regeneration size: 1,000 self-play games per milestone cell.
+2. Wish counts as healing but broken out; Ingrain excluded.
+3. Ability immunities count in 2c-1 with a type/ability split.
+4. FoulPlay games at 100 ms search, matching the training/hi-fi convention.
+5. Focus Punch executions into Substitute/immune targets count as executed.
