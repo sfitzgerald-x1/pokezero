@@ -2,103 +2,118 @@
 
 Implementation of `docs/checkpoint_trait_tracking_plan.md`. Behavioral traits measured per
 checkpoint over cumulative-games milestones across the five lineages, from self-play (every
-milestone) and foul-play (selected checkpoints). Every metric is derived from the omniscient
-Showdown protocol log; the machinery, gates, and per-metric definitions live in `scripts/trait_*.py`.
+milestone) and foul-play (500k + each lineage's frontier). Every metric is derived from the
+omniscient Showdown protocol log; the machinery, gates, and per-metric definitions live in
+`scripts/trait_*.py`. Regenerate any time with `scripts/trait_extract_all.sh`.
 
-> **Status: the numbers below are a snapshot and are being refreshed.** The lineages are still
-> training, and a foul-play run on each lineage's frontier checkpoint is in flight. The *machinery*
-> is final; the *figures* here trail it. Regenerate any time with `scripts/trait_extract_all.sh`,
-> which re-extracts every (lineage, milestone, opponent) present and rebuilds the report. Treat
-> specific values as illustrative until this banner is removed.
-
-**Data.** Self-play trajectories at every 100k milestone per lineage (2000 games/milestone; 5000 at
-500k), and foul-play (~1000 games, FoulPlay search at 1000 ms/move) at 500k plus each lineage's
-frontier checkpoint. Self-play and foul-play stats are kept separate and never merged. The
-observation unit is the behavioral-seat-game (self-play has two behavioral seats, foul-play one),
-so rates are directly comparable across the two.
+**Data.** 67 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — 57 checkpoints, v22-lr3m spanning 100k→1900k. Foul-play (~950–1000 games,
+FoulPlay search at 1000 ms/move) at 500k and each frontier — 10 checkpoints. Self-play and
+foul-play are kept separate and never merged. The observation unit is the behavioral-seat-game
+(self-play has two behavioral seats, foul-play one), so rates are comparable across the two.
 
 ## What changes over training (self-play)
 
-These are the clearest per-checkpoint trajectories; each point is one checkpoint, no aggregation.
+Each point is one checkpoint; no aggregation.
 
 - **Conditional move use is *learned*, not innate.** Early checkpoints fire conditional moves
   blindly; later ones gate them on the condition that makes them good:
-  - *Solar Beam in sun*: **~3–20% → 96–99.7%** for the lineages that train long enough
-    (m50-seq 4.7→96.0, v22-lr3m →99.7, m50-ep7 17.1→99.6). The two short runs never develop it
-    (l200-ep7-wu75 20→25 at 500k; l200-seq only reaches 40.6 by 1M) — this trait needs training
-    length, and it is the sharpest signal in the dataset.
+  - *Solar Beam in sun*: **~3–20% → 96–99.7%** for lineages that train long enough (m50-seq
+    4.7→96.0, v22-lr3m →99.7, m50-ep7 17.1→99.6). The short runs never develop it — this trait
+    needs training length, and it is the sharpest signal in the dataset.
   - *Phazing when justified* (enemy boosted or behind a Substitute): **~0–26% → 40–59%** across
-    all five lineages. Early Roar/Whirlwind is indiscriminate; the fraction aimed at a boosted /
-    subbed enemy roughly doubles-to-triples over training.
-- **Early toxic-spam collapses.** v22-lr3m opens at **5.41 Toxic/seat-game at 100k** and settles
-  to **2.28**; the effect is milder elsewhere. Very early checkpoints lean on status as a crutch.
+    all five lineages. Early Roar/Whirlwind is indiscriminate.
+- **Early toxic-spam collapses.** v22-lr3m opens at 5.41 Toxic/seat-game at 100k and settles to
+  ~2.3. Very early checkpoints lean on status as a crutch.
 - **The setup/utility toolkit is picked up over training.** stat-boost, Substitute, Spikes, and
-  healing (excl. Rest) all rise from near-zero at 100k and plateau — early policies barely use
-  them, later ones fold them in.
-- **v22-lr3m is the frontier outlier.** The 3M-LR lineage keeps climbing on Sleep-move and Spikes
-  usage past 1M games where the others have plateaued or stopped.
+  healing (excl. Rest) all rise from near-zero at 100k and plateau.
 - **The weakest checkpoints can't close games.** v22-lr3m@100k times out (stalls to the turn cap)
-  in **~50%** of its self-play games; its *decided* games average ~57 turns. Timeout rate falls to
-  ~0 by 300k. avg-turns is reported over decided games only, with the timeout rate as its own
-  trajectory (a checkpoint that can't win is a distinct failure mode from one that wins slowly).
+  in ~50% of its self-play games; its *decided* games average ~57 turns. Timeout rate falls to ~0
+  by 300k. avg-turns is reported over decided games only, with timeout rate as its own trajectory —
+  a checkpoint that cannot win is a distinct failure mode from one that wins slowly.
 
-## Trait ↔ foul-play win-rate correlation — currently underpowered, do not interpret
+## Strength vs FoulPlay improves with training
 
-Pearson r of each checkpoint's trait against its foul-play win rate, **both measured on the same
-foul-play games**. One point per *checkpoint*: each checkpoint's ~1000 foul-play games collapse to
-a single (trait, win-rate) pair, so n is the number of checkpoints with foul-play data — game
-volume buys precision within a point, not more points. It is an aggregate correlation confounded
-by overall checkpoint strength (better models do more of everything effective *and* win more), so
-it reads as association, never cause.
+| lineage | 500k | frontier | |
+|---|---|---|---|
+| m50-ep7 | 0.198 | **0.353** @1000k | |
+| v22-lr3m | 0.307 | **0.420** @1900k | best at frontier |
+| m50-seq | 0.339 | **0.392** @1000k | |
+| l200-seq | 0.317 | **0.347** @1000k | |
+| l200-ep7-wu75 | 0.319 | 0.295 @800k | **not significant** (z=1.13) |
 
-**This correlation does not currently carry signal, and we can demonstrate it.** With all five
-lineages, m50-ep7 (foul-play win rate 0.198) sits far below the other four (0.308–0.339), so it is
-a single high-leverage point and the fit largely reduces to "m50-ep7 vs the rest". Holding it out
-leaves n=4 over a **0.031** win-rate spread — and the r values *invert*:
+l200-ep7-wu75 is the one lineage that appears to get *worse*. It does not survive a test: a
+two-proportion z-test on 1000 vs 978 games gives **z=1.13** (needs |z|>1.96 at α=0.05). Do not
+report it as a regression — it is noise.
 
-| trait | n=5 | n=4 (m50-ep7 held out) |
+## Trait ↔ win correlation — read the per-game charts, not the aggregate
+
+Two correlations are rendered, and they disagree. **The per-game one is the trustworthy one.**
+
+### Per-game (n = games) — the real answer
+
+For each game: x = the seat's count of the trait *in that game*, y = 1 if that seat won.
+Point-biserial across games, computed *within* each checkpoint, then aggregated by reporting the
+mean r and the min..max range across checkpoints. Self-play is a **paired design** — both seats
+are the same policy in the same game, so comparing winner against loser holds policy strength and
+game length fixed by construction (a game-level quantity has no within-game variance and correctly
+falls out at r≈0). 57 self-play checkpoints / 254,678 decided seat-games; 10 foul-play / 9,736.
+
+**Headline: per-game behavior barely predicts winning.** Every effect is |r| ≤ 0.10 — under ~1% of
+outcome variance. Only these are sign-consistent across *every* checkpoint (consistency across
+independent checkpoints is the evidence, not any single r):
+
+| trait | self-play (57 ckpts) | vs FoulPlay (10 ckpts) |
 |---|---|---|
-| focus punch success % | +0.68 | **−0.79** |
-| sleeping mon out | +0.60 | **−0.75** |
-| spikes | −0.97 | **+0.22** |
+| Substitute | **−0.103** (all 57) | **−0.087** (all 10) |
+| healing (excl Rest) | **−0.070** (all 57) | −0.050 (not consistent) |
+| immunity switch-in | +0.042 (not consistent) | **+0.068** (all 10) |
+| phaze when justified | — | **−0.026** (all 10) |
 
-Sign flips of that size from removing one point mean the estimator is fitting sampling noise, not
-a behavioral relationship. Neither ranking should be quoted. The report renders the chart with
-`m50-ep7` held out (`CORR_EXCLUDE_LINEAGES`) and a low-power warning; the machinery is correct and
-the numbers are real, there is simply not enough variance on the win-rate axis to correlate
-against.
+Substitute and healing tracking *losses* is almost certainly **reverse causality** — you Substitute
+and heal when you are behind — not evidence that they lose games. Read these as association within
+game context. The clean version would be a per-decision propensity analysis, which is a much
+bigger lift.
 
-**What would fix it:** foul-play at every milestone. That turns each lineage's single point into a
-trajectory (≈49 checkpoints spanning weak→strong, so a wide win-rate axis), making this a
-per-checkpoint correlation with actual power. That run is gated on compute (FoulPlay search is
-~40 s/game). Until then, treat this section as machinery-ready and evidence-empty.
+**A trap worth recording:** the first cut of this chart ranked `forced_switch` first at r≈−0.65,
+sign-consistent everywhere. It is circular: a forced switch happens *because your mon fainted*, so
+its count is essentially "mons lost" and correlating it with losing restates the outcome. It is now
+excluded, with a test (`test_outcome_definitional_traits_excluded`) so it cannot creep back. Any
+trait added to `PER_GAME_TRAITS` must be a *chosen* behavior.
 
-## New per-trait conditional definitions (as of the review pass)
+### Aggregate (n = checkpoints) — kept, but weak
+
+One point per checkpoint: the trait and win rate are both aggregated over that checkpoint's
+foul-play games (same population). n=10 across a 0.198–0.420 win-rate spread. It is **confounded by
+overall checkpoint strength** — better models do more of everything effective *and* win more — so
+it largely measures "this trait tracks being a stronger model", not any contribution to winning.
+Its instability is documented: earlier cuts of this same chart (n=5, then n=4 with m50-ep7 held
+out, then switching the trait source from self-play to foul-play games) produced *sign flips* on
+`focus punch success`, `sleeping mon out`, and `spikes`. Treat it as descriptive only; where it and
+the per-game chart disagree, believe the per-game chart.
+
+`CORR_EXCLUDE_LINEAGES` is now empty: m50-ep7 was held out while foul-play existed only at 500k
+(one point at 0.198 against a 0.31–0.34 cluster = high leverage at n=5). With foul-play at each
+frontier its two points sit on a continuum, so excluding it would only discard win-rate spread.
+
+## Per-trait conditional definitions
 
 - **explosion/self-destruct**: one combined "boom" category (not split by move).
 - **focus punch success rate**: landed (not disrupted) / total bot attempts.
-- **opp focus-punch disrupted**: opponent Focus Punches the bot broke / opponent attempts — in
-  foul-play the bot lands ~90% of its own Focus Punches but disrupts only ~12% of FoulPlay's.
+- **opp focus-punch disrupted**: opponent Focus Punches the bot broke / opponent attempts — vs
+  FoulPlay the bot lands ~90% of its own Focus Punches but disrupts only ~12% of FoulPlay's.
 - **BP w/ stat or sub**: Baton Passes that actually carry a stat boost or Substitute (checked on
   the outgoing mon at pass time), not every BP switch.
-
-## Foul-play (500k)
-
-Against FoulPlay search (1000 ms/move) the 500k checkpoints win **20–34%** (m50-ep7 0.198,
-v22-lr3m 0.308, l200-ep7-wu75 0.319, l200-seq 0.317, m50-seq 0.339). This is the expected gap: a
-depth-searching opponent beats a raw 500k policy. The value here is behavioral, not the win rate —
-the foul-play panel shows how each checkpoint's move/switch/resource profile shifts under pressure
-from a strong searcher versus against itself (kept in a separate column, never merged).
+- **win rate** is only reported where there is a real opponent. In self-play the bot drives both
+  seats, so p1's rate is ~0.5 by construction and is omitted.
 
 ## Caveats
 
-- **Foul-play covers selected checkpoints, not every milestone.** Trajectories over training are
-  self-play; foul-play runs at 500k and each lineage's frontier. Extending it to *every* milestone
-  — which is what would give the correlation real power — is gated on compute (FoulPlay search is
-  ~40 s/game).
+- **Foul-play covers 500k + frontier, not every milestone.** Trajectories over training are
+  self-play. Extending foul-play to every milestone is gated on compute (~40 s/game).
 - **Rare conditionals are noisy at low volume.** rapid-spin-when-spikes-down and solar-beam-in-sun
-  ride on small denominators at early checkpoints (few carriers dealt the move); read the early end
-  of those trajectories as noisy. Denominators are surfaced (`carrier_rate`, category totals).
+  ride on small denominators at early checkpoints. Denominators are surfaced (`carrier_rate`,
+  category totals).
 - **A per-game memory climb** (~28 MB/game, framework-side, independent of env lifetime) caps
   shards at 500 games / 24 GiB; production is sharded accordingly. Documented in `trait_eval.py`.
 - **gen3-randbats coverage.** Screen-conditioned traits are absent from the pool by construction
