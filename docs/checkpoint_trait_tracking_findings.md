@@ -1,16 +1,21 @@
 # Checkpoint trait-tracking — findings
 
 Implementation of `docs/checkpoint_trait_tracking_plan.md`. Behavioral traits measured per
-checkpoint over cumulative-games milestones across the five lineages, from self-play (all
-milestones) and foul-play (500k). Every metric is derived from the omniscient Showdown protocol
-log; the machinery, gates, and per-metric definitions live in `scripts/trait_*.py`.
+checkpoint over cumulative-games milestones across the five lineages, from self-play (every
+milestone) and foul-play (selected checkpoints). Every metric is derived from the omniscient
+Showdown protocol log; the machinery, gates, and per-metric definitions live in `scripts/trait_*.py`.
 
-**Data.** 54 metric sets. Self-play trajectories at every 100k milestone per lineage — 2000
-games/milestone (v22-lr3m spans all 17 from 100k→1700k; m50-seq / l200-seq to 1000k; m50-ep7 to
-700k; l200-ep7-wu75 to 500k). Foul-play at 500k for all five lineages, ~946–1000 games each,
-FoulPlay search at 1000 ms/move. Self-play and foul-play stats are kept separate. Observation
-unit is the behavioral-seat-game (self-play has two behavioral seats, foul-play one), so rates
-are directly comparable across the two.
+> **Status: the numbers below are a snapshot and are being refreshed.** The lineages are still
+> training, and a foul-play run on each lineage's frontier checkpoint is in flight. The *machinery*
+> is final; the *figures* here trail it. Regenerate any time with `scripts/trait_extract_all.sh`,
+> which re-extracts every (lineage, milestone, opponent) present and rebuilds the report. Treat
+> specific values as illustrative until this banner is removed.
+
+**Data.** Self-play trajectories at every 100k milestone per lineage (2000 games/milestone; 5000 at
+500k), and foul-play (~1000 games, FoulPlay search at 1000 ms/move) at 500k plus each lineage's
+frontier checkpoint. Self-play and foul-play stats are kept separate and never merged. The
+observation unit is the behavioral-seat-game (self-play has two behavioral seats, foul-play one),
+so rates are directly comparable across the two.
 
 ## What changes over training (self-play)
 
@@ -39,8 +44,12 @@ These are the clearest per-checkpoint trajectories; each point is one checkpoint
 
 ## Trait ↔ foul-play win-rate correlation — currently underpowered, do not interpret
 
-Pearson r of each lineage's 500k self-play trait against its 500k foul-play win rate. Foul-play
-exists only at 500k, so the correlation has at most **one point per lineage** — n=5.
+Pearson r of each checkpoint's trait against its foul-play win rate, **both measured on the same
+foul-play games**. One point per *checkpoint*: each checkpoint's ~1000 foul-play games collapse to
+a single (trait, win-rate) pair, so n is the number of checkpoints with foul-play data — game
+volume buys precision within a point, not more points. It is an aggregate correlation confounded
+by overall checkpoint strength (better models do more of everything effective *and* win more), so
+it reads as association, never cause.
 
 **This correlation does not currently carry signal, and we can demonstrate it.** With all five
 lineages, m50-ep7 (foul-play win rate 0.198) sits far below the other four (0.308–0.339), so it is
@@ -83,9 +92,10 @@ from a strong searcher versus against itself (kept in a separate column, never m
 
 ## Caveats
 
-- **Foul-play is 500k-only.** Trajectories over training are self-play; the foul-play column is a
-  single flagship checkpoint per lineage. Extending foul-play across milestones is gated on
-  compute (FoulPlay search is ~40 s/game).
+- **Foul-play covers selected checkpoints, not every milestone.** Trajectories over training are
+  self-play; foul-play runs at 500k and each lineage's frontier. Extending it to *every* milestone
+  — which is what would give the correlation real power — is gated on compute (FoulPlay search is
+  ~40 s/game).
 - **Rare conditionals are noisy at low volume.** rapid-spin-when-spikes-down and solar-beam-in-sun
   ride on small denominators at early checkpoints (few carriers dealt the move); read the early end
   of those trajectories as noisy. Denominators are surfaced (`carrier_rate`, category totals).
