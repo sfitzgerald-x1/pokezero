@@ -209,11 +209,16 @@ so a precise multi-arm measurement here would not transfer to the final model.
 This checkpoint therefore receives one reduced, separately reserved directional
 probe: raw base policy versus the strongest pre-registered fixed search arm,
 `value-120`, at 200 mirrored games per opponent against max-damage and FoulPlay.
-The probe reports paired deltas with 95% CIs, per-move wall mean/p95, and fallback
-counts. Its red flags are deliberately simple: search must not lose to its raw
-prior, and the FoulPlay delta should be positive. This is a directional smoke, not
-a binding go/no-go verdict; it must not consume the full capstone's primary seed
-bands or motivate further arm tuning on this checkpoint.
+`value-120` means raw 1M policy priors plus the frozen isotonic 1M value copy as
+the leaf evaluator, deterministic root priors, the belief-determinized world
+configuration frozen by the matching audits, and the mandatory legal-action sweep
+plus 120 extra root visits. The controller records search diagnostics, wall time,
+and ordinary/privileged fallback counts rather than silently blending fallback
+games into the result. The probe reports paired deltas with 95% CIs and per-move
+wall mean/p95. Its red flags are deliberately simple: search must not lose to its
+raw prior, and the FoulPlay delta should be positive. This is a directional smoke,
+not a binding go/no-go verdict; it must not consume the full capstone's primary
+seed bands or motivate further arm tuning on this checkpoint.
 
 ## Step 4 — Binding capstone, deferred to the final checkpoint
 
@@ -225,6 +230,16 @@ and is passed as a leaf-only checkpoint: the raw checkpoint continues to supply
 policy priors, action selection, and rollout behavior. The calibrated copy records
 the immutable SHA-256 of its raw parent; every value-leaf run verifies that lineage
 and records both input hashes plus the applied transform.
+
+**Final-checkpoint freeze and prerequisites**: before any binding capstone seed is
+staged, the owner records the final checkpoint identity, immutable raw hash, and
+selection rationale in the capstone decision record. That record is the checkpoint
+selection rule for this one pre-registered measurement and cannot be changed after
+primary seed access begins. The final checkpoint must then run its own frozen Step
+0 calibration/readiness evaluation and Step 1-3 timing, prior/profile, and hazard
+audits on disjoint non-capstone data. Those artifacts must all bind the final
+checkpoint and its calibrated copy; the current 1M checkpoint's artifacts support
+only its directional smoke and cannot be reused as final-capstone evidence.
 Fixed search rows use post-sweep extra visits, never an absolute visit cap, so
 the actual budget is `legal_action_count + extra_visits` on every decision. A
 Dirichlet row is secondary-only and exists only when Step 3's pre-registered
