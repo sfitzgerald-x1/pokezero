@@ -2,10 +2,11 @@
 
 Status: active validation program, 2026-07-10. Slots under `selfplay_mcts_roadmap.md`'s
 "MCTS at inference" workstream. Every step validates a named assumption before the
-next step spends effort on it; the capstone is a pre-registered strength test using
-the **`emeta-v2-2-lr3m-1m-belief` 1M checkpoint (iteration-0312)** — the current
-best pure self-play agent (93.2% max-damage / 41% foul-play low-fi) — as the search
-value head. Later phases are funded by the capstone's outcome, not by default.
+next step spends effort on it. The current 1M checkpoint is used only for a
+non-binding directional probe. The pre-registered full strength capstone is deferred
+to a final checkpoint the owner designates later; its primary seed bands remain
+untouched. Later phases are funded by that binding capstone's outcome, not by
+default.
 
 ## Current state (verified in code/artifacts, 2026-07-10)
 
@@ -198,18 +199,32 @@ either enabling or rejecting a secondary noise arm. The artifact records only
 public-safe replay-rejection categories; recapture a replayable public probe
 before drawing an H3 conclusion.
 
-## Step 4 — CAPSTONE: strength test, 1M checkpoint as the value head
+## Directional probe — current 1M checkpoint, non-binding
 
-**Config**: `RootPUCTSearchPolicy` with priors AND leaf values from
-`emeta-v2-2-lr3m-1m-belief` iteration-0312 (local convention:
-`checkpoints/pz-v2-2-1m.pt`); belief-determinized worlds (K per Step 2's
+The current **`emeta-v2-2-lr3m-1m-belief` 1M checkpoint (iteration-0312)** is
+the current best pure self-play agent (93.2% max-damage / 41% foul-play low-fi),
+but its lineage is already continuing. Search deltas depend on the policy prior,
+so a precise multi-arm measurement here would not transfer to the final model.
+
+This checkpoint therefore receives one reduced, separately reserved directional
+probe: raw base policy versus the strongest pre-registered fixed search arm,
+`value-120`, at 200 mirrored games per opponent against max-damage and FoulPlay.
+The probe reports paired deltas with 95% CIs, per-move wall mean/p95, and fallback
+counts. Its red flags are deliberately simple: search must not lose to its raw
+prior, and the FoulPlay delta should be positive. This is a directional smoke, not
+a binding go/no-go verdict; it must not consume the full capstone's primary seed
+bands or motivate further arm tuning on this checkpoint.
+
+## Step 4 — Binding capstone, deferred to the final checkpoint
+
+**Config**: `RootPUCTSearchPolicy` with priors AND leaf values from the
+owner-designated final checkpoint; belief-determinized worlds (K per Step 2's
 uncertainty gating); **deterministic root priors**; and seeds fixed and shared
-across arms. The selected isotonic calibrated value copy is named on every
-value-leaf row and is passed as a leaf-only checkpoint: the raw checkpoint
-continues to supply policy priors, action selection, and rollout behavior.
-The calibrated copy records the immutable SHA-256 of its raw parent; every
-value-leaf run verifies that lineage and records both input hashes plus the
-applied transform.
+across arms. Its selected calibrated value copy is named on every value-leaf row
+and is passed as a leaf-only checkpoint: the raw checkpoint continues to supply
+policy priors, action selection, and rollout behavior. The calibrated copy records
+the immutable SHA-256 of its raw parent; every value-leaf run verifies that lineage
+and records both input hashes plus the applied transform.
 Fixed search rows use post-sweep extra visits, never an absolute visit cap, so
 the actual budget is `legal_action_count + extra_visits` on every decision. A
 Dirichlet row is secondary-only and exists only when Step 3's pre-registered
@@ -279,7 +294,7 @@ privileged-fallback rates per row (must be zero in primary rows).
   confirmed — evidence **against ever funding a fast-simulator backend**;
   adaptive small budgets + batched evals are the end-state architecture.
 
-## Gated follow-ons (not funded until the capstone reports)
+## Gated follow-ons (not funded until the binding capstone reports)
 
 1. **Batched leaf evaluation via the inference service** — the shared
    prerequisite for any deeper search at 50M+ (H4's consequence). Also speeds
