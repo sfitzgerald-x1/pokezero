@@ -2194,6 +2194,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "/showdown",
                 "--games",
                 "1",
+                "--max-decision-rounds",
+                "17",
                 "--summary-out",
                 str(summary_path),
             )
@@ -2208,6 +2210,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["schema_version"], "pokezero.controlled-foulplay-comparison.v1")
         self.assertEqual(payload["comparison_mode"], "per-seed")
+        self.assertEqual(payload["max_decision_rounds"], 17)
         self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
         self.assertEqual(build_comparison_arg_parser().parse_args(argv).games, 1)
         self.assertEqual(build_comparison_arg_parser().parse_args(argv).comparison_mode, "per-seed")

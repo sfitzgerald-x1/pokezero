@@ -769,6 +769,7 @@ class ControlledFoulPlayComparisonResult:
             "opponent_policy_id": "foul-play",
             "games": self.config.games,
             "seed_start": self.config.seed_start,
+            "max_decision_rounds": self.config.max_decision_rounds,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "foulplay_random_seed_schedule": _comparison_foulplay_random_seed_schedule_payload(
                 self.config,
