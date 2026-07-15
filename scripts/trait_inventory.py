@@ -17,8 +17,8 @@ import json
 import os
 import re
 
-EXP = "/shared/scott-experiment"
-OUT = "/shared/traits/inventory.json"
+EXP = ""
+OUT = ""
 MILESTONE_STEP = 100_000
 
 # key -> (regex over run-id, explicit extra run-ids to fold in for naming-era gaps)
@@ -29,6 +29,18 @@ LINEAGES = {
     "m50-seq":       (r"^metamon-m-50m-.*-seq-20260710$", []),
     "l200-seq":      (r"^metamon-l-200m-.*-seq-20260710$", []),
 }
+
+
+def configure_storage_from_env() -> None:
+    """Bind storage only from caller-provided configuration, never repo defaults."""
+
+    global EXP, OUT
+    EXP = os.environ.get("POKEZERO_SHARED_ROOT", "")
+    OUT = os.environ.get("POKEZERO_TRAIT_INVENTORY_OUT", "")
+    if not EXP:
+        raise SystemExit("set POKEZERO_SHARED_ROOT to the experiment storage root")
+    if not OUT:
+        raise SystemExit("set POKEZERO_TRAIT_INVENTORY_OUT to the inventory output path")
 
 
 def summary(run):
@@ -124,6 +136,7 @@ def phase1_verdict(legs):
 
 
 def main():
+    configure_storage_from_env()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     inv = {"schema": "pokezero.trait_inventory.v1", "milestone_step": MILESTONE_STEP, "lineages": {}}
     g0_ok = True
