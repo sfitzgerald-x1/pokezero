@@ -137,7 +137,9 @@ def phase1_verdict(legs):
 
 def main():
     configure_storage_from_env()
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    output_parent = os.path.dirname(OUT)
+    if output_parent:
+        os.makedirs(output_parent, exist_ok=True)
     inv = {"schema": "pokezero.trait_inventory.v1", "milestone_step": MILESTONE_STEP, "lineages": {}}
     g0_ok = True
     for key, (pattern, extras) in LINEAGES.items():
