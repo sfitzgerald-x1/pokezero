@@ -42,8 +42,10 @@ strength. In order:
 1. **Instrument before fixing**: per-decision logging over ~50 games —
    fallback rate, and a failure taxonomy for illegal scenarios
    (perspective/mask mismatch, force-switch turns, belief–world desync, stale
-   request state). We have never measured what fraction of turns actually
-   search; that number reframes every other result.
+   request state). The artifact must prove deployment-honest hidden opponent
+   masks and fallback enabled: W1 measures the fallback rate rather than
+   treating it as pure-search evidence. We have never measured what fraction
+   of turns actually search; that number reframes every other result.
 2. Root-cause and fix the top classes, starting from the privileged-guard
    lead above; unit-test each fixed class.
 3. Re-run the 200-seed paired baseline. Deliverables: fallback rate
