@@ -6,11 +6,16 @@ milestone) and foul-play (500k + each lineage's frontier). Every metric is deriv
 omniscient Showdown protocol log; the machinery, gates, and per-metric definitions live in
 `scripts/trait_*.py`. Regenerate any time with `scripts/trait_extract_all.sh`.
 
-**Data.** 67 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — 57 checkpoints, v22-lr3m spanning 100k→1900k. Foul-play (~950–1000 games,
-FoulPlay search at 1000 ms/move) at 500k and each frontier — 10 checkpoints. Self-play and
-foul-play are kept separate and never merged. The observation unit is the behavioral-seat-game
-(self-play has two behavioral seats, foul-play one), so rates are comparable across the two.
+**Data.** 82 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — **72 checkpoints**, following the active lineages to their current frontiers:
+v22-lr3m 100k→2300k (23 pts), m50-ep7 →1600k (16), l200-ep7-wu75 →1300k (13); m50-seq and l200-seq
+have stalled at 1000k (10 each). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at
+500k and a frontier per lineage — 10 checkpoints. **Foul-play was not re-run for this refresh, so
+its checkpoints trail the self-play frontiers** (e.g. m50-ep7 foul-play is @1000k while self-play
+now reaches 1600k); the foul-play panel and the trait↔win-rate correlations should be read as
+"checkpoint X", not "the current frontier". Self-play and foul-play are kept separate and never
+merged. The observation unit is the behavioral-seat-game (self-play has two behavioral seats,
+foul-play one), so rates are comparable across the two.
 
 ## What changes over training (self-play)
 
@@ -18,11 +23,14 @@ Each point is one checkpoint; no aggregation.
 
 - **Conditional move use is *learned*, not innate.** Early checkpoints fire conditional moves
   blindly; later ones gate them on the condition that makes them good:
-  - *Solar Beam in sun*: **~3–20% → 96–99.7%** for lineages that train long enough (m50-seq
-    4.7→96.0, v22-lr3m →99.7, m50-ep7 17.1→99.6). The short runs never develop it — this trait
-    needs training length, and it is the sharpest signal in the dataset.
-  - *Phazing when justified* (enemy boosted or behind a Substitute): **~0–26% → 40–59%** across
-    all five lineages. Early Roar/Whirlwind is indiscriminate.
+  - *Solar Beam in sun* — the sharpest signal in the dataset. Start → frontier:
+    m50-ep7 17.1%→98.0% (1600k), l200-ep7-wu75 20.4%→**100.0%** (1300k), v22-lr3m 14.3%→99.7%
+    (2300k), m50-seq 4.7%→96.0% (1000k). The exception is **l200-seq: 2.5%→40.6%** — it stalled at
+    1000k, the same games count where m50-seq reached 96%, so training length alone doesn't explain
+    it; something about the l200-seq run leaves this trait half-learned. Worth a look if the seq
+    lineages matter.
+  - *Phazing when justified* (enemy boosted or behind a Substitute): **~0–26% → 37–64%** across
+    the lineages (l200-ep7-wu75 highest at 63.7% @1300k). Early Roar/Whirlwind is indiscriminate.
 - **Early toxic-spam collapses.** v22-lr3m opens at 5.41 Toxic/seat-game at 100k and settles to
   ~2.3. Very early checkpoints lean on status as a crutch.
 - **The setup/utility toolkit is picked up over training.** stat-boost, Substitute, Spikes, and
@@ -57,16 +65,18 @@ Point-biserial across games, computed *within* each checkpoint, then aggregated 
 mean r and the min..max range across checkpoints. Self-play is a **paired design** — both seats
 are the same policy in the same game, so comparing winner against loser holds policy strength and
 game length fixed by construction (a game-level quantity has no within-game variance and correctly
-falls out at r≈0). 57 self-play checkpoints / 254,678 decided seat-games; 10 foul-play / 9,736.
+falls out at r≈0). **72** self-play checkpoints / **314,296** decided seat-games; 10 foul-play /
+9,736.
 
-**Headline: per-game behavior barely predicts winning.** Every effect is |r| ≤ 0.10 — under ~1% of
+**Headline: per-game behavior barely predicts winning.** Every effect is |r| ≤ 0.11 — under ~1% of
 outcome variance. Only these are sign-consistent across *every* checkpoint (consistency across
-independent checkpoints is the evidence, not any single r):
+independent checkpoints is the evidence, not any single r), and the effects held as the self-play
+sample grew from 57 to 72 checkpoints:
 
-| trait | self-play (57 ckpts) | vs FoulPlay (10 ckpts) |
+| trait | self-play (72 ckpts) | vs FoulPlay (10 ckpts) |
 |---|---|---|
-| Substitute | **−0.103** (all 57) | **−0.087** (all 10) |
-| healing (excl Rest) | **−0.070** (all 57) | −0.050 (not consistent) |
+| Substitute | **−0.106** (all 72) | **−0.087** (all 10) |
+| healing (excl Rest) | **−0.071** (all 72) | −0.050 (not consistent) |
 | immunity switch-in | +0.042 (not consistent) | **+0.068** (all 10) |
 | phaze when justified | — | **−0.026** (all 10) |
 
