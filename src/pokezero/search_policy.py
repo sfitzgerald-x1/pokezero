@@ -1240,7 +1240,7 @@ def _top_prior_action_choices(
     candidates = (
         tuple((index, priors[index]) for index in legal)
         if legal
-        else _hidden_mask_prior_action_choices(priors, rng=rng)
+        else _hidden_mask_prior_action_choices(context, player, priors, rng=rng)
     )
     ranked = sorted(candidates, key=lambda item: (-item[1], item[0]))[:limit]
     if not ranked:
@@ -1267,13 +1267,25 @@ def _opponent_action_choice_rng(context: PolicyContext, player: PlayerId) -> ran
 
 
 def _hidden_mask_prior_action_choices(
+    context: PolicyContext,
+    player: PlayerId,
     priors: tuple[float, ...],
     *,
     rng: random.Random,
 ) -> tuple[tuple[int, float], ...]:
-    """Collapse exchangeable hidden switch slots when opponent legal masks are unavailable."""
+    """Return public-information-compatible choices without an opponent request mask.
 
-    move_choices = tuple((index, priors[index]) for index in range(MOVE_ACTION_COUNT))
+    A fainted opposing active is protocol-visible, so its next request can only be a
+    replacement switch. Other request details (move disablement, trapping, and the
+    private party order behind a switch slot) remain hidden and therefore stay in
+    the replay-time legality path.
+    """
+
+    move_choices = (
+        ()
+        if _public_opponent_force_switch_is_required(context, player)
+        else tuple((index, priors[index]) for index in range(MOVE_ACTION_COUNT))
+    )
     switch_indices = tuple(range(MOVE_ACTION_COUNT, ACTION_COUNT))
     switch_weight = sum(priors[index] for index in switch_indices)
     # Hidden switch slots are exchangeable at the information-set level, but replay still needs a
@@ -1281,6 +1293,24 @@ def _hidden_mask_prior_action_choices(
     # cover different hidden backline positions without splitting the abstract switch bucket.
     representative_switch = _sample_representative_switch_action(priors, switch_indices, rng)
     return (*move_choices, (representative_switch, switch_weight))
+
+
+def _public_opponent_force_switch_is_required(
+    context: PolicyContext,
+    player: PlayerId,
+) -> bool:
+    """Recognize the one opponent request-family constraint visible to both seats.
+
+    ``opponent_active`` is normalized from public Showdown protocol state for the
+    acting player's perspective. Deliberately require the literal boolean value:
+    malformed or partial metadata must preserve the conservative hidden-mask
+    support instead of suppressing potentially legal move hypotheses.
+    """
+
+    if player == context.player_id:
+        return False
+    opponent_active = context.observation.metadata.get("opponent_active")
+    return isinstance(opponent_active, Mapping) and opponent_active.get("fainted") is True
 
 
 def _sample_representative_switch_action(

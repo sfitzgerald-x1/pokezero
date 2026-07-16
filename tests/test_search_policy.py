@@ -29,13 +29,17 @@ def _mask(*legal_indices: int) -> tuple[bool, ...]:
     return tuple(index in set(legal_indices) for index in range(ACTION_COUNT))
 
 
-def _observation(*legal_indices: int) -> PokeZeroObservationV0:
+def _observation(
+    *legal_indices: int,
+    metadata: dict[str, object] | None = None,
+) -> PokeZeroObservationV0:
     return PokeZeroObservationV0(
         categorical_ids=(),
         numeric_features=(),
         token_type_ids=(),
         attention_mask=(),
         legal_action_mask=_mask(*legal_indices),
+        metadata={} if metadata is None else metadata,
     )
 
 
@@ -395,6 +399,33 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(len(actions), 5)
         self.assertGreaterEqual(actions[-1], MOVE_ACTION_COUNT)
         self.assertAlmostEqual(sum(scenario.weight for scenario in scenarios), 1.0)
+
+    def test_prior_top_k_opponent_action_scenario_planner_uses_public_force_switch_signal(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.40, 0.30, 0.20, 0.10, 0.05) + (0.0,) * 4,
+            scenario_count=ACTION_COUNT,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(
+                0,
+                1,
+                metadata={"opponent_active": {"fainted": True}},
+            ),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            # The opposing request mask remains absent: this filter is public-state only.
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": MOVE_ACTION_COUNT}])
+        self.assertAlmostEqual(scenarios[0].weight, 1.0)
 
     def test_hidden_switch_handle_does_not_consume_caller_rng(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(
@@ -1812,7 +1843,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 1, "p2": 0},
         ])
 
-    def test_root_puct_policy_uses_hidden_switch_reserve_after_move_scenarios_reject(self) -> None:
+    def test_root_puct_policy_uses_public_force_switch_signal_before_replay(self) -> None:
         branch_envs: list[StrictSwitchOpponentActionEnv] = []
 
         def branch_env_factory() -> StrictSwitchOpponentActionEnv:
@@ -1839,7 +1870,11 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             battle_id="search-policy",
             format_id="gen3randombattle",
             seed=91,
-            observation=_observation(0, 1),
+            observation=_observation(
+                0,
+                1,
+                metadata={"opponent_active": {"fainted": True}},
+            ),
             requested_players=("p1", "p2"),
             trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
             # The hidden planner must not receive p2's private force-switch mask.
@@ -1850,12 +1885,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         self.assertFalse(decision.metadata["root_puct_fallback"])
         self.assertFalse(decision.metadata["root_puct_opponent_actions_legality_checked"])
-        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 5)
-        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 4)
-        self.assertEqual(
-            decision.metadata["root_puct_opponent_action_skip_categories"],
-            {"force_switch_illegal_action": 4},
-        )
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 0)
+        self.assertNotIn("root_puct_opponent_action_skip_categories", decision.metadata)
         self.assertEqual(
             decision.metadata["root_puct_opponent_action_scenarios"],
             [{"label": "p2:4", "weight": 1.0, "actions": {"p2": MOVE_ACTION_COUNT}}],
