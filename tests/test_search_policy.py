@@ -2,7 +2,7 @@ import random
 import unittest
 from unittest.mock import patch
 
-from pokezero.actions import ACTION_COUNT
+from pokezero.actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from pokezero.collection import benchmark_policy_provenance
 from pokezero.env import BattleStartOverride, StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
@@ -187,6 +187,17 @@ class StrictOpponentActionEnv(ImmediateOutcomeEnv):
         return super().step(actions)
 
 
+class StrictSwitchOpponentActionEnv(ImmediateOutcomeEnv):
+    def step(self, actions: dict[str, int]) -> StepResult:
+        p2_action = int(actions["p2"])
+        if p2_action != MOVE_ACTION_COUNT:
+            raise ValueError(
+                f"p2: action_index {p2_action} is not legal for the current request "
+                "(request_kind=force_switch)."
+            )
+        return super().step(actions)
+
+
 class DelayedOutcomeEnv:
     def __init__(self, winners_after_branch: dict[int, str | None]) -> None:
         self.winners_after_branch = winners_after_branch
@@ -359,6 +370,31 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertAlmostEqual(scenarios[0].weight, 0.54 / 0.69)
         self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.69)
         self.assertAlmostEqual(scenarios[2].weight, 0.05 / 0.69)
+
+    def test_prior_top_k_opponent_action_scenario_planner_keeps_hidden_switch_reserve(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.40, 0.30, 0.20, 0.10, 0.01, 0.01, 0.01, 0.01, 0.01),
+            scenario_count=ACTION_COUNT,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        actions = [scenario.actions["p2"] for scenario in scenarios]
+        self.assertEqual(actions[:4], [0, 1, 2, 3])
+        self.assertEqual(len(actions), 5)
+        self.assertGreaterEqual(actions[-1], MOVE_ACTION_COUNT)
+        self.assertAlmostEqual(sum(scenario.weight for scenario in scenarios), 1.0)
 
     def test_hidden_switch_handle_does_not_consume_caller_rng(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(
@@ -1763,6 +1799,62 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 0, "p2": 0},
             {"p1": 1, "p2": 0},
         ])
+
+    def test_root_puct_policy_uses_hidden_switch_reserve_after_move_scenarios_reject(self) -> None:
+        branch_envs: list[StrictSwitchOpponentActionEnv] = []
+
+        def branch_env_factory() -> StrictSwitchOpponentActionEnv:
+            env = StrictSwitchOpponentActionEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=prior_top_k_opponent_action_scenario_planner(
+                lambda history: (0.40, 0.30, 0.20, 0.10, 0.05) + (0.0,) * 4,
+                scenario_count=ACTION_COUNT,
+            ),
+            max_opponent_action_scenarios=1,
+            cpuct=0.0,
+            root_visit_budget=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            # The hidden planner must not receive p2's private force-switch mask.
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertFalse(decision.metadata["root_puct_opponent_actions_legality_checked"])
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 5)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 4)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skip_categories"],
+            {"force_switch_illegal_action": 4},
+        )
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_scenarios"],
+            [{"label": "p2:4", "weight": 1.0, "actions": {"p2": MOVE_ACTION_COUNT}}],
+        )
+        self.assertEqual(
+            branch_envs[0].all_step_calls,
+            [
+                {"p1": 0, "p2": MOVE_ACTION_COUNT},
+                {"p1": 1, "p2": MOVE_ACTION_COUNT},
+            ],
+        )
 
     def test_root_puct_policy_stops_after_max_replay_legal_opponent_scenarios(self) -> None:
         branch_envs: list[StrictOpponentActionEnv] = []
