@@ -43,6 +43,23 @@ class BenchmarkMatchup:
 
 
 @dataclass(frozen=True)
+class BenchmarkProgress:
+    """One completed game for opt-in benchmark progress reporting.
+
+    Progress stays out-of-band from the persisted report so job liveness can be
+    observed without changing the reproducible result artifact.
+    """
+
+    matchup_label: str
+    matchup_index: int
+    matchup_count: int
+    games_completed: int
+    games_total: int
+    seed: int
+    matchup_elapsed_seconds: float
+
+
+@dataclass(frozen=True)
 class BenchmarkGameResult:
     """Compact per-seed benchmark evidence for paired evaluation.
 
@@ -433,6 +450,7 @@ def benchmark_rollouts(
     rollout_config: RolloutConfig,
     seed_start: int = 1,
     matchups: Iterable[BenchmarkMatchup] | None = None,
+    progress_callback: Callable[[BenchmarkProgress], None] | None = None,
 ) -> BenchmarkReport:
     if games <= 0:
         raise ValueError("games must be positive.")
@@ -444,7 +462,7 @@ def benchmark_rollouts(
     # One env reused across every matchup and game (warm bridge process).
     env = env_factory()
     try:
-        for matchup in selected_matchups:
+        for matchup_index, matchup in enumerate(selected_matchups):
             policies = {
                 "p1": matchup.p1_policy,
                 "p2": matchup.p2_policy,
@@ -453,6 +471,7 @@ def benchmark_rollouts(
             belief_public_checksums_by_seed: dict[int, tuple[str, ...]] = {}
             game_results: list[BenchmarkGameResult] = []
             matchup_start = perf_counter()
+            progress_callback_seconds = 0.0
             for game_index in range(games):
                 seed = seed_start + game_index
                 record = run_rollout_record_on_env(
@@ -475,7 +494,24 @@ def benchmark_rollouts(
                 )
                 if checksums:
                     belief_public_checksums_by_seed[seed] = checksums
-            elapsed = perf_counter() - matchup_start
+                if progress_callback is not None:
+                    matchup_elapsed_seconds = (
+                        perf_counter() - matchup_start - progress_callback_seconds
+                    )
+                    callback_started = perf_counter()
+                    progress_callback(
+                        BenchmarkProgress(
+                            matchup_label=matchup.label,
+                            matchup_index=matchup_index,
+                            matchup_count=len(selected_matchups),
+                            games_completed=game_index + 1,
+                            games_total=games,
+                            seed=seed,
+                            matchup_elapsed_seconds=matchup_elapsed_seconds,
+                        )
+                    )
+                    progress_callback_seconds += perf_counter() - callback_started
+            elapsed = perf_counter() - matchup_start - progress_callback_seconds
             results.append(
                 BenchmarkMatchupResult(
                     label=matchup.label,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import json
@@ -24,6 +25,7 @@ from pokezero.foulplay_bridge import (
     _ControlledBattleState,
     _FoulPlayWebsocketServer,
     _choice_body_from_outgoing_message,
+    _controlled_foulplay_comparison_progress_callback,
     _config_from_args,
     _capture_resolved_public_action_round,
     _build_policy,
@@ -2240,13 +2242,17 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "1",
                 "--max-decision-rounds",
                 "17",
+                "--progress-interval-games",
+                "1",
                 "--summary-out",
                 str(summary_path),
             )
             with patch(
                 "pokezero.foulplay_bridge.run_controlled_foulplay_comparison",
                 side_effect=fake_comparison,
-            ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            ), patch("sys.stdout", new_callable=io.StringIO) as stdout, patch(
+                "sys.stderr", new_callable=io.StringIO
+            ) as stderr:
                 exit_code = asyncio.run(async_comparison_main(argv))
 
             payload = json.loads(summary_path.read_text())
@@ -2258,9 +2264,51 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
         self.assertEqual(build_comparison_arg_parser().parse_args(argv).games, 1)
         self.assertEqual(build_comparison_arg_parser().parse_args(argv).comparison_mode, "per-seed")
+        self.assertEqual(build_comparison_arg_parser().parse_args(argv).progress_interval_games, 1)
         self.assertIn("DIAGNOSTIC RESULT", stdout.getvalue())
         self.assertIn("(per-seed)", stdout.getvalue())
         self.assertIn("descriptive_delta=100.0%", stdout.getvalue())
+        progress_lines = [
+            line
+            for line in stderr.getvalue().splitlines()
+            if line.startswith("controlled_foulplay_comparison_progress:")
+        ]
+        self.assertEqual(
+            [json.loads(line.split(": ", 1)[1]) for line in progress_lines],
+            [
+                {
+                    "comparison_mode": "per-seed",
+                    "games_completed": 1,
+                    "games_total": 1,
+                    "opponent_crash_count": 0,
+                }
+            ],
+        )
+
+    def test_comparison_progress_reports_interval_and_final_state(self) -> None:
+        emit_progress = _controlled_foulplay_comparison_progress_callback(2)
+
+        def result(completed_games: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                raw=SimpleNamespace(completed_games=completed_games),
+                root_puct=SimpleNamespace(completed_games=completed_games),
+                config=SimpleNamespace(games=3),
+                comparison_mode="per-seed",
+                opponent_crashes=(),
+            )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            emit_progress(result(1))
+            emit_progress(result(2))
+            emit_progress(result(3), force=True)
+
+        lines = [
+            json.loads(line.split(": ", 1)[1])
+            for line in stderr.getvalue().splitlines()
+            if line.startswith("controlled_foulplay_comparison_progress:")
+        ]
+        self.assertEqual([line["games_completed"] for line in lines], [2, 3])
 
     def test_observation_with_search_metadata_adds_belief_view_without_mutating_original(self) -> None:
         class BeliefView:
