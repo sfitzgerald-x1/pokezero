@@ -92,6 +92,7 @@ def root_puct_decision_telemetry(
         return None
     fallback = bool(metadata.get("root_puct_fallback"))
     payload: dict[str, object] = {
+        "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
         "decision_index": decision_index,
         "turn_index": turn_index,
         "outcome": "fallback" if fallback else "searched",
@@ -134,6 +135,7 @@ def summarize_root_puct_decision_telemetry(
     timing_totals: dict[str, float | int] = {}
     root_elapsed_samples: list[float] = []
     policy_elapsed_samples: list[float] = []
+    full_decision_elapsed_samples: list[float] = []
     total_visits = 0
     effective_total_visits = 0
     scenario_counts: dict[str, int] = {}
@@ -161,6 +163,9 @@ def summarize_root_puct_decision_telemetry(
             policy_elapsed_samples.append(policy_elapsed)
         timing = item.get("timing")
         if isinstance(timing, Mapping):
+            total_seconds = _finite_nonnegative_float(timing.get("total_seconds"))
+            if total_seconds is not None:
+                full_decision_elapsed_samples.append(total_seconds)
             for key, value in timing.items():
                 if key not in _TIMING_KEYS:
                     continue
@@ -197,7 +202,11 @@ def summarize_root_puct_decision_telemetry(
             "mean_per_search": total_visits / searched if searched else None,
             "per_root_search_second": visit_rate,
         },
-        "root_search_wall_seconds": _sample_summary(root_elapsed_samples),
+        # ``root_puct_elapsed_seconds`` starts after opponent-scenario planning
+        # and prior evaluation. Keep it as a branch-search diagnostic rather
+        # than presenting it as the end-to-end Root-PUCT decision cost.
+        "branch_search_wall_seconds": _sample_summary(root_elapsed_samples),
+        "full_decision_wall_seconds": _sample_summary(full_decision_elapsed_samples),
         "policy_dispatch_wall_seconds": _sample_summary(policy_elapsed_samples),
         "timing_totals": dict(sorted(timing_totals.items())),
     }
@@ -227,10 +236,19 @@ def root_puct_benchmark_telemetry_report(
                 if requested_ids and policy_id not in requested_ids:
                     continue
                 entries = by_player.get(player)
-                if not isinstance(entries, list):
+                if entries is None:
                     continue
-                target = by_policy.setdefault(policy_id, [])
-                target.extend(item for item in entries if isinstance(item, Mapping))
+                if not isinstance(entries, list):
+                    raise ValueError(
+                        "benchmark artifact has invalid Root-PUCT telemetry entries for "
+                        f"{policy_id} {player}; expected a JSON list."
+                    )
+                validated = tuple(
+                    _validated_decision_telemetry(item, policy_id=policy_id, player_id=player, entry_index=index)
+                    for index, item in enumerate(entries)
+                )
+                if validated:
+                    by_policy.setdefault(policy_id, []).extend(validated)
     if requested_ids:
         missing = sorted(requested_ids - set(by_policy))
         if missing:
@@ -264,6 +282,42 @@ def _compact_timing(value: object) -> dict[str, float | int]:
         if parsed is not None:
             result[key] = parsed
     return result
+
+
+def _validated_decision_telemetry(
+    value: object,
+    *,
+    policy_id: str,
+    player_id: str,
+    entry_index: int,
+) -> Mapping[str, object]:
+    """Reject incompatible records instead of reporting plausible zeroes."""
+
+    context = f"{policy_id} {player_id} telemetry entry {entry_index}"
+    if not isinstance(value, Mapping):
+        raise ValueError(f"benchmark artifact has invalid {context}; expected a JSON object.")
+    if value.get("schema_version") != ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION:
+        raise ValueError(
+            f"benchmark artifact has incompatible {context} schema; expected "
+            f"{ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION}."
+        )
+    if _nonnegative_int(value.get("decision_index")) is None or _nonnegative_int(value.get("turn_index")) is None:
+        raise ValueError(f"benchmark artifact has invalid {context} decision or turn index.")
+    fallback = value.get("fallback")
+    outcome = value.get("outcome")
+    if not isinstance(fallback, bool) or outcome not in {"searched", "fallback"}:
+        raise ValueError(f"benchmark artifact has invalid {context} outcome.")
+    if fallback != (outcome == "fallback"):
+        raise ValueError(f"benchmark artifact has inconsistent {context} fallback flag.")
+    if fallback and not isinstance(value.get("fallback_category"), str):
+        raise ValueError(f"benchmark artifact has invalid {context} fallback category.")
+    if outcome == "searched":
+        if _nonnegative_int(value.get("root_puct_total_visits")) is None:
+            raise ValueError(f"benchmark artifact has incomplete {context}; missing root visit count.")
+        timing = value.get("timing")
+        if not isinstance(timing, Mapping) or _finite_nonnegative_float(timing.get("total_seconds")) is None:
+            raise ValueError(f"benchmark artifact has incomplete {context}; missing full decision timing.")
+    return value
 
 
 def _counter_map(value: object) -> dict[str, int]:

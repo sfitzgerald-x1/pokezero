@@ -37,6 +37,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(
             telemetry,
             {
+                "schema_version": "pokezero.root_puct_decision_telemetry.v1",
                 "decision_index": 4,
                 "turn_index": 7,
                 "outcome": "fallback",
@@ -114,10 +115,12 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["visits"]["effective_total"], 9)
         self.assertEqual(report["visits"]["mean_per_search"], 12.0)
         self.assertAlmostEqual(report["visits"]["per_root_search_second"], 20.0)
-        self.assertEqual(report["root_search_wall_seconds"]["samples"], 2)
-        self.assertAlmostEqual(report["root_search_wall_seconds"]["mean"], 0.30)
-        self.assertEqual(report["root_search_wall_seconds"]["p50"], 0.20)
-        self.assertEqual(report["root_search_wall_seconds"]["p95"], 0.40)
+        self.assertEqual(report["branch_search_wall_seconds"]["samples"], 2)
+        self.assertAlmostEqual(report["branch_search_wall_seconds"]["mean"], 0.30)
+        self.assertEqual(report["branch_search_wall_seconds"]["p50"], 0.20)
+        self.assertEqual(report["branch_search_wall_seconds"]["p95"], 0.40)
+        self.assertEqual(report["full_decision_wall_seconds"]["samples"], 2)
+        self.assertAlmostEqual(report["full_decision_wall_seconds"]["mean"], 0.30)
         self.assertAlmostEqual(report["timing_totals"]["prefix_replay_seconds"], 0.30)
         self.assertAlmostEqual(report["timing_totals"]["total_seconds"], 0.60)
 
@@ -132,6 +135,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                             "root_puct_decision_telemetry_by_player": {
                                 "p1": [
                                     {
+                                        "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                                        "decision_index": 0,
+                                        "turn_index": 0,
                                         "outcome": "searched",
                                         "fallback": False,
                                         "root_puct_total_visits": 24,
@@ -152,6 +158,54 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["policies"]["root-puct-120"]["visits"]["per_root_search_second"], 200.0)
         with self.assertRaisesRegex(ValueError, "no Root-PUCT decision telemetry"):
             root_puct_benchmark_telemetry_report(payload, policy_ids=("missing",))
+
+    def test_benchmark_report_rejects_unversioned_telemetry(self) -> None:
+        payload = {
+            "matchups": [
+                {
+                    "p1_policy_id": "root-puct-120",
+                    "p2_policy_id": "random-legal",
+                    "game_results": [
+                        {
+                            "root_puct_decision_telemetry_by_player": {
+                                "p1": [{"outcome": "searched", "fallback": False}]
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "incompatible .* schema"):
+            root_puct_benchmark_telemetry_report(payload)
+
+    def test_benchmark_report_rejects_incomplete_searched_telemetry(self) -> None:
+        payload = {
+            "matchups": [
+                {
+                    "p1_policy_id": "root-puct-120",
+                    "p2_policy_id": "random-legal",
+                    "game_results": [
+                        {
+                            "root_puct_decision_telemetry_by_player": {
+                                "p1": [
+                                    {
+                                        "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                                        "decision_index": 0,
+                                        "turn_index": 0,
+                                        "outcome": "searched",
+                                        "fallback": False,
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "incomplete .* missing root visit count"):
+            root_puct_benchmark_telemetry_report(payload)
 
 
 if __name__ == "__main__":

@@ -632,6 +632,7 @@ class CollectionTest(unittest.TestCase):
             games[0]["root_puct_decision_telemetry_by_player"]["p1"],
             [
                 {
+                    "schema_version": "pokezero.root_puct_decision_telemetry.v1",
                     "decision_index": 0,
                     "turn_index": 0,
                     "outcome": "searched",

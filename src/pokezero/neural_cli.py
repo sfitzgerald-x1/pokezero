@@ -4043,13 +4043,21 @@ def _print_root_puct_telemetry_report(report: Mapping[str, object]) -> None:
             for key, counts in sorted(taxonomy.items()):
                 if isinstance(counts, Mapping) and counts:
                     print("    " + str(key) + ": " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
-        wall = value.get("root_search_wall_seconds")
-        if isinstance(wall, Mapping):
+        full_wall = value.get("full_decision_wall_seconds")
+        if isinstance(full_wall, Mapping):
             print(
-                "  root wall: "
-                f"mean={_format_optional_float(wall.get('mean'))}s "
-                f"p50={_format_optional_float(wall.get('p50'))}s "
-                f"p95={_format_optional_float(wall.get('p95'))}s"
+                "  full decision wall: "
+                f"mean={_format_optional_float(full_wall.get('mean'))}s "
+                f"p50={_format_optional_float(full_wall.get('p50'))}s "
+                f"p95={_format_optional_float(full_wall.get('p95'))}s"
+            )
+        branch_wall = value.get("branch_search_wall_seconds")
+        if isinstance(branch_wall, Mapping):
+            print(
+                "  branch search wall: "
+                f"mean={_format_optional_float(branch_wall.get('mean'))}s "
+                f"p50={_format_optional_float(branch_wall.get('p50'))}s "
+                f"p95={_format_optional_float(branch_wall.get('p95'))}s"
             )
 
 
