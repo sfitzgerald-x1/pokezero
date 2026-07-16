@@ -63,7 +63,7 @@ python -m pokezero.neural_cli iterate --run-dir runs/selfplay --iterations 5 \
 Benchmark a checkpoint against the fixed baselines:
 
 ```bash
-python -m pokezero.neural_cli benchmark --checkpoint runs/selfplay/run/iteration-0005/transformer-policy.pt \
+python -m pokezero.neural_cli benchmark --checkpoint runs/selfplay/iteration-0005/transformer-policy.pt \
   --games 50 --showdown-root /path/to/pokemon-showdown
 ```
 
@@ -72,12 +72,16 @@ same seeds:
 
 ```bash
 python scripts/compare_root_puct_vs_foulplay.py --checkpoint <policy.pt> \
-  --value-checkpoint <calibrated-leaf.pt> --root-extra-visits 120 \
+  --root-extra-visits 120 \
   --search-time-ms 100 --comparison-mode per-seed --games 50 \
   --showdown-root /path/to/pokemon-showdown \
   --foulplay-root /abs/path/to/third_party/foul-play \
   --foulplay-python /abs/path/to/third_party/foul-play/.venv/bin/python
 ```
+
+`--value-checkpoint <calibrated-leaf.pt>` optionally swaps in a calibrated copy of the value
+head for leaf evaluation (see `pokezero.value_calibration`); omitted, search prices leaves with
+the checkpoint's raw value head.
 
 ## Public Prior/Belief Profile
 
@@ -90,11 +94,11 @@ inside a sampled belief world. Capture another non-overlapping seed band with
 `--append-public-decision-corpus` until the corpus has at least 2,000 valid `p1` decisions:
 
 ```bash
-pokezero-foulplay-capture --checkpoint runs/policy.pt --out runs/foulplay-band-001.jsonl \
+pokezero-foulplay-capture --checkpoint runs/selfplay/iteration-0005/transformer-policy.pt --out runs/foulplay-band-001.jsonl \
   --public-decision-corpus-out runs/public-decisions.jsonl --games 128 \
   --showdown-root /path/to/pokemon-showdown
 
-pokezero-foulplay-capture --checkpoint runs/policy.pt --out runs/foulplay-band-002.jsonl \
+pokezero-foulplay-capture --checkpoint runs/selfplay/iteration-0005/transformer-policy.pt --out runs/foulplay-band-002.jsonl \
   --public-decision-corpus-out runs/public-decisions.jsonl --append-public-decision-corpus \
   --games 128 --seed-start 129 --showdown-root /path/to/pokemon-showdown
 ```
@@ -106,7 +110,7 @@ corpus, schema, and configuration hashes in the report:
 
 ```bash
 pokezero-neural prior-belief-profile --corpus runs/public-decisions.jsonl \
-  --checkpoint runs/policy.pt --showdown-root /path/to/pokemon-showdown \
+  --checkpoint runs/selfplay/iteration-0005/transformer-policy.pt --showdown-root /path/to/pokemon-showdown \
   --out runs/prior-belief-profile.json
 ```
 
