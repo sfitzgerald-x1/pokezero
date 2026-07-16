@@ -56,6 +56,17 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             {"planner_none": 1},
         )
 
+    def test_counts_mixed_standalone_missing_world_retries(self) -> None:
+        reason = (
+            "start override source did not produce a sampled world; "
+            "start override planner did not produce a sampled world"
+        )
+
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(reason),
+            {"planner_none": 1, "source_none": 1},
+        )
+
     def test_classifies_duplicate_start_override(self) -> None:
         self.assertEqual(
             root_puct_fallback_category(

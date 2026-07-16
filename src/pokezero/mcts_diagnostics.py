@@ -27,6 +27,14 @@ _MISSING_WORLD_DETAIL_RE = re.compile(
     r"start override planner did not produce a sampled world:\s*(?P<detail>.*?)(?=;|\Z)",
     re.IGNORECASE,
 )
+_MISSING_WORLD_SOURCE_NONE_RE = re.compile(
+    r"start override source did not produce a sampled world",
+    re.IGNORECASE,
+)
+_MISSING_WORLD_PLANNER_NONE_RE = re.compile(
+    r"start override planner did not produce a sampled world(?!\s*:)",
+    re.IGNORECASE,
+)
 
 
 def root_puct_fallback_category(reason: object) -> str:
@@ -191,12 +199,12 @@ def root_puct_missing_sampled_world_reason_counts(reason: object) -> dict[str, i
     for match in _MISSING_WORLD_DETAIL_RE.finditer(text):
         category = _missing_sampled_world_reason_category(match.group("detail"))
         counts[category] = counts.get(category, 0) + 1
-    if not counts:
-        lowered = text.lower()
-        if "start override source did not produce a sampled world" in lowered:
-            counts["source_none"] = 1
-        elif "start override planner did not produce a sampled world" in lowered:
-            counts["planner_none"] = 1
+    source_none_count = len(_MISSING_WORLD_SOURCE_NONE_RE.findall(text))
+    if source_none_count:
+        counts["source_none"] = source_none_count
+    planner_none_count = len(_MISSING_WORLD_PLANNER_NONE_RE.findall(text))
+    if planner_none_count:
+        counts["planner_none"] = planner_none_count
     return counts
 
 
