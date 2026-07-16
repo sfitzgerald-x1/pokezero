@@ -19,8 +19,8 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-# Increment when persisted metric definitions change. Existing event captures can
-# be re-extracted, while report consumers can distinguish older metric files.
+# Increment when persisted metric definitions change. Existing event captures
+# can be re-extracted, and the version documents the resulting metric schema.
 METRICS_VERSION = "trait_extract.v2"
 
 # ---- frozen gen3 move-category lists (move ids: lowercased, no spaces/hyphens) ----
