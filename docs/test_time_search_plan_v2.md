@@ -48,6 +48,10 @@ strength. In order:
    of turns actually search; that number reframes every other result.
 2. Root-cause and fix the top classes, starting from the privileged-guard
    lead above; unit-test each fixed class.
+   - First public-information screen: when the protocol-visible opposing
+     active is fainted, remove move hypotheses before replay and retain only
+     the exchangeable replacement-switch bucket. This deliberately does not
+     infer private move disablement, trapping, or party order.
 3. Re-run the 200-seed paired baseline. Deliverables: fallback rate
    before/after, paired delta before/after. Hypothesis: if most turns fall
    back today, legality fixes multiply search's value.
