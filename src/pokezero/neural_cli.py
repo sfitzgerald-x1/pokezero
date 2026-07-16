@@ -106,6 +106,7 @@ from .search_policy import (
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
 )
+from .root_puct_telemetry import root_puct_benchmark_telemetry_report
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .value_calibration import (
@@ -1036,6 +1037,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional JSON path where the root-PUCT full-game benchmark report is persisted.",
     )
     root_puct_play.set_defaults(func=_root_puct_play_benchmark)
+
+    root_puct_telemetry = subparsers.add_parser(
+        "root-puct-telemetry-report",
+        help="Summarize Root-PUCT fallback, scenario-legality, visit, and timing telemetry from a benchmark JSON artifact.",
+    )
+    root_puct_telemetry.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Telemetry-enabled root-puct-play-benchmark JSON artifact.",
+    )
+    root_puct_telemetry.add_argument(
+        "--policy-id",
+        action="append",
+        default=None,
+        help="Optional Root-PUCT policy id to include. May be repeated; defaults to every telemetry-bearing policy.",
+    )
+    root_puct_telemetry.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Optional JSON path where the compact telemetry report is persisted.",
+    )
+    root_puct_telemetry.add_argument("--json", action="store_true", help="Print the telemetry report as JSON.")
+    root_puct_telemetry.set_defaults(func=_root_puct_telemetry_report)
 
     root_puct = subparsers.add_parser(
         "root-puct-benchmark",
@@ -3955,6 +3981,82 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     else:
         print_benchmark_report(report)
     return 0
+
+
+def _root_puct_telemetry_report(args: argparse.Namespace) -> int:
+    """Render the W1/W2 Root-PUCT telemetry readout without requiring torch."""
+
+    try:
+        payload = json.loads(args.input.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise ValueError(f"could not read root-PUCT benchmark artifact {args.input}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"root-PUCT benchmark artifact is not valid JSON: {error}") from error
+    if not isinstance(payload, Mapping):
+        raise ValueError("root-PUCT benchmark artifact must contain a JSON object.")
+    report = root_puct_benchmark_telemetry_report(
+        payload,
+        policy_ids=tuple(args.policy_id or ()),
+    )
+    if args.out is not None:
+        _write_json(args.out, report)
+        print(f"root_puct_telemetry_report: {args.out}", file=sys.stderr)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_root_puct_telemetry_report(report)
+    return 0
+
+
+def _print_root_puct_telemetry_report(report: Mapping[str, object]) -> None:
+    """Keep the human readout compact enough for a 50-game diagnostic run."""
+
+    policies = report.get("policies")
+    if not isinstance(policies, Mapping):
+        raise ValueError("Root-PUCT telemetry report is missing policies.")
+    for policy_id, value in sorted(policies.items()):
+        if not isinstance(value, Mapping):
+            continue
+        decisions = int(value.get("decisions", 0))
+        searches = int(value.get("searches", 0))
+        fallbacks = int(value.get("fallbacks", 0))
+        search_rate = value.get("search_rate")
+        fallback_rate = value.get("fallback_rate")
+        visits = value.get("visits")
+        visit_rate = visits.get("per_root_search_second") if isinstance(visits, Mapping) else None
+        print(f"{policy_id}: {searches}/{decisions} searched, {fallbacks} fallbacks")
+        print(
+            "  rates: "
+            f"search={_format_optional_fraction(search_rate)} "
+            f"fallback={_format_optional_fraction(fallback_rate)} "
+            f"visits/s={_format_optional_float(visit_rate)}"
+        )
+        categories = value.get("fallback_categories")
+        if isinstance(categories, Mapping) and categories:
+            print("  fallback categories: " + ", ".join(f"{key}={count}" for key, count in sorted(categories.items())))
+        scenario_counts = value.get("scenario_counts")
+        if isinstance(scenario_counts, Mapping) and scenario_counts:
+            print("  scenarios: " + ", ".join(f"{key}={count}" for key, count in sorted(scenario_counts.items())))
+        taxonomy = value.get("scenario_failure_taxonomy")
+        if isinstance(taxonomy, Mapping) and taxonomy:
+            print("  scenario taxonomy:")
+            for key, counts in sorted(taxonomy.items()):
+                if isinstance(counts, Mapping) and counts:
+                    print("    " + str(key) + ": " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
+        wall = value.get("root_search_wall_seconds")
+        if isinstance(wall, Mapping):
+            print(
+                "  root wall: "
+                f"mean={_format_optional_float(wall.get('mean'))}s "
+                f"p50={_format_optional_float(wall.get('p50'))}s "
+                f"p95={_format_optional_float(wall.get('p95'))}s"
+            )
+
+
+def _format_optional_fraction(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{float(value):.1%}"
+    return "n/a"
 
 
 def _require_belief_world_benchmark_coverage(

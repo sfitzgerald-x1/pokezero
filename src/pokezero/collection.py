@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
 from .mcts_diagnostics import root_puct_fallback_category
+from .root_puct_telemetry import root_puct_decision_telemetry
 from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
@@ -57,6 +58,11 @@ class BenchmarkGameResult:
     decision_rounds: int
     elapsed_seconds: float
     root_puct_by_player: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    # Compact, per-decision Root-PUCT telemetry.  This retains stable search
+    # diagnostics without serializing observations, actions, or raw errors.
+    root_puct_decision_telemetry_by_player: Mapping[str, tuple[Mapping[str, Any], ...]] = field(
+        default_factory=dict
+    )
     opponent_legal_mask_mode: str = "privileged"
     # Full policy-dispatch wall samples, present only when the rollout config
     # explicitly opts in. These are distinct from root-PUCT's internal timer.
@@ -90,6 +96,11 @@ class BenchmarkGameResult:
             payload["root_puct_by_player"] = {
                 player: dict(diagnostics)
                 for player, diagnostics in sorted(self.root_puct_by_player.items())
+            }
+        if self.root_puct_decision_telemetry_by_player:
+            payload["root_puct_decision_telemetry_by_player"] = {
+                player: [dict(item) for item in diagnostics]
+                for player, diagnostics in sorted(self.root_puct_decision_telemetry_by_player.items())
             }
         if self.policy_elapsed_seconds_by_player:
             payload["policy_elapsed_seconds_by_player"] = {
@@ -494,14 +505,25 @@ def benchmark_rollouts(
 
 def _benchmark_game_result(record: RolloutRecord) -> BenchmarkGameResult:
     root_puct_by_player: dict[str, dict[str, Any]] = {}
+    root_puct_decision_telemetry_by_player: dict[str, tuple[Mapping[str, Any], ...]] = {}
     policy_elapsed_seconds_by_player: dict[str, tuple[float, ...]] = {}
     for player_id in ("p1", "p2"):
         accumulator = _PolicyDecisionAccumulator()
         elapsed_samples: list[float] = []
         policy_elapsed_samples: list[float] = []
+        root_puct_decisions: list[Mapping[str, Any]] = []
+        decision_index = 0
         for step in record.trajectory.steps:
             if step.player_id != player_id:
                 continue
+            telemetry = root_puct_decision_telemetry(
+                step.metadata,
+                decision_index=decision_index,
+                turn_index=step.turn_index,
+            )
+            decision_index += 1
+            if telemetry is not None:
+                root_puct_decisions.append(telemetry)
             accumulator.add(step.metadata)
             elapsed = _metadata_optional_float(step.metadata.get("root_puct_elapsed_seconds"))
             if elapsed is not None:
@@ -520,6 +542,8 @@ def _benchmark_game_result(record: RolloutRecord) -> BenchmarkGameResult:
         if elapsed_samples:
             diagnostics["root_puct_elapsed_seconds"] = elapsed_samples
         root_puct_by_player[player_id] = diagnostics
+        if root_puct_decisions:
+            root_puct_decision_telemetry_by_player[player_id] = tuple(root_puct_decisions)
     return BenchmarkGameResult(
         seed=record.seed,
         battle_id=record.battle_id,
@@ -528,6 +552,7 @@ def _benchmark_game_result(record: RolloutRecord) -> BenchmarkGameResult:
         decision_rounds=record.decision_round_count,
         elapsed_seconds=record.elapsed_seconds,
         root_puct_by_player=root_puct_by_player,
+        root_puct_decision_telemetry_by_player=root_puct_decision_telemetry_by_player,
         opponent_legal_mask_mode=(
             "hidden" if bool(record.trajectory.metadata.get("opponent_legal_action_masks_hidden")) else "privileged"
         ),

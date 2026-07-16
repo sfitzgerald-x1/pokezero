@@ -1,0 +1,158 @@
+import unittest
+
+from pokezero.root_puct_telemetry import (
+    ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
+    ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION,
+    root_puct_benchmark_telemetry_report,
+    root_puct_decision_telemetry,
+    summarize_root_puct_decision_telemetry,
+)
+
+
+class RootPUCTTelemetryTest(unittest.TestCase):
+    def test_compact_decision_keeps_stable_taxonomy_without_raw_error(self) -> None:
+        telemetry = root_puct_decision_telemetry(
+            {
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": True,
+                "root_puct_fallback_category": "replay_request_mismatch",
+                "root_puct_fallback_reason": "request mismatch carried private state: [secret]",
+                "root_puct_total_visits": 12,
+                "root_puct_effective_total_visits": 9,
+                "root_puct_elapsed_seconds": 0.25,
+                "policy_elapsed_seconds": 0.30,
+                "root_puct_timing": {
+                    "prefix_replay_seconds": 0.10,
+                    "prefix_replay_count": 2,
+                    "total_seconds": 0.25,
+                    "private_debug_detail": "must not persist",
+                },
+                "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
+                "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
+            },
+            decision_index=4,
+            turn_index=7,
+        )
+
+        self.assertEqual(
+            telemetry,
+            {
+                "decision_index": 4,
+                "turn_index": 7,
+                "outcome": "fallback",
+                "fallback": True,
+                "fallback_category": "replay_request_mismatch",
+                "root_puct_total_visits": 12,
+                "root_puct_effective_total_visits": 9,
+                "root_puct_elapsed_seconds": 0.25,
+                "policy_elapsed_seconds": 0.30,
+                "timing": {
+                    "prefix_replay_seconds": 0.10,
+                    "prefix_replay_count": 2,
+                    "total_seconds": 0.25,
+                },
+                "counters": {
+                    "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
+                    "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
+                },
+            },
+        )
+        self.assertNotIn("root_puct_fallback_reason", telemetry)
+
+    def test_summary_reports_fallbacks_taxonomy_visits_and_wall_samples(self) -> None:
+        report = summarize_root_puct_decision_telemetry(
+            (
+                {
+                    "outcome": "searched",
+                    "fallback": False,
+                    "root_puct_total_visits": 10,
+                    "root_puct_effective_total_visits": 8,
+                    "root_puct_opponent_action_scenario_count": 2,
+                    "root_puct_opponent_action_scenarios_generated": 3,
+                    "root_puct_opponent_action_scenarios_skipped": 1,
+                    "root_puct_elapsed_seconds": 0.20,
+                    "policy_elapsed_seconds": 0.25,
+                    "timing": {"total_seconds": 0.20, "prefix_replay_seconds": 0.10},
+                },
+                {
+                    "outcome": "fallback",
+                    "fallback": True,
+                    "fallback_category": "replay_request_mismatch",
+                    "root_puct_total_visits": 2,
+                    "root_puct_effective_total_visits": 1,
+                    "root_puct_opponent_action_scenario_count": 1,
+                    "root_puct_opponent_action_scenarios_generated": 3,
+                    "root_puct_opponent_action_scenarios_skipped": 2,
+                    "root_puct_elapsed_seconds": 0.40,
+                    "policy_elapsed_seconds": 0.45,
+                    "timing": {"total_seconds": 0.40, "prefix_replay_seconds": 0.20},
+                    "counters": {
+                        "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 2},
+                    },
+                },
+            )
+        )
+
+        self.assertEqual(report["schema_version"], ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION)
+        self.assertEqual(report["decisions"], 2)
+        self.assertEqual(report["searches"], 1)
+        self.assertEqual(report["fallbacks"], 1)
+        self.assertEqual(report["fallback_categories"], {"replay_request_mismatch": 1})
+        self.assertEqual(
+            report["scenario_counts"],
+            {
+                "scenarios_used": 3,
+                "scenarios_generated": 6,
+                "scenarios_skipped": 3,
+            },
+        )
+        self.assertEqual(
+            report["scenario_failure_taxonomy"],
+            {"skip_categories": {"replay_request_mismatch": 2}},
+        )
+        self.assertEqual(report["visits"]["total"], 12)
+        self.assertEqual(report["visits"]["effective_total"], 9)
+        self.assertEqual(report["visits"]["mean_per_search"], 12.0)
+        self.assertAlmostEqual(report["visits"]["per_root_search_second"], 20.0)
+        self.assertEqual(report["root_search_wall_seconds"]["samples"], 2)
+        self.assertAlmostEqual(report["root_search_wall_seconds"]["mean"], 0.30)
+        self.assertEqual(report["root_search_wall_seconds"]["p50"], 0.20)
+        self.assertEqual(report["root_search_wall_seconds"]["p95"], 0.40)
+        self.assertAlmostEqual(report["timing_totals"]["prefix_replay_seconds"], 0.30)
+        self.assertAlmostEqual(report["timing_totals"]["total_seconds"], 0.60)
+
+    def test_benchmark_report_groups_records_by_root_puct_policy(self) -> None:
+        payload = {
+            "matchups": [
+                {
+                    "p1_policy_id": "root-puct-120",
+                    "p2_policy_id": "random-legal",
+                    "game_results": [
+                        {
+                            "root_puct_decision_telemetry_by_player": {
+                                "p1": [
+                                    {
+                                        "outcome": "searched",
+                                        "fallback": False,
+                                        "root_puct_total_visits": 24,
+                                        "timing": {"total_seconds": 0.12},
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+        report = root_puct_benchmark_telemetry_report(payload, policy_ids=("root-puct-120",))
+
+        self.assertEqual(report["schema_version"], ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION)
+        self.assertEqual(report["policies"]["root-puct-120"]["decisions"], 1)
+        self.assertEqual(report["policies"]["root-puct-120"]["visits"]["per_root_search_second"], 200.0)
+        with self.assertRaisesRegex(ValueError, "no Root-PUCT decision telemetry"):
+            root_puct_benchmark_telemetry_report(payload, policy_ids=("missing",))
+
+
+if __name__ == "__main__":
+    unittest.main()
