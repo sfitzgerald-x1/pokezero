@@ -19,17 +19,24 @@ from collections import defaultdict
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
 
+# Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k and
+# are no longer being tracked. Their metrics remain on disk, so this is reversible — clear the set
+# to bring them back.
+REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq"}
+
 # (lineage, milestone) points dropped from the Phase-1 basics charts only. v22-lr3m@100k stalls
 # ~50% of its games to the turn cap; its scale compresses every other lineage's line. The point is
 # real and stays in the by-checkpoint trajectories — it is excluded here for legibility, and the
 # exclusion is stated in the section rather than hidden.
 BASICS_EXCLUDE = {("v22-lr3m", 100000)}
 
-# Lineages held out of the trait <-> foul-play correlation. m50-ep7 wins only ~0.20 vs FoulPlay
-# while the rest cluster at 0.31-0.34, so with n=5 it is a single high-leverage point and the
-# correlation largely reduces to "m50-ep7 vs the rest". Temporary — reintroduce once foul-play
-# spans more checkpoints and the win-rate axis has real spread.
-CORR_EXCLUDE_LINEAGES = {"m50-ep7"}
+# Lineages held out of the trait <-> foul-play correlation. m50-ep7 was held out while foul-play
+# existed only at 500k: it won ~0.20 against a 0.31-0.34 cluster, so at n=5 it was a single
+# high-leverage point. With foul-play now also at each frontier, its two points (0.198@500k ->
+# 0.353@1000k) sit on a continuum spanning 0.198-0.420 across 10 checkpoints, so it is no longer
+# leverage — excluding it would just throw away the win-rate spread. Empty by design; keep the
+# hook for a future genuine outlier.
+CORR_EXCLUDE_LINEAGES = set()
 
 
 def load(metrics_dir):
@@ -336,6 +343,79 @@ def phase2_correlations(rows):
             f'{warn}{_svg_corr(results)}</section>')
 
 
+PG_LABEL = {
+    "cat_stat_boost": "stat-boost", "cat_toxic": "toxic", "cat_substitute": "substitute",
+    "cat_spikes": "spikes", "cat_heal": "heal (excl Rest)", "cat_phaze": "phaze",
+    "cat_rest": "rest", "cat_sleep": "sleep (excl Yawn)", "cat_para": "paralysis",
+    "cat_leechseed": "leech seed", "cat_boom": "explosion/self-destruct",
+    "cat_batonpass": "baton pass", "cat_solarbeam": "solar beam",
+    "cat_rapidspin_total": "rapid spin", "cat_yawn": "yawn", "cat_wish": "wish",
+    "cat_weather_sun": "sunny day", "cat_weather_rain": "rain dance", "cat_curse": "curse",
+    "pivot": "pivot (voluntary switch)", "forced_switch": "forced switch",
+    "immunity_switchin": "immunity switch-in", "switch_out_sleeping": "sleeping mon out",
+    "switch_out_frozen": "frozen mon out", "cat_phaze_justified": "phaze when justified",
+    "cat_rapidspin_spikesdown": "rapid spin w/ spikes down", "cat_solarbeam_sun": "solar beam in sun",
+    "bp_stat_or_sub": "BP w/ stat or sub", "focuspunch_executed": "focus punch landed",
+    "focuspunch_disrupted": "focus punch disrupted",
+}
+
+
+def per_game_corr_section(rows, opponent, heading, blurb):
+    """Per-game trait->win correlation, aggregated across checkpoints. Each checkpoint contributes
+    its own within-checkpoint r (n = its decided seat-games); we show the mean and the min..max
+    range across checkpoints. Agreement in sign across independent checkpoints is the evidence —
+    a single r is one model, but the same sign in every model is hard to get from noise."""
+    ms = [r for r in rows if r.get("opponent") == opponent and r.get("per_game_correlations")]
+    if len(ms) < 2:
+        return ""
+    traits = sorted({t for m in ms for t in m["per_game_correlations"]})
+    results = []
+    for t in traits:
+        rs = [m["per_game_correlations"][t]["r"] for m in ms if t in m["per_game_correlations"]]
+        ns = sum(m["per_game_correlations"][t]["n"] for m in ms if t in m["per_game_correlations"])
+        if len(rs) < 2:
+            continue
+        mean = sum(rs) / len(rs)
+        consistent = all(x > 0 for x in rs) or all(x < 0 for x in rs)
+        results.append((PG_LABEL.get(t, t), mean, min(rs), max(rs), len(rs), ns, consistent))
+    if not results:
+        return ""
+    results.sort(key=lambda x: -x[1])
+    tot_games = sum(m.get("per_game_rows", 0) for m in ms)
+    return (f'<section><h2>{esc(heading)}</h2><p class="sub">{blurb} '
+            f'{len(ms)} checkpoints, {tot_games:,} decided seat-games total. Bar = mean r across '
+            f'checkpoints; whisker = min..max. <strong>Bold</strong> = every checkpoint agrees in '
+            f'sign (consistency across independent checkpoints is the signal, not any single r).</p>'
+            f'{_svg_pg_corr(results)}</section>')
+
+
+def _svg_pg_corr(results, width=700, rowh=22, pad=200):
+    valw = 46
+    h = rowh * len(results) + 22
+    x0, x1 = pad, width - valw
+    cx, half = (x0 + x1) / 2, (x1 - x0) / 2
+    # per-game r values are small; scale to the observed max so the chart is readable
+    lim = max(0.05, max(max(abs(m), abs(lo), abs(hi)) for _, m, lo, hi, _, _, _ in results))
+    out = [f'<svg viewBox="0 0 {width} {h}" class="chart" role="img" aria-label="per-game trait correlations">']
+    for frac in (-1, -0.5, 0, 0.5, 1):
+        x = cx + frac * half
+        out.append(f'<line x1="{x:.0f}" y1="2" x2="{x:.0f}" y2="{h-16}" class="{"axis" if frac == 0 else "grid"}"/>')
+        out.append(f'<text x="{x:.0f}" y="{h-4}" class="xlab" text-anchor="middle">{frac*lim:+.2f}</text>')
+    for i, (lbl, mean, lo, hi, k, ns, consistent) in enumerate(results):
+        y = 8 + i * rowh
+        color = "#059669" if mean >= 0 else "#dc2626"
+        bw = rowh * 0.5
+        mx = cx + (mean / lim) * half
+        lox, hix = cx + (lo / lim) * half, cx + (hi / lim) * half
+        weight = ' font-weight="700"' if consistent else ''
+        out.append(f'<text x="{x0-8}" y="{y+bw*0.85:.0f}" class="ylab" text-anchor="end"{weight}>{esc(lbl)}</text>')
+        out.append(f'<line x1="{lox:.1f}" y1="{y+bw/2:.1f}" x2="{hix:.1f}" y2="{y+bw/2:.1f}" stroke="{color}" stroke-width="1" opacity="0.45"/>')
+        out.append(f'<rect x="{min(cx, mx):.1f}" y="{y:.0f}" width="{abs(mx-cx):.1f}" height="{bw:.0f}" rx="2" fill="{color}" opacity="0.85"/>')
+        out.append(f'<text x="{width-4}" y="{y+bw*0.85:.0f}" class="ylab" text-anchor="end"{weight}>{mean:+.3f}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
 def _svg_corr(results, width=700, rowh=24, pad=180):
     if not results:
         return '<div class="empty">not enough lineages with both self + foul 500k</div>'
@@ -467,6 +547,8 @@ tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:
 
 
 def build_html(rows):
+    # drop excluded lineages up front so every section below is consistent
+    rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES]
     rows_self = [r for r in rows if r.get("opponent") == "self"]
     n_self = len(rows_self)
     n_foul = len([r for r in rows if r.get("opponent") == "foulplay"])
@@ -475,6 +557,18 @@ def build_html(rows):
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})))}</p>']
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self))
+    body.append(per_game_corr_section(
+        rows, "foulplay", "Per-game trait ↔ win correlation (vs FoulPlay)",
+        "Within each checkpoint&#39;s foul-play games: did the bot use the trait more in games it "
+        "<em>won</em>? One row per game, so n is games rather than checkpoints — this is the "
+        "powered version of the aggregate chart below. Confound to keep in mind: longer games "
+        "contain more of everything, and game length is not independent of the result."))
+    body.append(per_game_corr_section(
+        rows, "self", "Per-game trait ↔ win correlation (self-play, paired)",
+        "The best-controlled view we have. Both seats are the <em>same policy</em> playing the "
+        "<em>same game</em>, so comparing the winning seat&#39;s behavior against the losing "
+        "seat&#39;s holds policy strength and game length fixed by construction — a game-level "
+        "quantity has no within-game variance and cannot leak in."))
     body.append(phase2_correlations(rows))
     cks = paired_checkpoints(rows)
     body.append('<section><h2>Phase 2 — detailed panel by checkpoint (self vs foul-play)</h2>'

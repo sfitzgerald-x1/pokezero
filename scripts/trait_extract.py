@@ -19,7 +19,9 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-METRICS_VERSION = "trait_extract.v1"
+# Increment when persisted metric definitions change. Existing event captures
+# can be re-extracted, and the version documents the resulting metric schema.
+METRICS_VERSION = "trait_extract.v2"
 
 # ---- frozen gen3 move-category lists (move ids: lowercased, no spaces/hyphens) ----
 def mid(name):
@@ -48,6 +50,38 @@ LEECH_SEED = mid("Leech Seed")
 SOLAR_BEAM = mid("Solar Beam")
 
 OTHER_SEAT = {"p1": "p2", "p2": "p1"}
+
+# Per-game trait -> win correlation. One row per (game, behavioral seat) with a decided outcome:
+# x = the seat's count of the trait IN THAT GAME, y = 1 if that seat won. n is games, not
+# checkpoints, so this has real power. In self-play both seats are the same policy and share the
+# game, so the winner-vs-loser comparison is paired: it controls for policy strength AND game
+# length (a game-level quantity has zero within-game variance and correctly falls out at r=0).
+# Only *chosen* behaviors — nothing outcome-definitional, which would be circular. Deliberately
+# excluded: `forced_switch` (a forced switch happens because your active mon fainted, so its count
+# is essentially "mons lost" — correlating it with losing restates the outcome and buries the real
+# effects at r~-0.6), and the mons-alive/closer metrics for the same reason.
+PER_GAME_TRAITS = [
+    "cat_stat_boost", "cat_toxic", "cat_substitute", "cat_spikes", "cat_heal", "cat_phaze",
+    "cat_rest", "cat_sleep", "cat_para", "cat_leechseed", "cat_boom", "cat_batonpass",
+    "cat_solarbeam", "cat_rapidspin_total", "cat_yawn", "cat_wish", "cat_weather_sun",
+    "cat_weather_rain", "cat_curse",
+    "pivot", "immunity_switchin", "switch_out_sleeping", "switch_out_frozen",
+    "cat_phaze_justified", "cat_rapidspin_spikesdown", "cat_solarbeam_sun", "bp_stat_or_sub",
+    "focuspunch_executed", "focuspunch_disrupted",
+]
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    return sxy / (sxx * syy) ** 0.5
 
 
 def parse_line(line):
@@ -289,6 +323,7 @@ def extract(files, lineage=None, milestone=None):
     switch_ev = defaultdict(int)
     opp_fp_attempt = 0
     opp_fp_disrupted = 0
+    pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
     mons_alive_win = []
@@ -340,6 +375,11 @@ def extract(files, lineage=None, milestone=None):
         for oseat in {OTHER_SEAT[s] for s in behav_seats}:
             opp_fp_attempt += gp.ev[oseat]["focuspunch_attempt"]
             opp_fp_disrupted += gp.ev[oseat]["focuspunch_disrupted"]
+        # per-game rows for the trait->win correlation: decided games only (a timeout has no winner
+        # and would silently become a "loss" for both seats).
+        if not g.get("capped") and winner in ("p1", "p2"):
+            for seat in behav_seats:
+                pg_rows.append((gp.ev[seat], 1.0 if winner == seat else 0.0))
         # species vector: every behavioral-seat team, each species labeled by whether that seat won.
         # self-play samples both teams (symmetric); foulplay samples only the bot's team.
         for seat in behav_seats:
@@ -365,6 +405,15 @@ def extract(files, lineage=None, milestone=None):
     def per_game(lst):
         return round(sum(lst) / len(lst), 4) if lst else 0.0
 
+    # point-biserial r of each per-game trait count against winning that game
+    pg_corr = {}
+    for t in PER_GAME_TRAITS:
+        xs = [float(ev[t]) for ev, _ in pg_rows]
+        ys = [w for _, w in pg_rows]
+        r = _pearson(xs, ys)
+        if r is not None:
+            pg_corr[t] = {"r": round(r, 4), "n": len(xs), "mean": round(sum(xs) / len(xs), 4)}
+
     metrics = {
         "metrics_version": METRICS_VERSION, "opponent": opponent, "n_games": n,
         "lineage": lineage or (manifest or {}).get("lineage"),
@@ -377,6 +426,10 @@ def extract(files, lineage=None, milestone=None):
         "top5_moves": [{"move": m, "share": round(c / total_moves, 4), "uses_per_game": round(c / (n or 1), 3)}
                        for m, c in move_counts.most_common(5)],
         "move_distribution": {m: c for m, c in move_counts.most_common()},
+        # per-game trait -> win correlation within THIS checkpoint (n = decided seat-games, not
+        # checkpoints). Self-play is a paired winner-vs-loser design: same policy, same game.
+        "per_game_correlations": pg_corr,
+        "per_game_rows": len(pg_rows),
         "avg_turns": per_game(turns),            # decided games only (timeouts excluded)
         "decided_games": len(turns),
         "timeout_rate": round(caps / n, 4) if n else 0.0,

@@ -166,6 +166,67 @@ class PPAndSpecies(unittest.TestCase):
         self.assertAlmostEqual(sv["Weezing"]["win_delta"], -0.2, places=6)
 
 
+class PerGameCorrelation(unittest.TestCase):
+    """The per-game trait->win correlation: n is games, and self-play is a paired winner-vs-loser
+    design (same policy both seats, same game), so game-level quantities cannot leak in."""
+
+    def _game(self, seed, winner, p1_subs, p2_subs, capped=False):
+        proto = ["|player|p1|Bot p1|", "|player|p2|Bot p2|", "|turn|1"]
+        proto += ["|move|p1a: X|Substitute|p1a: X"] * p1_subs
+        proto += ["|move|p2a: Y|Substitute|p2a: Y"] * p2_subs
+        if winner:
+            proto.append(f"|win|Bot {winner}")
+        ms = {"p1": [{"species": "X", "moves": ["Substitute"]}],
+              "p2": [{"species": "Y", "moves": ["Substitute"]}]}
+        return {"seed": seed, "opponent": "self", "winner": winner, "turn_count": 30,
+                "capped": capped, "protocol": proto, "movesets": ms, "pp_track": []}
+
+    def _extract(self, games):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in games:
+                    f.write(json.dumps(g) + "\n")
+            return TE.extract([path])
+
+    def test_winner_uses_more_gives_positive_r(self):
+        # in every game the winning seat used more Substitute -> strong positive r
+        games = [self._game(i, "p1" if i % 2 else "p2",
+                            p1_subs=4 if i % 2 else 0, p2_subs=0 if i % 2 else 4) for i in range(10)]
+        m = self._extract(games)
+        c = m["per_game_correlations"]["cat_substitute"]
+        self.assertEqual(c["n"], 20)               # 10 games x 2 behavioral seats
+        self.assertGreater(c["r"], 0.9)
+
+    def test_loser_uses_more_gives_negative_r(self):
+        games = [self._game(i, "p1" if i % 2 else "p2",
+                            p1_subs=0 if i % 2 else 4, p2_subs=4 if i % 2 else 0) for i in range(10)]
+        m = self._extract(games)
+        self.assertLess(m["per_game_correlations"]["cat_substitute"]["r"], -0.9)
+
+    def test_timeouts_excluded_from_per_game_rows(self):
+        # a timeout has no winner; counting it would silently score both seats as losses
+        games = [self._game(i, "p1", p1_subs=2, p2_subs=1) for i in range(5)]
+        games.append(self._game(99, None, p1_subs=9, p2_subs=9, capped=True))
+        m = self._extract(games)
+        self.assertEqual(m["per_game_rows"], 10)   # 5 decided games x 2 seats; timeout dropped
+
+
+    def test_outcome_definitional_traits_excluded(self):
+        # forced_switch is caused by your mon fainting, so it is ~"mons lost" — correlating it
+        # with losing restates the outcome. It must never be in the per-game trait set.
+        self.assertNotIn("forced_switch", TE.PER_GAME_TRAITS)
+        for banned in ("forced_switch", "mons_alive", "last_active"):
+            self.assertFalse(any(banned in t for t in TE.PER_GAME_TRAITS), f"{banned} is circular")
+
+    def test_no_signal_when_usage_unrelated_to_winning(self):
+        # both seats always use the same amount -> no within-game variance -> r undefined/dropped
+        games = [self._game(i, "p1" if i % 2 else "p2", p1_subs=3, p2_subs=3) for i in range(10)]
+        m = self._extract(games)
+        self.assertNotIn("cat_substitute", m["per_game_correlations"])
+
+
 class EndToEnd(unittest.TestCase):
     def test_extract_over_tiny_events_file(self):
         movesets = {"p1": [{"species": "Skarmory", "moves": ["Toxic", "Spikes", "Roar", "Protect"]}],
