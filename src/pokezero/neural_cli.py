@@ -26,6 +26,7 @@ from .collection import (
     cache_observation_schemas_by_path,
     cache_feature_masks_by_path,
     cache_shaping_configs_by_path,
+    BenchmarkProgress,
     BenchmarkMatchup,
     benchmark_rollouts,
     distinct_belief_set_source_hashes,
@@ -1037,6 +1038,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Optional JSON path where the root-PUCT full-game benchmark report is persisted.",
+    )
+    root_puct_play.add_argument(
+        "--progress-interval-games",
+        type=int,
+        default=None,
+        help=(
+            "Optional per-matchup game interval for compact stderr progress lines. "
+            "This is liveness reporting only and does not change the persisted benchmark artifact."
+        ),
     )
     root_puct_play.set_defaults(func=_root_puct_play_benchmark)
 
@@ -3641,6 +3651,35 @@ def _validate_root_opponent_action_scenario_counts(args: argparse.Namespace) -> 
     return candidate_scenarios
 
 
+def _root_puct_benchmark_progress_callback(
+    interval_games: int,
+) -> Callable[[BenchmarkProgress], None]:
+    """Return compact stderr liveness reporting for a long Root-PUCT benchmark."""
+
+    if interval_games <= 0:
+        raise ValueError("root PUCT progress interval must be positive.")
+
+    def emit(progress: BenchmarkProgress) -> None:
+        if progress.games_completed % interval_games != 0 and progress.games_completed != progress.games_total:
+            return
+        payload = {
+            "matchup_label": progress.matchup_label,
+            "matchup_index": progress.matchup_index + 1,
+            "matchup_count": progress.matchup_count,
+            "games_completed": progress.games_completed,
+            "games_total": progress.games_total,
+            "seed": progress.seed,
+            "matchup_elapsed_seconds": round(progress.matchup_elapsed_seconds, 3),
+        }
+        print(
+            "root_puct_play_benchmark_progress: " + json.dumps(payload, sort_keys=True),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return emit
+
+
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if not args.allow_legacy_checkpoints:
@@ -3650,6 +3689,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             context="root-puct play benchmark",
         )
     root_opponent_action_candidate_scenarios = _validate_root_opponent_action_scenario_counts(args)
+    if args.progress_interval_games is not None and args.progress_interval_games <= 0:
+        raise ValueError("root PUCT progress interval must be positive when set.")
     if args.root_opponent_action_policy == "benchmark" and args.root_opponent_action_scenarios != 1:
         raise ValueError(
             "root opponent action scenarios above one require --root-opponent-action-policy checkpoint."
@@ -3971,13 +4012,18 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                     )
                 )
 
-    report = benchmark_rollouts(
-        games=args.games,
-        env_factory=lambda: LocalShowdownEnv(env_config),
-        rollout_config=rollout_config,
-        seed_start=args.seed_start,
-        matchups=tuple(matchups),
-    )
+    benchmark_kwargs: dict[str, object] = {
+        "games": args.games,
+        "env_factory": lambda: LocalShowdownEnv(env_config),
+        "rollout_config": rollout_config,
+        "seed_start": args.seed_start,
+        "matchups": tuple(matchups),
+    }
+    if args.progress_interval_games is not None:
+        benchmark_kwargs["progress_callback"] = _root_puct_benchmark_progress_callback(
+            args.progress_interval_games
+        )
+    report = benchmark_rollouts(**benchmark_kwargs)
     if belief_start_override_planner is not None:
         _require_belief_world_benchmark_coverage(report, search_policy_ids=search_policy_ids)
     payload = _root_puct_play_payload(
