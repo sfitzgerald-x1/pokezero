@@ -3310,6 +3310,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         def fake_benchmark_rollouts(**kwargs):
             captured.update(kwargs)
+            kwargs["progress_callback"](
+                SimpleNamespace(
+                    matchup_label="neural-smoke vs random-legal",
+                    matchup_index=0,
+                    matchup_count=6,
+                    games_completed=2,
+                    games_total=3,
+                    seed=100,
+                    matchup_elapsed_seconds=12.3456,
+                )
+            )
             matchups = tuple(kwargs["matchups"])
             deterministic_search_policy = matchups[2].p1_policy
             search_policy = matchups[4].p1_policy
@@ -3333,6 +3344,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             return FakeReport()
 
         stdout = io.StringIO()
+        stderr = io.StringIO()
 
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
@@ -3341,6 +3353,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6) as opponent_eval,
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
             contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
         ):
             exit_code = neural_cli_main(
                 [
@@ -3384,6 +3397,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "0.7",
                     "--adaptive-root-value-margin-threshold",
                     "0.15",
+                    "--progress-interval-games",
+                    "2",
                     "--json",
                 ]
             )
@@ -3391,7 +3406,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
         self.assertEqual(captured["games"], 3)
-        self.assertNotIn("progress_callback", captured)
+        self.assertTrue(callable(captured["progress_callback"]))
         self.assertEqual(captured["seed_start"], 99)
         self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
         matchups = tuple(captured["matchups"])
@@ -3440,6 +3455,25 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.0)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
         payload = json.loads(stdout.getvalue())
+        progress_lines = [
+            line
+            for line in stderr.getvalue().splitlines()
+            if line.startswith("root_puct_play_benchmark_progress:")
+        ]
+        self.assertEqual(
+            [json.loads(line.split(": ", 1)[1]) for line in progress_lines],
+            [
+                {
+                    "games_completed": 2,
+                    "games_total": 3,
+                    "matchup_count": 6,
+                    "matchup_elapsed_seconds": 12.346,
+                    "matchup_index": 1,
+                    "matchup_label": "neural-smoke vs random-legal",
+                    "seed": 100,
+                }
+            ],
+        )
         self.assertEqual(payload["matchups"], 6)
         self.assertEqual(payload["root_dirichlet"], {"enabled": True, "alpha": 0.3, "mix": 0.2, "base_seed": 11})
         self.assertEqual(
