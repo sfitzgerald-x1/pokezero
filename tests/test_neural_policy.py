@@ -2678,6 +2678,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                                                     "outcome": "searched",
                                                     "fallback": False,
                                                     "root_puct_total_visits": 24,
+                                                    "full_decision_elapsed_seconds": 0.15,
                                                     "timing": {"total_seconds": 0.12},
                                                 }
                                             ]

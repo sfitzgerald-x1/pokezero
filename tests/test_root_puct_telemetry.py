@@ -47,6 +47,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "root_puct_effective_total_visits": 9,
                 "root_puct_elapsed_seconds": 0.25,
                 "policy_elapsed_seconds": 0.30,
+                "full_decision_elapsed_seconds": 0.30,
                 "timing": {
                     "prefix_replay_seconds": 0.10,
                     "prefix_replay_count": 2,
@@ -73,6 +74,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_opponent_action_scenarios_skipped": 1,
                     "root_puct_elapsed_seconds": 0.20,
                     "policy_elapsed_seconds": 0.25,
+                    "full_decision_elapsed_seconds": 0.25,
                     "timing": {"total_seconds": 0.20, "prefix_replay_seconds": 0.10},
                 },
                 {
@@ -86,6 +88,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_opponent_action_scenarios_skipped": 2,
                     "root_puct_elapsed_seconds": 0.40,
                     "policy_elapsed_seconds": 0.45,
+                    "full_decision_elapsed_seconds": 0.45,
                     "timing": {"total_seconds": 0.40, "prefix_replay_seconds": 0.20},
                     "counters": {
                         "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 2},
@@ -120,7 +123,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["branch_search_wall_seconds"]["p50"], 0.20)
         self.assertEqual(report["branch_search_wall_seconds"]["p95"], 0.40)
         self.assertEqual(report["full_decision_wall_seconds"]["samples"], 2)
-        self.assertAlmostEqual(report["full_decision_wall_seconds"]["mean"], 0.30)
+        self.assertAlmostEqual(report["full_decision_wall_seconds"]["mean"], 0.35)
         self.assertAlmostEqual(report["timing_totals"]["prefix_replay_seconds"], 0.30)
         self.assertAlmostEqual(report["timing_totals"]["total_seconds"], 0.60)
 
@@ -141,6 +144,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                                         "outcome": "searched",
                                         "fallback": False,
                                         "root_puct_total_visits": 24,
+                                        "full_decision_elapsed_seconds": 0.15,
                                         "timing": {"total_seconds": 0.12},
                                     }
                                 ]
@@ -195,6 +199,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                                         "turn_index": 0,
                                         "outcome": "searched",
                                         "fallback": False,
+                                        "full_decision_elapsed_seconds": 0.15,
                                     }
                                 ]
                             }
@@ -205,6 +210,20 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(ValueError, "incomplete .* missing root visit count"):
+            root_puct_benchmark_telemetry_report(payload)
+
+    def test_benchmark_report_rejects_missing_root_puct_seat_telemetry(self) -> None:
+        payload = {
+            "matchups": [
+                {
+                    "p1_policy_id": "root-puct-120",
+                    "p2_policy_id": "random-legal",
+                    "game_results": [{}],
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(ValueError, "missing Root-PUCT telemetry"):
             root_puct_benchmark_telemetry_report(payload)
 
 

@@ -111,6 +111,13 @@ def root_puct_decision_telemetry(
     timing = _compact_timing(metadata.get("root_puct_timing"))
     if timing:
         payload["timing"] = timing
+    # Dispatch timing is recorded for root-puct-play-benchmark and includes
+    # legality failures that return before internal search timing exists.
+    full_decision_elapsed = _finite_nonnegative_float(metadata.get("policy_elapsed_seconds"))
+    if full_decision_elapsed is None:
+        full_decision_elapsed = _finite_nonnegative_float(timing.get("total_seconds"))
+    if full_decision_elapsed is not None:
+        payload["full_decision_elapsed_seconds"] = full_decision_elapsed
     counters: dict[str, Mapping[str, int]] = {}
     for field in _COUNTER_MAP_FIELDS:
         value = _counter_map(metadata.get(field))
@@ -161,11 +168,11 @@ def summarize_root_puct_decision_telemetry(
         policy_elapsed = _finite_nonnegative_float(item.get("policy_elapsed_seconds"))
         if policy_elapsed is not None:
             policy_elapsed_samples.append(policy_elapsed)
+        full_decision_elapsed = _finite_nonnegative_float(item.get("full_decision_elapsed_seconds"))
+        if full_decision_elapsed is not None:
+            full_decision_elapsed_samples.append(full_decision_elapsed)
         timing = item.get("timing")
         if isinstance(timing, Mapping):
-            total_seconds = _finite_nonnegative_float(timing.get("total_seconds"))
-            if total_seconds is not None:
-                full_decision_elapsed_samples.append(total_seconds)
             for key, value in timing.items():
                 if key not in _TIMING_KEYS:
                     continue
@@ -221,28 +228,68 @@ def root_puct_benchmark_telemetry_report(
 
     requested_ids = set(policy_ids)
     by_policy: dict[str, list[Mapping[str, object]]] = {}
-    for matchup in _mappings(payload.get("matchups")):
+    matchups = payload.get("matchups")
+    if not isinstance(matchups, list):
+        raise ValueError("benchmark artifact must contain a matchups JSON list.")
+    for matchup_index, matchup in enumerate(matchups):
+        if not isinstance(matchup, Mapping):
+            raise ValueError(f"benchmark artifact matchup {matchup_index} must be a JSON object.")
         player_policies = {
             "p1": matchup.get("p1_policy_id"),
             "p2": matchup.get("p2_policy_id"),
         }
-        for game in _mappings(matchup.get("game_results")):
+        game_results = matchup.get("game_results")
+        if not isinstance(game_results, list):
+            raise ValueError(f"benchmark artifact matchup {matchup_index} is missing game_results.")
+        for game_index, game in enumerate(game_results):
+            if not isinstance(game, Mapping):
+                raise ValueError(
+                    f"benchmark artifact matchup {matchup_index} game {game_index} must be a JSON object."
+                )
             by_player = game.get("root_puct_decision_telemetry_by_player")
+            if by_player is None:
+                by_player = {}
             if not isinstance(by_player, Mapping):
-                continue
+                raise ValueError(
+                    f"benchmark artifact matchup {matchup_index} game {game_index} has invalid "
+                    "root_puct_decision_telemetry_by_player."
+                )
+            root_puct_by_player = game.get("root_puct_by_player")
+            if root_puct_by_player is None:
+                root_puct_by_player = {}
+            if not isinstance(root_puct_by_player, Mapping):
+                raise ValueError(
+                    f"benchmark artifact matchup {matchup_index} game {game_index} has invalid root_puct_by_player."
+                )
             for player, policy_id in player_policies.items():
                 if not isinstance(policy_id, str) or not policy_id:
                     continue
-                if requested_ids and policy_id not in requested_ids:
-                    continue
                 entries = by_player.get(player)
+                requested = policy_id in requested_ids
+                is_root_puct_seat = (
+                    requested
+                    or player in root_puct_by_player
+                    or _looks_like_root_puct_policy(policy_id)
+                )
                 if entries is None:
+                    if is_root_puct_seat:
+                        raise ValueError(
+                            f"benchmark artifact matchup {matchup_index} game {game_index} is missing Root-PUCT "
+                            f"telemetry for {policy_id} {player}."
+                        )
                     continue
                 if not isinstance(entries, list):
                     raise ValueError(
-                        "benchmark artifact has invalid Root-PUCT telemetry entries for "
-                        f"{policy_id} {player}; expected a JSON list."
+                        f"benchmark artifact matchup {matchup_index} game {game_index} has invalid Root-PUCT "
+                        f"telemetry entries for {policy_id} {player}; expected a non-empty JSON list."
                     )
+                if not entries:
+                    raise ValueError(
+                        f"benchmark artifact matchup {matchup_index} game {game_index} is missing Root-PUCT "
+                        f"telemetry for {policy_id} {player}."
+                    )
+                if requested_ids and not requested:
+                    continue
                 validated = tuple(
                     _validated_decision_telemetry(item, policy_id=policy_id, player_id=player, entry_index=index)
                     for index, item in enumerate(entries)
@@ -301,7 +348,10 @@ def _validated_decision_telemetry(
             f"benchmark artifact has incompatible {context} schema; expected "
             f"{ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION}."
         )
-    if _nonnegative_int(value.get("decision_index")) is None or _nonnegative_int(value.get("turn_index")) is None:
+    if (
+        _nonnegative_int(value.get("decision_index")) is None
+        or _nonnegative_int(value.get("turn_index")) is None
+    ):
         raise ValueError(f"benchmark artifact has invalid {context} decision or turn index.")
     fallback = value.get("fallback")
     outcome = value.get("outcome")
@@ -311,6 +361,8 @@ def _validated_decision_telemetry(
         raise ValueError(f"benchmark artifact has inconsistent {context} fallback flag.")
     if fallback and not isinstance(value.get("fallback_category"), str):
         raise ValueError(f"benchmark artifact has invalid {context} fallback category.")
+    if _finite_nonnegative_float(value.get("full_decision_elapsed_seconds")) is None:
+        raise ValueError(f"benchmark artifact has incomplete {context}; missing full decision wall timing.")
     if outcome == "searched":
         if _nonnegative_int(value.get("root_puct_total_visits")) is None:
             raise ValueError(f"benchmark artifact has incomplete {context}; missing root visit count.")
@@ -318,6 +370,10 @@ def _validated_decision_telemetry(
         if not isinstance(timing, Mapping) or _finite_nonnegative_float(timing.get("total_seconds")) is None:
             raise ValueError(f"benchmark artifact has incomplete {context}; missing full decision timing.")
     return value
+
+
+def _looks_like_root_puct_policy(policy_id: str) -> bool:
+    return "root-puct" in policy_id
 
 
 def _counter_map(value: object) -> dict[str, int]:
@@ -351,12 +407,6 @@ def _sample_summary(values: Sequence[float]) -> dict[str, float | int | None]:
 def _nearest_rank(values: Sequence[float], percentile: float) -> float:
     index = max(0, math.ceil(percentile * len(values)) - 1)
     return values[index]
-
-
-def _mappings(value: object) -> tuple[Mapping[str, object], ...]:
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, Mapping))
 
 
 def _nonnegative_int(value: object) -> int | None:

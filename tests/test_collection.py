@@ -663,6 +663,10 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(len(timing["p2"]), 1)
         self.assertGreaterEqual(timing["p1"][0], 0.0)
         self.assertGreaterEqual(timing["p2"][0], 0.0)
+        telemetry = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_decision_telemetry_by_player"][
+            "p1"
+        ][0]
+        self.assertEqual(telemetry["full_decision_elapsed_seconds"], timing["p1"][0])
 
     def test_per_seed_benchmark_search_diagnostics_sanitize_fallback_reasons(self) -> None:
         report = benchmark_rollouts(
