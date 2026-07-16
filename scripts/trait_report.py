@@ -19,6 +19,11 @@ from collections import defaultdict
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
 
+# Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k and
+# are no longer being tracked. Their metrics remain on disk, so this is reversible — clear the set
+# to bring them back.
+REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq"}
+
 # (lineage, milestone) points dropped from the Phase-1 basics charts only. v22-lr3m@100k stalls
 # ~50% of its games to the turn cap; its scale compresses every other lineage's line. The point is
 # real and stays in the by-checkpoint trajectories — it is excluded here for legibility, and the
@@ -542,6 +547,8 @@ tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:
 
 
 def build_html(rows):
+    # drop excluded lineages up front so every section below is consistent
+    rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES]
     rows_self = [r for r in rows if r.get("opponent") == "self"]
     n_self = len(rows_self)
     n_foul = len([r for r in rows if r.get("opponent") == "foulplay"])
