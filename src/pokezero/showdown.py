@@ -1232,7 +1232,10 @@ def showdown_choice_for_action(state: PlayerRelativeBattleState, action_index: i
     if action_index < 0 or action_index >= ACTION_COUNT:
         raise ValueError(f"action_index must be between 0 and {ACTION_COUNT - 1}.")
     if not state.legal_action_mask[action_index]:
-        raise ValueError(f"action_index {action_index} is not legal for the current request.")
+        raise ValueError(
+            f"action_index {action_index} is not legal for the current request "
+            f"(request_kind={state.request_kind})."
+        )
     if is_move_action(action_index):
         return f"move {action_index + 1}"
     if is_switch_action(action_index):

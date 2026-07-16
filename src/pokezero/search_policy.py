@@ -9,6 +9,7 @@ from time import perf_counter
 from time import perf_counter as _timing_perf_counter
 import math
 import random
+import re
 from typing import Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
@@ -1582,7 +1583,9 @@ def _opponent_scenario_replay_legality_error(
         return message
     if message == "cannot branch from a terminal replay prefix.":
         return message
-    if "action_index " in message and message.endswith(" is not legal for the current request."):
+    if "action_index " in message and re.search(
+        r" is not legal for the current request(?: \(request_kind=[^)]+\))?\.$", message
+    ):
         return message
     for player, action_index in scenario.actions.items():
         unqualified = f"action_index {action_index} is not legal for the current request."

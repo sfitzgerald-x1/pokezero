@@ -51,6 +51,10 @@ def root_puct_fallback_category(reason: object) -> str:
         has_observation_mismatch = "start override does not reproduce" in text
         has_missing_world = "did not produce a sampled world" in text
         has_duplicate_override = "sampled start override duplicated" in text
+        has_force_switch_illegal_action = (
+            "action_index " in text
+            and "is not legal for the current request (request_kind=force_switch)." in text
+        )
         if (has_unexpected_players or has_missing_players) and (
             has_observation_mismatch or has_missing_world
         ):
@@ -73,7 +77,14 @@ def root_puct_fallback_category(reason: object) -> str:
             return "start_override_observation_mismatch"
         if has_missing_world:
             return "missing_sampled_world"
+        if has_force_switch_illegal_action:
+            return "force_switch_illegal_action"
         return "all_opponent_scenarios_replay_illegal"
+    if (
+        "action_index " in text
+        and "is not legal for the current request (request_kind=force_switch)." in text
+    ):
+        return "force_switch_illegal_action"
     if "action_index " in text and " is not legal for the current request" in text:
         return "illegal_action_for_current_request"
     if "sampled start override duplicated" in text:

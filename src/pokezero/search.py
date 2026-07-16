@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import math
+import re
 from time import perf_counter
 from time import perf_counter as _timing_perf_counter
 from typing import Any, Callable, Mapping, Sequence
@@ -29,6 +30,10 @@ ActionPriorVector = tuple[float, ...]
 RootVisitBudgetResolver = Callable[["RootPUCTVisitBudgetContext"], int | None]
 StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
 START_OVERRIDE_MISSING_WORLD_MESSAGE = "start override source did not produce a sampled world."
+_ILLEGAL_ACTION_FOR_REQUEST_RE = re.compile(
+    r"^(?:(?P<player_id>[^:]+): )?action_index (?P<action_index>\d+) "
+    r"is not legal for the current request(?: \(request_kind=[^)]+\))?\.$"
+)
 
 
 @dataclass(frozen=True)
@@ -1252,9 +1257,11 @@ def _timed_value_evaluation(
 
 
 def _is_candidate_illegal_action_error(exc: ValueError, *, player_id: PlayerId, action_index: int) -> bool:
-    message = str(exc)
-    unqualified = f"action_index {action_index} is not legal for the current request."
-    return message == unqualified or message == f"{player_id}: {unqualified}"
+    match = _ILLEGAL_ACTION_FOR_REQUEST_RE.fullmatch(str(exc))
+    if match is None or int(match.group("action_index")) != action_index:
+        return False
+    reported_player_id = match.group("player_id")
+    return reported_player_id is None or reported_player_id == player_id
 
 
 def player_observation_history(
