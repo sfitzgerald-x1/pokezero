@@ -191,8 +191,12 @@ def root_puct_missing_sampled_world_reason_counts(reason: object) -> dict[str, i
     for match in _MISSING_WORLD_DETAIL_RE.finditer(text):
         category = _missing_sampled_world_reason_category(match.group("detail"))
         counts[category] = counts.get(category, 0) + 1
-    if not counts and "start override source did not produce a sampled world" in text.lower():
-        counts["source_none"] = 1
+    if not counts:
+        lowered = text.lower()
+        if "start override source did not produce a sampled world" in lowered:
+            counts["source_none"] = 1
+        elif "start override planner did not produce a sampled world" in lowered:
+            counts["planner_none"] = 1
     return counts
 
 
