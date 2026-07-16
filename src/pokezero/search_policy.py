@@ -365,6 +365,12 @@ class RootPUCTSearchPolicy:
     start_override_samples_per_scenario: int | None = 1
     start_override_hp_fraction_tolerance: float = 0.02
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
+    # Search is a policy wrapper rather than an alias wrapper. Preserve the
+    # underlying raw-policy checkpoint explicitly so benchmark provenance can
+    # audit the concrete prior used by every search decision. Keep these at the
+    # end to preserve the existing positional constructor contract.
+    checkpoint_path: str | None = None
+    weights_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:

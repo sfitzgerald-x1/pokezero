@@ -1,5 +1,6 @@
 import contextlib
 from dataclasses import replace
+import hashlib
 import io
 import json
 import os
@@ -3712,6 +3713,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
 
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        policy_checkpoint = Path(temporary.name) / "policy.pt"
+        value_checkpoint = Path(temporary.name) / "calibrated.pt"
+        policy_checkpoint.write_bytes(b"raw-policy")
+        value_checkpoint.write_bytes(b"value-leaf")
+        raw_checkpoint_sha256 = hashlib.sha256(b"raw-policy").hexdigest()
+
         policy_model = object()
         value_model = object()
         model_config = SimpleNamespace(
@@ -3742,11 +3751,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             value_calibration_transform=calibrated_transform,
         )
         value_leaf_provenance = {
-            "policy_checkpoint": "/policy.pt",
-            "policy_checkpoint_sha256": "raw-sha",
-            "value_checkpoint": "/calibrated.pt",
+            "policy_checkpoint": str(policy_checkpoint),
+            "policy_checkpoint_sha256": raw_checkpoint_sha256,
+            "value_checkpoint": str(value_checkpoint),
             "value_checkpoint_sha256": "leaf-sha",
-            "value_calibration_source_checkpoint_sha256": "raw-sha",
+            "value_calibration_source_checkpoint_sha256": raw_checkpoint_sha256,
             "model_config_match": True,
             "belief_set_source_hash_match": True,
             "value_calibration_transform": calibrated_transform.to_dict(),
@@ -3784,9 +3793,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 [
                     "root-puct-play-benchmark",
                     "--checkpoint",
-                    "policy.pt",
+                    str(policy_checkpoint),
                     "--value-checkpoint",
-                    "calibrated.pt",
+                    str(value_checkpoint),
                     "--allow-legacy-checkpoints",
                     "--opponent-policy",
                     "random-legal",
@@ -3797,8 +3806,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(load.call_args_list[0].args[0], Path("policy.pt"))
-        self.assertEqual(load.call_args_list[1].args[0], Path("calibrated.pt"))
+        self.assertEqual(load.call_args_list[0].args[0], policy_checkpoint)
+        self.assertEqual(load.call_args_list[1].args[0], value_checkpoint)
+        self.assertEqual(captured["search_policy"].checkpoint_path, str(policy_checkpoint.resolve()))
+        self.assertEqual(captured["search_policy"].weights_sha256, raw_checkpoint_sha256)
         self.assertIs(value_eval.call_args.kwargs["model"], value_model)
         self.assertIs(prior_eval.call_args.kwargs["model"], policy_model)
         expected_root_config = {

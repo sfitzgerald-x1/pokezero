@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -1187,6 +1188,49 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
         self.assertEqual(policy.max_opponent_action_scenarios, 1)
         self.assertEqual(policy.start_override_samples_per_scenario, 1)
+
+    def test_build_policy_binds_raw_checkpoint_provenance_not_value_leaf(self) -> None:
+        class FakePolicy:
+            def __init__(
+                self,
+                policy_id: str | None = None,
+                checkpoint_path: str | None = None,
+                weights_sha256: str | None = None,
+                **_: object,
+            ) -> None:
+                self.policy_id = policy_id or "fake-transformer"
+                self.checkpoint_path = checkpoint_path
+                self.weights_sha256 = weights_sha256
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_checkpoint = Path(temp_dir) / "raw.pt"
+            raw_checkpoint.write_bytes(b"raw-policy")
+            config = ControlledFoulPlayConfig(
+                checkpoint=raw_checkpoint,
+                value_checkpoint=Path(temp_dir) / "distinct-value-leaf.pt",
+                showdown_root=Path("/showdown"),
+            )
+            with patch("pokezero.foulplay_bridge.TransformerSoftmaxPolicy", side_effect=FakePolicy):
+                policy = _build_policy(
+                    config=config,
+                    model=object(),
+                    result=fake_result,
+                    value_model=object(),
+                    value_result=fake_result,
+                    env_config=object(),
+                    rollout_config=object(),
+                    policy_id="fake-base",
+                )
+
+        self.assertEqual(policy.checkpoint_path, str(raw_checkpoint.resolve()))
+        self.assertEqual(policy.weights_sha256, hashlib.sha256(b"raw-policy").hexdigest())
+        self.assertEqual(policy.fallback_policy.checkpoint_path, str(raw_checkpoint.resolve()))
+        self.assertEqual(policy.fallback_policy.weights_sha256, policy.weights_sha256)
 
     def test_build_policy_uses_separate_calibrated_value_model_and_relative_budget(self) -> None:
         class FakePolicy:

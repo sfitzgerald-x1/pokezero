@@ -3696,13 +3696,12 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         )
     raw_policy_id = str(result.model_config.policy_id)
     raw_policy_checkpoint = str(args.checkpoint.resolve(strict=False))
-    # Explicit value leaves already prove the raw-file hash through the
-    # compatibility latch. Preserve the old no-leaf benchmark seam without
-    # forcing synthetic/unit-test checkpoint paths to exist just for reporting.
+    # The search wrapper owns the raw policy prior, independent of whether its
+    # leaf evaluator comes from a separate value checkpoint. Preserve the
+    # no-file unit-test seam, but bind real benchmark artifacts to that exact
+    # raw-policy file so downstream cost/strength reports can verify it.
     raw_policy_checkpoint_sha256 = (
-        str(value_leaf_provenance["policy_checkpoint_sha256"])
-        if value_leaf_provenance is not None
-        else None
+        checkpoint_file_sha256(args.checkpoint) if args.checkpoint.is_file() else None
     )
 
     root_dirichlet_enabled = args.root_dirichlet_alpha is not None
@@ -3866,6 +3865,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             fallback_policy=make_raw_policy(policy_id=f"{raw_policy_id}-fallback"),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
+            checkpoint_path=raw_policy_checkpoint,
+            weights_sha256=raw_policy_checkpoint_sha256,
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,

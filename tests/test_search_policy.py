@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
+from pokezero.collection import benchmark_policy_provenance
 from pokezero.env import BattleStartOverride, StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
@@ -240,6 +241,22 @@ class DelayedOutcomeEnv:
 
 
 class RootPUCTSearchPolicyTest(unittest.TestCase):
+    def test_root_puct_policy_exposes_raw_checkpoint_provenance(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            checkpoint_path="/shared/scott-experiment/policy.pt",
+            weights_sha256="a" * 64,
+        )
+
+        provenance = benchmark_policy_provenance(policy)
+
+        self.assertEqual(provenance["checkpoint_path"], "/shared/scott-experiment/policy.pt")
+        self.assertEqual(provenance["weights_sha256"], "a" * 64)
+        self.assertEqual(provenance["policy_class"], "RootPUCTSearchPolicy")
+
     def test_greedy_opponent_action_planner_uses_player_local_history(self) -> None:
         observed_history_lengths: list[int] = []
 

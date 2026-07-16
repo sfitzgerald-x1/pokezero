@@ -52,6 +52,7 @@ from pokezero.rollout_cli import (
     main as rollout_cli_main,
     print_benchmark_report,
 )
+from pokezero.search_policy import RootPUCTSearchPolicy
 from pokezero.selfplay import OpponentPoolEntry
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep, trajectory_from_dict, trajectory_to_dict
 
@@ -725,6 +726,30 @@ class CollectionTest(unittest.TestCase):
             payload["policy_provenance"]["candidate-alias"]["weights_sha256"],
             "abc123",
         )
+
+    def test_benchmark_report_serializes_root_puct_raw_checkpoint_provenance(self) -> None:
+        search_policy = RootPUCTSearchPolicy(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * 8,
+            policy_id="candidate+root-puct",
+            checkpoint_path="/tmp/raw-policy.pt",
+            weights_sha256="a" * 64,
+        )
+        decision = PolicyDecision(action_index=0, policy_id="candidate+root-puct", action_probability=1.0)
+        with patch.object(search_policy, "select_action_with_context", return_value=decision):
+            report = benchmark_rollouts(
+                games=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                matchups=(BenchmarkMatchup("search vs random", search_policy, RandomLegalPolicy()),),
+            )
+
+        provenance = report.to_dict()["matchups"][0]["p1_policy_provenance"]
+        self.assertEqual(provenance["checkpoint_path"], "/tmp/raw-policy.pt")
+        self.assertEqual(provenance["weights_sha256"], "a" * 64)
+        self.assertEqual(provenance["policy_class"], "RootPUCTSearchPolicy")
 
     def test_benchmark_rollouts_summarizes_root_puct_fallback_metadata(self) -> None:
         report = benchmark_rollouts(
