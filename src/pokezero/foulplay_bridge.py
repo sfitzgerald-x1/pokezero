@@ -3371,6 +3371,15 @@ def build_comparison_arg_parser() -> argparse.ArgumentParser:
             "excluded from paired stats, and the run continues. Use 0 to disable retries."
         ),
     )
+    parser.add_argument(
+        "--progress-interval-games",
+        type=int,
+        default=None,
+        help=(
+            "Emit paired-game liveness progress to stderr every N completed games and at completion. "
+            "This does not change the persisted comparison result."
+        ),
+    )
     parser.description = (
         "Run paired controlled BattleStream benchmarks: raw checkpoint and root-PUCT "
         "against external foul-play over the same seed band."
@@ -3445,6 +3454,42 @@ def _config_from_args(
     )
 
 
+def _controlled_foulplay_comparison_progress_callback(
+    interval_games: int,
+) -> Callable[..., None]:
+    """Emit paired FoulPlay progress without changing comparison artifacts."""
+
+    if interval_games <= 0:
+        raise ValueError("comparison progress interval must be positive.")
+    last_reported: tuple[int, int] | None = None
+
+    def emit(result: ControlledFoulPlayComparisonResult, *, force: bool = False) -> None:
+        nonlocal last_reported
+        raw_completed = result.raw.completed_games if result.raw is not None else 0
+        root_puct_completed = result.root_puct.completed_games if result.root_puct is not None else 0
+        paired_completed = min(raw_completed, root_puct_completed)
+        opponent_crash_count = len(result.opponent_crashes)
+        state = (paired_completed, opponent_crash_count)
+        if state == last_reported:
+            return
+        if not force and (paired_completed == 0 or paired_completed % interval_games != 0):
+            return
+        payload = {
+            "comparison_mode": result.comparison_mode,
+            "games_completed": paired_completed,
+            "games_total": result.config.games,
+            "opponent_crash_count": opponent_crash_count,
+        }
+        print(
+            f"controlled_foulplay_comparison_progress: {json.dumps(payload, sort_keys=True)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        last_reported = state
+
+    return emit
+
+
 async def async_main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
@@ -3486,17 +3531,28 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.showdown_root is None:
         parser.error("--showdown-root is required, or set POKEZERO_SHOWDOWN_ROOT.")
+    if args.progress_interval_games is not None and args.progress_interval_games <= 0:
+        parser.error("--progress-interval-games must be positive when set.")
     config = _config_from_args(args, policy_mode="root-puct")
+    emit_progress = (
+        _controlled_foulplay_comparison_progress_callback(args.progress_interval_games)
+        if args.progress_interval_games is not None
+        else None
+    )
 
     def write_progress(result: ControlledFoulPlayComparisonResult) -> None:
         if args.summary_out is not None:
             _write_json(args.summary_out, result.to_dict())
+        if emit_progress is not None:
+            emit_progress(result)
 
     result = await run_controlled_foulplay_comparison(
         config,
         comparison_mode=args.comparison_mode,
-        progress_callback=write_progress if args.summary_out is not None else None,
+        progress_callback=write_progress if args.summary_out is not None or emit_progress is not None else None,
     )
+    if emit_progress is not None:
+        emit_progress(result, force=True)
     payload = result.to_dict()
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
