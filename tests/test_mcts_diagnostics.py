@@ -5,6 +5,7 @@ import unittest
 from pokezero.mcts_diagnostics import (
     root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
+    root_puct_missing_sampled_world_reason_counts,
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
     root_puct_replay_request_mismatch_player_counts,
@@ -21,6 +22,60 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
                 "start override planner did not produce a sampled world: opponent Unown-Z"
             ),
             "missing_sampled_world",
+        )
+
+    def test_classifies_public_missing_world_reasons_without_retaining_species(self) -> None:
+        reason = (
+            "start override planner did not produce a sampled world: "
+            "request-known self_team is missing or inconsistent; "
+            "start override planner did not produce a sampled world: "
+            "opponent Unown-Z could not be sampled from public belief"
+        )
+
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(reason),
+            {
+                "revealed_opponent_unavailable": 1,
+                "self_team_unavailable": 1,
+            },
+        )
+
+    def test_classifies_missing_world_source_without_detail(self) -> None:
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(
+                "start override source did not produce a sampled world."
+            ),
+            {"source_none": 1},
+        )
+
+    def test_classifies_missing_world_planner_without_detail(self) -> None:
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(
+                "start override planner did not produce a sampled world"
+            ),
+            {"planner_none": 1},
+        )
+
+    def test_counts_mixed_standalone_missing_world_retries(self) -> None:
+        reason = (
+            "start override source did not produce a sampled world; "
+            "start override planner did not produce a sampled world"
+        )
+
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(reason),
+            {"planner_none": 1, "source_none": 1},
+        )
+
+    def test_counts_compacted_standalone_missing_world_retries(self) -> None:
+        reason = (
+            "start override source did not produce a sampled world (2 attempts); "
+            "start override planner did not produce a sampled world (3 attempts)"
+        )
+
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(reason),
+            {"planner_none": 3, "source_none": 2},
         )
 
     def test_classifies_duplicate_start_override(self) -> None:

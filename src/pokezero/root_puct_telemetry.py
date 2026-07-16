@@ -37,6 +37,7 @@ _COUNTER_MAP_FIELDS = (
     "root_puct_opponent_action_replay_request_mismatch_shapes",
     "root_puct_opponent_action_start_override_mismatch_decision_rounds",
     "root_puct_opponent_action_first_observation_mismatch_paths",
+    "root_puct_opponent_action_missing_sampled_world_reason_categories",
 )
 
 _TIMING_KEYS = (

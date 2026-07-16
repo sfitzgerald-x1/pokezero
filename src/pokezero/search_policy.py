@@ -17,6 +17,7 @@ from .env import BattleStartOverride, PlayerId, PokeZeroEnv
 from .mcts_diagnostics import (
     root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
+    root_puct_missing_sampled_world_reason_counts,
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
     root_puct_replay_request_mismatch_player_counts,
@@ -1421,6 +1422,7 @@ def _opponent_scenario_skip_metadata(
     replay_request_mismatch_shapes: dict[str, int] = {}
     start_override_mismatch_decision_rounds: dict[str, int] = {}
     first_observation_mismatch_paths: dict[str, int] = {}
+    missing_sampled_world_reason_categories: dict[str, int] = {}
     for _scenario, reason in skipped_scenarios:
         category = root_puct_fallback_category(reason)
         skip_categories[category] = skip_categories.get(category, 0) + 1
@@ -1447,6 +1449,10 @@ def _opponent_scenario_skip_metadata(
         _merge_counts(
             first_observation_mismatch_paths,
             root_puct_first_observation_mismatch_path_counts(reason),
+        )
+        _merge_counts(
+            missing_sampled_world_reason_categories,
+            root_puct_missing_sampled_world_reason_counts(reason),
         )
     metadata: dict[str, object] = {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
@@ -1490,6 +1496,10 @@ def _opponent_scenario_skip_metadata(
     if first_observation_mismatch_paths:
         metadata["root_puct_opponent_action_first_observation_mismatch_paths"] = dict(
             sorted(first_observation_mismatch_paths.items())
+        )
+    if missing_sampled_world_reason_categories:
+        metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
+            sorted(missing_sampled_world_reason_categories.items())
         )
     if opponent_action_group_count is not None:
         metadata.update(

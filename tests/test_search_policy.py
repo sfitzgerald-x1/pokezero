@@ -1485,6 +1485,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             decision.metadata["root_puct_opponent_action_skip_categories"],
             {"missing_sampled_world": 2},
         )
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"planner_none": 2},
+        )
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_used"], 0)
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_skipped"], 1)
@@ -1570,6 +1574,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"missing_sampled_world": 1},
         )
         self.assertEqual(
+            decision.metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"source_none": 1},
+        )
+        self.assertEqual(
             decision.metadata["root_puct_opponent_action_skipped_scenarios"],
             [
                 {
@@ -1643,6 +1651,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(
             decision.metadata["root_puct_opponent_action_skip_categories"],
             {"missing_sampled_world": 1},
+        )
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"opponent_belief_unavailable": 1},
         )
         self.assertEqual(
             decision.metadata["root_puct_opponent_action_skipped_scenarios"],
