@@ -3666,6 +3666,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         record_policy_timing=True,
         hide_opponent_legal_action_masks=True,
     )
+    opponent_legal_mask_mode = (
+        "hidden" if rollout_config.hide_opponent_legal_action_masks else "privileged"
+    )
     leaf_rollout_rounds_values = _root_puct_leaf_rollout_rounds_values(args)
     tag_leaf_policy_ids = args.leaf_rollout_rounds_sweep is not None
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
@@ -3749,6 +3752,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "belief_world_sample_cap": args.belief_world_sample_cap,
             "belief_start_override_attempts": args.belief_start_override_attempts,
             "belief_start_override_hp_fraction_tolerance": args.belief_start_override_hp_fraction_tolerance,
+            "opponent_legal_mask_mode": opponent_legal_mask_mode,
             "allow_search_fallback": not args.no_search_fallback,
             "root_dirichlet_alpha": args.root_dirichlet_alpha if dirichlet_enabled else None,
             "root_dirichlet_mix": args.root_dirichlet_mix if dirichlet_enabled else None,
