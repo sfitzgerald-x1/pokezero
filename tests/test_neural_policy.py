@@ -2656,6 +2656,62 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_root_puct_telemetry_report_reads_benchmark_artifact_without_torch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_path = Path(temp_dir) / "benchmark.json"
+            report_path = Path(temp_dir) / "telemetry-report.json"
+            artifact_path.write_text(
+                json.dumps(
+                    {
+                        "matchups": [
+                            {
+                                "p1_policy_id": "root-puct-120",
+                                "p2_policy_id": "random-legal",
+                                "game_results": [
+                                    {
+                                        "root_puct_decision_telemetry_by_player": {
+                                            "p1": [
+                                                {
+                                                    "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                                                    "decision_index": 0,
+                                                    "turn_index": 0,
+                                                    "outcome": "searched",
+                                                    "fallback": False,
+                                                    "root_puct_total_visits": 24,
+                                                    "full_decision_elapsed_seconds": 0.15,
+                                                    "timing": {"total_seconds": 0.12},
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = neural_cli_main(
+                    [
+                        "root-puct-telemetry-report",
+                        "--input",
+                        str(artifact_path),
+                        "--policy-id",
+                        "root-puct-120",
+                        "--out",
+                        str(report_path),
+                        "--json",
+                    ]
+                )
+
+            persisted = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(persisted["policies"]["root-puct-120"]["decisions"], 1)
+        self.assertEqual(persisted["policies"]["root-puct-120"]["visits"]["per_root_search_second"], 200.0)
+        self.assertIn('"schema_version": "pokezero.root_puct_telemetry_report.v1"', stdout.getvalue())
+
     def test_neural_cli_root_puct_benchmark_rejects_legacy_no_belief_checkpoint_by_default(self) -> None:
         stderr = io.StringIO()
 
