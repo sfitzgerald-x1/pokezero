@@ -19,7 +19,9 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-METRICS_VERSION = "trait_extract.v1"
+# Increment when persisted metric definitions change. Existing event captures can
+# be re-extracted, while report consumers can distinguish older metric files.
+METRICS_VERSION = "trait_extract.v2"
 
 # ---- frozen gen3 move-category lists (move ids: lowercased, no spaces/hyphens) ----
 def mid(name):
