@@ -3621,6 +3621,26 @@ def _root_opponent_action_candidate_scenario_count(args: argparse.Namespace) -> 
     return args.root_opponent_action_scenarios
 
 
+def _validate_root_opponent_action_scenario_counts(args: argparse.Namespace) -> int:
+    """Validate accepted scenario counts and return the replay-candidate budget."""
+
+    if args.root_opponent_action_scenarios <= 0:
+        raise ValueError("root opponent action scenarios must be positive.")
+    if args.root_opponent_action_scenarios > ACTION_COUNT:
+        raise ValueError(
+            f"root opponent action scenarios must not exceed {ACTION_COUNT} abstract actions."
+        )
+    candidate_scenarios = _root_opponent_action_candidate_scenario_count(args)
+    if candidate_scenarios <= 0:
+        raise ValueError("root opponent action candidate scenarios must be positive.")
+    if candidate_scenarios < args.root_opponent_action_scenarios:
+        raise ValueError(
+            "root opponent action candidate scenarios must be greater than or equal to "
+            "root opponent action scenarios."
+        )
+    return candidate_scenarios
+
+
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if not args.allow_legacy_checkpoints:
@@ -3629,16 +3649,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             reference_specs=tuple(args.opponent_policy or ()),
             context="root-puct play benchmark",
         )
-    if args.root_opponent_action_scenarios <= 0:
-        raise ValueError("root opponent action scenarios must be positive.")
-    root_opponent_action_candidate_scenarios = _root_opponent_action_candidate_scenario_count(args)
-    if root_opponent_action_candidate_scenarios <= 0:
-        raise ValueError("root opponent action candidate scenarios must be positive.")
-    if root_opponent_action_candidate_scenarios < args.root_opponent_action_scenarios:
-        raise ValueError(
-            "root opponent action candidate scenarios must be greater than or equal to "
-            "root opponent action scenarios."
-        )
+    root_opponent_action_candidate_scenarios = _validate_root_opponent_action_scenario_counts(args)
     if args.root_opponent_action_policy == "benchmark" and args.root_opponent_action_scenarios != 1:
         raise ValueError(
             "root opponent action scenarios above one require --root-opponent-action-policy checkpoint."

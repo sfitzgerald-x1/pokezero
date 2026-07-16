@@ -29,6 +29,7 @@ from pokezero.neural_cli import (
     _PolicyIdAlias,
     _adaptive_root_visit_budget_selector,
     _root_opponent_action_candidate_scenario_count,
+    _validate_root_opponent_action_scenario_counts,
     _root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
@@ -180,6 +181,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             ),
             3,
         )
+
+    def test_checkpoint_root_puct_rejects_accepted_scenarios_above_action_space(self) -> None:
+        args = SimpleNamespace(
+            root_opponent_action_candidate_scenarios=None,
+            root_opponent_action_scenarios=ACTION_COUNT + 1,
+            root_opponent_action_policy="checkpoint",
+        )
+
+        with self.assertRaisesRegex(ValueError, rf"must not exceed {ACTION_COUNT} abstract actions"):
+            _validate_root_opponent_action_scenario_counts(args)
 
     def test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults(self) -> None:
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
