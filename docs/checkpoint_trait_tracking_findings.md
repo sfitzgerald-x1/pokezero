@@ -4,7 +4,10 @@ Implementation of `docs/checkpoint_trait_tracking_plan.md`. Behavioral traits me
 checkpoint over cumulative-games milestones across the five lineages, from self-play (every
 milestone) and foul-play (500k + each lineage's frontier). Every metric is derived from the
 omniscient Showdown protocol log; the machinery, gates, and per-metric definitions live in
-`scripts/trait_*.py`. Regenerate any time with `scripts/trait_extract_all.sh`.
+`scripts/trait_*.py`. Regenerate any time with `scripts/trait_extract_all.sh`. The rendered,
+self-contained report is committed alongside this file at
+[`checkpoint_trait_tracking_report.html`](checkpoint_trait_tracking_report.html) (a static
+snapshot — open it directly in a browser; no server needed).
 
 **Data.** 82 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
 5000 at 500k) — **72 checkpoints**, following the active lineages to their current frontiers:
