@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from unittest.mock import call, patch
 
 from pokezero import neural_policy as neural_policy_module
+from pokezero.actions import ACTION_COUNT
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import (
     TrajectoryDatasetConfig,
@@ -27,6 +28,7 @@ from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
     _adaptive_root_visit_budget_selector,
+    _root_opponent_action_candidate_scenario_count,
     _root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
@@ -147,6 +149,37 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(config.temporal_aggregator, "mean")
         self.assertGreaterEqual(config.token_count, ACTION_CANDIDATE_TOKEN_OFFSET + 9)
         self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
+
+    def test_checkpoint_root_puct_defaults_to_hidden_reserve_candidates(self) -> None:
+        base = SimpleNamespace(
+            root_opponent_action_candidate_scenarios=None,
+            root_opponent_action_scenarios=1,
+            root_opponent_action_policy="checkpoint",
+        )
+
+        self.assertEqual(_root_opponent_action_candidate_scenario_count(base), ACTION_COUNT)
+        self.assertEqual(
+            _root_opponent_action_candidate_scenario_count(
+                SimpleNamespace(
+                    **{
+                        **vars(base),
+                        "root_opponent_action_policy": "benchmark",
+                    }
+                )
+            ),
+            1,
+        )
+        self.assertEqual(
+            _root_opponent_action_candidate_scenario_count(
+                SimpleNamespace(
+                    **{
+                        **vars(base),
+                        "root_opponent_action_candidate_scenarios": 3,
+                    }
+                )
+            ),
+            3,
+        )
 
     def test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults(self) -> None:
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
@@ -3327,7 +3360,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
             )
             self.assertEqual(getattr(search_policy.opponent_action_planner, "planner_id"), "checkpoint")
-            self.assertIsNone(search_policy.opponent_action_scenario_planner)
+            self.assertIsNotNone(search_policy.opponent_action_scenario_planner)
+            self.assertEqual(
+                getattr(search_policy.opponent_action_scenario_planner, "planner_id"),
+                f"checkpoint-top{ACTION_COUNT}",
+            )
             self.assertEqual(search_policy.opponent_action_planner(context, __import__("random").Random(1)), {"p2": 2})
             return FakeReport()
 
@@ -3466,7 +3503,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "root_time_budget_ms": None,
             "root_opponent_action_policy": "checkpoint",
             "root_opponent_action_scenarios": 1,
-            "root_opponent_action_candidate_scenarios": 1,
+            "root_opponent_action_candidate_scenarios": ACTION_COUNT,
             "leaf_rollout_rounds": 2,
             "leaf_rollout_sampling": False,
             "leaf_rollout_opponent_policy": "checkpoint",
@@ -3829,7 +3866,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "root_time_budget_ms": None,
             "root_opponent_action_policy": "checkpoint",
             "root_opponent_action_scenarios": 1,
-            "root_opponent_action_candidate_scenarios": 1,
+            "root_opponent_action_candidate_scenarios": ACTION_COUNT,
             "leaf_rollout_rounds": 0,
             "leaf_rollout_sampling": False,
             "leaf_rollout_opponent_policy": "checkpoint",

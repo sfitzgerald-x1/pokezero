@@ -16,6 +16,7 @@ import sys
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .actions import ACTION_COUNT
 from .cli_audit import (
     add_post_iteration_audit_arguments,
     post_iteration_audit_config_from_args,
@@ -874,9 +875,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Number of checkpoint-prior opponent root-action candidates to try while searching "
-            "for replay-legal scenarios. Defaults to --root-opponent-action-scenarios; values "
-            "above that provide hidden-mode reserve candidates without averaging more accepted "
-            "scenarios."
+            "for replay-legal scenarios. Defaults to the full action space for checkpoint "
+            "opponents, or --root-opponent-action-scenarios for benchmark opponents. Values "
+            "above the accepted scenario count provide hidden-mode reserve candidates without "
+            "averaging more accepted scenarios."
         ),
     )
     root_puct_play.add_argument(
@@ -3605,6 +3607,20 @@ def _adaptive_root_visit_budget_selector(args: argparse.Namespace) -> EntropyMar
     return selector if isinstance(selector, EntropyMarginVisitBudgetSelector) else None
 
 
+def _root_opponent_action_candidate_scenario_count(args: argparse.Namespace) -> int:
+    """Resolve replay candidates without silently dropping hidden-mode reserve actions."""
+
+    configured = args.root_opponent_action_candidate_scenarios
+    if configured is not None:
+        return configured
+    if args.root_opponent_action_policy == "checkpoint":
+        # The hidden-information path cannot inspect the opponent's legal mask. Retain every
+        # abstract action bucket so replay can reject an invalid high-prior hypothesis and try
+        # the next one; RootPUCTSearchPolicy still caps accepted scenarios separately.
+        return ACTION_COUNT
+    return args.root_opponent_action_scenarios
+
+
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if not args.allow_legacy_checkpoints:
@@ -3615,11 +3631,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         )
     if args.root_opponent_action_scenarios <= 0:
         raise ValueError("root opponent action scenarios must be positive.")
-    root_opponent_action_candidate_scenarios = (
-        args.root_opponent_action_scenarios
-        if args.root_opponent_action_candidate_scenarios is None
-        else args.root_opponent_action_candidate_scenarios
-    )
+    root_opponent_action_candidate_scenarios = _root_opponent_action_candidate_scenario_count(args)
     if root_opponent_action_candidate_scenarios <= 0:
         raise ValueError("root opponent action candidate scenarios must be positive.")
     if root_opponent_action_candidate_scenarios < args.root_opponent_action_scenarios:
