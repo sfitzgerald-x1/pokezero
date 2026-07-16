@@ -28,13 +28,14 @@ _MISSING_WORLD_DETAIL_RE = re.compile(
     re.IGNORECASE,
 )
 _MISSING_WORLD_SOURCE_NONE_RE = re.compile(
-    r"start override source did not produce a sampled world",
+    r"start override source did not produce a sampled world(?:\s+\([2-9]\d* attempts\))?",
     re.IGNORECASE,
 )
 _MISSING_WORLD_PLANNER_NONE_RE = re.compile(
-    r"start override planner did not produce a sampled world(?!\s*:)",
+    r"start override planner did not produce a sampled world(?!\s*:)(?:\s+\([2-9]\d* attempts\))?",
     re.IGNORECASE,
 )
+_REJECTION_ATTEMPT_SUFFIX_RE = re.compile(r"\s+\((?P<count>[2-9]\d*) attempts\)\s*$", re.IGNORECASE)
 
 
 def root_puct_fallback_category(reason: object) -> str:
@@ -198,13 +199,11 @@ def root_puct_missing_sampled_world_reason_counts(reason: object) -> dict[str, i
     text = str(reason or "")
     for match in _MISSING_WORLD_DETAIL_RE.finditer(text):
         category = _missing_sampled_world_reason_category(match.group("detail"))
-        counts[category] = counts.get(category, 0) + 1
-    source_none_count = len(_MISSING_WORLD_SOURCE_NONE_RE.findall(text))
-    if source_none_count:
-        counts["source_none"] = source_none_count
-    planner_none_count = len(_MISSING_WORLD_PLANNER_NONE_RE.findall(text))
-    if planner_none_count:
-        counts["planner_none"] = planner_none_count
+        counts[category] = counts.get(category, 0) + _rejection_attempt_count(match.group(0))
+    for match in _MISSING_WORLD_SOURCE_NONE_RE.finditer(text):
+        counts["source_none"] = counts.get("source_none", 0) + _rejection_attempt_count(match.group(0))
+    for match in _MISSING_WORLD_PLANNER_NONE_RE.finditer(text):
+        counts["planner_none"] = counts.get("planner_none", 0) + _rejection_attempt_count(match.group(0))
     return counts
 
 
@@ -214,6 +213,11 @@ def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str
         key = match.group(1)
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _rejection_attempt_count(reason: str) -> int:
+    match = _REJECTION_ATTEMPT_SUFFIX_RE.search(reason)
+    return int(match.group("count")) if match is not None else 1
 
 
 def _request_mismatch_detail_strings(reason: object) -> list[str]:
