@@ -10,6 +10,7 @@ from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig
 from pokezero.search import (
     RootPUCTSearchTiming,
+    _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
     terminal_value_for_player,
@@ -32,6 +33,38 @@ def _start_override() -> BattleStartOverride:
     return BattleStartOverride(
         player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
     )
+
+
+class CandidateIllegalActionErrorTest(unittest.TestCase):
+    def test_accepts_legacy_and_request_kind_qualified_errors_for_the_candidate(self) -> None:
+        for message in (
+            "action_index 4 is not legal for the current request.",
+            "p1: action_index 4 is not legal for the current request.",
+            "action_index 4 is not legal for the current request (request_kind=force_switch).",
+            "p1: action_index 4 is not legal for the current request (request_kind=force_switch).",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(
+                    _is_candidate_illegal_action_error(
+                        ValueError(message), player_id="p1", action_index=4
+                    )
+                )
+
+    def test_rejects_qualified_errors_for_a_different_action_or_player(self) -> None:
+        self.assertFalse(
+            _is_candidate_illegal_action_error(
+                ValueError("p2: action_index 4 is not legal for the current request (request_kind=move)."),
+                player_id="p1",
+                action_index=4,
+            )
+        )
+        self.assertFalse(
+            _is_candidate_illegal_action_error(
+                ValueError("p1: action_index 3 is not legal for the current request (request_kind=move)."),
+                player_id="p1",
+                action_index=4,
+            )
+        )
 
 
 class BranchOutcomeEnv:

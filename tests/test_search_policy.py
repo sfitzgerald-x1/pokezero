@@ -2100,6 +2100,15 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             message,
         )
 
+    def test_opponent_scenario_replay_legality_classifies_force_switch_illegal_action(self) -> None:
+        scenario = OpponentActionScenario(actions={"p2": 0})
+        message = "p1: action_index 0 is not legal for the current request (request_kind=force_switch)."
+
+        self.assertEqual(
+            _opponent_scenario_replay_legality_error(ValueError(message), scenario),
+            message,
+        )
+
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),

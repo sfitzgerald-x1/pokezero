@@ -180,6 +180,17 @@ class LocalShowdownRequestTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not legal"):
             showdown_choice_for_action(state, 4)
 
+    def test_choice_translation_reports_force_switch_request_kind_for_illegal_move(self) -> None:
+        replay = parse_showdown_replay(replay_lines_with_request(request_payload("p1", force_switch=True)))
+        state = normalize_for_player(replay, player_id="p1", configured_showdown_slot="p1")
+
+        self.assertEqual(state.request_kind, "force_switch")
+        with self.assertRaisesRegex(
+            ValueError,
+            r"action_index 0 is not legal for the current request \(request_kind=force_switch\)\.",
+        ):
+            showdown_choice_for_action(state, 0)
+
     def test_choice_translation_blocks_maybe_trapped_switches(self) -> None:
         replay = parse_showdown_replay(replay_lines_with_request(request_payload("p1", maybe_trapped=True)))
         state = normalize_for_player(replay, player_id="p1", configured_showdown_slot="p1")
