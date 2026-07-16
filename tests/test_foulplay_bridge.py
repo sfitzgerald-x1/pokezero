@@ -1455,6 +1455,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_skip_categories={
                         "start_override_observation_mismatch": 1,
                     },
+                    root_puct_opponent_action_missing_sampled_world_reason_categories={
+                        "self_team_unavailable": 2,
+                    },
                     root_puct_opponent_action_replay_rejection_decision_rounds={"3": 1},
                     root_puct_opponent_action_start_override_mismatch_decision_rounds={"3": 1},
                     root_puct_opponent_action_first_observation_mismatch_paths={
@@ -1502,6 +1505,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_skip_categories={
                         "illegal_action_for_current_request": 2,
                         "missing_sampled_world": 1,
+                    },
+                    root_puct_opponent_action_missing_sampled_world_reason_categories={
+                        "opponent_belief_unavailable": 1,
                     },
                     root_puct_opponent_action_replay_rejection_decision_rounds={
                         "12": 2,
@@ -1562,6 +1568,13 @@ class FoulPlayBridgeTest(unittest.TestCase):
             },
         )
         self.assertEqual(
+            payload["root_puct"]["opponent_action_missing_sampled_world_reason_categories"],
+            {
+                "opponent_belief_unavailable": 1,
+                "self_team_unavailable": 2,
+            },
+        )
+        self.assertEqual(
             payload["root_puct"]["opponent_action_replay_rejection_decision_rounds"],
             {"3": 1, "12": 2},
         )
@@ -1618,6 +1631,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
             {"start_override_observation_mismatch": 1},
         )
         self.assertEqual(
+            payload["game_results"][0]["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"self_team_unavailable": 2},
+        )
+        self.assertEqual(
             payload["game_results"][0]["root_puct_opponent_action_replay_rejection_decision_rounds"],
             {"3": 1},
         )
@@ -1669,6 +1686,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "illegal_action_for_current_request": 2,
                 "missing_sampled_world": 1,
             },
+        )
+        self.assertEqual(
+            payload["game_results"][1]["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"opponent_belief_unavailable": 1},
         )
         self.assertEqual(
             payload["game_results"][1]["root_puct_opponent_action_replay_request_mismatch_players"],

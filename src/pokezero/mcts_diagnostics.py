@@ -23,6 +23,10 @@ _OBSERVATION_MISMATCH_PATH_RE = re.compile(
     r"\((?P<path>[^():]+):\s+actual=.*?\s+expected=.*?\)",
     re.IGNORECASE,
 )
+_MISSING_WORLD_DETAIL_RE = re.compile(
+    r"start override planner did not produce a sampled world:\s*(?P<detail>.*?)(?=;|\Z)",
+    re.IGNORECASE,
+)
 
 
 def root_puct_fallback_category(reason: object) -> str:
@@ -179,6 +183,19 @@ def root_puct_first_observation_mismatch_path_counts(reason: object) -> dict[str
     return counts
 
 
+def root_puct_missing_sampled_world_reason_counts(reason: object) -> dict[str, int]:
+    """Classify public belief-world materialization failures without retaining raw details."""
+
+    counts: dict[str, int] = {}
+    text = str(reason or "")
+    for match in _MISSING_WORLD_DETAIL_RE.finditer(text):
+        category = _missing_sampled_world_reason_category(match.group("detail"))
+        counts[category] = counts.get(category, 0) + 1
+    if not counts and "start override source did not produce a sampled world" in text.lower():
+        counts["source_none"] = 1
+    return counts
+
+
 def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str, int]:
     counts: dict[str, int] = {}
     for match in pattern.finditer(str(reason or "")):
@@ -210,3 +227,32 @@ def _request_mismatch_players_key(players_text: str) -> str:
     if not players:
         return "none"
     return ",".join(player.lower() for player in players)
+
+
+def _missing_sampled_world_reason_category(detail: str) -> str:
+    normalized = detail.strip().lower()
+    if "unsupported format" in normalized:
+        return "unsupported_format"
+    if "observation metadata is missing" in normalized:
+        return "observation_metadata_missing"
+    if "belief_view is missing or invalid" in normalized:
+        return "belief_view_invalid"
+    if "request-known self_team is missing or inconsistent" in normalized:
+        return "self_team_unavailable"
+    if "public opponent switch constraints are inconsistent" in normalized:
+        return "opponent_switch_constraints_inconsistent"
+    if "opponent belief has more revealed pokemon than team slots" in normalized:
+        return "revealed_team_overfull"
+    if "public constrained hidden opponent species could not be sampled" in normalized:
+        return "constrained_hidden_backline_unavailable"
+    if "random hidden opponent backline could not be sampled" in normalized:
+        return "hidden_backline_unavailable"
+    if "sampled opponent team could not satisfy public team slot constraints" in normalized:
+        return "team_slot_constraints_unsatisfied"
+    if "belief_view player slots are invalid" in normalized:
+        return "belief_view_slots_invalid"
+    if "could not be sampled from public belief" in normalized:
+        return "revealed_opponent_unavailable"
+    if "opponent belief could not be materialized" in normalized:
+        return "opponent_belief_unavailable"
+    return "other"

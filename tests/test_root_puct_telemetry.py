@@ -29,6 +29,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 },
                 "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
                 "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
+                "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                    "self_team_unavailable": 2
+                },
             },
             decision_index=4,
             turn_index=7,
@@ -56,6 +59,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "counters": {
                     "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
                     "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
+                    "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                        "self_team_unavailable": 2
+                    },
                 },
             },
         )
@@ -92,6 +98,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "timing": {"total_seconds": 0.40, "prefix_replay_seconds": 0.20},
                     "counters": {
                         "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 2},
+                        "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                            "opponent_belief_unavailable": 1
+                        },
                     },
                 },
             )
@@ -112,7 +121,12 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         )
         self.assertEqual(
             report["scenario_failure_taxonomy"],
-            {"skip_categories": {"replay_request_mismatch": 2}},
+            {
+                "missing_sampled_world_reason_categories": {
+                    "opponent_belief_unavailable": 1
+                },
+                "skip_categories": {"replay_request_mismatch": 2},
+            },
         )
         self.assertEqual(report["visits"]["total"], 12)
         self.assertEqual(report["visits"]["effective_total"], 9)
