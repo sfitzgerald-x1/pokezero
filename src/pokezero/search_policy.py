@@ -337,6 +337,11 @@ class RootPUCTSearchPolicy:
     value_fn: ObservationValueFunction
     prior_fn: ActionPriorFunction
     policy_id: str = "root-puct-search"
+    # Search is a policy wrapper rather than an alias wrapper. Preserve the
+    # underlying raw-policy checkpoint explicitly so benchmark provenance can
+    # audit the concrete prior used by every search decision.
+    checkpoint_path: str | None = None
+    weights_sha256: str | None = None
     cpuct: float = 1.25
     opponent_action_planner: OpponentActionPlanner = no_opponent_action_planner
     opponent_action_scenario_planner: OpponentActionScenarioPlanner | None = None
