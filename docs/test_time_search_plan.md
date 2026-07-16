@@ -343,3 +343,40 @@ privileged-fallback rates per row (must be zero in primary rows).
   threshold to tune.
 - Blind-spot honesty: a positive capstone does NOT mean the hazard axis is
   fixed — Step 3 exists to keep that claim impossible to make by accident.
+
+## Disposition (2026-07-15) — program outcome and hand-off to v2
+
+This plan is closed. Superseded by `test_time_search_plan_v2.md` (lean
+workstreams). Record of what happened to each commitment:
+
+**Completed:**
+- Step 0: frozen isotonic calibrated leaf for iteration-0312 (Pearson 0.503,
+  sign 0.758, ECE 0.063; late-game ECE 0.136 caveat stands).
+- Step 1 timing audit and Step 3 hazard blind-spot audit: artifacts on shared
+  storage. The prior/profile audit completed via the 8-way sharded map after
+  the monolith hit OOM/deadline walls (progress logging added in the process).
+- P-0 through P-3 prerequisite implementations, the sharded-profile
+  infrastructure, and the documented one-command re-point path.
+
+**Left undone by this apparatus:**
+- The directional probe's paired deltas were never produced here: attempts
+  failed pre-measurement three distinct ways (profile monolith OOM/deadline —
+  fixed by sharding; frozen-plan provenance mismatch on
+  `max_decision_rounds`; opponent-action scenarios all illegal with fallback
+  disabled). The last is a real finding, carried into v2 as workstream W1.
+- The unattended reliability rehearsal never passed green.
+
+**Descoped by owner decision (2026-07-15):**
+- The pre-registered five-arm capstone on the 1M checkpoint: the checkpoint
+  was superseded by its own lineage mid-program; the binding measurement is
+  deferred to a future owner-designated final checkpoint. Primary seed bands
+  (7460000/7470000) remain reserved and untouched.
+- Frozen-plan/provenance-gated execution as the default doctrine, the
+  Dirichlet secondary arm, and further audit runs.
+
+**The headline question was answered outside this apparatus:** 200 paired
+seeds on `scripts/compare_root_puct_vs_foulplay.py` — root-PUCT-120 with the
+frozen leaf (fallback enabled) 43.0% vs FoulPlay against the raw model's
+33.0%, paired +10.0 pts (McNemar b=46/c=26, p≈0.02). H1 ("MCTS is a topper")
+is supported in the deployable configuration; H3's blind-spot concern and the
+H4/H5 cost questions transfer to v2 workstreams W1/W2/W4.
