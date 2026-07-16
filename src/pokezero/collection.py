@@ -471,6 +471,7 @@ def benchmark_rollouts(
             belief_public_checksums_by_seed: dict[int, tuple[str, ...]] = {}
             game_results: list[BenchmarkGameResult] = []
             matchup_start = perf_counter()
+            progress_callback_seconds = 0.0
             for game_index in range(games):
                 seed = seed_start + game_index
                 record = run_rollout_record_on_env(
@@ -494,6 +495,10 @@ def benchmark_rollouts(
                 if checksums:
                     belief_public_checksums_by_seed[seed] = checksums
                 if progress_callback is not None:
+                    matchup_elapsed_seconds = (
+                        perf_counter() - matchup_start - progress_callback_seconds
+                    )
+                    callback_started = perf_counter()
                     progress_callback(
                         BenchmarkProgress(
                             matchup_label=matchup.label,
@@ -502,10 +507,11 @@ def benchmark_rollouts(
                             games_completed=game_index + 1,
                             games_total=games,
                             seed=seed,
-                            matchup_elapsed_seconds=perf_counter() - matchup_start,
+                            matchup_elapsed_seconds=matchup_elapsed_seconds,
                         )
                     )
-            elapsed = perf_counter() - matchup_start
+                    progress_callback_seconds += perf_counter() - callback_started
+            elapsed = perf_counter() - matchup_start - progress_callback_seconds
             results.append(
                 BenchmarkMatchupResult(
                     label=matchup.label,

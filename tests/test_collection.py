@@ -536,6 +536,35 @@ class CollectionTest(unittest.TestCase):
         self.assertGreaterEqual(progress[0].matchup_elapsed_seconds, 0.0)
         self.assertGreaterEqual(progress[1].matchup_elapsed_seconds, progress[0].matchup_elapsed_seconds)
 
+    def test_benchmark_rollouts_excludes_progress_callback_time_from_matchup_metrics(self) -> None:
+        class Clock:
+            value = 0.0
+
+            def __call__(self) -> float:
+                current = self.value
+                self.value += 1.0
+                return current
+
+            def advance(self, seconds: float) -> None:
+                self.value += seconds
+
+        clock = Clock()
+
+        def slow_progress(_progress) -> None:
+            clock.advance(50.0)
+
+        with patch("pokezero.collection.perf_counter", clock):
+            report = benchmark_rollouts(
+                games=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                matchups=(BenchmarkMatchup("p1 vs p2", RandomLegalPolicy(), RandomLegalPolicy()),),
+                progress_callback=slow_progress,
+            )
+
+        # The callback's synthetic 50 seconds is liveness I/O, not benchmark work.
+        self.assertLess(report.matchups[0].metrics.elapsed_seconds, 10.0)
+
     def test_benchmark_rollouts_summarizes_policy_decision_metadata(self) -> None:
         report = benchmark_rollouts(
             games=2,
