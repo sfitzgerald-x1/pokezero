@@ -1,87 +1,82 @@
 # PokeZero
 
 PokeZero is a **work-in-progress** effort to train an agent that plays Pokémon Showdown **Gen 3
-random battles** well enough to be **competitive on the live ladder** — learned entirely from
-self-play, on CPU-first hardware. The approach is AlphaZero-style: improve a policy/value network
-by having it play itself, here applied to an imperfect-information, simultaneous-move game.
+random battles** at a high level — **pure self-play reinforcement learning**, no human data, no
+scripted teachers. The approach is AlphaZero-style: improve a policy/value network by having it
+play itself, here applied to an imperfect-information, simultaneous-move game.
 
 > ⚠️ Active research. Encodings, APIs, and checkpoints change frequently. The neural policy below
 > is the current frontier; the linear baseline and parts of the harness are earlier scaffolding
-> kept for reference.
+> kept for reference. Checkpoints are pinned to observation-schema versions — see
+> [`docs/model_versioning.md`](docs/model_versioning.md) before loading anything old.
 
 ## How it works
 
-- **Observation — raw facts only.** The battle state is encoded as per-entity tokens (active mons,
-  team members, candidate moves, field), each carrying categorical ids plus numeric features. A
-  **hard rule**: no precomputed type effectiveness, STAB, expected power, damage estimates, or
-  matchup summaries — the model must learn these from raw observable facts.
-  ([`docs/observation_input_shape.html`](docs/observation_input_shape.html))
+- **Observation — raw facts only.** The battle state is encoded as per-entity tokens, each carrying
+  categorical ids plus numeric features. A **hard rule**: no precomputed type effectiveness, STAB,
+  expected power, damage estimates, or matchup summaries — the model must learn these from raw
+  observable facts.
 - **Hidden information → belief.** A public belief engine tracks only what is observable about the
-  opponent (revealed moves/ability/item, narrowed candidate sets) instead of leaking hidden state.
+  opponent (revealed moves/ability/item, candidate sets narrowed against the public random-battle
+  set data) instead of leaking hidden state.
 - **Model.** An entity-token transformer **encoder** that outputs a policy over legal actions **and**
-  a value estimate — AlphaZero-style policy+value, *not* autoregressive next-token prediction. Gen 3
-  dex data is loaded generation-correctly via `Dex.forGen(3)`.
+  a value estimate — AlphaZero-style policy+value, *not* autoregressive next-token prediction —
+  plus auxiliary prediction heads (opponent action, action family, switch target) trained
+  alongside. Gen 3 dex data is loaded generation-correctly via `Dex.forGen(3)`.
+- **Test-time search.** A root-PUCT search layer (`pokezero.search_policy`) can sit on top of any
+  checkpoint at play time: belief-backed world sampling (determinization), opponent-action
+  scenarios, and a calibrated value leaf. In paired evaluation it beats the same checkpoint
+  without search. See [`docs/test_time_search_plan_v2.md`](docs/test_time_search_plan_v2.md).
+
+## What the model sees (v2.2)
+
+![v2.2 observation structure](docs/observation_v22_tokens.svg)
+
+One decision is **151 tokens**: a global field token (weather, hazards, screens, turn count,
+request kind), six self-team tokens (full knowledge: exact stats, PP, status, boosts), six
+opponent tokens (public knowledge only: revealed facts plus belief buckets and uncertainty),
+nine action-candidate tokens (the 4 moves and 5 switches the policy chooses among), one stats
+token, and **128 turn-merged transition tokens** — the model's memory, encoding what happened
+per resolved action since its last decision (the run configuration is window-size 1; history
+lives in these tokens, not in stacked past frames). Every token carries **51 categorical ids**
+(direct closed-vocabulary lookups into 841 embedding rows — no feature hashing) and **155
+numeric features**.
 
 ## Quickstart
 
 Prerequisites: a **built** Pokémon Showdown checkout (so `dist/sim/index.js` exists), passed as
-`--showdown-root` on each command, plus the optional `neural` extra (PyTorch) that the transformer
-policy needs:
+`--showdown-root` on each command, plus the `neural` extra (PyTorch):
 
 ```bash
-pip install -e '.[neural]'
+pip install -e '.[neural]'   # or: uv sync --extra neural
 ```
 
-Collect self-play rollouts as JSONL:
-
-```bash
-python -m pokezero.rollout_cli collect --games 50 --out runs/rollouts.jsonl \
-  --showdown-root /path/to/pokemon-showdown \
-  --p1-policy scripted-teacher --p2-policy scripted-teacher
-```
-
-Train the neural (entity-token transformer) policy from rollout JSONL:
-
-```bash
-python -m pokezero.neural_cli train --data runs/rollouts.jsonl --out runs/policy.pt \
-  --objective behavior-cloning --showdown-root /path/to/pokemon-showdown
-```
-
-For larger CPU self-play runs, prefer compact training caches over raw JSONL and process them in
-bounded shards. The training cache stores array-backed examples directly. Cache creation and
-training-cache consumption default to a 50GiB active-root cap; `train` deletes consumed cache shards
-after the checkpoint is safely written unless `--keep-cache-after-read` is passed:
-
-```bash
-mkdir -p runs/cache-chunk-000
-
-python -m pokezero.rollout_cli collect-training-cache --games 1000 \
-  --out runs/cache-chunk-000/cache-000 --showdown-root /path/to/pokemon-showdown \
-  --p1-policy random-legal --p2-policy random-legal --window-size 4
-
-# Repeat cache-001, cache-002, ... until the current chunk is ready, then train/delete it
-# before collecting the next chunk. Keep each shard small enough that collection memory stays
-# bounded; the default 50GiB cap is the on-disk guardrail for the active cache root.
-# The active-root cap counts all files under that root, so keep checkpoints/raw JSONL outside it.
-
-python -m pokezero.neural_cli train --data runs/cache-chunk-000/cache-* \
-  --out runs/policy.pt --objective ppo --showdown-root /path/to/pokemon-showdown \
-  --max-cache-gb 50
-```
-
-Run neural self-play iterations (collect → train → benchmark each round):
+Run self-play iterations (collect → train → benchmark each round). The cold start is
+`random-legal` — iteration 1 trains on random self-play, and the network takes over from there:
 
 ```bash
 python -m pokezero.neural_cli iterate --run-dir runs/selfplay --iterations 5 \
-  --games-per-iteration 512 --evaluation-games 40 --initial-policy neural:runs/policy.pt \
+  --games-per-iteration 512 --evaluation-games 40 --initial-policy random-legal \
   --showdown-root /path/to/pokemon-showdown
 ```
 
 Benchmark a checkpoint against the fixed baselines:
 
 ```bash
-python -m pokezero.neural_cli benchmark --checkpoint runs/policy.pt --games 50 \
-  --showdown-root /path/to/pokemon-showdown
+python -m pokezero.neural_cli benchmark --checkpoint runs/selfplay/run/iteration-0005/transformer-policy.pt \
+  --games 50 --showdown-root /path/to/pokemon-showdown
+```
+
+Play a checkpoint with root-PUCT search against FoulPlay, paired against the raw policy on the
+same seeds:
+
+```bash
+python scripts/compare_root_puct_vs_foulplay.py --checkpoint <policy.pt> \
+  --value-checkpoint <calibrated-leaf.pt> --root-extra-visits 120 \
+  --search-time-ms 100 --comparison-mode per-seed --games 50 \
+  --showdown-root /path/to/pokemon-showdown \
+  --foulplay-root /abs/path/to/third_party/foul-play \
+  --foulplay-python /abs/path/to/third_party/foul-play/.venv/bin/python
 ```
 
 ## Public Prior/Belief Profile
@@ -119,15 +114,24 @@ pokezero-neural prior-belief-profile --corpus runs/public-decisions.jsonl \
 
 - **Self-play environment** — `pokezero.local_showdown`: a Node BattleStream-backed Gen 3 env;
   observations are built incrementally from the protocol stream.
-- **Baselines** — `random-legal`, `simple-legal`, `scripted-teacher` (Gen 3 heuristic, for
-  bootstrap data), and `max-damage` / `aggressive-damage` (evaluation targets).
-- **Linear baseline** — `pokezero.linear_cli`: the original dependency-free masked-softmax policy.
-  Superseded by the neural policy; kept for plumbing and debugging.
-- **Bootstrap & promotion** — `pokezero.bootstrap_cli`, `pokezero.selfplay_cli`, `pokezero.eval_cli`:
-  scripted-teacher bootstrap, the linear self-play harness, and benchmark/health promotion gates.
-  Operational flags are documented in each command's `--help`.
+- **Opponents & baselines** — `random-legal`, `simple-legal`, `max-damage` /
+  `aggressive-damage` (fixed evaluation ladders), and **FoulPlay**
+  (`third_party/foul-play` + `pokezero.foulplay_bridge`) as the external benchmark opponent.
+  See [`docs/eval_opponents.md`](docs/eval_opponents.md).
+- **Test-time search** — `pokezero.search_policy`, `pokezero.determinization`,
+  `scripts/compare_root_puct_vs_foulplay.py`: root-PUCT over the policy's priors with
+  belief-sampled worlds and a calibrated value leaf; paired-seed strength comparison built in.
+- **Analysis** — behavioral trait tracking
+  ([`docs/checkpoint_trait_tracking_plan.md`](docs/checkpoint_trait_tracking_plan.md)),
+  strategy-diversity fingerprints
+  ([`docs/diversity_fingerprint_plan.md`](docs/diversity_fingerprint_plan.md)), and their
+  findings docs.
 - **Belief sidecar** — `pokezero.sidecar`: a read-only webview of the public belief state for a live
   battle room.
-- **Design & background** — [`docs/`](docs/): `goals.md`, `learning_architecture_exploration.md`,
-  `bootstrap_strategy.md`, `cpu_self_play_roadmap.md`, `max_damage_exploration_learnings.md`,
-  `observation_input_shape.html`.
+- **Legacy scaffolding** — `pokezero.linear_cli` (the original dependency-free masked-softmax
+  policy) and the early bootstrap/promotion harnesses; superseded by the neural self-play loop,
+  kept for plumbing and debugging.
+- **Design & background** — [`docs/`](docs/): `goals.md`, `model_versioning.md`,
+  `mcts_design.md`, `test_time_search_plan_v2.md` (and the closed v1 with its disposition
+  record), `human_predictor_plan.md`, the `foundation_*_results.md` series,
+  `learning_architecture_exploration.md`, `observation_input_shape.html`.
