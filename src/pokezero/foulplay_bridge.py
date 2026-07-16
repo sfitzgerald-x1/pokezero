@@ -1953,6 +1953,9 @@ def _build_policy(
     rollout_config: RolloutConfig,
     policy_id: str,
 ) -> Policy:
+    raw_checkpoint = str(config.checkpoint.resolve(strict=False))
+    raw_checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+
     def raw_policy(
         policy_id_override: str | None = None,
         *,
@@ -1965,6 +1968,8 @@ def _build_policy(
             sampling_temperature=config.temperature,
             device=config.device,
             policy_id=policy_id_override,
+            checkpoint_path=raw_checkpoint,
+            weights_sha256=raw_checkpoint_sha256,
         )
 
     if config.policy_mode == "raw":
@@ -2028,6 +2033,8 @@ def _build_policy(
         fallback_policy=raw_policy(f"{search_policy_id}-fallback"),
         allow_fallback=config.allow_search_fallback,
         policy_id=search_policy_id,
+        checkpoint_path=raw_checkpoint,
+        weights_sha256=raw_checkpoint_sha256,
         cpuct=config.cpuct,
         selection_mode=config.selection_mode,
         root_prior_temperature=config.effective_root_prior_temperature,
