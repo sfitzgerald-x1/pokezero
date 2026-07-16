@@ -27,6 +27,7 @@ from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
     _adaptive_root_visit_budget_selector,
+    _root_puct_benchmark_progress_callback,
     _root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
@@ -3390,6 +3391,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
         self.assertEqual(captured["games"], 3)
+        self.assertNotIn("progress_callback", captured)
         self.assertEqual(captured["seed_start"], 99)
         self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
         matchups = tuple(captured["matchups"])
@@ -3517,6 +3519,54 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.adaptive_root_uncontested_extra_visits, 0)
         self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
         self.assertIsNone(args.adaptive_root_value_margin_threshold)
+        self.assertIsNone(args.progress_interval_games)
+
+    def test_root_puct_progress_callback_emits_only_configured_intervals_and_completion(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(2)
+        with contextlib.redirect_stderr(stderr):
+            for games_completed in (1, 2, 3):
+                callback(
+                    SimpleNamespace(
+                        matchup_label="root-puct vs max-damage",
+                        matchup_index=1,
+                        matchup_count=4,
+                        games_completed=games_completed,
+                        games_total=3,
+                        seed=80 + games_completed,
+                        matchup_elapsed_seconds=1.23456 * games_completed,
+                    )
+                )
+
+        lines = [
+            line
+            for line in stderr.getvalue().splitlines()
+            if line.startswith("root_puct_play_benchmark_progress:")
+        ]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(
+            [json.loads(line.split(": ", 1)[1]) for line in lines],
+            [
+                {
+                    "games_completed": 2,
+                    "games_total": 3,
+                    "matchup_count": 4,
+                    "matchup_elapsed_seconds": 2.469,
+                    "matchup_index": 2,
+                    "matchup_label": "root-puct vs max-damage",
+                    "seed": 82,
+                },
+                {
+                    "games_completed": 3,
+                    "games_total": 3,
+                    "matchup_count": 4,
+                    "matchup_elapsed_seconds": 3.704,
+                    "matchup_index": 2,
+                    "matchup_label": "root-puct vs max-damage",
+                    "seed": 83,
+                },
+            ],
+        )
 
     def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
         if not torch_available():

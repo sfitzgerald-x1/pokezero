@@ -512,6 +512,30 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(result.metrics.p1_wins, 2)
             self.assertEqual(result.metrics.total_decision_rounds, 2)
 
+    def test_benchmark_rollouts_reports_each_completed_game_to_opt_in_progress_callback(self) -> None:
+        progress = []
+
+        benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(BenchmarkMatchup("p1 vs p2", RandomLegalPolicy(), RandomLegalPolicy()),),
+            progress_callback=progress.append,
+        )
+
+        self.assertEqual(len(progress), 2)
+        self.assertEqual(
+            [(entry.matchup_label, entry.matchup_index, entry.matchup_count) for entry in progress],
+            [("p1 vs p2", 0, 1), ("p1 vs p2", 0, 1)],
+        )
+        self.assertEqual(
+            [(entry.games_completed, entry.games_total, entry.seed) for entry in progress],
+            [(1, 2, 20), (2, 2, 21)],
+        )
+        self.assertGreaterEqual(progress[0].matchup_elapsed_seconds, 0.0)
+        self.assertGreaterEqual(progress[1].matchup_elapsed_seconds, progress[0].matchup_elapsed_seconds)
+
     def test_benchmark_rollouts_summarizes_policy_decision_metadata(self) -> None:
         report = benchmark_rollouts(
             games=2,
