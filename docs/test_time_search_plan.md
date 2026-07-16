@@ -1,5 +1,6 @@
-# Test-time search: validation-first plan from root-PUCT to ladder budgets
+# Test-time search: working plan v2 (lean)
 
+<<<<<<< Updated upstream
 Status: active validation program, 2026-07-10. Slots under `selfplay_mcts_roadmap.md`'s
 "MCTS at inference" workstream. Every step validates a named assumption before the
 next step spends effort on it. The current 1M checkpoint is used only for a
@@ -7,105 +8,78 @@ non-binding directional probe. The pre-registered full strength capstone is defe
 to a final checkpoint the owner designates later; its primary seed bands remain
 untouched. Later phases are funded by that binding capstone's outcome, not by
 default.
+=======
+Status: 2026-07-15. Replaces the staged validation program (Steps 0–4 and the
+capstone apparatus). That program's ceremony — frozen plans, provenance gating,
+audit preconditions, reserved-seed choreography — is retired for everyday
+questions. The measurement doctrine is now: **paired seeds, both arms, the
+compare harness (`scripts/compare_root_puct_vs_foulplay.py`), provenance logged
+but never gating.** A 200-seed paired read costs ~40 minutes locally; shard on
+cluster for larger n. The primary capstone seed bands stay reserved and
+untouched in case a formally defensible run is ever wanted.
+>>>>>>> Stashed changes
 
-## Current state (verified in code/artifacts, 2026-07-10)
+## Established results
 
-Exists and works today:
-- `RootPUCTSearchPolicy` (`search_policy.py`): one-ply PUCT over root actions —
-  priors from the policy head, visit-based final selection, time budgets,
-  override gates, fallback diagnostics (`mcts_diagnostics.py`).
-- Simultaneous moves via opponent-action planners (greedy / weighted top-k
-  scenario enumeration from the opponent policy's priors).
-- Hidden information via `determinization.py` — belief-backed world sampling.
-- Leaf evaluation: seeded rollout tails (`replay_branching`, prefix
-  snapshot/restore) and/or an observation-value function hook.
-- Runnable surfaces: `neural_cli root_puct` / `root_puct_counterfactual`
-  (recorded-decision re-scoring + benchmarks), `foulplay_bridge` (live play),
-  refutation mining (G4 consumer).
+- **Search works.** Root-PUCT-120 + frozen isotonic leaf, fallback enabled, 1M
+  v2.2 checkpoint: **43.0% vs FoulPlay against the raw model's 33.0%** —
+  paired **+10.0 pts** (200 seeds, McNemar b=46/c=26, p≈0.02). Search does not
+  lose to its own prior.
+- **Pure (fallback-disabled) search cannot run.** Opponent-action scenario
+  materialization comes up illegal essentially always — the same wall as the
+  hazard audit's world_unavailable (1680/1776). Today's +10 is earned on the
+  minority of decisions where scenarios materialize, with the prior playing
+  the rest. Known lead: the checkpoint scenario planner's requested-legal-mask
+  path is a *privileged benchmark guard* (its own comment says so) — the
+  deployment-honest (hidden-mask) path has no equivalent legality guard.
+- **The search is one-ply**: root-PUCT over root actions with rollout tails /
+  value-leaf evaluation. No multi-ply tree, no in-tree chance nodes, no
+  batched NN evaluation, no tree reuse across moves. "Deeper search" today
+  means more root visits, scenarios, and longer tails — not depth.
+- Value-leaf calibration (Step 0) is a repeatable job. The 1M frozen isotonic
+  leaf: Pearson 0.503, sign 0.758, ECE 0.063 — with a known weak late-game
+  slice (phase ECE 0.089/0.054/0.136). Timing and hazard artifacts exist; no
+  new audits planned.
 
-Does not exist: a multi-ply tree (no internal nodes/backup), in-tree chance
-nodes, batched/served NN evaluation for search, tree reuse across moves.
-**Still not wired (review findings, 2026-07-10, verified in code)**: the
-checkpoint scenario planner's requested-legal-mask path is a **privileged**
-benchmark guard (its own comment says so). P-3's per-decision visit-budget hook
-is implemented; its strength benefit remains unmeasured.
+## Workstreams
 
-Step 0 is closed. A frozen isotonic calibrated copy of iteration-0312 passed
-the global held-out thresholds on the schema-matched external corpus: Pearson
-0.503, sign agreement 0.758, and ECE 0.063. The raw head failed calibration,
-so every subsequent value-leaf result must name the calibrated copy. Phase
-stratification is retained as a risk diagnostic: early/mid/late ECE was
-0.089/0.054/0.136 respectively. The late-game slice is above the global target;
-it is not hidden or tuned away, and capstone reporting must preserve that
-limitation alongside the global authorization.
+### W1 — Fix opponent-scenario legality
 
-## Prerequisite implementations (small, test-gated; required before the steps that cite them)
+The illegal-scenario wall blocks pure search and silently caps current
+strength. In order:
 
-- **P-0 Schema-matched external evaluation corpus (closed for Step 0)**: every value-readiness corpus must match the checkpoint's observation
-  schema and numeric census. The historical `pool-fp-v1` and `pool-fp-v2` artifacts cannot score
-  this v2.2/155-column capstone checkpoint, so they are explicitly ineligible. The controlled
-  foul-play harness now normalizes turn-merged history for v2.2 and exposes
-  `capture_controlled_foulplay_rollouts` for raw-policy, p1-only external-opponent capture; it
-  writes each labeled terminal game immediately, excludes capped/tied outcomes, and stamps
-  belief-source provenance. The completed Step 0 read used disjoint v2.2
-  calibration-fit and evaluation bands of 120 labeled games each, with corpus,
-  source-checkpoint, observation-census, belief-source, and seed-range provenance
-  frozen in the gate artifact. A one-game v2.2 capture smoke validates plumbing
-  only; it is not a gate result.
-- **P-1 Belief-world wiring (implemented, required by Steps 2–4)**:
-  `root-puct-play-benchmark --belief-start-overrides` wires the public Gen 3
-  belief planner into replay search and explicitly enables the candidate-set
-  source for the benchmark environment. `--belief-world-sample-cap` implements
-  the pre-registered mapping **K = min(cap, public full-team combinations)**:
-  surviving revealed variants plus the distinct-species unrevealed backline
-  worlds the materializer can draw, respecting public switch/move constraints.
-  Uncertainty bits and the resolved K are diagnostics, not policy uncertainty.
-  **Anti-leakage gate (tested)**: the sampling profile is a function of public
-  belief only; matched fixture contexts with different opponent-private request
-  data have identical checksums/K and sampled worlds. Benchmark JSON logs the
-  distinct public-belief checksum(s) for each game seed and refuses a
-  belief-enabled result if any searched seed materialized no world.
-- **P-2 Root Dirichlet noise (implemented; required by Step 3)**: alpha/mix/seed
-  semantics are explicit and per-decision seeded for reproducibility; diagnostics
-  record the legal-action noise draw and mixed priors. **Audit-only by default**:
-  primary evaluation arms run deterministic priors; `--root-dirichlet-alpha`
-  creates a separately labeled `+dirichlet` row. Noise never silently enters a
-  strength row.
-- **P-3 Per-decision budget hook (implemented; required by Step 4 arm 4)**:
-  after the mandatory legal-action sweep, `EntropyMarginVisitBudgetSelector`
-  can add visits only when normalized policy entropy and/or the initial top-two
-  leaf-value margin crosses configured thresholds. The CLI records and labels
-  adaptive-budget rows separately; fixed-budget behavior remains the default.
+1. **Instrument before fixing**: per-decision logging over ~50 games —
+   fallback rate, and a failure taxonomy for illegal scenarios
+   (perspective/mask mismatch, force-switch turns, belief–world desync, stale
+   request state). We have never measured what fraction of turns actually
+   search; that number reframes every other result.
+2. Root-cause and fix the top classes, starting from the privileged-guard
+   lead above; unit-test each fixed class.
+3. Re-run the 200-seed paired baseline. Deliverables: fallback rate
+   before/after, paired delta before/after. Hypothesis: if most turns fall
+   back today, legality fixes multiply search's value.
 
-## Assumptions under test
+### W2 — Throughput profile and the budget→value curve
 
-| id | assumption | validated in |
-|---|---|---|
-| H0 | the chosen checkpoint's VALUE HEAD is a valid leaf evaluator (held-out ranking + calibration), independent of its policy strength | Step 0 |
-| H1 | root-only search adds measurable strength on a strong checkpoint ("MCTS is a topper") | Step 4 |
-| H2 | search value concentrates at contested decisions (high policy entropy / small value margin) → adaptive budgets beat flat budgets | Steps 2, 4 |
-| H3 | prior-guided search inherits systematic blind spots (near-zero prior ⇒ no post-sweep revisit at useful budgets); root noise is a separately tested remedy, not default hygiene | Step 3 |
-| H4 | per-simulation cost is dominated by NN eval (not sim stepping) at 10M+, and grows with model scale — the eval path, not the simulator, is the bottleneck | Step 1 |
-| H5 | the sims→strength curve flattens quickly under a strong prior (few, well-aimed sims suffice) — bounding whether a fast simulator backend is ever required | Step 4 |
+1. Mechanics: per-decision wall-clock and visits/sec on the small model at
+   extra-visits {0, 24, 120, 480, 1200}, with a stage breakdown (encode, NN
+   forward, scenario materialization, rollout tails, sim stepping).
+2. Value: paired winrate vs FoulPlay at each budget (~100–200 seeds/point).
+   Deliverable: **winrate vs seconds-per-turn curve** and its knee — "how far
+   can we reasonably search" answered in points, not visits.
 
-## Step 0 — Value-head readiness gate for the capstone checkpoint (H0)
+### W3 — Frontier small checkpoint (v2.2 @ ~2.3M+, then the 3M final)
 
-The 1M checkpoint was chosen for policy strength; nothing yet certifies its
-VALUE head as a leaf evaluator — and project precedent (the E1 value-readiness
-line) treats that as the prerequisite it is. On the frozen P-0 v2.2
-external-opponent corpus: held-out value **ranking** (Pearson vs realized
-outcomes) and **calibration** (ECE + sign agreement) for iteration-0312
-specifically, with checkpoint/data provenance recorded. Historical v1/v2
-encoded pools are invalid for this v2.2 checkpoint.
-Pre-registered thresholds: Pearson ≥ the E1 floor re-derived on the P-0 pool;
-sign agreement ≥ 0.75; ECE ≤ 0.10 (raw) — if raw calibration fails but ranking
-passes, a **calibrated copy** (affine/isotonic fit on the disjoint P-0
-calibration band, never on capstone games) MAY be used as the leaf evaluator
-and must be labeled as such in every capstone row. The completed selection is
-the isotonic copy described above. If ranking fails, the
-capstone is re-pointed at the best value-ready checkpoint and the plan's title
-claim changes accordingly.
+1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
+   A 1M-fitted isotonic map on a 2.3M value head confounds the read — the one
+   prerequisite kept from the old program.
+2. Paired baseline at the W2 knee budget: raw vs search at the frontier.
+   Deliverable: does a stronger prior shrink search's edge (1M vs frontier
+   delta comparison)?
+3. When the 3M final lands, the same two commands re-run there. Those numbers
+   feed the final-checkpoint designation.
 
+<<<<<<< Updated upstream
 ## Step 1 — Mechanics + capstone-equivalent cost profile
 
 Submit the persistent timing-audit job configured to run
@@ -117,16 +91,31 @@ cannot size a legal+24 tail match. Its durable timing artifact and terminal
 marker, not a foreground command's exit status, are the record of this probe.
 Use `root-puct-play-benchmark --belief-start-overrides` for the P-1 end-to-end
 determinization validation.
+=======
+### W4 — Search cost at M (50M) and L (200M) scale
 
-Validates: the checkpoint loads under search (v2.2 latch), and — the measured
-numbers this plan's cost claims depend on — the per-move wall split into {prefix
-replay, per-branch sim stepping, NN evals, rollout tails}. The scoping estimates
-(5–20 ms/edge, seconds/tail) are hypotheses until this table exists.
+1. Per-decision search cost with M and L checkpoints on eval GPUs: forward
+   latency, visits/sec, achievable extra-visits within realistic per-turn
+   budgets (~2s aggressive, ~10s ladder-like). Deliverable: feasible search
+   budget per scale — how much search the big models actually get.
+2. Framing: compute allocation — strong prior with few visits vs weaker prior
+   with many; the per-scale W2 curve says where search adds most. Optional,
+   only if M-scale feasible budget is nontrivial: one paired probe at M with
+   a refit M leaf.
+>>>>>>> Stashed changes
 
-Gate: any component >3× its estimate → update this doc's budget math before
-proceeding (measure-don't-assume; twice this month the finer measurement
-overturned the confident model).
+### W5 — Search efficiency (strictly after W2's profile)
 
+Attack what the profile says dominates. Candidates going in, confirmed or
+discarded by data: caching/reusing determinized worlds instead of per-visit
+materialization, batched leaf NN evaluation, tree reuse across consecutive
+turns, early termination on forced lines, vectorized sim stepping. The bigger
+structural option — an actual multi-ply tree — is only on the table if W2
+shows the one-ply budget curve saturating while wall-clock headroom remains.
+Deliverable: measured speedup, then the W2 value curve re-run — success is
+**more winrate at fixed wall-clock**, not more visits.
+
+<<<<<<< Updated upstream
 ### Recorded timing evidence
 
 The first capstone-equivalent timing read completed with raw policy priors, the
@@ -149,19 +138,18 @@ sweep-only, rollout-tail, or wrong value-leaf timing artifact rather than
 silently accepting a hand-entered wall budget.
 
 ## Step 2 — Prior-quality profile of the 1M net (hours)
+=======
+## Order and cost
+>>>>>>> Stashed changes
 
-Over a ≥2,000-decision corpus from recorded games: per-decision policy entropy,
-top-1/top-2 prior mass, and value margin between the two best candidates.
+W1 ∥ W2 first (cheap; W1's fallback rate reframes everything else). W3 after
+its leaf refit; W4 anytime on eval GPUs; W5 only after W2. Every strength
+claim uses the paired harness, both arms on shared seeds; no strength claims
+from unpaired or single-arm runs.
 
-Deliverable: the "contested-decision fraction" — what share of moves have
-entropy > τ or value margin < δ (sweep τ, δ). **Also measured (P-1's input):
-belief-candidate uncertainty per decision** (candidate-set entropy over
-unrevealed opponent slots) — policy uncertainty gates the SIM budget; belief
-uncertainty gates K, and the two are distinct populations by hypothesis. This is the load factor for
-adaptive budgets (H2's precondition) and the ladder wall-clock model
-(budget ≈ contested-fraction × per-search cost). Also stratify by game phase:
-the hypothesis says lategame/endgame decisions are the contested ones.
+## Retired from the previous plan
 
+<<<<<<< Updated upstream
 Gate: none (descriptive), but the number feeds Step 4's adaptive arm and the
 ladder-budget arithmetic.
 
@@ -343,3 +331,12 @@ privileged-fallback rates per row (must be zero in primary rows).
   threshold to tune.
 - Blind-spot honesty: a positive capstone does NOT mean the hazard axis is
   fixed — Step 3 exists to keep that claim impossible to make by accident.
+=======
+Frozen-plan composition, provenance gates, audit-lineage preconditions,
+marker-backed execution, the five-arm battery, Dirichlet secondaries. The
+owner-criteria thresholds (+3 md / +5 fp, paired CI > 0, never losing to the
+prior) remain the bar for any eventual *binding* claim, measured with this
+harness at cluster scale (~1000+ paired games) once a final checkpoint is
+designated. Late-game value-leaf ECE stays a named caveat on all value-leaf
+results until a refit clears it.
+>>>>>>> Stashed changes
