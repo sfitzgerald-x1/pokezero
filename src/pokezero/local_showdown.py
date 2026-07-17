@@ -450,6 +450,12 @@ class LocalShowdownEnv:
         direct_requests = _json_clone_requests(requests)
         if not direct_requests:
             raise LocalShowdownError("Direct materialization produced no actionable request boundary.")
+        # The bridge rebuilds its team in active-first order to construct the sampled world.  Its
+        # generated actor request can therefore reorder the player's own party tokens even though
+        # the player-visible request at this decision boundary is already known.  Keep that exact
+        # actor request for encoding and choice validation; requests for every other seat remain
+        # bridge-generated from the determinized simulator.
+        direct_requests[state.player_id] = _json_clone_mapping(state.self_request)
         replay = replace(
             state.replay,
             battle_id=self._battle_id,
