@@ -1038,6 +1038,9 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
+            # The parser's observation feature advances the toxic value at a new turn. The
+            # simulator state at the request boundary is one residual behind that feature.
+            "toxicStage": _materialization_toxic_stage(replay, player),
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
@@ -1060,6 +1063,13 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "selfBenchedMoveHistory": _has_self_benched_move_history(state),
         "sides": sides,
     }
+
+
+def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int:
+    """Return the public toxic counter in the simulator's request-boundary convention."""
+
+    tracked_stage = int(replay.toxic_stage.get(player, 0))
+    return max(0, tracked_stage - 1)
 
 
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:

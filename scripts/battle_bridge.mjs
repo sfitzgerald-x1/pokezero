@@ -29,9 +29,10 @@ if (!showdownRoot) {
 
 let BattleStream;
 let getPlayerStreams;
-let Battle;
+let State;
 try {
-  ({ Battle, BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
 } catch (error) {
   emit({
     type: "error",
@@ -213,7 +214,9 @@ function snapshotBattle(command) {
     type: "snapshot",
     battleId: battle.battleId,
     snapshot: {
-      battle: battle.battleStream.battle.toJSON(),
+      // Keep the engine state API explicit: snapshots are cloned simulator worlds, never
+      // protocol replays and never a serialization of the live decision environment.
+      battle: State.serializeBattle(battle.battleStream.battle),
       boundaryRequests: battle.boundaryRequests,
       terminalScheduled: battle.terminalScheduled,
     },
@@ -230,7 +233,7 @@ function restoreBattle(command) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
   const send = battle.battleStream.battle.send;
-  battle.battleStream.battle = Battle.fromJSON(snapshot.battle);
+  battle.battleStream.battle = State.deserializeBattle(snapshot.battle);
   battle.battleStream.battle.restart(send);
   battle.boundaryRequests =
     snapshot.boundaryRequests && typeof snapshot.boundaryRequests === "object"
@@ -255,10 +258,12 @@ function materializeBattle(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
-  const snapshot = battle.battleStream.battle.toJSON();
+  // This template belongs to the already belief-sampled search world. We construct a new
+  // public branch-point payload from it, then let Showdown deserialize that payload directly.
+  const snapshot = State.serializeBattle(battle.battleStream.battle);
   applyPublicState(snapshot, publicState);
   const send = battle.battleStream.battle.send;
-  battle.battleStream.battle = Battle.fromJSON(snapshot);
+  battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.readyScheduled = false;
@@ -323,7 +328,13 @@ function applyPublicState(snapshot, publicState) {
         throw new Error(`Materialize cannot uniquely match ${sideId} ${row.species}.`);
       }
       const index = matchingIndices[0];
-      applyPokemonCondition(serializedSide.pokemon[index], row.condition, sideId, row.species);
+      applyPokemonCondition(
+        serializedSide.pokemon[index],
+        row.condition,
+        sideId,
+        row.species,
+        publicSide.toxicStage,
+      );
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
         : normalizedBoosts(null);
@@ -526,15 +537,15 @@ function normalizedBoosts(boosts) {
   return normalized;
 }
 
-function applyPokemonCondition(pokemon, condition, sideId, species) {
+function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage) {
   if (typeof condition !== "string" || !condition.trim()) {
     throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
   }
   const parts = condition.trim().split(/\s+/);
   const fainted = parts.includes("fnt") || parts[0] === "0";
-  const status = parts.find(part => ["brn", "frz", "par", "psn"].includes(part)) || "";
-  if (parts.includes("slp") || parts.includes("tox")) {
-    throw new Error("Materialize does not yet support sleep or toxic counters.");
+  const status = parts.find(part => ["brn", "frz", "par", "psn", "tox"].includes(part)) || "";
+  if (parts.includes("slp")) {
+    throw new Error("Materialize does not yet support sleep counters.");
   }
   let hp = 0;
   let maxhp = pokemon.maxhp;
@@ -554,6 +565,14 @@ function applyPokemonCondition(pokemon, condition, sideId, species) {
   pokemon.fainted = fainted;
   pokemon.status = status;
   pokemon.statusState = {id: status, effectOrder: 0};
+  if (status === "tox") {
+    if (!Number.isInteger(toxicStage) || toxicStage < 0 || toxicStage > 15) {
+      throw new Error(`Materialize requires a valid toxic stage for ${sideId} ${species}.`);
+    }
+    // The replay fold records the current toxic ramp from public protocol events. It is
+    // sufficient to restore the exact next residual without reading source-world state.
+    pokemon.statusState.stage = toxicStage;
+  }
 }
 
 function applyKnownMoveState(pokemon, moves) {
