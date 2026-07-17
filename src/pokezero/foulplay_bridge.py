@@ -40,6 +40,7 @@ from .local_showdown import (
 )
 from .mcts_diagnostics import root_puct_fallback_category
 from .neural_policy import (
+    TransformerInferenceTimingAccumulator,
     TransformerSoftmaxPolicy,
     feature_masks_from_model_config,
     evaluate_transformer_action_priors,
@@ -1992,6 +1993,10 @@ def _build_policy(
         return raw_policy(policy_id)
 
     search_policy_id = f"{policy_id}+root-puct"
+    # One accumulator spans the prior, opponent-prior, and value closures for
+    # each root decision. RootPUCTSearchPolicy snapshots it before/after search
+    # so W2 can report encode and forward sub-slices without affecting policy.
+    inference_timing = TransformerInferenceTimingAccumulator()
 
     def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
         return evaluate_transformer_observation_value(
@@ -1999,6 +2004,7 @@ def _build_policy(
             result=value_result,
             observations=history,
             device=config.device,
+            timing=inference_timing,
         )
 
     def prior_fn(history: tuple[PokeZeroObservationV0, ...]) -> tuple[float, ...]:
@@ -2008,6 +2014,7 @@ def _build_policy(
             observations=history,
             temperature=1.0,
             device=config.device,
+            timing=inference_timing,
         )
 
     def opponent_prior_fn(history: tuple[PokeZeroObservationV0, ...]) -> tuple[float, ...]:
@@ -2017,6 +2024,7 @@ def _build_policy(
             observations=history,
             temperature=config.temperature,
             device=config.device,
+            timing=inference_timing,
         )
 
     scenario_planner = None
@@ -2051,6 +2059,7 @@ def _build_policy(
         policy_id=search_policy_id,
         checkpoint_path=raw_checkpoint,
         weights_sha256=raw_checkpoint_sha256,
+        neural_timing_snapshot=lambda: inference_timing.snapshot().to_dict(),
         cpuct=config.cpuct,
         selection_mode=config.selection_mode,
         root_prior_temperature=config.effective_root_prior_temperature,

@@ -51,6 +51,59 @@ ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorV
 OpponentActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
 RootVisitBudgetSelector = Callable[[PolicyContext, RootPUCTVisitBudgetContext], int | None]
+NeuralTimingSnapshot = Callable[[], Mapping[str, float | int]]
+
+_NEURAL_TIMING_SECONDS = ("observation_encoding_seconds", "neural_forward_seconds")
+_NEURAL_TIMING_COUNTS = ("observation_encoding_count", "neural_forward_count")
+
+
+def _neural_timing_snapshot(source: NeuralTimingSnapshot | None) -> dict[str, float | int] | None:
+    """Normalize a cumulative evaluator-timing snapshot for one root decision."""
+
+    if source is None:
+        return None
+    payload = source()
+    if not isinstance(payload, Mapping):
+        raise ValueError("neural_timing_snapshot must return a mapping.")
+    result: dict[str, float | int] = {}
+    for field in _NEURAL_TIMING_SECONDS:
+        value = payload.get(field, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (float, int)) or value < 0.0:
+            raise ValueError(f"neural_timing_snapshot has invalid {field}.")
+        result[field] = float(value)
+    for field in _NEURAL_TIMING_COUNTS:
+        value = payload.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"neural_timing_snapshot has invalid {field}.")
+        result[field] = value
+    return result
+
+
+def _neural_timing_delta(
+    before: Mapping[str, float | int] | None,
+    after: Mapping[str, float | int] | None,
+) -> dict[str, float | int]:
+    """Return a validated per-decision delta from cumulative evaluator counters."""
+
+    if before is None or after is None:
+        return {
+            "observation_encoding_seconds": 0.0,
+            "observation_encoding_count": 0,
+            "neural_forward_seconds": 0.0,
+            "neural_forward_count": 0,
+        }
+    result: dict[str, float | int] = {}
+    for field in _NEURAL_TIMING_SECONDS:
+        delta = float(after[field]) - float(before[field])
+        if delta < 0.0:
+            raise ValueError(f"neural_timing_snapshot moved backwards for {field}.")
+        result[field] = delta
+    for field in _NEURAL_TIMING_COUNTS:
+        delta = int(after[field]) - int(before[field])
+        if delta < 0:
+            raise ValueError(f"neural_timing_snapshot moved backwards for {field}.")
+        result[field] = delta
+    return result
 
 
 @dataclass(frozen=True)
@@ -373,6 +426,10 @@ class RootPUCTSearchPolicy:
     # end to preserve the existing positional constructor contract.
     checkpoint_path: str | None = None
     weights_sha256: str | None = None
+    # Optional snapshot source for transformer encode/forward sub-timings.
+    # Its counters are cumulative across decisions; ``select_action_with_context``
+    # records only the local delta in RootPUCTSearchTiming.
+    neural_timing_snapshot: NeuralTimingSnapshot | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
@@ -393,6 +450,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.root_visit_budget_selector is not None and not callable(self.root_visit_budget_selector):
             raise ValueError("root_visit_budget_selector must be callable when set.")
+        if self.neural_timing_snapshot is not None and not callable(self.neural_timing_snapshot):
+            raise ValueError("neural_timing_snapshot must be callable when set.")
         if self.root_time_budget_seconds is not None and (
             self.root_time_budget_seconds <= 0.0 or not math.isfinite(self.root_time_budget_seconds)
         ):
@@ -477,6 +536,7 @@ class RootPUCTSearchPolicy:
         if context.player_id not in context.requested_players:
             return self._fallback(context, rng=rng, reason="player is not requested")
         timing_started_at = _timing_perf_counter()
+        neural_timing_before = _neural_timing_snapshot(self.neural_timing_snapshot)
         opponent_scenario_planning_started_at = _timing_perf_counter()
         try:
             opponent_scenarios = _opponent_action_scenarios(self, context, rng)
@@ -748,6 +808,16 @@ class RootPUCTSearchPolicy:
                 .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
                 .with_policy_evaluation(policy_evaluation_seconds)
                 .with_total(_timing_perf_counter() - timing_started_at)
+            )
+            neural_timing = _neural_timing_delta(
+                neural_timing_before,
+                _neural_timing_snapshot(self.neural_timing_snapshot),
+            )
+            timing = timing.with_neural_subtiming(
+                observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
+                observation_encoding_count=int(neural_timing["observation_encoding_count"]),
+                neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
+                neural_forward_count=int(neural_timing["neural_forward_count"]),
             )
         finally:
             close = getattr(env, "close", None)

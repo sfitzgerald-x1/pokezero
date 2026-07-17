@@ -1283,6 +1283,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
             )
 
         self.assertIs(value_eval.call_args.kwargs["model"], value_model)
+        self.assertIsNotNone(value_eval.call_args.kwargs["timing"])
+        self.assertIsNotNone(policy.neural_timing_snapshot)
         self.assertEqual(
             policy.root_visit_budget_selector.to_dict(),
             {"selector_id": "fixed-extra-visits", "extra_visits": 24},

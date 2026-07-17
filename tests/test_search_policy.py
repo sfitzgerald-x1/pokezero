@@ -524,20 +524,35 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
     def test_root_puct_policy_selects_search_action_using_separate_branch_env(self) -> None:
         branch_envs: list[ImmediateOutcomeEnv] = []
+        neural_timing = {
+            "observation_encoding_seconds": 0.0,
+            "observation_encoding_count": 0,
+            "neural_forward_seconds": 0.0,
+            "neural_forward_count": 0,
+        }
 
         def branch_env_factory() -> ImmediateOutcomeEnv:
             env = ImmediateOutcomeEnv(label=f"branch-{len(branch_envs)}")
             branch_envs.append(env)
             return env
 
+        def prior_fn(history):
+            del history
+            neural_timing["observation_encoding_seconds"] += 0.01
+            neural_timing["observation_encoding_count"] += 1
+            neural_timing["neural_forward_seconds"] += 0.02
+            neural_timing["neural_forward_count"] += 1
+            return (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
         policy = RootPUCTSearchPolicy(
             env_factory=branch_env_factory,
             rollout_config=RolloutConfig(max_decision_rounds=3),
             value_fn=lambda history: 0.0,
-            prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            prior_fn=prior_fn,
             opponent_action_planner=lambda context, rng: {"p2": 0},
             cpuct=0.0,
             root_visit_budget=None,
+            neural_timing_snapshot=lambda: dict(neural_timing),
         )
         live_env = ImmediateOutcomeEnv(label="live")
 
@@ -566,6 +581,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         timing = metadata["root_puct_timing"]
         self.assertEqual(timing["opponent_scenario_planning_count"], 1)
         self.assertEqual(timing["policy_evaluation_count"], 1)
+        self.assertAlmostEqual(timing["observation_encoding_seconds"], 0.01)
+        self.assertEqual(timing["observation_encoding_count"], 1)
+        self.assertAlmostEqual(timing["neural_forward_seconds"], 0.02)
+        self.assertEqual(timing["neural_forward_count"], 1)
         self.assertEqual(timing["value_evaluation_count"], 0)
         self.assertEqual(timing["rollout_tail_count"], 0)
         self.assertEqual(timing["policy_value_evaluation_count"], 1)
