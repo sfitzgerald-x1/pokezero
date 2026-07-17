@@ -3801,7 +3801,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     )
                 )
 
-        for line in stderr.getvalue().splitlines():
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        for line in lines:
             payload = json.loads(line.split(": ", 1)[1])
             self.assertNotIn("root_puct_searches", payload)
             self.assertNotIn("root_puct_fallback_categories", payload)
