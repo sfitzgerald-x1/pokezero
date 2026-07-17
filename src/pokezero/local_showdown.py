@@ -1190,10 +1190,11 @@ def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
         for player, set_turn in replay.wish_set_turns.items()
         if player in PLAYER_IDS
         and isinstance(set_turn, int)
-        # A request boundary after Wish is the immediately following turn.  Older
-        # entries can remain in the public fold if the full-HP landing emitted no
-        # heal line, but they are no longer a live simulator condition.
-        and replay.turn_number - set_turn == 1
+        # Forced switches can interrupt the declaration turn before its residual
+        # phase; ordinary requests arrive on the next turn. Older entries can
+        # remain in the public fold if the full-HP landing emitted no heal line,
+        # but they are no longer a live simulator condition.
+        and replay.turn_number - set_turn in {0, 1}
     }
 
 

@@ -447,6 +447,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
             self.assertTrue(materialization.self_request["forceSwitch"][0])
             self.assertTrue(source._latest_requests["p2"]["forceSwitch"][0])
+            self.assertEqual(_public_materialization_payload(materialization)["wishSetTurns"], {"p1": 1})
             search_env.materialize_public_world(
                 state=materialization,
                 start_override=start_override,
@@ -457,8 +458,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             actual = search_env.step({"p1": 4, "p2": 4})
 
         self.assertEqual(
-            actual.observations["p1"].metadata["self_team"][0]["condition"],
-            expected.observations["p1"].metadata["self_team"][0]["condition"],
+            actual.observations["p1"].metadata["self_active"]["condition"],
+            expected.observations["p1"].metadata["self_active"]["condition"],
         )
 
     def test_public_materialization_preserves_three_member_actor_request_order(self) -> None:

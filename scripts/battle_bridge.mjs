@@ -477,7 +477,8 @@ function applyPublicState(snapshot, publicState) {
 
 function applyPublicWish(serializedSide, setTurn, sideId, currentTurn) {
   if (setTurn == null) return;
-  if (!Number.isInteger(setTurn) || setTurn !== currentTurn - 1) {
+  const age = currentTurn - setTurn;
+  if (!Number.isInteger(setTurn) || (age !== 0 && age !== 1)) {
     throw new Error(`Materialize received expired or invalid Wish timing for ${sideId}.`);
   }
   const source = serializedSide.pokemon[0];
@@ -491,7 +492,10 @@ function applyPublicWish(serializedSide, setTurn, sideId, currentTurn) {
     source: `[Pokemon:${sourceSlot}]`,
     sourceSlot,
     isSlotCondition: true,
-    duration: 1,
+    // A normal request is already on the turn after Wish. A forced-switch
+    // boundary can still be on the declaration turn, requiring one extra
+    // residual countdown before the heal lands.
+    duration: 2 - age,
     effectOrder: 2,
     // Gen 3 Wish heals half the user's maximum HP, captured before any later
     // switch can occur. At this request boundary the user remains the active
