@@ -1017,10 +1017,13 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
+            "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
+        "weatherSetTurn": replay.weather_set_turn,
+        "weatherFromAbility": replay.weather_from_ability,
         "futureSight": dict(replay.future_sight),
         "selfPlayer": state.player_id,
         "selfActiveMoves": _request_active_moves(state.self_request),
