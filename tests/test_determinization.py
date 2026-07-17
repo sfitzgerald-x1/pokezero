@@ -659,6 +659,55 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertIsNotNone(override)
 
+    def test_revealed_shedinja_absolute_hp_uses_fixed_hp(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                }
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Shedinja",
+                        "active": True,
+                        "condition": "1/1",
+                        "candidate_variants": [
+                            {
+                                "variant_id": "shedinja-fixed-hp",
+                                "source_set_id": "shedinja-1",
+                                "role": "Physical Attacker",
+                                "level": 100,
+                                "moves": ["hiddenpowerfighting", "shadowball", "toxic", "silverwind"],
+                                "ability": "Wonder Guard",
+                                "item": "Lum Berry",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+        override = gen3_randbat_belief_start_override(
+            context=_context(metadata),
+            set_source=_source(),
+            rng=random.Random(1),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        self.assertIn("Shedinja", override.player_teams["p1"])
+
     def test_opponent_private_trajectory_moves_do_not_constrain_sampled_variants(self) -> None:
         metadata = _metadata()
         context = _context(metadata)
