@@ -13,6 +13,7 @@ from pokezero.search import (
     _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
+    prepare_replay_prefix,
     terminal_value_for_player,
     value_branch_search,
 )
@@ -121,6 +122,16 @@ class ValueBranchEnv:
         self.reset_calls.append((seed, format_id))
         self._requested = ("p1", "p2")
         self._terminal = None
+
+    def reset_with_start_override(
+        self,
+        *,
+        seed: int,
+        format_id: str | None = None,
+        start_override: BattleStartOverride,
+    ) -> None:
+        del start_override
+        self.reset(seed=seed, format_id=format_id or "gen3customgame")
 
     def observe(self, player: str) -> PokeZeroObservationV0:
         return _observation(0)
@@ -452,6 +463,160 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(env.restore_calls, 3)
         self.assertEqual(len(env.all_step_calls), 4)
         self.assertEqual(env.all_step_calls[0], {"p1": 0, "p2": 0})
+
+    def test_puct_branch_search_reuses_prepared_sampled_world_prefix_without_replay(self) -> None:
+        env = TimedSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(len(env.reset_calls), 1)
+        self.assertEqual(env.snapshot_calls, 1)
+        self.assertEqual(env.restore_calls, 5)
+        timing = result.timing.to_dict()
+        self.assertEqual(timing["prefix_replay_count"], 0)
+        self.assertEqual(timing["state_snapshot_count"], 0)
+        self.assertEqual(timing["state_restore_count"], 5)
+
+    def test_puct_branch_search_rejects_prepared_prefix_from_a_different_world(self) -> None:
+        env = TimedSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        with self.assertRaisesRegex(ValueError, "different sampled world"):
+            puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_visit_budget=2,
+                start_override=BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": "Tauros||||Body Slam|||||||",
+                    }
+                ),
+                expected_current_observation=_observation(0),
+                prepared_prefix=prepared_prefix,
+            )
+
+    def test_puct_branch_search_rejects_prepared_prefix_from_a_different_public_state(self) -> None:
+        env = TimedSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        with self.assertRaisesRegex(ValueError, "different public decision state"):
+            puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_visit_budget=2,
+                start_override=_start_override(),
+                expected_current_observation=_observation(1),
+                prepared_prefix=prepared_prefix,
+            )
+
+    def test_puct_branch_search_rejects_prepared_prefix_from_a_different_trajectory_prefix(self) -> None:
+        def trajectory_with_first_action(action_index: int) -> BattleTrajectory:
+            trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+            trajectory.append(
+                TrajectoryStep(
+                    player_id="p1",
+                    turn_index=0,
+                    observation=_observation(action_index),
+                    legal_action_mask=_observation(action_index).legal_action_mask,
+                    action_index=action_index,
+                )
+            )
+            trajectory.append(
+                TrajectoryStep(
+                    player_id="p2",
+                    turn_index=0,
+                    observation=_observation(0),
+                    legal_action_mask=_observation(0).legal_action_mask,
+                    action_index=0,
+                )
+            )
+            return trajectory
+
+        env = TimedSnapshotValueBranchEnv()
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory_with_first_action(0),
+            player_id="p1",
+            prefix_decision_round_count=1,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        with self.assertRaisesRegex(ValueError, "different trajectory prefix"):
+            puct_branch_search(
+                env=env,
+                trajectory=trajectory_with_first_action(1),
+                player_id="p1",
+                prefix_decision_round_count=1,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_visit_budget=2,
+                start_override=_start_override(),
+                expected_current_observation=_observation(0),
+                prepared_prefix=prepared_prefix,
+            )
 
     def test_value_branch_search_does_not_skip_opponent_illegal_action_errors(self) -> None:
         with self.assertRaisesRegex(ValueError, "p2: action_index 0"):

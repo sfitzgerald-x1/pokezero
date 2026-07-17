@@ -323,6 +323,40 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
         self.assertEqual(restored_branch_suffix, first_branch_suffix)
 
+    def test_snapshot_restore_reuses_prepared_world_in_fresh_bridge_shell(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            snapshot = env.snapshot()
+            prefix_len = len(snapshot.protocol_lines)
+            env.step({"p1": 0, "p2": 1})
+            expected_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+            env.reset(seed=19)
+            with self.assertRaisesRegex(ValueError, "format does not match"):
+                env.restore(snapshot)
+
+            env.reset_with_start_override(seed=19, start_override=start_override)
+            self.assertNotEqual(env._battle_token, snapshot.battle_token)
+            env.restore(snapshot)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+            env.step({"p1": 0, "p2": 1})
+            restored_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+        self.assertEqual(restored_suffix, expected_suffix)
+
     def test_snapshot_restore_rebuilds_investment_trackers(self) -> None:
         config = integration_config()
         assert config is not None

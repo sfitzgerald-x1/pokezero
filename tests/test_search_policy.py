@@ -165,6 +165,21 @@ class StartOverrideOutcomeEnv(ImmediateOutcomeEnv):
         self.reset(seed=seed, format_id=format_id or start_override.format_id)
 
 
+class SnapshotStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.snapshot_calls = 0
+        self.restore_calls = 0
+
+    def snapshot(self):
+        self.snapshot_calls += 1
+        return self._terminal
+
+    def restore(self, snapshot) -> None:
+        self.restore_calls += 1
+        self._terminal = snapshot
+
+
 class RejectingStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
     def __init__(self, *, label: str) -> None:
         super().__init__(label=label)
@@ -970,6 +985,69 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             ),
             2,
         )
+
+    def test_root_puct_policy_reuses_public_world_snapshot_after_validation(self) -> None:
+        branch_envs: list[SnapshotStartOverrideOutcomeEnv] = []
+
+        def branch_env_factory() -> SnapshotStartOverrideOutcomeEnv:
+            env = SnapshotStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(context, scenario, scenario_index, rng):
+            del context, scenario, scenario_index, rng
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": "Xatu||||Psychic|||||||",
+                    }
+                )
+
+            return sample_override
+
+        start_override_planner.scenario_independent = True  # type: ignore[attr-defined]
+        start_override_planner.sample_count_for_context = lambda context: 1  # type: ignore[attr-defined]
+        start_override_planner.sampling_metadata_for_context = lambda context: {  # type: ignore[attr-defined]
+            "root_puct_belief_public_checksum": "public-only",
+        }
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=3,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=None,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(len(branch_envs), 1)
+        self.assertEqual(len(branch_envs[0].reset_calls), 1)
+        self.assertEqual(branch_envs[0].snapshot_calls, 1)
+        self.assertEqual(branch_envs[0].restore_calls, 3)
+        self.assertEqual(decision.metadata["root_puct_belief_public_checksum"], "public-only")
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["belief_world_materialization_count"], 1)
+        self.assertEqual(timing["prefix_replay_count"], 0)
+        self.assertEqual(timing["state_snapshot_count"], 0)
+        self.assertEqual(timing["state_restore_count"], 3)
 
     def test_root_puct_policy_falls_back_when_dynamic_world_count_is_invalid(self) -> None:
         def start_override_planner(context, scenario, scenario_index, rng):
