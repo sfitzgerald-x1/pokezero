@@ -1205,6 +1205,61 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(_public_materialization_payload(stale_actor_boundary)["pendingBatonPassSides"], [])
         self.assertEqual(_public_materialization_payload(stale_opponent_boundary)["pendingBatonPassSides"], [])
 
+    def test_public_materialization_samples_deferred_baton_pass_action_without_private_request(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Swords Dance", "Baton Pass", "Protect"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle", "Protect"),
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden", "Protect")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=79, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Swords Dance versus the private Harden request.
+            source.step({"p1": 1, "p2": 0})  # Baton Pass interrupts before Harden resolves.
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            # Neither the pending source move nor an alternative must be copied from p2's private
+            # request. The direct world receives only an action index sampled by the planner.
+            self.assertIn("harden", json.dumps(source._latest_requests["p2"]).casefold())
+            self.assertIn("protect", json.dumps(source._latest_requests["p2"]).casefold())
+            serialized_payload = json.dumps(payload, sort_keys=True).casefold()
+            self.assertNotIn("harden", serialized_payload)
+            self.assertNotIn("moves", payload["sides"]["p2"]["pokemon"][0])
+            self.assertEqual(payload["deferredOpponentActions"], {})
+
+            # Action one is Protect, not the live battle's previously chosen Harden. This proves
+            # the restored queue follows the predictor's sampled world rather than the live queue.
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=79,
+                deferred_opponent_actions={"p2": 1},
+            )
+            search_env.step({"p1": 4})
+            protocol = "\n".join(search_env.protocol_lines)
+
+        self.assertIn("|move|p2a: Ditto|Protect|", protocol)
+        self.assertNotIn("|move|p2a: Ditto|Harden|", protocol)
+
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()
         assert config is not None
