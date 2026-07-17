@@ -90,6 +90,7 @@ def validate_admission_guard(
     comparison_vectors = _comparison_vector_count(payload)
     vector_threshold = _minimum_vector_distance_threshold(payload)
     observed_vector_distance = _largest_observed_vector_distance(payload)
+    ineligible_strength_path = _first_explicit_false_path(payload, "strength_evidence_eligible")
 
     checks = [
         AdmissionGuardCheck(
@@ -109,7 +110,7 @@ def validate_admission_guard(
             source=comparison_vectors.path,
         ),
     ]
-    if payload.get("strength_evidence_eligible") is False:
+    if ineligible_strength_path is not None:
         checks.append(
             AdmissionGuardCheck(
                 name="strength_evidence_eligible",
@@ -117,7 +118,7 @@ def validate_admission_guard(
                 observed=0,
                 threshold=1,
                 message="artifact explicitly forbids use as strength evidence",
-                source="strength_evidence_eligible",
+                source=ineligible_strength_path,
             )
         )
     if resolved_config.require_vector_distance:
@@ -350,6 +351,25 @@ def _value_at_path(payload: Mapping[str, Any], path: tuple[str, ...]) -> Any:
             return None
         current = current.get(part)
     return current
+
+
+def _first_explicit_false_path(value: Any, key: str, path: tuple[str, ...] = ()) -> str | None:
+    """Find an explicit false flag anywhere in a JSON-shaped admission artifact."""
+
+    if isinstance(value, Mapping):
+        for child_key, child_value in value.items():
+            child_path = path + (str(child_key),)
+            if child_key == key and child_value is False:
+                return ".".join(child_path)
+            found = _first_explicit_false_path(child_value, key, child_path)
+            if found is not None:
+                return found
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for index, child_value in enumerate(value):
+            found = _first_explicit_false_path(child_value, key, path + (str(index),))
+            if found is not None:
+                return found
+    return None
 
 
 def _number(value: Any) -> float | None:

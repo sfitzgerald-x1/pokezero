@@ -29,6 +29,29 @@ class AdmissionGuardTest(unittest.TestCase):
         checks = {check.name: check for check in result.checks}
         self.assertFalse(checks["strength_evidence_eligible"].passed)
 
+    def test_rejects_nested_artifact_explicitly_ineligible_for_strength_use(self) -> None:
+        result = validate_admission_guard(
+            {
+                "config": {
+                    "min_benchmark_win_rate": 0.5,
+                },
+                "comparison_vectors": ["candidate-a"],
+                "vector_distance": 0.2,
+                "benchmark": {
+                    "root_puct_play": {
+                        "strength_evidence_eligible": False,
+                    },
+                },
+            }
+        )
+
+        self.assertFalse(result.passed)
+        checks = {check.name: check for check in result.checks}
+        self.assertEqual(
+            checks["strength_evidence_eligible"].source,
+            "benchmark.root_puct_play.strength_evidence_eligible",
+        )
+
     def test_rejects_vacuous_zero_floor_and_no_vectors(self) -> None:
         result = validate_admission_guard(
             {
