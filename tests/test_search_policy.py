@@ -196,6 +196,28 @@ class DirectSnapshotStartOverrideOutcomeEnv(SnapshotStartOverrideOutcomeEnv):
         self._terminal = None
 
 
+class BridgeDirectSnapshotStartOverrideOutcomeEnv(DirectSnapshotStartOverrideOutcomeEnv):
+    """Direct-materialization double that exposes the search-handle lifecycle."""
+
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.search_snapshot_calls = 0
+        self.search_restore_calls = 0
+        self.released_search_snapshots: list[TerminalState | None] = []
+
+    def snapshot_for_search(self) -> TerminalState | None:
+        self.search_snapshot_calls += 1
+        return self._terminal
+
+    def restore_search_snapshot(self, snapshot: TerminalState | None) -> None:
+        self.search_restore_calls += 1
+        self._terminal = snapshot
+
+    def release_search_snapshot(self, snapshot: TerminalState | None) -> bool:
+        self.released_search_snapshots.append(snapshot)
+        return True
+
+
 class DirectFailureReplayFallbackEnv(SnapshotStartOverrideOutcomeEnv):
     def __init__(self, *, label: str) -> None:
         super().__init__(label=label)
@@ -1090,11 +1112,11 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["state_snapshot_count"], 0)
         self.assertEqual(timing["state_restore_count"], 3)
 
-    def test_root_puct_policy_directly_materializes_shared_public_worlds(self) -> None:
-        branch_envs: list[DirectSnapshotStartOverrideOutcomeEnv] = []
+    def test_root_puct_policy_releases_shared_direct_world_snapshot_handles(self) -> None:
+        branch_envs: list[BridgeDirectSnapshotStartOverrideOutcomeEnv] = []
 
-        def branch_env_factory() -> DirectSnapshotStartOverrideOutcomeEnv:
-            env = DirectSnapshotStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+        def branch_env_factory() -> BridgeDirectSnapshotStartOverrideOutcomeEnv:
+            env = BridgeDirectSnapshotStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
             branch_envs.append(env)
             return env
 
@@ -1145,8 +1167,11 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(len(branch_envs[0].direct_materializations), 1)
         self.assertEqual(branch_envs[0].direct_materializations[0][0], public_state)
         self.assertEqual(branch_envs[0].reset_calls, [])
-        self.assertEqual(branch_envs[0].snapshot_calls, 1)
-        self.assertEqual(branch_envs[0].restore_calls, 3)
+        self.assertEqual(branch_envs[0].search_snapshot_calls, 1)
+        self.assertEqual(branch_envs[0].search_restore_calls, 3)
+        self.assertEqual(branch_envs[0].released_search_snapshots, [None])
+        self.assertEqual(branch_envs[0].snapshot_calls, 0)
+        self.assertEqual(branch_envs[0].restore_calls, 0)
         self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 1)
         self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
 

@@ -1123,6 +1123,73 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
         self.assertEqual(restored_branch_suffix, first_branch_suffix)
 
+    def test_search_snapshot_handle_replays_same_branch_without_exposing_simulator_state(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            snapshot = env.snapshot_for_search()
+            self.assertIsInstance(snapshot.bridge_snapshot.get("snapshot_id"), str)
+            self.assertNotIn("battle", snapshot.bridge_snapshot)
+            prefix_len = len(snapshot.protocol_lines)
+            env.step({"p1": 0, "p2": 1})
+            expected_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+            env.reset_with_start_override(seed=19, start_override=start_override)
+            env.restore_search_snapshot(snapshot)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+            env.step({"p1": 0, "p2": 1})
+            restored_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+            # A second restore of the same handle must start from an independent engine clone,
+            # not from the state mutated by the prior restored branch.
+            env.restore_search_snapshot(snapshot)
+            env.step({"p1": 1, "p2": 0})
+            env.restore_search_snapshot(snapshot)
+            env.step({"p1": 0, "p2": 1})
+            repeated_restored_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+        self.assertEqual(restored_suffix, expected_suffix)
+        self.assertEqual(repeated_restored_suffix, expected_suffix)
+
+    def test_search_snapshot_handle_rejects_live_rollout(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team((FixturePokemon(species="Charmander", moves=("Ember",)),)),
+                "p2": pack_team((FixturePokemon(species="Squirtle", moves=("Water Gun",)),)),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset(seed=17)
+            with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
+                env.snapshot_for_search()
+
+            env.reset_with_start_override(seed=19, start_override=start_override)
+            snapshot = env.snapshot_for_search()
+            env.reset(seed=23)
+            with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
+                env.restore_search_snapshot(snapshot)
+
+            env.reset_with_start_override(seed=29, start_override=start_override)
+            self.assertTrue(env.release_search_snapshot(snapshot))
+            self.assertFalse(env.release_search_snapshot(snapshot))
+            with self.assertRaisesRegex(LocalShowdownError, "Unknown search snapshot"):
+                env.restore_search_snapshot(snapshot)
+
     def test_snapshot_restore_reuses_prepared_world_in_fresh_bridge_shell(self) -> None:
         config = integration_config()
         assert config is not None

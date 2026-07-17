@@ -421,6 +421,7 @@ class ValueBranchSearchResult:
 class _RestorablePrefix:
     prefix: ReplayPrefixResult
     snapshot: Any
+    restore_snapshot: Callable[[Any], None]
 
 
 @dataclass(frozen=True)
@@ -445,6 +446,7 @@ class PreparedReplayPrefix:
     prefix: ReplayPrefixResult
     snapshot: Any
     materialization_mode: str = "replay"
+    snapshot_restore_mode: str = "generic"
 
 
 @dataclass(frozen=True)
@@ -658,6 +660,7 @@ def _value_branch_search_with_prefix(
     )
     restorable_prefix = _restorable_prefix_from_prepared(
         prepared_prefix,
+        env=env,
         trajectory=trajectory,
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
@@ -1208,10 +1211,10 @@ def prepare_replay_prefix(
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
-    snapshotter = getattr(env, "snapshot", None)
-    restorer = getattr(env, "restore", None)
-    if not callable(snapshotter) or not callable(restorer):
+    snapshot_hooks = _snapshot_hooks(env, prefer_search_snapshots=True)
+    if snapshot_hooks is None:
         return None
+    snapshotter, _restorer, snapshot_restore_mode = snapshot_hooks
     return PreparedReplayPrefix(
         trajectory_seed=trajectory.seed,
         format_id=trajectory.format_id,
@@ -1225,6 +1228,7 @@ def prepare_replay_prefix(
         expected_current_observation=expected_current_observation,
         prefix=prefix,
         snapshot=snapshotter(),
+        snapshot_restore_mode=snapshot_restore_mode,
     )
 
 
@@ -1261,11 +1265,11 @@ def prepare_direct_materialization_prefix(
         expected_current_observation=expected_current_observation,
     )
     materializer = getattr(env, "materialize_public_world", None)
-    snapshotter = getattr(env, "snapshot", None)
-    restorer = getattr(env, "restore", None)
-    if not callable(materializer) or not callable(snapshotter) or not callable(restorer):
+    snapshot_hooks = _snapshot_hooks(env, prefer_search_snapshots=True)
+    if not callable(materializer) or snapshot_hooks is None:
         _record_direct_materialization_unavailable(on_unavailable, "environment_unavailable")
         return None
+    snapshotter, _restorer, snapshot_restore_mode = snapshot_hooks
     try:
         materializer(
             state=public_materialization_state,
@@ -1313,7 +1317,20 @@ def prepare_direct_materialization_prefix(
         prefix=prefix,
         snapshot=snapshotter(),
         materialization_mode="direct",
+        snapshot_restore_mode=snapshot_restore_mode,
     )
+
+
+def release_prepared_replay_prefix(env: PokeZeroEnv, prepared_prefix: PreparedReplayPrefix) -> bool:
+    """Release a bridge handle after its final scenario without affecting generic snapshots."""
+
+    if prepared_prefix.snapshot_restore_mode != "bridge-handle":
+        return False
+    releaser = getattr(env, "release_search_snapshot", None)
+    if not callable(releaser):
+        return False
+    result = releaser(prepared_prefix.snapshot)
+    return bool(result)
 
 
 def _record_direct_materialization_unavailable(
@@ -1327,6 +1344,7 @@ def _record_direct_materialization_unavailable(
 def _restorable_prefix_from_prepared(
     prepared_prefix: PreparedReplayPrefix | None,
     *,
+    env: PokeZeroEnv,
     trajectory: BattleTrajectory,
     player_id: PlayerId,
     prefix_decision_round_count: int,
@@ -1356,7 +1374,14 @@ def _restorable_prefix_from_prepared(
         raise ValueError("prepared replay prefix belongs to a different sampled world.")
     if prepared_prefix.prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal prepared replay prefix.")
-    return _RestorablePrefix(prefix=prepared_prefix.prefix, snapshot=prepared_prefix.snapshot)
+    restorer = _snapshot_restorer_for_mode(env, prepared_prefix.snapshot_restore_mode)
+    if restorer is None:
+        raise ValueError("prepared replay prefix restore path became unavailable.")
+    return _RestorablePrefix(
+        prefix=prepared_prefix.prefix,
+        snapshot=prepared_prefix.snapshot,
+        restore_snapshot=restorer,
+    )
 
 
 def _restorable_prefix_snapshot(
@@ -1370,10 +1395,13 @@ def _restorable_prefix_snapshot(
     replay_hp_fraction_tolerance: float,
     timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> _RestorablePrefix | None:
-    snapshotter = getattr(env, "snapshot", None)
-    restorer = getattr(env, "restore", None)
-    if not callable(snapshotter) or not callable(restorer):
+    snapshot_hooks = _snapshot_hooks(
+        env,
+        prefer_search_snapshots=start_override is not None and not callable(start_override),
+    )
+    if snapshot_hooks is None:
         return None
+    snapshotter, restorer, _snapshot_restore_mode = snapshot_hooks
     if callable(start_override):
         return None
     prefix_replay_started_at = _timing_perf_counter() if timing is not None else None
@@ -1399,7 +1427,7 @@ def _restorable_prefix_snapshot(
     if timing is not None:
         assert snapshot_started_at is not None
         timing.add_state_snapshot(_timing_perf_counter() - snapshot_started_at)
-    return _RestorablePrefix(prefix=prefix, snapshot=snapshot)
+    return _RestorablePrefix(prefix=prefix, snapshot=snapshot, restore_snapshot=restorer)
 
 
 def _branch_from_replay_prefix(
@@ -1454,11 +1482,8 @@ def _branch_from_replay_prefix(
             branch_round=branch_round,
             step_result=step_result,
         )
-    restorer = getattr(env, "restore", None)
-    if not callable(restorer):
-        raise ValueError("environment snapshot restore became unavailable.")
     restore_started_at = _timing_perf_counter() if timing is not None else None
-    restorer(restorable_prefix.snapshot)
+    restorable_prefix.restore_snapshot(restorable_prefix.snapshot)
     if timing is not None:
         assert restore_started_at is not None
         timing.add_state_restore(_timing_perf_counter() - restore_started_at)
@@ -1481,6 +1506,38 @@ def _branch_from_replay_prefix(
         branch_round=branch_round,
         step_result=step_result,
     )
+
+
+def _snapshot_hooks(
+    env: PokeZeroEnv,
+    *,
+    prefer_search_snapshots: bool = False,
+) -> tuple[Callable[[], Any], Callable[[Any], None], str] | None:
+    """Return snapshot hooks without using search handles for live/oracle rollouts."""
+
+    if prefer_search_snapshots:
+        snapshotter = getattr(env, "snapshot_for_search", None)
+        restorer = getattr(env, "restore_search_snapshot", None)
+        if callable(snapshotter) and callable(restorer):
+            return snapshotter, restorer, "bridge-handle"
+    snapshotter = getattr(env, "snapshot", None)
+    restorer = getattr(env, "restore", None)
+    if callable(snapshotter) and callable(restorer):
+        return snapshotter, restorer, "generic"
+    return None
+
+
+def _snapshot_restorer_for_mode(
+    env: PokeZeroEnv,
+    mode: str,
+) -> Callable[[Any], None] | None:
+    if mode == "bridge-handle":
+        restorer = getattr(env, "restore_search_snapshot", None)
+    elif mode == "generic":
+        restorer = getattr(env, "restore", None)
+    else:
+        raise ValueError(f"prepared replay prefix has unsupported snapshot restore mode {mode!r}.")
+    return restorer if callable(restorer) else None
 
 
 def _require_exact_requested_players(

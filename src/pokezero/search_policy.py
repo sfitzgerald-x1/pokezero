@@ -45,6 +45,7 @@ from .search import (
     prepare_replay_prefix,
     player_observation_history,
     puct_branch_search,
+    release_prepared_replay_prefix,
 )
 from .trajectory import BattleTrajectory, TrajectoryStep
 
@@ -650,6 +651,7 @@ class RootPUCTSearchPolicy:
         # planning and prior evaluation before replay work spends its remaining budget.
         search_started_at = perf_counter()
         env = self.env_factory()
+        prepared_prefixes_to_release: list[PreparedReplayPrefix] = []
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
             try:
@@ -721,6 +723,11 @@ class RootPUCTSearchPolicy:
                             on_direct_materialization_observation_mismatch_path=(
                                 record_direct_materialization_observation_mismatch_path
                             ),
+                        )
+                        prepared_prefixes_to_release.extend(
+                            prepared_prefix
+                            for prepared_prefix in shared_start_override_samples.prepared_prefixes
+                            if prepared_prefix is not None
                         )
                     finally:
                         belief_world_materialization_seconds = (
@@ -811,6 +818,8 @@ class RootPUCTSearchPolicy:
                                             record_direct_materialization_observation_mismatch_path
                                         ),
                                     )
+                                    if prepared_prefix is not None:
+                                        prepared_prefixes_to_release.append(prepared_prefix)
                                 search = puct_branch_search(
                                     env=env,
                                     trajectory=search_trajectory,
@@ -1005,9 +1014,18 @@ class RootPUCTSearchPolicy:
                 neural_forward_count=int(neural_timing["neural_forward_count"]),
             )
         finally:
-            close = getattr(env, "close", None)
-            if callable(close):
-                close()
+            try:
+                for prepared_prefix in prepared_prefixes_to_release:
+                    try:
+                        release_prepared_replay_prefix(env, prepared_prefix)
+                    except Exception:
+                        # Close below still clears the bridge cache; cleanup must not mask a
+                        # completed search result or a more relevant search failure.
+                        pass
+            finally:
+                close = getattr(env, "close", None)
+                if callable(close):
+                    close()
 
         search = _aggregate_scenario_searches(
             scenario_searches,
