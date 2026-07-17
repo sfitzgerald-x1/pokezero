@@ -52,15 +52,16 @@ Each point is one checkpoint; no aggregation.
 - **Conditional move use is *learned*, not innate.** Early checkpoints fire conditional moves
   blindly; later ones gate them on the condition that makes them good:
   - *Solar Beam in sun* — the sharpest signal in the dataset, and all three tracked lineages
-    develop it. Start → frontier: m50-ep7 **25.4%→97.5%** (2400k), l200-ep7-wu75 **31.1%→99.4%**
-    (1900k), v22-lr3m **23.5%→99.3%** (2700k). It converges and stays converged (v22-lr3m reads
-    95.1% at 2600k, 99.3% at 2700k — that wobble is a small denominator, ~270–320 uses/checkpoint).
+    develop it. Start → frontier: m50-ep7 **25.4%→100.0%** (2700k), l200-ep7-wu75 **31.1%→98.8%**
+    (2200k), v22-lr3m **23.5%→99.7%** (2900k). It converges and stays converged (v22-lr3m reads
+    95.1% at 2600k, 99.7% at 2900k — that wobble is a small denominator, ~270–320 uses/checkpoint).
     *These figures were corrected — see "Measurement corrections" below; earlier drafts reported a
     much lower start (~14–20%) and even an impossible 100.4%.*
   - *Phazing when justified* (enemy boosted or behind a Substitute) rises off ~0% early, but
     **unlike Solar Beam it does not converge** — it stays volatile and non-monotonic. At the
-    current frontiers: v22-lr3m 67.6% (2700k), l200-ep7-wu75 31.7% (1900k), m50-ep7 26.7% (2400k).
-    l200-ep7-wu75 read 63.7% at 1300k and fell to 31.7% by 1900k; m50-ep7 37.4%→26.7%. Phazing is
+    current frontiers: l200-ep7-wu75 51.8% (2200k), m50-ep7 48.4% (2700k), v22-lr3m 35.6% (2900k) —
+    yet at earlier checkpoints l200-ep7-wu75 read 63.7% (1300k) then 31.7% (1900k), and v22-lr3m read
+    67.6% (2700k). The ordering reshuffles refresh to refresh. Phazing is
     rare (only ~70–270 uses per checkpoint vs 175–669 for Solar Beam), but those swings are ~6×
     the binomial SE, so this is real fluctuation rather than small-n noise. **Do not quote a
     frontier value as "the" rate for a lineage** — read the trajectory. Only the early rise off
@@ -105,11 +106,11 @@ outcome variance. Only these are sign-consistent across *every* checkpoint (cons
 independent checkpoints is the evidence, not any single r), and the effects have been stable as the
 self-play sample grew across successive refreshes:
 
-| trait | self-play (70 ckpts) | vs FoulPlay (6 ckpts) |
+| trait | self-play (80 ckpts) | vs FoulPlay (6 ckpts) |
 |---|---|---|
-| Substitute | **−0.112** (all 70) | **−0.081** (all 6) |
-| healing (excl Rest) | **−0.069** (all 70) | **−0.060** (all 6) |
-| immunity switch-in | +0.042 (not consistent) | **+0.058** (all 6) |
+| Substitute | **−0.112** (all 80) | **−0.081** (all 6) |
+| healing (excl Rest) | **−0.068** (all 80) | **−0.060** (all 6) |
+| immunity switch-in | +0.041 (not consistent) | **+0.058** (all 6) |
 | phaze when justified | — | **−0.025** (all 6) |
 
 Substitute and healing tracking *losses* is almost certainly **reverse causality** — you Substitute
