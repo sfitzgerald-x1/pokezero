@@ -171,6 +171,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_count",
             "state_snapshot_count",
             "state_restore_count",
+            "belief_world_materialization_count",
             "opponent_scenario_planning_count",
             "policy_evaluation_count",
             "observation_encoding_count",
@@ -185,6 +186,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_seconds",
             "state_snapshot_seconds",
             "state_restore_seconds",
+            "belief_world_materialization_seconds",
             "opponent_scenario_planning_seconds",
             "policy_evaluation_seconds",
             "observation_encoding_seconds",
@@ -204,6 +206,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
                 + timing_payload["branch_simulator_step_seconds"]
                 + timing_payload["state_snapshot_seconds"]
                 + timing_payload["state_restore_seconds"]
+                + timing_payload["belief_world_materialization_seconds"]
                 + timing_payload["opponent_scenario_planning_seconds"]
                 + timing_payload["policy_value_evaluation_seconds"]
                 + timing_payload["rollout_tail_seconds"]
@@ -323,6 +326,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_count",
             "state_snapshot_count",
             "state_restore_count",
+            "belief_world_materialization_count",
             "opponent_scenario_planning_count",
             "policy_evaluation_count",
             "value_evaluation_count",
@@ -335,6 +339,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_seconds",
             "state_snapshot_seconds",
             "state_restore_seconds",
+            "belief_world_materialization_seconds",
             "opponent_scenario_planning_seconds",
             "policy_evaluation_seconds",
             "value_evaluation_seconds",
@@ -352,6 +357,7 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
                 + timing["branch_simulator_step_seconds"]
                 + timing["state_snapshot_seconds"]
                 + timing["state_restore_seconds"]
+                + timing["belief_world_materialization_seconds"]
                 + timing["opponent_scenario_planning_seconds"]
                 + timing["policy_value_evaluation_seconds"]
                 + timing["rollout_tail_seconds"]

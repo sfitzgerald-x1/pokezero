@@ -49,6 +49,8 @@ _TIMING_KEYS = (
     "state_snapshot_count",
     "state_restore_seconds",
     "state_restore_count",
+    "belief_world_materialization_seconds",
+    "belief_world_materialization_count",
     "opponent_scenario_planning_seconds",
     "opponent_scenario_planning_count",
     "policy_evaluation_seconds",

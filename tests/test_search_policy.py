@@ -594,6 +594,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertTrue(metadata["root_puct_opponent_actions_legality_checked"])
         timing = metadata["root_puct_timing"]
         self.assertEqual(timing["opponent_scenario_planning_count"], 1)
+        self.assertEqual(timing["belief_world_materialization_count"], 0)
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertAlmostEqual(timing["observation_encoding_seconds"], 0.01)
         self.assertEqual(timing["observation_encoding_count"], 1)
@@ -1079,6 +1080,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_start_override_shared_samples"], 2)
         self.assertEqual(metadata["root_puct_start_override_shared_samples_accepted"], 2)
         self.assertEqual(metadata["root_puct_start_override_shared_samples_rejected"], 0)
+        timing = metadata["root_puct_timing"]
+        self.assertEqual(timing["belief_world_materialization_count"], 2)
+        self.assertGreater(timing["belief_world_materialization_seconds"], 0.0)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 4)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 0)
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 4)
@@ -1357,6 +1361,75 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             },
         )
         self.assertEqual(metadata["root_puct_opponent_action_groups_skipped"], 2)
+        timing = metadata["root_puct_timing"]
+        self.assertEqual(timing["belief_world_materialization_count"], 2)
+        self.assertGreater(timing["belief_world_materialization_seconds"], 0.0)
+
+    def test_root_puct_policy_fallback_keeps_partial_belief_world_attempt_count(self) -> None:
+        branch_envs: list[RejectingStartOverrideOutcomeEnv] = []
+        planner_calls = 0
+
+        def branch_env_factory() -> RejectingStartOverrideOutcomeEnv:
+            env = RejectingStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            nonlocal planner_calls
+            del context, scenario, scenario_index, rng
+            planner_calls += 1
+            if planner_calls == 2:
+                raise RuntimeError("belief-world planner crashed")
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": "Badmon||||Psychic|||||||",
+                    }
+                )
+
+            return sample_override
+
+        start_override_planner.scenario_independent = True  # type: ignore[attr-defined]
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            allow_fallback=True,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_attempts=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertIn("belief-world planner crashed", decision.metadata["root_puct_fallback_reason"])
+        self.assertEqual(planner_calls, 2)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["belief_world_materialization_count"], 2)
+        self.assertGreater(timing["belief_world_materialization_seconds"], 0.0)
 
     def test_root_puct_policy_caps_opponent_actions_not_belief_samples_after_skips(self) -> None:
         branch_envs: list[RejectingStartOverrideOutcomeEnv] = []

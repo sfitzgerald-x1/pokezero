@@ -656,18 +656,29 @@ class RootPUCTSearchPolicy:
                 skipped_action_group_count = 0
                 searched_action_group_count = 0
                 flat_scenario_index = 0
-                shared_start_override_samples = (
-                    _shared_start_override_samples(
-                        env=env,
-                        policy=self,
-                        context=context,
-                        rng=rng,
-                        sample_scenarios=search_scenario_groups[0].samples,
-                        search_trajectory=search_trajectory,
-                    )
-                    if _uses_scenario_independent_start_overrides(self)
-                    else None
-                )
+                belief_world_materialization_seconds = 0.0
+                belief_world_materialization_count = 0
+                shared_start_override_samples = None
+                if _uses_scenario_independent_start_overrides(self):
+                    def record_belief_world_materialization_attempt() -> None:
+                        nonlocal belief_world_materialization_count
+                        belief_world_materialization_count += 1
+
+                    belief_world_materialization_started_at = _timing_perf_counter()
+                    try:
+                        shared_start_override_samples = _shared_start_override_samples(
+                            env=env,
+                            policy=self,
+                            context=context,
+                            rng=rng,
+                            sample_scenarios=search_scenario_groups[0].samples,
+                            search_trajectory=search_trajectory,
+                            on_attempt=record_belief_world_materialization_attempt,
+                        )
+                    finally:
+                        belief_world_materialization_seconds = (
+                            _timing_perf_counter() - belief_world_materialization_started_at
+                        )
                 if shared_start_override_samples is not None:
                     start_override_attempts_used += shared_start_override_samples.attempts_used
                 for group_index, scenario_group in enumerate(search_scenario_groups):
@@ -847,6 +858,8 @@ class RootPUCTSearchPolicy:
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
                     policy_evaluation_seconds=policy_evaluation_seconds,
+                    belief_world_materialization_seconds=belief_world_materialization_seconds,
+                    belief_world_materialization_count=belief_world_materialization_count,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             except Exception as exc:
@@ -858,12 +871,18 @@ class RootPUCTSearchPolicy:
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
                     policy_evaluation_seconds=policy_evaluation_seconds,
+                    belief_world_materialization_seconds=belief_world_materialization_seconds,
+                    belief_world_materialization_count=belief_world_materialization_count,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             elapsed_seconds = perf_counter() - search_started_at
             timing = (
                 RootPUCTSearchTiming.aggregate(
                     tuple(scenario_search.timing for scenario_search in scenario_searches)
+                )
+                .with_belief_world_materialization(
+                    belief_world_materialization_seconds,
+                    attempt_count=belief_world_materialization_count,
                 )
                 .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
                 .with_policy_evaluation(policy_evaluation_seconds)
@@ -1065,6 +1084,8 @@ class RootPUCTSearchPolicy:
         neural_timing_before: Mapping[str, float | int] | None = None,
         opponent_scenario_planning_seconds: float | None = None,
         policy_evaluation_seconds: float | None = None,
+        belief_world_materialization_seconds: float | None = None,
+        belief_world_materialization_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
@@ -1088,6 +1109,8 @@ class RootPUCTSearchPolicy:
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
                     policy_evaluation_seconds=policy_evaluation_seconds,
+                    belief_world_materialization_seconds=belief_world_materialization_seconds,
+                    belief_world_materialization_count=belief_world_materialization_count,
                     completed_search_timing=completed_search_timing,
                 ),
                 **dict(extra_metadata or {}),
@@ -1101,6 +1124,8 @@ class RootPUCTSearchPolicy:
         neural_timing_before: Mapping[str, float | int] | None,
         opponent_scenario_planning_seconds: float | None = None,
         policy_evaluation_seconds: float | None = None,
+        belief_world_materialization_seconds: float | None = None,
+        belief_world_materialization_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
     ) -> dict[str, object]:
         """Attach all work done before a graceful fallback to the decision artifact."""
@@ -1112,6 +1137,11 @@ class RootPUCTSearchPolicy:
             timing = timing.with_opponent_scenario_planning(opponent_scenario_planning_seconds)
         if policy_evaluation_seconds is not None:
             timing = timing.with_policy_evaluation(policy_evaluation_seconds)
+        if belief_world_materialization_seconds is not None:
+            timing = timing.with_belief_world_materialization(
+                belief_world_materialization_seconds,
+                attempt_count=belief_world_materialization_count or 0,
+            )
         neural_timing = _neural_timing_delta(
             neural_timing_before,
             _neural_timing_snapshot(self.neural_timing_snapshot),
@@ -1297,6 +1327,7 @@ def _shared_start_override_samples(
     rng: random.Random,
     sample_scenarios: Sequence[OpponentActionScenario],
     search_trajectory: BattleTrajectory,
+    on_attempt: Callable[[], None] | None = None,
 ) -> _SharedStartOverrideSamples:
     if policy.start_override_planner is None:
         raise ValueError("start_override_planner is required for shared start overrides.")
@@ -1311,6 +1342,8 @@ def _shared_start_override_samples(
         sample_rejections: list[str] = []
         for _attempt_index in range(policy.start_override_attempts):
             attempts_used += 1
+            if on_attempt is not None:
+                on_attempt()
             start_override = policy.start_override_planner(
                 context,
                 sample_scenario,
