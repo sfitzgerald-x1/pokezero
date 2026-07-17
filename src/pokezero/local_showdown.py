@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
 from .belief import PublicBattleBeliefEngine
-from .actions import ACTION_COUNT
+from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
@@ -1178,7 +1178,7 @@ def _public_materialization_payload(
     if deferred_actions and set(deferred_actions) != {deferred_player}:
         raise ValueError("Direct materialization received an unexpected deferred opponent action.")
     if any(
-        isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < ACTION_COUNT
+        isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < MOVE_ACTION_COUNT
         for action in deferred_actions.values()
     ):
         raise ValueError("Direct materialization received an invalid deferred opponent action.")

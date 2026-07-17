@@ -1173,6 +1173,11 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(
                 _public_materialization_payload(materialization)["pendingBatonPassSides"], ["p1"]
             )
+            with self.assertRaisesRegex(ValueError, "invalid deferred opponent action"):
+                _public_materialization_payload(
+                    materialization,
+                    deferred_opponent_actions={"p2": 4},
+                )
 
             search_env.materialize_public_world(
                 state=materialization,

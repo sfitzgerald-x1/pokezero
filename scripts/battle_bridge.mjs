@@ -406,7 +406,7 @@ function applyPublicState(snapshot, publicState) {
   if (deferredEntries.length > 1 ||
       deferredEntries.some(([sideId, actionIndex]) =>
         !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
-        !Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex > 8)) {
+        !Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4)) {
     throw new Error("Materialize received invalid deferred opponent actions.");
   }
   if (deferredEntries.length && !selfForceSwitch) {
@@ -525,25 +525,20 @@ function restoreDeferredOpponentActions(simulatorBattle, publicState) {
   if (!pokemon || pokemon.fainted) {
     throw new Error("Materialize cannot restore a deferred action without an active opponent.");
   }
-  if (actionIndex < 4) {
-    const moveSlot = pokemon.moveSlots?.[actionIndex];
-    if (!moveSlot || moveSlot.disabled || moveSlot.pp <= 0) {
-      throw new Error("Materialize sampled an unavailable deferred opponent move.");
-    }
-    simulatorBattle.queue.addChoice({
-      choice: "move",
-      pokemon,
-      moveid: moveSlot.id,
-      moveSlot: actionIndex,
-      targetLoc: -1,
-    });
-  } else {
-    const target = side.pokemon?.[actionIndex - 3];
-    if (!target || target.fainted || pokemon.trapped) {
-      throw new Error("Materialize sampled an unavailable deferred opponent switch.");
-    }
-    simulatorBattle.queue.addChoice({ choice: "switch", pokemon, target });
+  if (!Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4) {
+    throw new Error("Materialize cannot restore a non-move deferred opponent action.");
   }
+  const moveSlot = pokemon.moveSlots?.[actionIndex];
+  if (!moveSlot || moveSlot.disabled || moveSlot.pp <= 0) {
+    throw new Error("Materialize sampled an unavailable deferred opponent move.");
+  }
+  simulatorBattle.queue.addChoice({
+    choice: "move",
+    pokemon,
+    moveid: moveSlot.id,
+    moveSlot: actionIndex,
+    targetLoc: -1,
+  });
   simulatorBattle.queue.addChoice({ choice: "residual" });
 }
 

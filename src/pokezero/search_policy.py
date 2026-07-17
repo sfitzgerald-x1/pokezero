@@ -319,6 +319,11 @@ def prior_top_k_opponent_action_scenario_planner(
                     priors,
                     limit=scenario_count,
                     rng=_opponent_action_choice_rng(context, player),
+                    # A switch resolves before Baton Pass. Only a previously committed move
+                    # can remain pending across the actor's forced replacement choice.
+                    allowed_action_indices=(
+                        tuple(range(MOVE_ACTION_COUNT)) if player in deferred_opponents else None
+                    ),
                 ),
             )
             for player in scenario_players
@@ -1364,7 +1369,11 @@ def _deferred_opponent_action_planner_error(
     if actual != expected:
         return "deferred opponent action planner returned an unexpected action set"
     for player, action_index in deferred_actions.items():
-        if isinstance(action_index, bool) or not isinstance(action_index, int) or not 0 <= action_index < ACTION_COUNT:
+        if (
+            isinstance(action_index, bool)
+            or not isinstance(action_index, int)
+            or not 0 <= action_index < MOVE_ACTION_COUNT
+        ):
             return f"deferred opponent action planner returned an invalid action for {player}: {action_index!r}"
     return None
 
@@ -1683,15 +1692,19 @@ def _top_prior_action_choices(
     *,
     limit: int,
     rng: random.Random,
+    allowed_action_indices: tuple[int, ...] | None = None,
 ) -> tuple[tuple[int, float], ...]:
     if limit <= 0:
         raise ValueError("opponent action scenario limit must be positive.")
-    legal = _requested_legal_action_indices_for_player(context, player)
-    candidates = (
-        tuple((index, priors[index]) for index in legal)
-        if legal
-        else _hidden_mask_prior_action_choices(context, player, priors, rng=rng)
-    )
+    if allowed_action_indices is not None:
+        candidates = tuple((index, priors[index]) for index in allowed_action_indices)
+    else:
+        legal = _requested_legal_action_indices_for_player(context, player)
+        candidates = (
+            tuple((index, priors[index]) for index in legal)
+            if legal
+            else _hidden_mask_prior_action_choices(context, player, priors, rng=rng)
+        )
     ranked = sorted(candidates, key=lambda item: (-item[1], item[0]))[:limit]
     if not ranked:
         raise ValueError(f"no opponent action candidates available for {player}.")
