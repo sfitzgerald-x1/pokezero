@@ -519,6 +519,29 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": MOVE_ACTION_COUNT}])
         self.assertAlmostEqual(scenarios[0].weight, 1.0)
 
+    def test_prior_top_k_opponent_action_scenario_planner_separates_deferred_action(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.50, 0.20, 0.10) + (0.0,) * 5,
+            scenario_count=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(4, 5),
+            requested_players=("p1",),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            public_materialization_state=SimpleNamespace(deferred_opponent_action_player="p2"),
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{}, {}])
+        self.assertEqual([dict(scenario.deferred_actions) for scenario in scenarios], [{"p2": 1}, {"p2": 2}])
+        self.assertAlmostEqual(sum(scenario.weight for scenario in scenarios), 1.0)
+
     def test_hidden_switch_handle_does_not_consume_caller_rng(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(
             lambda history: (0.10, 0.05, 0.04, 0.03, 0.07, 0.08, 0.09, 0.10, 0.20),

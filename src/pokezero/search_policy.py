@@ -206,10 +206,14 @@ class OpponentActionScenario:
     actions: Mapping[PlayerId, int]
     weight: float = 1.0
     label: str = "single"
+    # An opponent action that was committed before a player-only forced-switch request. It is
+    # reconstructed into the direct world's queue, not submitted alongside the root action.
+    deferred_actions: Mapping[PlayerId, int] = field(default_factory=dict)
 
     def normalized(self, *, total_weight: float) -> "OpponentActionScenario":
         return OpponentActionScenario(
             actions=dict(self.actions),
+            deferred_actions=dict(self.deferred_actions),
             weight=self.weight / total_weight,
             label=self.label,
         )
@@ -271,6 +275,7 @@ def greedy_opponent_action_planner(
         return opponent_actions
 
     planner.planner_id = "checkpoint"  # type: ignore[attr-defined]
+    planner.opponent_prior_fn = prior_fn  # type: ignore[attr-defined]
     return planner
 
 
@@ -293,7 +298,9 @@ def prior_top_k_opponent_action_scenario_planner(
     def planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
         del rng
         requested_opponents = tuple(player for player in context.requested_players if player != context.player_id)
-        if not requested_opponents:
+        deferred_opponents = _deferred_opponent_action_players(context)
+        scenario_players = requested_opponents + deferred_opponents
+        if not scenario_players:
             return (OpponentActionScenario(actions={}, weight=1.0, label="no-opponent"),)
         trajectory = _trajectory_with_current_observation(context)
         history = player_observation_history(
@@ -314,20 +321,33 @@ def prior_top_k_opponent_action_scenario_planner(
                     rng=_opponent_action_choice_rng(context, player),
                 ),
             )
-            for player in requested_opponents
+            for player in scenario_players
         )
         scenarios: list[OpponentActionScenario] = []
         for combination in product(*(choices for _player, choices in choices_by_player)):
             actions = {
                 player: action
                 for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
+                if player in requested_opponents
+            }
+            deferred_actions = {
+                player: action
+                for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
+                if player in deferred_opponents
             }
             weight = math.prod(weight for _action, weight in combination)
             label = ",".join(
                 f"{player}:{action}"
                 for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
             )
-            scenarios.append(OpponentActionScenario(actions=actions, weight=weight, label=label))
+            scenarios.append(
+                OpponentActionScenario(
+                    actions=actions,
+                    deferred_actions=deferred_actions,
+                    weight=weight,
+                    label=label,
+                )
+            )
         scenarios.sort(key=lambda scenario: (-scenario.weight, tuple(sorted(scenario.actions.items()))))
         return _normalize_scenarios(tuple(scenarios[:scenario_count]))
 
@@ -586,6 +606,19 @@ class RootPUCTSearchPolicy:
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
                 )
+            deferred_error = _deferred_opponent_action_planner_error(
+                context=context,
+                deferred_actions=scenario.deferred_actions,
+            )
+            if deferred_error is not None:
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=deferred_error,
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                )
             legality_report = _opponent_action_legality_report(context, scenario.actions)
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
@@ -809,6 +842,7 @@ class RootPUCTSearchPolicy:
                                         prefix_decision_round_count=context.decision_round_index,
                                         start_override=start_override,
                                         public_materialization_state=context.public_materialization_state,
+                                        deferred_opponent_actions=scenario.deferred_actions,
                                         expected_current_observation=context.observation,
                                         replay_hp_fraction_tolerance=(
                                             self.start_override_hp_fraction_tolerance
@@ -1310,6 +1344,31 @@ def _opponent_action_planner_error(
     return None
 
 
+def _deferred_opponent_action_players(context: PolicyContext) -> tuple[PlayerId, ...]:
+    """Return public-timing opponent actions that must resolve after this root choice."""
+
+    state = context.public_materialization_state
+    player = getattr(state, "deferred_opponent_action_player", None)
+    if player in {"p1", "p2"} and player != context.player_id:
+        return (player,)
+    return ()
+
+
+def _deferred_opponent_action_planner_error(
+    *,
+    context: PolicyContext,
+    deferred_actions: Mapping[PlayerId, int],
+) -> str | None:
+    expected = set(_deferred_opponent_action_players(context))
+    actual = set(deferred_actions)
+    if actual != expected:
+        return "deferred opponent action planner returned an unexpected action set"
+    for player, action_index in deferred_actions.items():
+        if isinstance(action_index, bool) or not isinstance(action_index, int) or not 0 <= action_index < ACTION_COUNT:
+            return f"deferred opponent action planner returned an invalid action for {player}: {action_index!r}"
+    return None
+
+
 def _best_prior_candidate(
     candidates: tuple[PUCTBranchSearchCandidate, ...],
 ) -> PUCTBranchSearchCandidate:
@@ -1364,6 +1423,12 @@ def _opponent_action_scenarios(
 ) -> tuple[OpponentActionScenario, ...]:
     if policy.opponent_action_scenario_planner is not None:
         return _normalize_scenarios(tuple(policy.opponent_action_scenario_planner(context, rng)))
+    if _deferred_opponent_action_players(context):
+        prior_fn = getattr(policy.opponent_action_planner, "opponent_prior_fn", None)
+        if callable(prior_fn):
+            return _normalize_scenarios(
+                tuple(prior_top_k_opponent_action_scenario_planner(prior_fn, scenario_count=1)(context, rng))
+            )
     return _normalize_scenarios(
         (
             OpponentActionScenario(
@@ -1396,6 +1461,7 @@ def _start_override_sampled_scenario_groups(
             samples.append(
                 OpponentActionScenario(
                     actions=dict(scenario.actions),
+                    deferred_actions=dict(scenario.deferred_actions),
                     weight=sample_weight,
                     label=f"{scenario.label}/belief-sample-{sample_index + 1}",
                 )
@@ -1510,6 +1576,7 @@ def _shared_start_override_samples(
                     prefix_decision_round_count=context.decision_round_index,
                     start_override=materialized_override,
                     public_materialization_state=context.public_materialization_state,
+                    deferred_opponent_actions=sample_scenario.deferred_actions,
                     expected_current_observation=context.observation,
                     # Shared sampled worlds need only prove the branch-point state. Earlier
                     # custom-game replay observations can drift for metadata-only reasons.
@@ -1810,11 +1877,14 @@ def _root_visit_budget_selector_config(selector: RootVisitBudgetSelector) -> Map
 
 
 def _opponent_action_scenario_payload(scenario: OpponentActionScenario) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "label": scenario.label,
         "weight": scenario.weight,
         "actions": dict(scenario.actions),
     }
+    if scenario.deferred_actions:
+        payload["deferred_actions"] = dict(scenario.deferred_actions)
+    return payload
 
 
 def _opponent_scenario_skip_metadata(

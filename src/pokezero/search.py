@@ -1240,6 +1240,7 @@ def prepare_direct_materialization_prefix(
     prefix_decision_round_count: int,
     start_override: BattleStartOverride | None,
     public_materialization_state: object | None,
+    deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
     on_unavailable: Callable[[str], None] | None = None,
@@ -1271,11 +1272,14 @@ def prepare_direct_materialization_prefix(
         return None
     snapshotter, _restorer, snapshot_restore_mode = snapshot_hooks
     try:
-        materializer(
-            state=public_materialization_state,
-            start_override=start_override,
-            seed=trajectory.seed,
-        )
+        materialization_kwargs: dict[str, object] = {
+            "state": public_materialization_state,
+            "start_override": start_override,
+            "seed": trajectory.seed,
+        }
+        if deferred_opponent_actions:
+            materialization_kwargs["deferred_opponent_actions"] = dict(deferred_opponent_actions)
+        materializer(**materialization_kwargs)
         if expected_current_observation is not None:
             require_current_observation_match(
                 env,

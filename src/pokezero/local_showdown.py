@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
 from .belief import PublicBattleBeliefEngine
+from .actions import ACTION_COUNT
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
@@ -220,6 +221,21 @@ class PublicBattleMaterializationState:
     self_request: Mapping[str, Any]
     self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     self_initial_request: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def deferred_opponent_action_player(self) -> PlayerId | None:
+        """Return the opponent whose committed move must resolve after this switch.
+
+        A Baton Pass forced switch interrupts a simultaneous turn after the opponent has already
+        committed an action. Its identity is hidden, but the pending action itself is public
+        timing information and must be sampled into a direct search world.
+        """
+
+        if _request_materialization_kind(self.self_request) != "force-switch":
+            return None
+        if self.player_id not in self.replay.pending_baton_pass:
+            return None
+        return "p2" if self.player_id == "p1" else "p1"
 
 
 class LocalShowdownEnv:
@@ -435,6 +451,7 @@ class LocalShowdownEnv:
         state: PublicBattleMaterializationState,
         start_override: BattleStartOverride,
         seed: int,
+        deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -449,7 +466,10 @@ class LocalShowdownEnv:
             {
                 "type": "materialize",
                 "battleId": self._battle_token,
-                "publicState": _public_materialization_payload(state),
+                "publicState": _public_materialization_payload(
+                    state,
+                    deferred_opponent_actions=deferred_opponent_actions,
+                ),
             }
         )
         event = self._read_until_event_type("materialized")
@@ -1127,7 +1147,11 @@ def _json_clone_request_history(
     }
 
 
-def _public_materialization_payload(state: PublicBattleMaterializationState) -> dict[str, Any]:
+def _public_materialization_payload(
+    state: PublicBattleMaterializationState,
+    *,
+    deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+) -> dict[str, Any]:
     replay = state.replay
     sides: dict[PlayerId, dict[str, Any]] = {}
     for player in PLAYER_IDS:
@@ -1149,6 +1173,15 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
+    deferred_actions = dict(deferred_opponent_actions or {})
+    deferred_player = state.deferred_opponent_action_player
+    if deferred_actions and set(deferred_actions) != {deferred_player}:
+        raise ValueError("Direct materialization received an unexpected deferred opponent action.")
+    if any(
+        isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < ACTION_COUNT
+        for action in deferred_actions.values()
+    ):
+        raise ValueError("Direct materialization received an invalid deferred opponent action.")
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
@@ -1164,6 +1197,10 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         # A Baton Pass declaration is public and its forced switch has not yet resolved. The
         # bridge needs the source-effect id so Showdown preserves the carried battle state.
         "pendingBatonPassSides": _pending_baton_pass_sides(replay, state),
+        # The action has already been committed in the interrupted simultaneous turn but is not
+        # yet protocol-visible. It is supplied by the opponent-action predictor, never the live
+        # battle, and the bridge restores it before the actor's forced switch resolves.
+        "deferredOpponentActions": deferred_actions,
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's

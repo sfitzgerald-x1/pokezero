@@ -1178,11 +1178,14 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 state=materialization,
                 start_override=start_override,
                 seed=73,
+                deferred_opponent_actions={"p2": 0},
             )
             self.assertEqual(search_env.requested_players(), ("p1",))
 
             source.step({"p1": 4})
             search_env.step({"p1": 4})
+            expected = source.observe("p1")
+            actual = search_env.observe("p1")
             ordinary_boundary = source.public_materialization_state("p1")
             stale_actor_boundary = replace(
                 ordinary_boundary,
@@ -1193,9 +1196,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 replay=replace(ordinary_boundary.replay, pending_baton_pass=("p2",)),
             )
 
-        # The opposing turn action is hidden at this forced-switch boundary and is deliberately
-        # not replayed by direct materialization. The required mechanical invariant is that the
-        # chosen replacement inherits the outgoing Pokemon's Baton Pass state.
+        # The opposing action is hidden at the forced-switch boundary. The direct world samples
+        # it into the restored queue, so both the pass and the interrupted turn resolve normally.
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(source._parser.snapshot().boosts["p1"], {"atk": 2})
         self.assertEqual(search_env._parser.snapshot().boosts["p1"], {"atk": 2})
         self.assertEqual(_public_materialization_payload(stale_actor_boundary)["pendingBatonPassSides"], [])

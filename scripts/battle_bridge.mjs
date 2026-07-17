@@ -338,6 +338,7 @@ function materializeBattle(command) {
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
+  restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.readyScheduled = false;
   battle.terminalScheduled = false;
@@ -365,6 +366,7 @@ function applyPublicState(snapshot, publicState) {
   }
   snapshot.turn = publicState.turn;
   const selfForceSwitch = publicState.selfRequestKind === "force-switch";
+  const deferredOpponentActions = publicState.deferredOpponentActions ?? {};
   snapshot.requestState = selfForceSwitch ? "switch" : "move";
   snapshot.lastMove = null;
   snapshot.lastMoveLine = 0;
@@ -396,6 +398,24 @@ function applyPublicState(snapshot, publicState) {
        (pendingBatonPassSides[0] !== publicState.selfPlayer || !selfForceSwitch))) {
     throw new Error("Materialize received a Baton Pass state without its forced switch.");
   }
+  if (!deferredOpponentActions || typeof deferredOpponentActions !== "object" ||
+      Array.isArray(deferredOpponentActions)) {
+    throw new Error("Materialize received invalid deferred opponent actions.");
+  }
+  const deferredEntries = Object.entries(deferredOpponentActions);
+  if (deferredEntries.length > 1 ||
+      deferredEntries.some(([sideId, actionIndex]) =>
+        !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
+        !Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex > 8)) {
+    throw new Error("Materialize received invalid deferred opponent actions.");
+  }
+  if (deferredEntries.length && !selfForceSwitch) {
+    throw new Error("Materialize received a deferred opponent action without a forced switch.");
+  }
+  // A direct world normally starts at a decision boundary. When a move was committed before a
+  // Baton Pass switch, preserve the interrupted turn so the actor's replacement resolves before
+  // the sampled hidden action and its residual phase.
+  if (deferredEntries.length) snapshot.midTurn = true;
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -494,6 +514,37 @@ function applyPublicState(snapshot, publicState) {
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+}
+
+function restoreDeferredOpponentActions(simulatorBattle, publicState) {
+  const entries = Object.entries(publicState.deferredOpponentActions || {});
+  if (!entries.length) return;
+  const [sideId, actionIndex] = entries[0];
+  const side = simulatorBattle.sides[sideId === "p1" ? 0 : 1];
+  const pokemon = side?.active?.[0];
+  if (!pokemon || pokemon.fainted) {
+    throw new Error("Materialize cannot restore a deferred action without an active opponent.");
+  }
+  if (actionIndex < 4) {
+    const moveSlot = pokemon.moveSlots?.[actionIndex];
+    if (!moveSlot || moveSlot.disabled || moveSlot.pp <= 0) {
+      throw new Error("Materialize sampled an unavailable deferred opponent move.");
+    }
+    simulatorBattle.queue.addChoice({
+      choice: "move",
+      pokemon,
+      moveid: moveSlot.id,
+      moveSlot: actionIndex,
+      targetLoc: -1,
+    });
+  } else {
+    const target = side.pokemon?.[actionIndex - 3];
+    if (!target || target.fainted || pokemon.trapped) {
+      throw new Error("Materialize sampled an unavailable deferred opponent switch.");
+    }
+    simulatorBattle.queue.addChoice({ choice: "switch", pokemon, target });
+  }
+  simulatorBattle.queue.addChoice({ choice: "residual" });
 }
 
 function applyPublicWish(serializedSide, setTurn, sideId, currentTurn) {
