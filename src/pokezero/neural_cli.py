@@ -3674,7 +3674,12 @@ def _root_puct_benchmark_progress_callback(
             cumulative_searches = 0
             cumulative_fallbacks = 0
             cumulative_fallback_categories.clear()
-        for diagnostics in progress.root_puct_by_player.values():
+        root_puct_by_player = getattr(progress, "root_puct_by_player", {})
+        if not isinstance(root_puct_by_player, Mapping):
+            root_puct_by_player = {}
+        for diagnostics in root_puct_by_player.values():
+            if not isinstance(diagnostics, Mapping):
+                continue
             searches = diagnostics.get("root_puct_searches")
             fallbacks = diagnostics.get("root_puct_fallbacks")
             if isinstance(searches, int) and not isinstance(searches, bool):

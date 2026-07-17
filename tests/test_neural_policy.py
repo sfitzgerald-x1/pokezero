@@ -3756,6 +3756,29 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             ],
         )
 
+    def test_root_puct_progress_callback_tolerates_legacy_progress_without_diagnostics(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(1)
+
+        with contextlib.redirect_stderr(stderr):
+            callback(
+                SimpleNamespace(
+                    matchup_label="root-puct vs max-damage",
+                    matchup_index=0,
+                    matchup_count=1,
+                    games_completed=1,
+                    games_total=1,
+                    seed=81,
+                    matchup_elapsed_seconds=1.0,
+                )
+            )
+
+        payload = json.loads(stderr.getvalue().split(": ", 1)[1])
+        self.assertIsNone(payload["root_puct_fallback_rate"])
+        self.assertEqual(payload["root_puct_searches"], 0)
+        self.assertEqual(payload["root_puct_fallbacks"], 0)
+        self.assertEqual(payload["root_puct_fallback_categories"], {})
+
     def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
