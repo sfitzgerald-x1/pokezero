@@ -246,6 +246,241 @@ function restoreBattle(command) {
   });
 }
 
+function materializeBattle(command) {
+  const battle = requireBattle(command);
+  const publicState = command.publicState;
+  if (!publicState || typeof publicState !== "object") {
+    throw new Error("Materialize requires a publicState object.");
+  }
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  const snapshot = battle.battleStream.battle.toJSON();
+  applyPublicState(snapshot, publicState);
+  const send = battle.battleStream.battle.send;
+  battle.battleStream.battle = Battle.fromJSON(snapshot);
+  battle.battleStream.battle.restart(send);
+  battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  battle.readyScheduled = false;
+  battle.terminalScheduled = false;
+  battle.tRecv = null;
+  emit({
+    type: "materialized",
+    battleId: battle.battleId,
+    boundaryRequests: battle.boundaryRequests,
+    requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+  });
+}
+
+function applyPublicState(snapshot, publicState) {
+  if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
+    throw new Error("Materialize requires a positive integer turn.");
+  }
+  if (!publicState.sides || typeof publicState.sides !== "object") {
+    throw new Error("Materialize requires public state for both sides.");
+  }
+  if (publicState.weather || hasEntries(publicState.futureSight)) {
+    throw new Error("Materialize does not yet support active weather or Future Sight.");
+  }
+  snapshot.turn = publicState.turn;
+  snapshot.requestState = "move";
+  snapshot.lastMove = null;
+  snapshot.lastMoveLine = 0;
+  snapshot.lastSuccessfulMoveThisTurn = null;
+  snapshot.lastDamage = 0;
+  snapshot.midTurn = false;
+  snapshot.queue = [];
+  snapshot.faintQueue = [];
+  snapshot.activeMove = null;
+  snapshot.activePokemon = null;
+  snapshot.activeTarget = null;
+  snapshot.field.weather = "";
+  snapshot.field.weatherState = {id: "", effectOrder: 0};
+  snapshot.field.pseudoWeather = {};
+
+  for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
+    const publicSide = publicState.sides[sideId];
+    if (!publicSide || typeof publicSide !== "object") {
+      throw new Error(`Materialize is missing public state for ${sideId}.`);
+    }
+    if (hasEntries(publicSide.sideConditions) || hasEntries(publicSide.volatiles)) {
+      throw new Error("Materialize does not yet support side conditions or volatile effects.");
+    }
+    const rows = Array.isArray(publicSide.pokemon) ? publicSide.pokemon : [];
+    const serializedSide = snapshot.sides[sideIndex];
+    let activeIndex = null;
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || typeof row.species !== "string") {
+        throw new Error(`Materialize contains an invalid ${sideId} Pokemon row.`);
+      }
+      const matchingIndices = serializedSide.pokemon
+        .map((pokemon, index) => (sameSpecies(pokemon, row.species) ? index : -1))
+        .filter(index => index >= 0);
+      if (matchingIndices.length !== 1) {
+        throw new Error(`Materialize cannot uniquely match ${sideId} ${row.species}.`);
+      }
+      const index = matchingIndices[0];
+      applyPokemonCondition(serializedSide.pokemon[index], row.condition, sideId, row.species);
+      serializedSide.pokemon[index].boosts = row.active
+        ? normalizedBoosts(publicSide.boosts)
+        : normalizedBoosts(null);
+      serializedSide.pokemon[index].volatiles = {};
+      serializedSide.pokemon[index].lastMove = null;
+      serializedSide.pokemon[index].lastMoveUsed = null;
+      serializedSide.pokemon[index].attackedBy = [];
+      serializedSide.pokemon[index].lastDamage = 0;
+      serializedSide.pokemon[index].activeMoveActions = 0;
+      serializedSide.pokemon[index].moveThisTurn = "";
+      serializedSide.pokemon[index].isActive = Boolean(row.active);
+      if (row.active) {
+        if (activeIndex !== null) throw new Error(`Materialize found multiple active ${sideId} Pokemon.`);
+        activeIndex = index;
+      }
+    }
+    if (activeIndex === null) {
+      throw new Error(`Materialize requires one active ${sideId} Pokemon.`);
+    }
+    // Showdown treats `position < side.active.length` as the request-level active
+    // predicate. A direct construction therefore needs the same active-first team
+    // ordering that a real switch produces; changing only `side.active` leaves the
+    // sampled lead in slot zero and exposes the wrong request to the policy.
+    const active = moveActivePokemonToFront(serializedSide, activeIndex);
+    active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
+    serializedSide.active = [`[Pokemon:${sideId}a]`];
+    if (sideId === publicState.selfPlayer) {
+      applySelfActiveMoveState(active, publicState.selfActiveMoves);
+    }
+    serializedSide.sideConditions = {};
+    serializedSide.slotConditions = [{}];
+    serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
+    serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
+    delete serializedSide.activeRequest;
+  }
+}
+
+function moveActivePokemonToFront(serializedSide, activeIndex) {
+  const originalPokemon = serializedSide.pokemon;
+  const originalIndices = [activeIndex];
+  for (let index = 0; index < originalPokemon.length; index++) {
+    if (index !== activeIndex) originalIndices.push(index);
+  }
+  const originalIndexByCurrentIndex = originalTeamIndexByCurrentIndex(
+    serializedSide.team,
+    originalPokemon.length,
+  );
+  const reorderedTeam = Array(originalPokemon.length);
+  serializedSide.pokemon = originalIndices.map(index => originalPokemon[index]);
+  for (const [newIndex, oldIndex] of originalIndices.entries()) {
+    const pokemon = serializedSide.pokemon[newIndex];
+    pokemon.position = newIndex;
+    pokemon.isActive = newIndex === 0;
+    reorderedTeam[originalIndexByCurrentIndex[oldIndex]] = newIndex + 1;
+  }
+  serializedSide.team = encodeTeamOrder(reorderedTeam);
+  return serializedSide.pokemon[0];
+}
+
+function originalTeamIndexByCurrentIndex(team, expectedLength) {
+  const tokens = String(team || "").split(String(team || "").includes(",") ? "," : "");
+  if (tokens.length !== expectedLength) {
+    throw new Error("Materialize received an invalid serialized team order.");
+  }
+  const result = Array(expectedLength);
+  for (const [originalIndex, token] of tokens.entries()) {
+    const currentIndex = Number(token) - 1;
+    if (!Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= expectedLength) {
+      throw new Error("Materialize received an invalid serialized team order.");
+    }
+    if (result[currentIndex] !== undefined) {
+      throw new Error("Materialize received a non-permutation serialized team order.");
+    }
+    result[currentIndex] = originalIndex;
+  }
+  return result;
+}
+
+function encodeTeamOrder(order) {
+  return order.join(order.length > 9 ? "," : "");
+}
+
+function sameSpecies(pokemon, species) {
+  const packedSpecies = pokemon?.set?.species || pokemon?.set?.name || "";
+  return normalizeId(packedSpecies) === normalizeId(species);
+}
+
+function normalizeId(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function hasEntries(value) {
+  return value && typeof value === "object" && Object.keys(value).length > 0;
+}
+
+function normalizedBoosts(boosts) {
+  const normalized = {atk: 0, def: 0, spa: 0, spd: 0, spe: 0, accuracy: 0, evasion: 0};
+  if (!boosts || typeof boosts !== "object") return normalized;
+  for (const key of Object.keys(normalized)) {
+    if (Number.isInteger(boosts[key])) normalized[key] = boosts[key];
+  }
+  return normalized;
+}
+
+function applyPokemonCondition(pokemon, condition, sideId, species) {
+  if (typeof condition !== "string" || !condition.trim()) {
+    throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
+  }
+  const parts = condition.trim().split(/\s+/);
+  const fainted = parts.includes("fnt") || parts[0] === "0";
+  const status = parts.find(part => ["brn", "frz", "par", "psn"].includes(part)) || "";
+  if (parts.includes("slp") || parts.includes("tox")) {
+    throw new Error("Materialize does not yet support sleep or toxic counters.");
+  }
+  let hp = 0;
+  let maxhp = pokemon.maxhp;
+  if (!fainted) {
+    const match = /^(\d+)\/(\d+)$/.exec(parts[0]);
+    if (!match) throw new Error(`Materialize received an invalid condition for ${sideId} ${species}.`);
+    hp = Number(match[1]);
+    const publicMaxhp = Number(match[2]);
+    if (publicMaxhp !== pokemon.maxhp) {
+      throw new Error(`Materialize max HP mismatch for ${sideId} ${species}.`);
+    }
+    maxhp = publicMaxhp;
+  }
+  pokemon.hp = hp;
+  pokemon.maxhp = maxhp;
+  pokemon.baseMaxhp = maxhp;
+  pokemon.fainted = fainted;
+  pokemon.status = status;
+  pokemon.statusState = {id: status, effectOrder: 0};
+}
+
+function applySelfActiveMoveState(pokemon, moves) {
+  if (!Array.isArray(moves)) return;
+  for (const state of moves) {
+    if (!state || typeof state.id !== "string" || !Number.isInteger(state.pp) || !Number.isInteger(state.maxpp)) {
+      continue;
+    }
+    const slot = pokemon.moveSlots.find(move => normalizeId(move.id) === normalizeId(state.id));
+    if (!slot) throw new Error(`Materialize cannot match acting move ${state.id}.`);
+    if (slot.maxpp !== state.maxpp) {
+      throw new Error(`Materialize max PP mismatch for acting move ${state.id}.`);
+    }
+    slot.pp = state.pp;
+    slot.disabled = Boolean(state.disabled);
+    slot.used = state.pp < state.maxpp;
+  }
+}
+
+function boundaryRequestsFromBattle(simulatorBattle) {
+  const requests = simulatorBattle.getRequests(simulatorBattle.requestState);
+  const result = {};
+  for (const [index, player] of ["p1", "p2"].entries()) {
+    if (requests[index] && typeof requests[index] === "object") result[player] = requests[index];
+  }
+  return result;
+}
+
 async function reseedBattle(command) {
   const battle = requireBattle(command);
   const seed = command.seed;
@@ -349,6 +584,9 @@ async function handleCommand(command) {
       break;
     case "restore":
       restoreBattle(command);
+      break;
+    case "materialize":
+      materializeBattle(command);
       break;
     case "reseed":
       await reseedBattle(command);

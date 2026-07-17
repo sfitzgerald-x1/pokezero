@@ -152,6 +152,21 @@ class ReorderedFakeSetSource(FakeSetSource):
 
 
 class ShowdownReplayNormalizationTest(unittest.TestCase):
+    def test_public_damage_updates_the_active_pokemon_condition(self) -> None:
+        replay = parse_showdown_replay(
+            [
+                "|switch|p1a: Charizard|Charizard, L80|250/250",
+                "|switch|p2a: Xatu|Xatu, L80|220/220",
+                "|-damage|p2a: Xatu|180/220 brn",
+                "|-heal|p1a: Charizard|250/250",
+                "|-status|p1a: Charizard|par",
+            ]
+        )
+
+        self.assertEqual(replay.public_active["p2"].condition, "180/220 brn")
+        self.assertEqual(replay.public_active["p1"].condition, "250/250 par")
+        self.assertEqual(replay.public_revealed["p2"][0].condition, "180/220 brn")
+
     def test_timestamp_lines_are_not_normalized_into_public_events(self) -> None:
         replay = parse_showdown_replay(
             [

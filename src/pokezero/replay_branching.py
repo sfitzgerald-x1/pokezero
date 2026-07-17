@@ -445,6 +445,26 @@ def _require_observation_match(
         )
 
 
+def require_current_observation_match(
+    env: PokeZeroEnv,
+    *,
+    expected: PokeZeroObservationV0,
+    player_id: PlayerId,
+    turn_index: int,
+    hp_fraction_tolerance: float = 0.0,
+) -> None:
+    """Validate a directly materialized branch point against its public observation."""
+
+    _require_observation_match(
+        env,
+        expected=expected,
+        player_id=player_id,
+        turn_index=turn_index,
+        ignore_recent_events=True,
+        hp_fraction_tolerance=hp_fraction_tolerance,
+    )
+
+
 def _observations_match_for_replay(
     actual: PokeZeroObservationV0,
     expected: PokeZeroObservationV0,

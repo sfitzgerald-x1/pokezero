@@ -20,6 +20,7 @@ from .replay_branching import (
     ReplayBranchRolloutResult,
     ReplayPrefixResult,
     action_rounds_from_trajectory,
+    require_current_observation_match,
     replay_trajectory_branch_rollout,
     replay_trajectory_prefix,
 )
@@ -420,7 +421,7 @@ class _RestorablePrefix:
 
 @dataclass(frozen=True)
 class PreparedReplayPrefix:
-    """A sampled-world branch point captured after public replay validation.
+    """A sampled-world branch point captured after public-state validation.
 
     This is intentionally created only from a caller-provided start override,
     never from a live hidden-information battle. The concrete override identity
@@ -439,6 +440,7 @@ class PreparedReplayPrefix:
     expected_current_observation: PokeZeroObservationV0
     prefix: ReplayPrefixResult
     snapshot: Any
+    materialization_mode: str = "replay"
 
 
 @dataclass(frozen=True)
@@ -1219,6 +1221,77 @@ def prepare_replay_prefix(
         expected_current_observation=expected_current_observation,
         prefix=prefix,
         snapshot=snapshotter(),
+    )
+
+
+def prepare_direct_materialization_prefix(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    start_override: BattleStartOverride | None,
+    public_materialization_state: object | None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
+) -> PreparedReplayPrefix | None:
+    """Construct a sampled branch point from public state without replaying its prefix.
+
+    Environments opt in through ``materialize_public_world``. Unsupported public effects are
+    represented by ``None`` so callers retain the verified Tier 1 replay path rather than filling
+    unknown simulator state with an approximation.
+    """
+
+    if start_override is None or public_materialization_state is None:
+        return None
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
+    _require_current_observation_for_start_override(
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
+    materializer = getattr(env, "materialize_public_world", None)
+    snapshotter = getattr(env, "snapshot", None)
+    restorer = getattr(env, "restore", None)
+    if not callable(materializer) or not callable(snapshotter) or not callable(restorer):
+        return None
+    try:
+        materializer(
+            state=public_materialization_state,
+            start_override=start_override,
+            seed=trajectory.seed,
+        )
+        if expected_current_observation is not None:
+            require_current_observation_match(
+                env,
+                expected=expected_current_observation,
+                player_id=player_id,
+                turn_index=prefix_decision_round_count,
+                hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            )
+    except (RuntimeError, ValueError):
+        return None
+    prefix = ReplayPrefixResult(
+        replayed_round_count=prefix_decision_round_count,
+        requested_players=env.requested_players(),
+        terminal=env.terminal(),
+    )
+    if prefix.terminal is not None:
+        return None
+    return PreparedReplayPrefix(
+        trajectory_seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        trajectory_prefix_key=_prepared_trajectory_prefix_key(
+            trajectory,
+            prefix_decision_round_count=prefix_decision_round_count,
+        ),
+        start_override_key=_prepared_start_override_key(start_override),
+        expected_current_observation=expected_current_observation,
+        prefix=prefix,
+        snapshot=snapshotter(),
+        materialization_mode="direct",
     )
 
 
