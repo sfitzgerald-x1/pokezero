@@ -330,6 +330,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     pokezero_decisions=1,
                     root_puct_searches=0,
                     root_puct_fallbacks=1,
+                    root_puct_start_override_direct_materializations=3,
+                    root_puct_start_override_replay_materializations=2,
                     root_puct_timings=(decision_timing,),
                 ),
             ),
@@ -338,6 +340,14 @@ class FoulPlayBridgeTest(unittest.TestCase):
         payload = result.to_dict()
 
         self.assertEqual(payload["game_results"][0]["root_puct_timing"], [decision_timing])
+        self.assertEqual(
+            payload["game_results"][0]["root_puct_start_override_direct_materializations"],
+            3,
+        )
+        self.assertEqual(
+            payload["game_results"][0]["root_puct_start_override_replay_materializations"],
+            2,
+        )
         self.assertEqual(payload["root_puct"]["timing"], decision_timing)
 
     def test_root_puct_timing_persistence_keeps_derived_timing_fields(self) -> None:
