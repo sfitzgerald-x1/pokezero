@@ -12,7 +12,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv, TerminalState
-from .mcts_diagnostics import root_puct_first_observation_mismatch_path_counts
+from .mcts_diagnostics import (
+    root_puct_direct_materialization_rejection_category,
+    root_puct_first_observation_mismatch_path_counts,
+)
 from .observation import PokeZeroObservationV0
 from .policy import Policy
 from .replay_branching import (
@@ -1278,7 +1281,7 @@ def prepare_direct_materialization_prefix(
                 hp_fraction_tolerance=replay_hp_fraction_tolerance,
             )
     except (RuntimeError, ValueError) as error:
-        category = _direct_materialization_rejection_category(error)
+        category = root_puct_direct_materialization_rejection_category(error)
         _record_direct_materialization_unavailable(
             on_unavailable,
             category,
@@ -1319,31 +1322,6 @@ def _record_direct_materialization_unavailable(
 ) -> None:
     if callback is not None:
         callback(category)
-
-
-def _direct_materialization_rejection_category(error: Exception) -> str:
-    """Map direct-construction failures to public-safe, stable telemetry categories."""
-
-    message = str(error).lower()
-    if "does not reproduce recorded replay prefix observations" in message:
-        return "observation_mismatch"
-    if "spent pp for a benched acting pokemon" in message:
-        return "self_benched_move_history"
-    if "future sight" in message:
-        return "future_sight"
-    if "volatile effects" in message:
-        return "volatile_effects"
-    if "side condition" in message:
-        return "unsupported_side_condition"
-    if "cannot uniquely match" in message:
-        return "ambiguous_species"
-    if "positive integer turn" in message:
-        return "invalid_turn"
-    if "requires one active" in message:
-        return "missing_active"
-    if "no actionable request boundary" in message:
-        return "no_actionable_boundary"
-    return "materializer_error"
 
 
 def _restorable_prefix_from_prepared(

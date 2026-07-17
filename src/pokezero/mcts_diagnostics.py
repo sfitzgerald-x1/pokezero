@@ -82,6 +82,31 @@ _DIRECT_MATERIALIZATION_REJECTION_CATEGORIES = frozenset(
 )
 
 
+def root_puct_direct_materialization_rejection_category(error: object) -> str:
+    """Classify a direct public-state construction error without retaining its text."""
+
+    message = str(error or "").lower()
+    if "does not reproduce recorded replay prefix observations" in message:
+        return "observation_mismatch"
+    if "spent pp for a benched acting pokemon" in message:
+        return "self_benched_move_history"
+    if "future sight" in message:
+        return "future_sight"
+    if "volatile effects" in message:
+        return "volatile_effects"
+    if "side condition" in message:
+        return "unsupported_side_condition"
+    if "cannot uniquely match" in message:
+        return "ambiguous_species"
+    if "positive integer turn" in message:
+        return "invalid_turn"
+    if "requires one active" in message:
+        return "missing_active"
+    if "no actionable request boundary" in message:
+        return "no_actionable_boundary"
+    return "materializer_error"
+
+
 def root_puct_fallback_category(reason: object) -> str:
     """Return a stable, compact category for a verbose root-PUCT fallback reason."""
 
