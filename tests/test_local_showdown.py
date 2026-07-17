@@ -426,10 +426,14 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 seed=7,
             )
             actual = search_env.observe("p1")
+            for _ in range(4):
+                search_env.step({"p1": 0, "p2": 0})
+            final_materialization = search_env.public_materialization_state("p1")
 
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertIsNone(final_materialization.replay.weather)
 
     def test_public_materialization_preserves_permanent_ability_weather(self) -> None:
         config = integration_config()
@@ -437,10 +441,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         start_override = BattleStartOverride(
             player_teams={
                 "p1": pack_team(
-                    (FixturePokemon(species="Tyranitar", ability="Sand Stream", moves=("Tackle",)),)
+                    (FixturePokemon(species="Tyranitar", ability="Sand Stream", moves=("Protect",)),)
                 ),
                 "p2": pack_team(
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Tackle",)),)
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Protect",)),)
                 ),
             },
         )
@@ -459,10 +463,14 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 seed=7,
             )
             actual = search_env.observe("p1")
+            for _ in range(4):
+                search_env.step({"p1": 0, "p2": 0})
+            final_materialization = search_env.public_materialization_state("p1")
 
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(final_materialization.replay.weather, "sandstorm")
 
     def test_public_materialization_preserves_reflect_duration(self) -> None:
         config = integration_config()
@@ -493,10 +501,14 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 seed=7,
             )
             actual = search_env.observe("p1")
+            for _ in range(4):
+                search_env.step({"p1": 0, "p2": 0})
+            final_materialization = search_env.public_materialization_state("p1")
 
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertNotIn("reflect", final_materialization.replay.side_condition_counts["p1"])
 
     def test_public_materialization_fails_closed_after_a_benched_self_pokemon_used_a_move(self) -> None:
         config = integration_config()
