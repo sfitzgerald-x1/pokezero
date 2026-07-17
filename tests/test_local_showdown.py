@@ -344,6 +344,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             env.step({"p1": 0, "p2": 1})
             expected_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
 
+            env.reset(seed=19)
+            with self.assertRaisesRegex(ValueError, "format does not match"):
+                env.restore(snapshot)
+
             env.reset_with_start_override(seed=19, start_override=start_override)
             self.assertNotEqual(env._battle_token, snapshot.battle_token)
             env.restore(snapshot)

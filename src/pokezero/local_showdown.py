@@ -403,6 +403,11 @@ class LocalShowdownEnv:
 
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
+        if (
+            self._format_id != snapshot.format_id
+            or self._observation_format_id != snapshot.observation_format_id
+        ):
+            raise ValueError("LocalShowdownSnapshot format does not match the current live battle shell.")
         self._send_command(
             {
                 "type": "restore",

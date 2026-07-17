@@ -19,6 +19,7 @@ from .replay_branching import (
     ReplayBranchResult,
     ReplayBranchRolloutResult,
     ReplayPrefixResult,
+    action_rounds_from_trajectory,
     replay_trajectory_branch_rollout,
     replay_trajectory_prefix,
 )
@@ -433,6 +434,7 @@ class PreparedReplayPrefix:
     format_id: str
     player_id: PlayerId
     prefix_decision_round_count: int
+    trajectory_prefix_key: tuple[tuple[int, tuple[tuple[PlayerId, int], ...]], ...]
     start_override_key: tuple[object, ...]
     expected_current_observation: PokeZeroObservationV0
     prefix: ReplayPrefixResult
@@ -1145,6 +1147,22 @@ def _prepared_start_override_key(start_override: BattleStartOverride) -> tuple[o
     )
 
 
+def _prepared_trajectory_prefix_key(
+    trajectory: BattleTrajectory,
+    *,
+    prefix_decision_round_count: int,
+) -> tuple[tuple[int, tuple[tuple[PlayerId, int], ...]], ...]:
+    """Return the replay-relevant action identity for a prepared branch point."""
+
+    return tuple(
+        (round_.turn_index, tuple(sorted(round_.actions.items())))
+        for round_ in action_rounds_from_trajectory(
+            trajectory,
+            decision_round_count=prefix_decision_round_count,
+        )
+    )
+
+
 def prepare_replay_prefix(
     *,
     env: PokeZeroEnv,
@@ -1193,6 +1211,10 @@ def prepare_replay_prefix(
         format_id=trajectory.format_id,
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
+        trajectory_prefix_key=_prepared_trajectory_prefix_key(
+            trajectory,
+            prefix_decision_round_count=prefix_decision_round_count,
+        ),
         start_override_key=_prepared_start_override_key(start_override),
         expected_current_observation=expected_current_observation,
         prefix=prefix,
@@ -1217,6 +1239,11 @@ def _restorable_prefix_from_prepared(
         raise ValueError("prepared replay prefix belongs to a different player.")
     if prepared_prefix.prefix_decision_round_count != prefix_decision_round_count:
         raise ValueError("prepared replay prefix belongs to a different decision round.")
+    if prepared_prefix.trajectory_prefix_key != _prepared_trajectory_prefix_key(
+        trajectory,
+        prefix_decision_round_count=prefix_decision_round_count,
+    ):
+        raise ValueError("prepared replay prefix belongs to a different trajectory prefix.")
     if expected_current_observation != prepared_prefix.expected_current_observation:
         raise ValueError("prepared replay prefix belongs to a different public decision state.")
     if (
