@@ -149,6 +149,19 @@ class CapstoneArtifactsTest(unittest.TestCase):
         self.assertEqual(pair.candidate.calibrated_value_copy, f"isotonic:{'b' * 64}")
         self.assertEqual(pair.candidate_wall_seconds, (0.4, 0.6))
 
+    def test_root_normalization_rejects_mechanics_only_artifact(self) -> None:
+        payload = root_payload(seat="p1")
+        payload["strength_evidence_eligible"] = False
+
+        with self.assertRaisesRegex(ValueError, "mechanics-only"):
+            normalize_root_puct_play_artifact(
+                payload,
+                opponent_id="max-damage",
+                arm_id="value-24",
+                band="a",
+                seat="p1",
+            )
+
     def test_root_normalization_rejects_missing_value_provenance_and_fallback(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing frozen calibration provenance"):
             normalize_root_puct_play_artifact(

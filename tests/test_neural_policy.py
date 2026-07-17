@@ -28,6 +28,7 @@ from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
     _adaptive_root_visit_budget_selector,
+    _belief_world_benchmark_coverage,
     _root_opponent_action_candidate_scenario_count,
     _validate_root_opponent_action_scenario_counts,
     _root_puct_benchmark_progress_callback,
@@ -4312,6 +4313,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             captured["env_config"] = config
             return object()
 
+        stdout = io.StringIO()
         with (
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
@@ -4321,7 +4323,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             patch("pokezero.neural_cli.gen3_randbat_belief_start_override_planner", return_value=belief_planner) as planner,
             patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
             patch("pokezero.neural_cli.LocalShowdownEnv", side_effect=capture_env),
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
         ):
             exit_code = neural_cli_main(
                 [
@@ -4332,6 +4334,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "--opponent-policy",
                     "random-legal",
                     "--belief-start-overrides",
+                    "--record-belief-world-coverage-gaps",
                     "--belief-world-sample-cap",
                     "3",
                     "--belief-start-override-attempts",
@@ -4351,6 +4354,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(search_policy.start_override_attempts, 7)
         self.assertEqual(search_policy.start_override_hp_fraction_tolerance, 0.03)
         self.assertTrue(captured["env_config"].set_belief_source)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["belief_world_coverage_gaps_allowed"])
+        self.assertEqual(payload["belief_world_coverage_mode"], "mechanics-only-gaps-allowed")
+        self.assertFalse(payload["strength_evidence_eligible"])
+        self.assertEqual(payload["artifact_scope"], "w5-mechanics-only-not-strength-evidence")
+        self.assertEqual(payload["belief_world_coverage"]["per_game_any_materialization_rate"], 1.0)
 
     def test_root_puct_belief_benchmark_rejects_missing_world_checksums(self) -> None:
         result = SimpleNamespace(
@@ -4364,9 +4373,47 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "missing belief-world checksum for seeds 13"):
             _require_belief_world_benchmark_coverage(
-                SimpleNamespace(matchups=(result,)),
-                search_policy_ids=("search",),
+                _belief_world_benchmark_coverage(
+                    SimpleNamespace(matchups=(result,)),
+                    search_policy_ids=("search",),
+                ),
             )
+
+    def test_root_puct_belief_benchmark_records_partial_world_coverage(self) -> None:
+        result = SimpleNamespace(
+            label="search vs max-damage",
+            p1_policy_id="search",
+            p2_policy_id="max-damage",
+            seed_start=12,
+            metrics=SimpleNamespace(games=3),
+            root_puct_belief_public_checksums_by_seed={12: ("public",), 14: ("public",)},
+        )
+
+        coverage = _belief_world_benchmark_coverage(
+            SimpleNamespace(matchups=(result,)),
+            search_policy_ids=("search",),
+        )
+
+        self.assertEqual(coverage["scope"], "per-game-any-decision")
+        self.assertEqual(coverage["expected_game_count"], 3)
+        self.assertEqual(coverage["games_with_materialized_world"], 2)
+        self.assertEqual(coverage["games_without_materialized_world"], 1)
+        self.assertEqual(coverage["per_game_any_materialization_rate"], 2 / 3)
+        self.assertEqual(coverage["matchups"][0]["missing_seeds"], [13])
+
+    def test_root_puct_belief_world_coverage_gaps_flag_parses(self) -> None:
+        args = build_neural_arg_parser().parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--belief-start-overrides",
+                "--record-belief-world-coverage-gaps",
+            ]
+        )
+
+        self.assertTrue(args.belief_start_overrides)
+        self.assertTrue(args.record_belief_world_coverage_gaps)
 
     def test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature(self) -> None:
         if not torch_available():

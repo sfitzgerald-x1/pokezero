@@ -101,6 +101,8 @@ def normalize_root_puct_play_artifact(
     """Recover one seat's raw/search pair from ``root-puct-play-benchmark`` JSON."""
 
     _require_seat(seat)
+    if payload.get("strength_evidence_eligible") is False:
+        raise ValueError("mechanics-only root-PUCT artifacts cannot be used for a strength capstone.")
     if payload.get("root_dirichlet") is not None:
         raise ValueError("primary capstone artifacts must use deterministic root priors.")
     matchups = _mappings(payload.get("matchups"), field="matchups")
