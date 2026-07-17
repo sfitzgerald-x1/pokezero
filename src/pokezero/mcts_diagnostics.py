@@ -62,6 +62,50 @@ _MISSING_SAMPLED_WORLD_REASON_CATEGORIES = frozenset(
     }
 )
 
+_DIRECT_MATERIALIZATION_REJECTION_CATEGORIES = frozenset(
+    {
+        "ambiguous_species",
+        "environment_unavailable",
+        "future_sight",
+        "invalid_turn",
+        "materializer_error",
+        "missing_active",
+        "missing_public_state",
+        "missing_start_override",
+        "no_actionable_boundary",
+        "observation_mismatch",
+        "self_benched_move_history",
+        "terminal_state",
+        "unsupported_side_condition",
+        "volatile_effects",
+    }
+)
+
+
+def root_puct_direct_materialization_rejection_category(error: object) -> str:
+    """Classify a direct public-state construction error without retaining its text."""
+
+    message = str(error or "").lower()
+    if "does not reproduce recorded replay prefix observations" in message:
+        return "observation_mismatch"
+    if "spent pp for a benched acting pokemon" in message:
+        return "self_benched_move_history"
+    if "future sight" in message:
+        return "future_sight"
+    if "volatile effects" in message:
+        return "volatile_effects"
+    if "side condition" in message:
+        return "unsupported_side_condition"
+    if "cannot uniquely match" in message:
+        return "ambiguous_species"
+    if "positive integer turn" in message:
+        return "invalid_turn"
+    if "requires one active" in message:
+        return "missing_active"
+    if "no actionable request boundary" in message:
+        return "no_actionable_boundary"
+    return "materializer_error"
+
 
 def root_puct_fallback_category(reason: object) -> str:
     """Return a stable, compact category for a verbose root-PUCT fallback reason."""
@@ -242,6 +286,25 @@ def sanitize_root_puct_missing_sampled_world_reason_categories(value: object) ->
         if (
             not isinstance(category, str)
             or category not in _MISSING_SAMPLED_WORLD_REASON_CATEGORIES
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+        ):
+            continue
+        sanitized[category] = count
+    return dict(sorted(sanitized.items()))
+
+
+def sanitize_root_puct_direct_materialization_rejection_categories(value: object) -> dict[str, int]:
+    """Keep only direct-construction categories that are safe to persist in telemetry."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    sanitized: dict[str, int] = {}
+    for category, count in value.items():
+        if (
+            not isinstance(category, str)
+            or category not in _DIRECT_MATERIALIZATION_REJECTION_CATEGORIES
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 0

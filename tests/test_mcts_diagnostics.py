@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from pokezero.mcts_diagnostics import (
+    root_puct_direct_materialization_rejection_category,
     root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
     root_puct_missing_sampled_world_reason_counts,
@@ -16,6 +17,20 @@ from pokezero.replay_branching import ReplayActionRound, _require_requested_play
 
 
 class RootPUCTFallbackCategoryTests(unittest.TestCase):
+    def test_classifies_direct_materialization_failures_without_retaining_details(self) -> None:
+        self.assertEqual(
+            root_puct_direct_materialization_rejection_category(
+                "Materialize cannot reconstruct spent PP for a benched acting Pokemon: Secretmon"
+            ),
+            "self_benched_move_history",
+        )
+        self.assertEqual(
+            root_puct_direct_materialization_rejection_category(
+                "unexpected bridge detail with private values"
+            ),
+            "materializer_error",
+        )
+
     def test_classifies_missing_sampled_world(self) -> None:
         self.assertEqual(
             root_puct_fallback_category(

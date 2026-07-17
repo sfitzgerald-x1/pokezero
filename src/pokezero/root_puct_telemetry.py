@@ -12,7 +12,10 @@ from __future__ import annotations
 import math
 from typing import Any, Iterable, Mapping, Sequence
 
-from .mcts_diagnostics import sanitize_root_puct_missing_sampled_world_reason_categories
+from .mcts_diagnostics import (
+    sanitize_root_puct_direct_materialization_rejection_categories,
+    sanitize_root_puct_missing_sampled_world_reason_categories,
+)
 
 
 ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION = "pokezero.root_puct_decision_telemetry.v1"
@@ -37,6 +40,11 @@ _SCALAR_COUNT_FIELDS = (
 )
 
 _COUNTER_MAP_FIELDS = (
+    # Direct construction is allowed to fail closed to the Tier 1 replay path.
+    # Keep only a compact category so W5 diagnostics can identify why without
+    # persisting bridge exception text or battle state.
+    "root_puct_direct_materialization_rejection_categories",
+    "root_puct_direct_materialization_observation_mismatch_paths",
     "root_puct_opponent_action_skip_categories",
     "root_puct_opponent_action_replay_rejection_decision_rounds",
     "root_puct_opponent_action_replay_request_mismatch_decision_rounds",
@@ -95,6 +103,10 @@ _MATERIALIZATION_COUNT_NAMES = {
     "root_puct_start_override_replay_materializations": "replay",
 }
 
+_COUNTER_TAXONOMY_NAMES = {
+    "root_puct_direct_materialization_rejection_categories": "direct_materialization_rejection_categories",
+}
+
 
 def root_puct_decision_telemetry(
     metadata: Mapping[str, Any],
@@ -143,7 +155,9 @@ def root_puct_decision_telemetry(
     for field in _COUNTER_MAP_FIELDS:
         source = metadata.get(field)
         value = (
-            sanitize_root_puct_missing_sampled_world_reason_categories(source)
+            sanitize_root_puct_direct_materialization_rejection_categories(source)
+            if field == "root_puct_direct_materialization_rejection_categories"
+            else sanitize_root_puct_missing_sampled_world_reason_categories(source)
             if field == "root_puct_opponent_action_missing_sampled_world_reason_categories"
             else _counter_map(source)
         )
@@ -180,7 +194,9 @@ def summarize_root_puct_decision_telemetry(
         for field in _COUNTER_MAP_FIELDS:
             counter_values = item.get("counters")
             source = counter_values.get(field) if isinstance(counter_values, Mapping) else None
-            if field == "root_puct_opponent_action_missing_sampled_world_reason_categories":
+            if field == "root_puct_direct_materialization_rejection_categories":
+                source = sanitize_root_puct_direct_materialization_rejection_categories(source)
+            elif field == "root_puct_opponent_action_missing_sampled_world_reason_categories":
                 source = sanitize_root_puct_missing_sampled_world_reason_categories(source)
             _merge_counter_map(counters[field], source)
         total_visits += _nonnegative_int(item.get("root_puct_total_visits")) or 0
@@ -231,7 +247,10 @@ def summarize_root_puct_decision_telemetry(
         },
         "materialization_counts": materialization_counts,
         "scenario_failure_taxonomy": {
-            field.removeprefix("root_puct_opponent_action_"): dict(sorted(values.items()))
+            _COUNTER_TAXONOMY_NAMES.get(
+                field,
+                field.removeprefix("root_puct_opponent_action_"),
+            ): dict(sorted(values.items()))
             for field, values in counters.items()
             if values
         },

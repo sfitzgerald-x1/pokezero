@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field, replace
 import hashlib
 from itertools import product
@@ -665,6 +666,14 @@ class RootPUCTSearchPolicy:
                 shared_start_override_samples = None
                 direct_materialization_count = 0
                 replay_materialization_count = 0
+                direct_materialization_rejection_categories: Counter[str] = Counter()
+                direct_materialization_observation_mismatch_paths: Counter[str] = Counter()
+
+                def record_direct_materialization_rejection(category: str) -> None:
+                    direct_materialization_rejection_categories[category] += 1
+
+                def record_direct_materialization_observation_mismatch_path(path: str) -> None:
+                    direct_materialization_observation_mismatch_paths[path] += 1
                 # Count only worlds that supplied a completed branch search. A
                 # prepared shared world can serve several action scenarios, so
                 # its identity also prevents duplicate credits.
@@ -708,6 +717,10 @@ class RootPUCTSearchPolicy:
                             sample_scenarios=search_scenario_groups[0].samples,
                             search_trajectory=search_trajectory,
                             on_attempt=record_belief_world_materialization_attempt,
+                            on_direct_materialization_unavailable=record_direct_materialization_rejection,
+                            on_direct_materialization_observation_mismatch_path=(
+                                record_direct_materialization_observation_mismatch_path
+                            ),
                         )
                     finally:
                         belief_world_materialization_seconds = (
@@ -792,6 +805,10 @@ class RootPUCTSearchPolicy:
                                         expected_current_observation=context.observation,
                                         replay_hp_fraction_tolerance=(
                                             self.start_override_hp_fraction_tolerance
+                                        ),
+                                        on_unavailable=record_direct_materialization_rejection,
+                                        on_observation_mismatch_path=(
+                                            record_direct_materialization_observation_mismatch_path
                                         ),
                                     )
                                 search = puct_branch_search(
@@ -906,6 +923,10 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_replay_materializations": (
                                     replay_materialization_count
                                 ),
+                                **_direct_materialization_rejection_metadata(
+                                    direct_materialization_rejection_categories,
+                                    direct_materialization_observation_mismatch_paths,
+                                ),
                                 **_shared_start_override_metadata(shared_start_override_samples),
                                 **start_override_sampling_metadata,
                             }
@@ -938,6 +959,10 @@ class RootPUCTSearchPolicy:
                         ),
                         "root_puct_start_override_replay_materializations": (
                             replay_materialization_count
+                        ),
+                        **_direct_materialization_rejection_metadata(
+                            direct_materialization_rejection_categories,
+                            direct_materialization_observation_mismatch_paths,
                         ),
                     }
                     if self.start_override_planner is not None
@@ -1094,6 +1119,10 @@ class RootPUCTSearchPolicy:
                 ),
                 "root_puct_start_override_direct_materializations": direct_materialization_count,
                 "root_puct_start_override_replay_materializations": replay_materialization_count,
+                **_direct_materialization_rejection_metadata(
+                    direct_materialization_rejection_categories,
+                    direct_materialization_observation_mismatch_paths,
+                ),
                 **_shared_start_override_metadata(shared_start_override_samples),
                 **start_override_sampling_metadata,
             }
@@ -1411,6 +1440,8 @@ def _shared_start_override_samples(
     sample_scenarios: Sequence[OpponentActionScenario],
     search_trajectory: BattleTrajectory,
     on_attempt: Callable[[], None] | None = None,
+    on_direct_materialization_unavailable: Callable[[str], None] | None = None,
+    on_direct_materialization_observation_mismatch_path: Callable[[str], None] | None = None,
 ) -> _SharedStartOverrideSamples:
     if policy.start_override_planner is None:
         raise ValueError("start_override_planner is required for shared start overrides.")
@@ -1465,6 +1496,8 @@ def _shared_start_override_samples(
                     # Shared sampled worlds need only prove the branch-point state. Earlier
                     # custom-game replay observations can drift for metadata-only reasons.
                     replay_hp_fraction_tolerance=policy.start_override_hp_fraction_tolerance,
+                    on_unavailable=on_direct_materialization_unavailable,
+                    on_observation_mismatch_path=on_direct_materialization_observation_mismatch_path,
                 )
                 if prepared_prefix is None:
                     prepared_prefix = prepare_replay_prefix(
@@ -1514,6 +1547,28 @@ def _shared_start_override_metadata(samples: _SharedStartOverrideSamples | None)
     if samples.duplicate_attempts:
         metadata["root_puct_start_override_duplicate_attempts"] = samples.duplicate_attempts
     return metadata
+
+
+def _direct_materialization_rejection_metadata(
+    categories: Mapping[str, int],
+    mismatch_paths: Mapping[str, int],
+) -> dict[str, Mapping[str, int]]:
+    cleaned = {
+        str(category): int(count)
+        for category, count in sorted(categories.items())
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+    cleaned_paths = {
+        str(path): int(count)
+        for path, count in sorted(mismatch_paths.items())
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+    result: dict[str, Mapping[str, int]] = {}
+    if cleaned:
+        result["root_puct_direct_materialization_rejection_categories"] = cleaned
+    if cleaned_paths:
+        result["root_puct_direct_materialization_observation_mismatch_paths"] = cleaned_paths
+    return result
 
 
 def _start_override_key(start_override: BattleStartOverride) -> tuple[object, ...]:

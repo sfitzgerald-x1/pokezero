@@ -28,6 +28,10 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "private_debug_detail": "must not persist",
                 },
                 "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
+                "root_puct_direct_materialization_rejection_categories": {
+                    "observation_mismatch": 2,
+                    "private error detail": 4,
+                },
                 "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
                 "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                     "self_team_unavailable": 2,
@@ -59,6 +63,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "total_seconds": 0.25,
                 },
                 "counters": {
+                    "root_puct_direct_materialization_rejection_categories": {
+                        "observation_mismatch": 2
+                    },
                     "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
                     "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
                     "root_puct_opponent_action_missing_sampled_world_reason_categories": {
@@ -103,6 +110,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "full_decision_elapsed_seconds": 0.45,
                     "timing": {"total_seconds": 0.40, "prefix_replay_seconds": 0.20},
                     "counters": {
+                        "root_puct_direct_materialization_rejection_categories": {
+                            "observation_mismatch": 1
+                        },
                         "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 2},
                         "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                             "opponent_belief_unavailable": 1
@@ -129,6 +139,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(
             report["scenario_failure_taxonomy"],
             {
+                "direct_materialization_rejection_categories": {
+                    "observation_mismatch": 1
+                },
                 "missing_sampled_world_reason_categories": {
                     "opponent_belief_unavailable": 1
                 },

@@ -194,15 +194,21 @@ class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
 
 
 class DirectMaterializationValueBranchEnv(SnapshotValueBranchEnv):
-    def __init__(self, *, reject_materialization: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        reject_materialization: bool = False,
+        rejection_message: str = "unsupported public state",
+    ) -> None:
         super().__init__()
         self.reject_materialization = reject_materialization
+        self.rejection_message = rejection_message
         self.materialize_calls: list[tuple[object, BattleStartOverride, int]] = []
 
     def materialize_public_world(self, *, state: object, start_override: BattleStartOverride, seed: int) -> None:
         self.materialize_calls.append((state, start_override, seed))
         if self.reject_materialization:
-            raise RuntimeError("unsupported public state")
+            raise RuntimeError(self.rejection_message)
         self._terminal = None
         self._requested = ("p1", "p2")
 
@@ -504,6 +510,8 @@ class FlatBranchSearchTest(unittest.TestCase):
     def test_direct_materialization_fails_closed_to_tier_one(self) -> None:
         env = DirectMaterializationValueBranchEnv(reject_materialization=True)
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        rejection_categories: list[str] = []
+        mismatch_paths: list[str] = []
 
         prepared = prepare_direct_materialization_prefix(
             env=env,
@@ -513,10 +521,43 @@ class FlatBranchSearchTest(unittest.TestCase):
             start_override=_start_override(),
             public_materialization_state=object(),
             expected_current_observation=_observation(0),
+            on_unavailable=rejection_categories.append,
+            on_observation_mismatch_path=mismatch_paths.append,
         )
 
         self.assertIsNone(prepared)
         self.assertEqual(len(env.materialize_calls), 1)
+        self.assertEqual(rejection_categories, ["materializer_error"])
+        self.assertEqual(mismatch_paths, [])
+
+    def test_direct_materialization_records_only_the_first_safe_observation_path(self) -> None:
+        env = DirectMaterializationValueBranchEnv(
+            reject_materialization=True,
+            rejection_message=(
+                "start override does not reproduce recorded replay prefix observations "
+                "for decision round 3: p1. "
+                "(categorical_ids/opponent_pokemon[8][11]: actual=76 expected=0)"
+            ),
+        )
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        rejection_categories: list[str] = []
+        mismatch_paths: list[str] = []
+
+        prepared = prepare_direct_materialization_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=3,
+            start_override=_start_override(),
+            public_materialization_state=object(),
+            expected_current_observation=_observation(0),
+            on_unavailable=rejection_categories.append,
+            on_observation_mismatch_path=mismatch_paths.append,
+        )
+
+        self.assertIsNone(prepared)
+        self.assertEqual(rejection_categories, ["observation_mismatch"])
+        self.assertEqual(mismatch_paths, ["categorical_ids/opponent_pokemon[8][11]"])
 
     def test_puct_branch_search_reuses_prepared_sampled_world_prefix_without_replay(self) -> None:
         env = TimedSnapshotValueBranchEnv()
