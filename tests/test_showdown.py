@@ -770,6 +770,23 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"atk": 2})
 
+    def test_failed_baton_pass_does_not_leak_to_a_later_switch_or_turn(self) -> None:
+        failed = parse_showdown_replay(
+            [
+                "|move|p2a: Charizard|Baton Pass",
+                "|-fail|p2a: Charizard|move: Baton Pass",
+            ]
+        )
+        self.assertEqual(failed.pending_baton_pass, ())
+
+        stale_turn = parse_showdown_replay(
+            [
+                "|move|p2a: Charizard|Baton Pass",
+                "|turn|8",
+            ]
+        )
+        self.assertEqual(stale_turn.pending_baton_pass, ())
+
     def test_baton_pass_via_switch_from_tag_carries_boosts(self) -> None:
         # Some replays only tag the switch line ("[from] Baton Pass") without a flag-setting
         # move line in the recent window; that tag alone must still carry boosts.

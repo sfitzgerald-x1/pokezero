@@ -1183,12 +1183,17 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
             source.step({"p1": 4})
             search_env.step({"p1": 4})
+            stale_boundary = replace(
+                source.public_materialization_state("p1"),
+                replay=replace(source._parser.snapshot(), pending_baton_pass=("p2",)),
+            )
 
         # The opposing turn action is hidden at this forced-switch boundary and is deliberately
         # not replayed by direct materialization. The required mechanical invariant is that the
         # chosen replacement inherits the outgoing Pokemon's Baton Pass state.
         self.assertEqual(source._parser.snapshot().boosts["p1"], {"atk": 2})
         self.assertEqual(search_env._parser.snapshot().boosts["p1"], {"atk": 2})
+        self.assertEqual(_public_materialization_payload(stale_boundary)["pendingBatonPassSides"], [])
 
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()

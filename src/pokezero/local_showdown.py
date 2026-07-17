@@ -1163,7 +1163,7 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "leechSeedSourceSides": _active_leech_seed_source_sides(replay),
         # A Baton Pass declaration is public and its forced switch has not yet resolved. The
         # bridge needs the source-effect id so Showdown preserves the carried battle state.
-        "pendingBatonPassSides": list(replay.pending_baton_pass),
+        "pendingBatonPassSides": _pending_baton_pass_sides(replay, state),
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's
@@ -1200,6 +1200,17 @@ def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
         # but they are no longer a live simulator condition.
         and replay.turn_number - set_turn in {0, 1}
     }
+
+
+def _pending_baton_pass_sides(
+    replay: ShowdownReplayState,
+    state: PublicBattleMaterializationState,
+) -> list[PlayerId]:
+    """Return the actor's Baton Pass only at its corresponding forced-switch boundary."""
+
+    if _request_materialization_kind(state.self_request) != "force-switch":
+        return []
+    return [state.player_id] if state.player_id in replay.pending_baton_pass else []
 
 
 def _active_leech_seed_source_sides(replay: ShowdownReplayState) -> dict[str, str]:

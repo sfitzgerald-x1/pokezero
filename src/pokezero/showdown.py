@@ -811,10 +811,17 @@ class _ReplayParser:
                 self.turn_number = int(parts[2])
             except (TypeError, ValueError):
                 pass
+            # A successful Baton Pass is consumed by its same-turn forced switch. Anything still
+            # pending at a fresh turn belongs to a failed or truncated protocol sequence.
+            self.pending_baton_pass.clear()
             # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
             for slot, stage in self.toxic_stage.items():
                 if stage:
                     self.toxic_stage[slot] = min(15, stage + 1)
+        if event_type == "-fail" and len(parts) >= 3:
+            # A failed Baton Pass emits its move declaration but no switch request. Do not let
+            # that declaration turn a later ordinary switch into a phantom Baton Pass.
+            self.pending_baton_pass.discard(_slot_from_ident(parts[2]))
         _update_public_pokemon_condition(parts, self.public_active, self.public_revealed)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
