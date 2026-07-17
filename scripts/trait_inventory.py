@@ -22,10 +22,19 @@ OUT = "/shared/traits/inventory.json"
 MILESTONE_STEP = 100_000
 
 # key -> (regex over run-id, explicit extra run-ids to fold in for naming-era gaps)
+#
+# A lineage is one entity on the cumulative-games axis: its legs are *continuations* that pick up
+# where the previous left off. A FORK is not a continuation — it branches off a shared ancestor and
+# is its own entity from the fork point on, so it gets its own key and must not be swept up by
+# another lineage's pattern. v22-flat2m forks from v22-lr3m at 2M (flat LR vs the lr3m schedule);
+# it does not match `emeta-v2-2-lr3m-*`, so the two stay separate. A forked lineage legitimately has
+# no history below its fork point — see milestone_map (skips uncovered milestones) and the G0 gate
+# (only demands a 500k checkpoint from lineages that actually span 500k).
 LINEAGES = {
     "m50-ep7":       (r"^metamon-m50-.*-lr10m-ep7$", []),
     "l200-ep7-wu75": (r"^metamon-l200-.*-lr10m-ep7-wu75$", []),
     "v22-lr3m":      (r"^emeta-v2-2-lr3m-.*$", ["foundation-emetamon-v2-2-lr3m-500k-belief"]),
+    "v22-flat2m":    (r"^emeta-v2-2-flat2m-.*$", []),   # fork of v22-lr3m at 2M (flat-LR twin)
     "m50-seq":       (r"^metamon-m-50m-.*-seq-20260710$", []),
     "l200-seq":      (r"^metamon-l-200m-.*-seq-20260710$", []),
 }
@@ -92,7 +101,12 @@ def milestone_map(legs):
             if l["offset"] < G <= l["terminal_games"] + l["games_per_iteration"]:
                 leg = l
         if leg is None:
-            leg = min(legs, key=lambda l: abs(l["offset"] - G))
+            # No leg actually trained through this milestone. For a fork (whose first leg starts at
+            # the fork point) every milestone below the fork is genuinely absent — skip it. Never
+            # fall back to a "nearest" leg: that clamps want_iter to 1 and invents a checkpoint,
+            # silently attributing the fork's first iteration to milestones it never trained.
+            G += MILESTONE_STEP
+            continue
         gpi, off = leg["games_per_iteration"], leg["offset"]
         want_iter = round((G - off) / gpi)
         want_iter = max(1, min(want_iter, leg["max_iter"]))
@@ -137,11 +151,15 @@ def main():
             gap = legs[i]["offset"] - legs[i - 1]["terminal_games"]
             continuity.append({"between": [legs[i - 1]["run"], legs[i]["run"]], "gap_games": gap,
                                "ok": abs(gap) <= legs[i]["games_per_iteration"]})
-        # pin sha for the 500k milestone (G0 requirement)
+        # pin sha for the 500k milestone (G0 requirement). A forked lineage starts at its fork point
+        # and legitimately has no 500k of its own — G0 only binds where the lineage actually spans
+        # 500k (i.e. some leg begins before it). Failing a fork for missing pre-fork history would
+        # be a false alarm; its ancestry lives in the parent lineage.
+        spans_500k = any(l["offset"] < 500_000 for l in legs)
         m500 = next((m for m in grid if m["milestone"] == 500_000), None)
         if m500 and os.path.isfile(m500["checkpoint"]):
             m500["sha256"] = sha256(m500["checkpoint"])
-        else:
+        elif spans_500k:
             g0_ok = False
         inv["lineages"][key] = {
             "pattern": pattern, "folded_in": extras,
@@ -151,8 +169,12 @@ def main():
             "phase1_source": verdict, "phase1_source_reason": why,
             "n_milestones": len(grid), "milestones": grid,
             "has_500k": m500 is not None,
+            "spans_500k": spans_500k,
+            "fork_point_games": min((l["offset"] for l in legs), default=0),
         }
-        print(f"{key}: legs={[l['run'] for l in legs]} frontier={frontier:,} milestones={len(grid)} 500k={'sha ' + m500['sha256'][:12] if m500 and m500.get('sha256') else 'MISSING'} src={verdict}")
+        k500 = ('sha ' + m500['sha256'][:12] if m500 and m500.get('sha256')
+                else ('n/a (forked at %s)' % f"{min((l['offset'] for l in legs), default=0):,}" if not spans_500k else 'MISSING'))
+        print(f"{key}: legs={[l['run'] for l in legs]} frontier={frontier:,} milestones={len(grid)} 500k={k500} src={verdict}")
 
     inv["gate_g0"] = {"passed": g0_ok, "requirement": "every lineage has a 500k checkpoint pinned by sha"}
     json.dump(inv, open(OUT, "w"), indent=1)

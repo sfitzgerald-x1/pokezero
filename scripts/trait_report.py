@@ -16,8 +16,10 @@ import os
 from collections import defaultdict
 
 # stable lineage order + display names
-LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "m50-seq", "l200-seq"]
-PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
+# v22-flat2m is a FORK of v22-lr3m at 2M (flat-LR twin) — a separate entity, ordered next to its
+# parent so the post-fork divergence is easy to read off the trajectories.
+LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m", "m50-seq", "l200-seq"]
+PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
 # Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k and
 # are no longer being tracked. Their metrics remain on disk, so this is reversible — clear the set

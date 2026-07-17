@@ -1,34 +1,47 @@
 # Checkpoint trait-tracking — findings
 
 Implementation of `docs/checkpoint_trait_tracking_plan.md`. Behavioral traits measured per
-checkpoint over cumulative-games milestones across the five lineages, from self-play (every
-milestone) and foul-play (500k + each lineage's frontier). Every metric is derived from the
+checkpoint over cumulative-games milestones across the tracked lineages, from self-play (every
+milestone) and foul-play (500k + a frontier per lineage). Every metric is derived from the
 omniscient Showdown protocol log; the machinery, gates, and per-metric definitions live in
 `scripts/trait_*.py`. Regenerate any time with `scripts/trait_extract_all.sh`. The rendered,
 self-contained report is committed alongside this file at
 [`checkpoint_trait_tracking_report.html`](checkpoint_trait_tracking_report.html) (a static
 snapshot — open it directly in a browser; no server needed).
 
-**Scope.** Three active lineages are tracked: **m50-ep7, l200-ep7-wu75, v22-lr3m**. The two `seq`
-lineages (m50-seq, l200-seq) stalled at 1000k and are no longer tracked — they are excluded from
-the report and this doc (`REPORT_EXCLUDE_LINEAGES` in `trait_report.py`; their metrics remain on
-disk, so it is reversible).
+**Scope.** Three active lineages are tracked: **m50-ep7, l200-ep7-wu75, v22-lr3m**, plus
+**v22-flat2m**, a *fork* of v22-lr3m (see below). The two `seq` lineages (m50-seq, l200-seq)
+stalled at 1000k and are no longer tracked — they are excluded from the report and this doc
+(`REPORT_EXCLUDE_LINEAGES` in `trait_report.py`; their metrics remain on disk, so it is reversible).
+
+**Forked lineages.** A lineage's legs are *continuations* on one cumulative-games axis. A **fork**
+is not a continuation: it branches from a shared ancestor and is its own entity from the fork point
+on. `v22-flat2m` (run `emeta-v2-2-flat2m-belief`) forks from v22-lr3m at **2,000,000 games** — the
+flat-LR twin against the `lr3m` schedule — and is tracked separately; it does not match the
+`emeta-v2-2-lr3m-*` pattern, so the two never merge. A fork legitimately has no history below its
+fork point, which required two fixes: the milestone grid now **skips** milestones no leg trained
+through (it previously fell back to the nearest leg and clamped the iteration to 1, inventing ~20
+pre-fork checkpoints), and **G0** only demands a sha-pinned 500k from lineages that actually span
+500k. Both are covered by `tests/test_trait_inventory.py`.
+
+> **v22-flat2m has no milestone yet.** It has trained 2,000,000→2,054,400 (34 iterations, ~54k
+> games past the fork), so it has not reached its first 100k-grid point at 2,100k. It is registered
+> and will populate automatically on the next refresh once it crosses that line.
 
 Lineages are resolved from run-directory names by pattern (`trait_inventory.py`), which absorbs
-continuation legs automatically; run names can drift slightly as new legs are added, so the
-inventory is re-run each refresh and G0 (every lineage has a sha-pinned 500k checkpoint) is
-re-checked — it still passes, and the tracked lineages resolve cleanly.
+continuation legs automatically; run names drift as new legs are added, so the inventory is re-run
+each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
-**Data.** 70 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — **64 checkpoints**, following the active lineages to their current frontiers:
-v22-lr3m 100k→2600k (26 pts), m50-ep7 →2100k (21), l200-ep7-wu75 →1700k (17). Foul-play (~950–1000
-games, FoulPlay search at 1000 ms/move) at 500k and a frontier per lineage — 6 checkpoints.
-**Foul-play was not re-run for the latest refresh, so its checkpoints trail the self-play
-frontiers** (e.g. m50-ep7 foul-play is @1000k while self-play now reaches 1600k); the foul-play
-panel and the trait↔win-rate correlations should be read as "checkpoint X", not "the current
-frontier". Self-play and foul-play are kept separate and never merged. The observation unit is the
-behavioral-seat-game (self-play has two behavioral seats, foul-play one), so rates are comparable
-across the two.
+**Data.** 76 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — **70 checkpoints**, following the active lineages to their current frontiers:
+v22-lr3m 100k→2700k (27 pts), m50-ep7 →2400k (24), l200-ep7-wu75 →1900k (19); v22-flat2m has no
+grid point yet. Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
+per lineage — 6 checkpoints. **Foul-play was not re-run for the latest refreshes, so its
+checkpoints trail the self-play frontiers badly** (m50-ep7 foul-play is @1000k while self-play now
+reaches 2400k); the foul-play panel and the trait↔win-rate correlations describe those specific
+older checkpoints, not the current frontier. Self-play and foul-play are kept separate and never
+merged. The observation unit is the behavioral-seat-game (self-play has two behavioral seats,
+foul-play one), so rates are comparable across the two.
 
 ## What changes over training (self-play)
 
@@ -37,12 +50,18 @@ Each point is one checkpoint; no aggregation.
 - **Conditional move use is *learned*, not innate.** Early checkpoints fire conditional moves
   blindly; later ones gate them on the condition that makes them good:
   - *Solar Beam in sun* — the sharpest signal in the dataset, and all three tracked lineages
-    develop it. Start → frontier: m50-ep7 17.1%→98.4% (2100k), l200-ep7-wu75 20.4%→99.3% (1700k),
-    v22-lr3m 14.3%→**91.0%** (2600k). v22-lr3m had reached 99.7% at 2300k and slipped to 91.0% by
-    2600k — likely a small-denominator wobble at the frontier rather than unlearning, but flag it if
-    a later refresh shows the same slide.
-  - *Phazing when justified* (enemy boosted or behind a Substitute): **~0–26% → 37–64%** across
-    the lineages (l200-ep7-wu75 highest at 63.7% @1300k). Early Roar/Whirlwind is indiscriminate.
+    develop it. Start → frontier: m50-ep7 17.1%→95.7% (2400k), l200-ep7-wu75 20.4%→98.7% (1900k),
+    v22-lr3m 14.3%→**100.0%** (2700k). v22-lr3m dipped to 91.0% at 2600k and recovered to 100.0% at
+    2700k, confirming that dip was frontier noise on a small denominator, not unlearning — the
+    trait is stable once acquired.
+  - *Phazing when justified* (enemy boosted or behind a Substitute) rises off ~0% early, but
+    **unlike Solar Beam it does not converge** — it stays volatile and non-monotonic. At the
+    current frontiers: v22-lr3m 67.6% (2700k), l200-ep7-wu75 31.7% (1900k), m50-ep7 26.7% (2400k).
+    l200-ep7-wu75 read 63.7% at 1300k and fell to 31.7% by 1900k; m50-ep7 37.4%→26.7%. Phazing is
+    rare (only ~70–270 uses per checkpoint vs 175–669 for Solar Beam), but those swings are ~6×
+    the binomial SE, so this is real fluctuation rather than small-n noise. **Do not quote a
+    frontier value as "the" rate for a lineage** — read the trajectory. Only the early rise off
+    ~0% is solid.
 - **Early toxic-spam collapses.** v22-lr3m opens at 5.41 Toxic/seat-game at 100k and settles to
   ~2.3. Very early checkpoints lean on status as a crutch.
 - **The setup/utility toolkit is picked up over training.** stat-boost, Substitute, Spikes, and
@@ -75,7 +94,7 @@ Point-biserial across games, computed *within* each checkpoint, then aggregated 
 mean r and the min..max range across checkpoints. Self-play is a **paired design** — both seats
 are the same policy in the same game, so comparing winner against loser holds policy strength and
 game length fixed by construction (a game-level quantity has no within-game variance and correctly
-falls out at r≈0). **64** self-play checkpoints / **270,476** decided seat-games; 6 foul-play /
+falls out at r≈0). **70** self-play checkpoints / **294,326** decided seat-games; 6 foul-play /
 5,864.
 
 **Headline: per-game behavior barely predicts winning.** Every effect is |r| ≤ 0.11 — under ~1% of
@@ -83,10 +102,10 @@ outcome variance. Only these are sign-consistent across *every* checkpoint (cons
 independent checkpoints is the evidence, not any single r), and the effects have been stable as the
 self-play sample grew across successive refreshes:
 
-| trait | self-play (64 ckpts) | vs FoulPlay (6 ckpts) |
+| trait | self-play (70 ckpts) | vs FoulPlay (6 ckpts) |
 |---|---|---|
-| Substitute | **−0.109** (all 64) | **−0.081** (all 6) |
-| healing (excl Rest) | **−0.070** (all 64) | **−0.060** (all 6) |
+| Substitute | **−0.112** (all 70) | **−0.081** (all 6) |
+| healing (excl Rest) | **−0.069** (all 70) | **−0.060** (all 6) |
 | immunity switch-in | +0.042 (not consistent) | **+0.058** (all 6) |
 | phaze when justified | — | **−0.025** (all 6) |
 
