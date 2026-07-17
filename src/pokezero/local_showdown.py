@@ -1155,6 +1155,11 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "weatherSetTurn": replay.weather_set_turn,
         "weatherFromAbility": replay.weather_from_ability,
         "futureSight": dict(replay.future_sight),
+        # A Wish is a public, one-turn slot condition.  The replay parser retains its
+        # set turn for observation features, including harmless expired entries when
+        # the landing Pokemon was already at full HP, so only expose a still-pending
+        # Wish to the direct constructor.
+        "wishSetTurns": _pending_wish_set_turns(replay),
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's
@@ -1175,6 +1180,21 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
 
     tracked_stage = int(replay.toxic_stage.get(player, 0))
     return max(0, tracked_stage - 1)
+
+
+def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
+    """Return only Wish declarations that must still resolve at this boundary."""
+
+    return {
+        player: int(set_turn)
+        for player, set_turn in replay.wish_set_turns.items()
+        if player in PLAYER_IDS
+        and isinstance(set_turn, int)
+        # A request boundary after Wish is the immediately following turn.  Older
+        # entries can remain in the public fold if the full-HP landing emitted no
+        # heal line, but they are no longer a live simulator condition.
+        and replay.turn_number - set_turn == 1
+    }
 
 
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:

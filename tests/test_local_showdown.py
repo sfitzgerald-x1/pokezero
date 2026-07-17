@@ -15,6 +15,7 @@ from pokezero.local_showdown import (
     LocalShowdownSnapshot,
     _drain_stderr,
     _drain_stdout,
+    _public_materialization_payload,
     _start_players_payload,
     requested_players_from_requests,
     showdown_seed_from_int,
@@ -359,6 +360,106 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
+
+    def test_public_materialization_preserves_pending_wish(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Tackle",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=29, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Jirachi uses Wish.
+            materialization = source.public_materialization_state("p1")
+            expected = source.step({"p1": 1, "p2": 0})
+
+            self.assertEqual(materialization.replay.wish_set_turns, {"p1": 1})
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=29,
+            )
+            actual = search_env.step({"p1": 1, "p2": 0})
+
+        self.assertEqual(
+            actual.observations["p1"].metadata["self_team"][0]["condition"],
+            expected.observations["p1"].metadata["self_team"][0]["condition"],
+        )
+
+    def test_public_materialization_omits_expired_full_hp_wish(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Splash",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source:
+            source.reset_with_start_override(seed=31, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Jirachi uses Wish while at full HP.
+            source.step({"p1": 1, "p2": 0})  # The landing does not emit a heal event.
+            materialization = source.public_materialization_state("p1")
+
+        # The protocol fold intentionally preserves the set turn for observation history, but
+        # direct construction must not recreate a Wish that has already expired.
+        self.assertEqual(materialization.replay.wish_set_turns, {"p1": 1})
+        self.assertEqual(_public_materialization_payload(materialization)["wishSetTurns"], {})
+
+    def test_public_materialization_preserves_wish_through_double_force_switch(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Tackle",)),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Snorlax", ability="Immunity", moves=("Explosion",)),
+                        FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Splash",)),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=35, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Wish is set before Snorlax's Explosion.
+            materialization = source.public_materialization_state("p1")
+
+            self.assertTrue(materialization.self_request["forceSwitch"][0])
+            self.assertTrue(source._latest_requests["p2"]["forceSwitch"][0])
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=35,
+            )
+            self.assertTrue(search_env.legal_actions("p2")[4])
+            expected = source.step({"p1": 4, "p2": 4})
+            actual = search_env.step({"p1": 4, "p2": 4})
+
+        self.assertEqual(
+            actual.observations["p1"].metadata["self_team"][0]["condition"],
+            expected.observations["p1"].metadata["self_team"][0]["condition"],
+        )
 
     def test_public_materialization_preserves_three_member_actor_request_order(self) -> None:
         config = integration_config()

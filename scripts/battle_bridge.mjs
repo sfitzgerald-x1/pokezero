@@ -378,6 +378,10 @@ function applyPublicState(snapshot, publicState) {
   snapshot.activeTarget = null;
   applyPublicWeather(snapshot.field, publicState);
   snapshot.field.pseudoWeather = {};
+  const wishSetTurns = publicState.wishSetTurns;
+  if (wishSetTurns != null && typeof wishSetTurns !== "object") {
+    throw new Error("Materialize received invalid Wish timing.");
+  }
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -447,6 +451,11 @@ function applyPublicState(snapshot, publicState) {
     const active = moveActivePokemonToFront(serializedSide, activeIndex);
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
+    // The acting request is private, but a fainted public active with a surviving
+    // bench deterministically requires a replacement for either side.
+    if (active.fainted && serializedSide.pokemon.some(pokemon => !pokemon.fainted)) {
+      active.switchFlag = true;
+    }
     if (sideId === publicState.selfPlayer) {
       preserveActorTeamOrder(serializedSide, publicState.selfTeamOrder);
       if (selfForceSwitch) active.switchFlag = true;
@@ -459,10 +468,37 @@ function applyPublicState(snapshot, publicState) {
     }
     applyPublicSideConditions(serializedSide, publicSide, sideId, publicState.turn);
     serializedSide.slotConditions = [{}];
+    applyPublicWish(serializedSide, wishSetTurns?.[sideId], sideId, publicState.turn);
     serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+}
+
+function applyPublicWish(serializedSide, setTurn, sideId, currentTurn) {
+  if (setTurn == null) return;
+  if (!Number.isInteger(setTurn) || setTurn !== currentTurn - 1) {
+    throw new Error(`Materialize received expired or invalid Wish timing for ${sideId}.`);
+  }
+  const source = serializedSide.pokemon[0];
+  if (!source || !Number.isFinite(source.maxhp) || source.maxhp < 1) {
+    throw new Error(`Materialize cannot restore Wish without a ${sideId} source.`);
+  }
+  const sourceSlot = `${sideId}a`;
+  serializedSide.slotConditions[0].wish = {
+    id: "wish",
+    target: `[Side:${sideId}]`,
+    source: `[Pokemon:${sourceSlot}]`,
+    sourceSlot,
+    isSlotCondition: true,
+    duration: 1,
+    effectOrder: 2,
+    // Gen 3 Wish heals half the user's maximum HP, captured before any later
+    // switch can occur. At this request boundary the user remains the active
+    // slot, possibly fainted while awaiting a forced switch.
+    hp: source.maxhp / 2,
+    startingTurn: setTurn,
+  };
 }
 
 const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "mist"]);
