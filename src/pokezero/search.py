@@ -100,6 +100,8 @@ class RootPUCTSearchTiming:
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
     state_restore_count: int = 0
+    belief_world_materialization_seconds: float = 0.0
+    belief_world_materialization_count: int = 0
     opponent_scenario_planning_seconds: float = 0.0
     opponent_scenario_planning_count: int = 0
     policy_evaluation_seconds: float = 0.0
@@ -129,6 +131,7 @@ class RootPUCTSearchTiming:
             + self.branch_simulator_step_seconds
             + self.state_snapshot_seconds
             + self.state_restore_seconds
+            + self.belief_world_materialization_seconds
             + self.opponent_scenario_planning_seconds
             + self.policy_value_evaluation_seconds
             + self.rollout_tail_seconds
@@ -144,6 +147,28 @@ class RootPUCTSearchTiming:
             self,
             opponent_scenario_planning_seconds=self.opponent_scenario_planning_seconds + elapsed_seconds,
             opponent_scenario_planning_count=self.opponent_scenario_planning_count + 1,
+        )
+
+    def with_belief_world_materialization(
+        self,
+        elapsed_seconds: float,
+        *,
+        attempt_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Record public belief-world sampling plus replay validation work.
+
+        This stage runs before ``puct_branch_search`` and is therefore not
+        included in the branch-level replay timings it later returns.
+        """
+
+        return replace(
+            self,
+            belief_world_materialization_seconds=(
+                self.belief_world_materialization_seconds + elapsed_seconds
+            ),
+            belief_world_materialization_count=(
+                self.belief_world_materialization_count + attempt_count
+            ),
         )
 
     def with_policy_evaluation(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
@@ -191,6 +216,12 @@ class RootPUCTSearchTiming:
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
             state_restore_seconds=sum(timing.state_restore_seconds for timing in timings),
             state_restore_count=sum(timing.state_restore_count for timing in timings),
+            belief_world_materialization_seconds=sum(
+                timing.belief_world_materialization_seconds for timing in timings
+            ),
+            belief_world_materialization_count=sum(
+                timing.belief_world_materialization_count for timing in timings
+            ),
             opponent_scenario_planning_seconds=sum(
                 timing.opponent_scenario_planning_seconds for timing in timings
             ),
@@ -224,6 +255,8 @@ class RootPUCTSearchTiming:
             "state_snapshot_count": self.state_snapshot_count,
             "state_restore_seconds": self.state_restore_seconds,
             "state_restore_count": self.state_restore_count,
+            "belief_world_materialization_seconds": self.belief_world_materialization_seconds,
+            "belief_world_materialization_count": self.belief_world_materialization_count,
             "opponent_scenario_planning_seconds": self.opponent_scenario_planning_seconds,
             "opponent_scenario_planning_count": self.opponent_scenario_planning_count,
             "policy_evaluation_seconds": self.policy_evaluation_seconds,
