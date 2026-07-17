@@ -193,6 +193,10 @@ class LocalShowdownSnapshot:
     bridge_snapshot: Mapping[str, Any]
     protocol_lines: tuple[str, ...]
     latest_requests: Mapping[PlayerId, Mapping[str, Any]]
+    first_requests: Mapping[PlayerId, Mapping[str, Any]]
+    request_history: Mapping[PlayerId, tuple[Mapping[str, Any], ...]]
+    replay: ShowdownReplayState
+    belief_engine: PublicBattleBeliefEngine
     latest_turn: int
     terminal: TerminalState | None
 
@@ -496,22 +500,13 @@ class LocalShowdownEnv:
 
         if self._battle_token is None:
             raise LocalShowdownError("Cannot snapshot before reset.")
+        self._sync_incremental_state()
         self._send_command({"type": "snapshot", "battleId": self._battle_token})
         event = self._read_until_event_type("snapshot")
         snapshot = event.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise LocalShowdownError(f"Bridge emitted malformed snapshot event: {event!r}")
-        return LocalShowdownSnapshot(
-            battle_token=self._battle_token,
-            battle_id=self._battle_id,
-            format_id=self._format_id,
-            observation_format_id=self._observation_format_id,
-            bridge_snapshot=_json_clone_mapping(snapshot),
-            protocol_lines=tuple(self._lines),
-            latest_requests=_json_clone_requests(self._latest_requests),
-            latest_turn=self._latest_turn,
-            terminal=self._terminal,
-        )
+        return self._local_snapshot(bridge_snapshot=_json_clone_mapping(snapshot))
 
     def snapshot_for_search(self) -> LocalShowdownSnapshot:
         """Store a sampled search-world snapshot inside the bridge and return only its handle.
@@ -527,19 +522,31 @@ class LocalShowdownEnv:
             raise LocalShowdownError(
                 "Bridge-resident search snapshots require a belief-sampled start override."
             )
+        self._sync_incremental_state()
         self._send_command({"type": "snapshot_search", "battleId": self._battle_token})
         event = self._read_until_event_type("search_snapshot")
         snapshot_id = event.get("snapshotId")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot event: {event!r}")
+        return self._local_snapshot(bridge_snapshot={"snapshot_id": snapshot_id})
+
+    def _local_snapshot(self, *, bridge_snapshot: Mapping[str, Any]) -> LocalShowdownSnapshot:
+        """Capture the Python state paired with either a generic or bridge snapshot."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot snapshot before reset.")
         return LocalShowdownSnapshot(
             battle_token=self._battle_token,
             battle_id=self._battle_id,
             format_id=self._format_id,
             observation_format_id=self._observation_format_id,
-            bridge_snapshot={"snapshot_id": snapshot_id},
+            bridge_snapshot=bridge_snapshot,
             protocol_lines=tuple(self._lines),
             latest_requests=_json_clone_requests(self._latest_requests),
+            first_requests=_json_clone_requests(self._first_requests),
+            request_history=_json_clone_request_history(self._request_history),
+            replay=self._parser.snapshot(),
+            belief_engine=self._belief_engine.clone(),
             latest_turn=self._latest_turn,
             terminal=self._terminal,
         )
@@ -624,21 +631,20 @@ class LocalShowdownEnv:
         self._observation_format_id = snapshot.observation_format_id
         self._lines = list(snapshot.protocol_lines)
         self._latest_requests = _json_clone_requests(snapshot.latest_requests)
-        # Trackers rebuild lazily from the restored line prefix; the earliest request in
-        # the restored snapshot stands in for the battle's first (own-team stats are
-        # immutable within a battle, which is all the trackers read from it).
-        self._first_requests = dict(self._latest_requests)
+        self._first_requests = _json_clone_requests(snapshot.first_requests)
+        self._request_history = {
+            player: [_json_clone_mapping(request) for request in snapshot.request_history.get(player, ())]
+            for player in PLAYER_IDS
+        }
         self._tier2_trackers = {}
         self._investment_trackers = {}
         self._latest_turn = snapshot.latest_turn
         self._terminal = snapshot.terminal
         self._last_step_had_error = False
-        self._parser = _ReplayParser(self._battle_id)
-        self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._observation_format_id, set_source=self._belief_set_source
-        )
-        self._parsed_line_count = 0
-        self._belief_fed_count = 0
+        self._parser = _ReplayParser.from_snapshot(snapshot.replay)
+        self._belief_engine = snapshot.belief_engine.clone()
+        self._parsed_line_count = len(self._lines)
+        self._belief_fed_count = len(snapshot.replay.public_events)
 
     def reseed_simulator_rng(self, seed: int) -> None:
         """Reset Showdown's battle PRNG at the current simulator state."""
@@ -1110,6 +1116,15 @@ def _json_clone_requests(
 ) -> dict[PlayerId, Mapping[str, Any]]:
     cloned = _json_clone_mapping(value)
     return {player: request for player in PLAYER_IDS if isinstance((request := cloned.get(player)), Mapping)}
+
+
+def _json_clone_request_history(
+    value: Mapping[PlayerId, Sequence[Mapping[str, Any]]],
+) -> dict[PlayerId, tuple[Mapping[str, Any], ...]]:
+    return {
+        player: tuple(_json_clone_mapping(request) for request in value.get(player, ()))
+        for player in PLAYER_IDS
+    }
 
 
 def _public_materialization_payload(state: PublicBattleMaterializationState) -> dict[str, Any]:
