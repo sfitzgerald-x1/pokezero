@@ -3663,9 +3663,17 @@ def _root_puct_benchmark_progress_callback(
     cumulative_searches = 0
     cumulative_fallbacks = 0
     cumulative_fallback_categories: dict[str, int] = {}
+    active_matchup_index: int | None = None
 
     def emit(progress: BenchmarkProgress) -> None:
-        nonlocal cumulative_searches, cumulative_fallbacks
+        nonlocal active_matchup_index, cumulative_searches, cumulative_fallbacks
+        # The log event names one matchup, so never carry its fallback rate
+        # into the next matchup in a multi-opponent benchmark.
+        if active_matchup_index != progress.matchup_index:
+            active_matchup_index = progress.matchup_index
+            cumulative_searches = 0
+            cumulative_fallbacks = 0
+            cumulative_fallback_categories.clear()
         for diagnostics in progress.root_puct_by_player.values():
             searches = diagnostics.get("root_puct_searches")
             fallbacks = diagnostics.get("root_puct_fallbacks")

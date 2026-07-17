@@ -3685,13 +3685,32 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         },
                     )
                 )
+            for games_completed in (1, 2):
+                callback(
+                    SimpleNamespace(
+                        matchup_label="root-puct vs foul-play",
+                        matchup_index=2,
+                        matchup_count=4,
+                        games_completed=games_completed,
+                        games_total=2,
+                        seed=90 + games_completed,
+                        matchup_elapsed_seconds=2.0 * games_completed,
+                        root_puct_by_player={
+                            "p2": {
+                                "root_puct_searches": 1,
+                                "root_puct_fallbacks": 0,
+                                "root_puct_fallback_categories": {},
+                            }
+                        },
+                    )
+                )
 
         lines = [
             line
             for line in stderr.getvalue().splitlines()
             if line.startswith("root_puct_play_benchmark_progress:")
         ]
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 3)
         self.assertEqual(
             [json.loads(line.split(": ", 1)[1]) for line in lines],
             [
@@ -3720,6 +3739,19 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root_puct_fallbacks": 3,
                     "root_puct_searches": 6,
                     "seed": 83,
+                },
+                {
+                    "games_completed": 2,
+                    "games_total": 2,
+                    "matchup_count": 4,
+                    "matchup_elapsed_seconds": 4.0,
+                    "matchup_index": 3,
+                    "matchup_label": "root-puct vs foul-play",
+                    "root_puct_fallback_categories": {},
+                    "root_puct_fallback_rate": 0.0,
+                    "root_puct_fallbacks": 0,
+                    "root_puct_searches": 2,
+                    "seed": 92,
                 },
             ],
         )
