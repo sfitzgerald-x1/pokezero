@@ -1326,6 +1326,11 @@ def _computed_stats(
 
 
 def _hp_stat(*, base_hp: int, iv: int, ev: int, level: int) -> int:
+    # Shedinja's HP is always one in battle, regardless of its displayed base HP,
+    # level, IVs, or EVs. This helper is also used to validate request stats and
+    # filter public opponent HP, so the exception must apply at both call sites.
+    if base_hp == 1:
+        return 1
     return ((2 * base_hp + iv + ev // 4 + 100) * level) // 100 + 10
 
 
