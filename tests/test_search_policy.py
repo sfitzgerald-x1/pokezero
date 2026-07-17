@@ -196,6 +196,14 @@ class DirectSnapshotStartOverrideOutcomeEnv(SnapshotStartOverrideOutcomeEnv):
         self._terminal = None
 
 
+class RetryingDirectStartOverrideOutcomeEnv(DirectSnapshotStartOverrideOutcomeEnv):
+    def step(self, actions: dict[str, int]) -> StepResult:
+        current_override = self.direct_materializations[-1][1]
+        if any("Badmon" in team for team in current_override.player_teams.values()):
+            raise ValueError("p2: action_index 0 is not legal for the current request.")
+        return super().step(actions)
+
+
 class RejectingStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
     def __init__(self, *, label: str) -> None:
         super().__init__(label=label)
@@ -1157,6 +1165,164 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         self.assertTrue(decision.metadata["root_puct_fallback"])
         self.assertIn("sample_count_for_context", decision.metadata["root_puct_fallback_reason"])
+
+    def test_root_puct_retry_replaces_a_failed_world_before_counting_direct_usage(self) -> None:
+        branch_envs: list[RetryingDirectStartOverrideOutcomeEnv] = []
+
+        def branch_env_factory() -> RetryingDirectStartOverrideOutcomeEnv:
+            env = RetryingDirectStartOverrideOutcomeEnv(label="branch")
+            branch_envs.append(env)
+            return env
+
+        planner_calls = 0
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ) -> BattleStartOverride:
+            nonlocal planner_calls
+            del context, scenario, scenario_index, rng
+            planner_calls += 1
+            opponent = "Badmon" if planner_calls == 1 else "Xatu"
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": f"{opponent}||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_attempts=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(planner_calls, 2)
+        self.assertEqual(len(branch_envs[0].direct_materializations), 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 1)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
+
+    def test_root_puct_generic_fallback_preserves_completed_materialization_usage(self) -> None:
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ) -> BattleStartOverride:
+            del context, scenario_index, rng
+            if scenario.actions["p2"] == 1:
+                raise RuntimeError("unexpected planner failure")
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": "Xatu||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: DirectSnapshotStartOverrideOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=lambda context, rng: (
+                OpponentActionScenario(actions={"p2": 0}),
+                OpponentActionScenario(actions={"p2": 1}),
+            ),
+            fallback_policy=FixedPolicy(1, policy_id="raw"),
+            allow_fallback=True,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 1)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
+
+    def test_root_puct_counts_each_nonshared_direct_world_that_completes(self) -> None:
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ) -> BattleStartOverride:
+            del context, scenario_index, rng
+            opponent = "Xatu" if scenario.actions["p2"] == 0 else "Tauros"
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": f"{opponent}||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: DirectSnapshotStartOverrideOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=lambda context, rng: (
+                OpponentActionScenario(actions={"p2": 0}),
+                OpponentActionScenario(actions={"p2": 1}),
+            ),
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
 
     def test_root_puct_policy_reuses_scenario_independent_start_override_samples(self) -> None:
         branch_envs: list[StartOverrideOutcomeEnv] = []

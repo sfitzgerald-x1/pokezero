@@ -21,6 +21,11 @@ ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION = "pokezero.root_puct_telemetry_report
 _SCALAR_COUNT_FIELDS = (
     "root_puct_total_visits",
     "root_puct_effective_total_visits",
+    # W5 records distinct reconstructed sampled worlds that supplied at least
+    # one completed branch search, split by direct public-state construction
+    # versus the Tier 1 replay fallback.
+    "root_puct_start_override_direct_materializations",
+    "root_puct_start_override_replay_materializations",
     "root_puct_opponent_action_scenario_count",
     "root_puct_opponent_action_scenarios_generated",
     "root_puct_opponent_action_scenarios_skipped",
@@ -83,6 +88,11 @@ _SCENARIO_COUNT_NAMES = {
     "root_puct_opponent_action_groups_used": "groups_used",
     "root_puct_opponent_action_groups_skipped": "groups_skipped",
     "root_puct_opponent_action_groups_unsearched": "groups_unsearched",
+}
+
+_MATERIALIZATION_COUNT_NAMES = {
+    "root_puct_start_override_direct_materializations": "direct",
+    "root_puct_start_override_replay_materializations": "replay",
 }
 
 
@@ -162,6 +172,7 @@ def summarize_root_puct_decision_telemetry(
     total_visits = 0
     effective_total_visits = 0
     scenario_counts: dict[str, int] = {}
+    materialization_counts = {name: 0 for name in _MATERIALIZATION_COUNT_NAMES.values()}
     for item in records:
         if item.get("outcome") == "fallback":
             category = str(item.get("fallback_category") or "unknown")
@@ -174,6 +185,8 @@ def summarize_root_puct_decision_telemetry(
             _merge_counter_map(counters[field], source)
         total_visits += _nonnegative_int(item.get("root_puct_total_visits")) or 0
         effective_total_visits += _nonnegative_int(item.get("root_puct_effective_total_visits")) or 0
+        for field, name in _MATERIALIZATION_COUNT_NAMES.items():
+            materialization_counts[name] += _nonnegative_int(item.get(field)) or 0
         for field in _SCALAR_COUNT_FIELDS:
             if not field.startswith("root_puct_opponent_action_"):
                 continue
@@ -216,6 +229,7 @@ def summarize_root_puct_decision_telemetry(
             _SCENARIO_COUNT_NAMES[field]: count
             for field, count in sorted(scenario_counts.items())
         },
+        "materialization_counts": materialization_counts,
         "scenario_failure_taxonomy": {
             field.removeprefix("root_puct_opponent_action_"): dict(sorted(values.items()))
             for field, values in counters.items()

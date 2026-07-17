@@ -665,6 +665,34 @@ class RootPUCTSearchPolicy:
                 shared_start_override_samples = None
                 direct_materialization_count = 0
                 replay_materialization_count = 0
+                # Count only worlds that supplied a completed branch search. A
+                # prepared shared world can serve several action scenarios, so
+                # its identity also prevents duplicate credits.
+                used_shared_sample_indices: set[int] = set()
+
+                def record_materialization_usage(
+                    prepared_prefix: PreparedReplayPrefix | None,
+                    search: PUCTBranchSearchResult,
+                    *,
+                    shared_sample_index: int | None,
+                ) -> None:
+                    nonlocal direct_materialization_count, replay_materialization_count
+                    if prepared_prefix is not None:
+                        if shared_sample_index is not None:
+                            if shared_sample_index in used_shared_sample_indices:
+                                return
+                            used_shared_sample_indices.add(shared_sample_index)
+                        if prepared_prefix.materialization_mode == "direct":
+                            direct_materialization_count += 1
+                        elif prepared_prefix.materialization_mode == "replay":
+                            replay_materialization_count += 1
+                        else:
+                            raise ValueError(
+                                "prepared start override has an unsupported materialization mode."
+                            )
+                    elif search.timing.prefix_replay_count:
+                        replay_materialization_count += 1
+
                 if _uses_scenario_independent_start_overrides(self):
                     def record_belief_world_materialization_attempt() -> None:
                         nonlocal belief_world_materialization_count
@@ -687,12 +715,6 @@ class RootPUCTSearchPolicy:
                         )
                 if shared_start_override_samples is not None:
                     start_override_attempts_used += shared_start_override_samples.attempts_used
-                    direct_materialization_count = sum(
-                        mode == "direct" for mode in shared_start_override_samples.materialization_modes
-                    )
-                    replay_materialization_count = sum(
-                        mode == "replay" for mode in shared_start_override_samples.materialization_modes
-                    )
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                     for sample_index, scenario in enumerate(scenario_group.samples):
@@ -724,6 +746,9 @@ class RootPUCTSearchPolicy:
                         for _attempt_index in range(attempts):
                             if shared_start_override_samples is None:
                                 start_override_attempts_used += 1
+                                # A retry receives a new belief world. Never carry a
+                                # snapshot prepared for a prior sampled world into it.
+                                prepared_prefix = None
                                 start_override = (
                                     None
                                     if self.start_override_planner is None
@@ -769,8 +794,6 @@ class RootPUCTSearchPolicy:
                                             self.start_override_hp_fraction_tolerance
                                         ),
                                     )
-                                    if prepared_prefix is not None:
-                                        direct_materialization_count += 1
                                 search = puct_branch_search(
                                     env=env,
                                     trajectory=search_trajectory,
@@ -805,12 +828,15 @@ class RootPUCTSearchPolicy:
                                 if start_override is None:
                                     break
                             else:
-                                if (
-                                    start_override is not None
-                                    and prepared_prefix is None
-                                    and search.timing.prefix_replay_count
-                                ):
-                                    replay_materialization_count += 1
+                                record_materialization_usage(
+                                    prepared_prefix,
+                                    search,
+                                    shared_sample_index=(
+                                        sample_index
+                                        if shared_start_override_samples is not None
+                                        else None
+                                    ),
+                                )
                                 scenario_search = search
                                 scenario_start_override = start_override
                                 completed_search_timings.append(search.timing)
@@ -905,10 +931,23 @@ class RootPUCTSearchPolicy:
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             except Exception as exc:
+                materialization_metadata = (
+                    {
+                        "root_puct_start_override_direct_materializations": (
+                            direct_materialization_count
+                        ),
+                        "root_puct_start_override_replay_materializations": (
+                            replay_materialization_count
+                        ),
+                    }
+                    if self.start_override_planner is not None
+                    else None
+                )
                 return self._fallback(
                     context,
                     rng=rng,
                     reason=f"search failed: {exc}",
+                    extra_metadata=materialization_metadata,
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,

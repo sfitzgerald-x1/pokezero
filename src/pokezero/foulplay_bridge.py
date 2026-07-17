@@ -347,6 +347,8 @@ class ControlledFoulPlayGameResult:
     root_puct_start_override_shared_samples: int = 0
     root_puct_start_override_shared_samples_accepted: int = 0
     root_puct_start_override_shared_samples_rejected: int = 0
+    root_puct_start_override_direct_materializations: int = 0
+    root_puct_start_override_replay_materializations: int = 0
     root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: Mapping[str, int] = field(default_factory=dict)
@@ -413,6 +415,12 @@ class ControlledFoulPlayGameResult:
             ),
             "root_puct_start_override_shared_samples_rejected": (
                 self.root_puct_start_override_shared_samples_rejected
+            ),
+            "root_puct_start_override_direct_materializations": (
+                self.root_puct_start_override_direct_materializations
+            ),
+            "root_puct_start_override_replay_materializations": (
+                self.root_puct_start_override_replay_materializations
             ),
         }
         if self.root_puct_effective_total_visits:
@@ -2498,6 +2506,16 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_start_override_direct_materializations = sum(
+        int(decision.metadata.get("root_puct_start_override_direct_materializations") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_start_override_replay_materializations = sum(
+        int(decision.metadata.get("root_puct_start_override_replay_materializations") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
     if trajectory_callback is not None:
         if state.trajectory.terminal is None:
@@ -2568,6 +2586,8 @@ async def _run_single_game(
         root_puct_start_override_shared_samples=root_start_override_shared_samples,
         root_puct_start_override_shared_samples_accepted=root_start_override_shared_samples_accepted,
         root_puct_start_override_shared_samples_rejected=root_start_override_shared_samples_rejected,
+        root_puct_start_override_direct_materializations=root_start_override_direct_materializations,
+        root_puct_start_override_replay_materializations=root_start_override_replay_materializations,
         root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_fallback_categories=root_fallback_categories,
