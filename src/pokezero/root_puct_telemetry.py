@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from typing import Any, Iterable, Mapping, Sequence
 
+from .mcts_diagnostics import sanitize_root_puct_missing_sampled_world_reason_categories
+
 
 ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION = "pokezero.root_puct_decision_telemetry.v1"
 ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION = "pokezero.root_puct_telemetry_report.v1"
@@ -129,7 +131,12 @@ def root_puct_decision_telemetry(
         payload["full_decision_elapsed_seconds"] = full_decision_elapsed
     counters: dict[str, Mapping[str, int]] = {}
     for field in _COUNTER_MAP_FIELDS:
-        value = _counter_map(metadata.get(field))
+        source = metadata.get(field)
+        value = (
+            sanitize_root_puct_missing_sampled_world_reason_categories(source)
+            if field == "root_puct_opponent_action_missing_sampled_world_reason_categories"
+            else _counter_map(source)
+        )
         if value:
             counters[field] = value
     if counters:
@@ -162,6 +169,8 @@ def summarize_root_puct_decision_telemetry(
         for field in _COUNTER_MAP_FIELDS:
             counter_values = item.get("counters")
             source = counter_values.get(field) if isinstance(counter_values, Mapping) else None
+            if field == "root_puct_opponent_action_missing_sampled_world_reason_categories":
+                source = sanitize_root_puct_missing_sampled_world_reason_categories(source)
             _merge_counter_map(counters[field], source)
         total_visits += _nonnegative_int(item.get("root_puct_total_visits")) or 0
         effective_total_visits += _nonnegative_int(item.get("root_puct_effective_total_visits")) or 0

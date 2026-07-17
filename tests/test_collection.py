@@ -163,6 +163,7 @@ class MetadataPolicy:
         leaf_actual_rounds: dict[str, int] | None = None,
         leaf_evaluations: dict[str, int] | None = None,
         belief_public_checksum: str | None = None,
+        missing_sampled_world_reason_categories: dict[str, int] | None = None,
     ) -> None:
         self.policy_id = policy_id
         self.fallback = fallback
@@ -177,17 +178,23 @@ class MetadataPolicy:
         self.leaf_actual_rounds = leaf_actual_rounds
         self.leaf_evaluations = leaf_evaluations
         self.belief_public_checksum = belief_public_checksum
+        self.missing_sampled_world_reason_categories = missing_sampled_world_reason_categories
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         if self.fallback:
+            metadata = {
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": True,
+                "root_puct_fallback_reason": "search failed: boom",
+            }
+            if self.missing_sampled_world_reason_categories is not None:
+                metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
+                    self.missing_sampled_world_reason_categories
+                )
             return PolicyDecision(
                 action_index=0,
                 policy_id=self.policy_id,
-                metadata={
-                    "policy_family": "root-puct-search",
-                    "root_puct_fallback": True,
-                    "root_puct_fallback_reason": "search failed: boom",
-                },
+                metadata=metadata,
             )
         metadata = {
             "policy_family": "root-puct-search",
@@ -731,7 +738,15 @@ class CollectionTest(unittest.TestCase):
             matchups=(
                 BenchmarkMatchup(
                     "root-puct fallback vs random",
-                    MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
+                    MetadataPolicy(
+                        policy_id="root-puct-fallback",
+                        fallback=True,
+                        missing_sampled_world_reason_categories={
+                            "opponent_belief_unavailable": 2,
+                            "raw replay detail: p2 move": 5,
+                            "belief_view_invalid": -1,
+                        },
+                    ),
                     RandomLegalPolicy(),
                 ),
             ),
@@ -742,6 +757,10 @@ class CollectionTest(unittest.TestCase):
 
         self.assertEqual(diagnostics["root_puct_fallbacks"], 1)
         self.assertEqual(diagnostics["root_puct_fallback_categories"], {"search_failed": 1})
+        self.assertEqual(
+            diagnostics["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"opponent_belief_unavailable": 2},
+        )
         self.assertNotIn("root_puct_fallback_reasons", diagnostics)
         telemetry = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_decision_telemetry_by_player"]["p1"][0]
         self.assertEqual(telemetry["fallback_category"], "unknown")
@@ -749,6 +768,12 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(
             progress[0].root_puct_by_player["p1"]["root_puct_fallback_categories"],
             {"search_failed": 1},
+        )
+        self.assertEqual(
+            progress[0].root_puct_by_player["p1"][
+                "root_puct_opponent_action_missing_sampled_world_reason_categories"
+            ],
+            {"opponent_belief_unavailable": 2},
         )
         self.assertNotIn(
             "root_puct_fallback_reasons",

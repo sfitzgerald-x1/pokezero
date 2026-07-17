@@ -38,7 +38,10 @@ from .local_showdown import (
     belief_set_source_env_enabled,
     showdown_seed_from_int,
 )
-from .mcts_diagnostics import root_puct_fallback_category
+from .mcts_diagnostics import (
+    root_puct_fallback_category,
+    sanitize_root_puct_missing_sampled_world_reason_categories,
+)
 from .neural_policy import (
     TransformerInferenceTimingAccumulator,
     TransformerSoftmaxPolicy,
@@ -2393,7 +2396,9 @@ async def _run_single_game(
         )
         _merge_count_mapping(
             root_missing_sampled_world_reason_categories,
-            decision.metadata.get("root_puct_opponent_action_missing_sampled_world_reason_categories"),
+            sanitize_root_puct_missing_sampled_world_reason_categories(
+                decision.metadata.get("root_puct_opponent_action_missing_sampled_world_reason_categories")
+            ),
         )
         _merge_count_mapping(
             root_replay_rejection_decision_rounds,

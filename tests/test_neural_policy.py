@@ -3681,6 +3681,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                                 "root_puct_searches": 2,
                                 "root_puct_fallbacks": 1,
                                 "root_puct_fallback_categories": {"missing_sampled_world": 1},
+                                "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                                    "opponent_belief_unavailable": 2,
+                                },
                             }
                         },
                     )
@@ -3722,6 +3725,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 2},
+                    "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                        "opponent_belief_unavailable": 4,
+                    },
                     "root_puct_fallback_rate": 0.5,
                     "root_puct_fallbacks": 2,
                     "root_puct_searches": 4,
@@ -3735,6 +3741,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 3},
+                    "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                        "opponent_belief_unavailable": 6,
+                    },
                     "root_puct_fallback_rate": 0.5,
                     "root_puct_fallbacks": 3,
                     "root_puct_searches": 6,
@@ -3778,6 +3787,41 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertNotIn("root_puct_searches", payload)
         self.assertNotIn("root_puct_fallbacks", payload)
         self.assertNotIn("root_puct_fallback_categories", payload)
+
+    def test_root_puct_progress_callback_filters_malformed_missing_world_categories(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(1)
+
+        with contextlib.redirect_stderr(stderr):
+            callback(
+                SimpleNamespace(
+                    matchup_label="root-puct vs max-damage",
+                    matchup_index=0,
+                    matchup_count=1,
+                    games_completed=1,
+                    games_total=1,
+                    seed=81,
+                    matchup_elapsed_seconds=1.0,
+                    root_puct_by_player={
+                        "p1": {
+                            "root_puct_searches": 1,
+                            "root_puct_fallbacks": 1,
+                            "root_puct_opponent_action_missing_sampled_world_reason_categories": {
+                                "belief_view_invalid": 2,
+                                "bad-count": "1",
+                                "boolean-count": True,
+                                3: 1,
+                            },
+                        }
+                    },
+                )
+            )
+
+        payload = json.loads(stderr.getvalue().split(": ", 1)[1])
+        self.assertEqual(
+            payload["root_puct_opponent_action_missing_sampled_world_reason_categories"],
+            {"belief_view_invalid": 2},
+        )
 
     def test_root_puct_progress_callback_ignores_malformed_optional_diagnostics(self) -> None:
         stderr = io.StringIO()

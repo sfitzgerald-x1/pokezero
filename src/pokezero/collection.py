@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Te
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
-from .mcts_diagnostics import root_puct_fallback_category
+from .mcts_diagnostics import (
+    root_puct_fallback_category,
+    sanitize_root_puct_missing_sampled_world_reason_categories,
+)
 from .root_puct_telemetry import root_puct_decision_telemetry
 from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
@@ -1542,6 +1545,9 @@ class _PolicyDecisionAccumulator:
     root_puct_time_budget_exhaustions: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: dict[str, int] = field(default_factory=dict)
+    root_puct_opponent_action_missing_sampled_world_reason_categories: dict[str, int] = field(
+        default_factory=dict
+    )
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
     root_puct_opponent_action_policies: dict[str, int] = field(default_factory=dict)
     root_puct_opponent_action_scenario_counts: dict[str, int] = field(default_factory=dict)
@@ -1554,6 +1560,13 @@ class _PolicyDecisionAccumulator:
         self.decisions += 1
         if metadata.get("policy_family") != "root-puct-search":
             return
+        for category, count in sanitize_root_puct_missing_sampled_world_reason_categories(
+            metadata.get("root_puct_opponent_action_missing_sampled_world_reason_categories")
+        ).items():
+            self.root_puct_opponent_action_missing_sampled_world_reason_categories[category] = (
+                self.root_puct_opponent_action_missing_sampled_world_reason_categories.get(category, 0)
+                + count
+            )
         if bool(metadata.get("root_puct_fallback")):
             self.root_puct_fallbacks += 1
             reason = str(metadata.get("root_puct_fallback_reason") or "unknown")
@@ -1701,6 +1714,10 @@ class _PolicyDecisionAccumulator:
             if self.root_puct_fallback_categories:
                 result["root_puct_fallback_categories"] = dict(
                     sorted(self.root_puct_fallback_categories.items())
+                )
+            if self.root_puct_opponent_action_missing_sampled_world_reason_categories:
+                result["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
+                    sorted(self.root_puct_opponent_action_missing_sampled_world_reason_categories.items())
                 )
         return result
 
