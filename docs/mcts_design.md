@@ -1,12 +1,18 @@
 # MCTS design: test-time search + fpdistill-seeded bootstrap
 
-Status: **planning / draft.** Detailed design for the test-time search policy-improvement operator
+Status: **historical design / draft.** Detailed design for the test-time search policy-improvement operator
 and a proposed search-teacher-seeded bootstrap track. Sits under
 [`selfplay_mcts_roadmap.md`](selfplay_mcts_roadmap.md) (WS-C forking, WS-D search, WS-E value).
 
 > **Reality check (2026-07):** more of this is already built than the roadmap's "to-do" framing
 > implies — see **Current implementation state** below. This doc is therefore about *extending +
 > validating* the existing search, not building it from scratch.
+
+> **Current execution source of truth (2026-07-17):**
+> [`test_time_search_plan_v2.md`](test_time_search_plan_v2.md) supersedes this document's
+> replay-materialization roadmap. Its W5 redesign is implemented and its mechanics and paired
+> FoulPlay validation are running. The pre-W5 diagnostics retained below are historical baseline
+> evidence, not a description of the active materialization mechanism.
 
 ## Why now / motivating evidence
 
@@ -21,14 +27,14 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 
 | Piece | Status | Where / caveat |
 |---|---|---|
-| Forking = **replay-from-root plus accepted-prefix snapshot restore** | **built, still materialization-limited** | `replay_branching.py`, `search.py`, `local_showdown.py`, `scripts/battle_bridge.mjs` — search can still replay a sampled battle prefix from root, but `LocalShowdownEnv` now exposes a Showdown `Battle.toJSON()` / `Battle.fromJSON()` snapshot seam. When available, `value_branch_search` replays/materializes the prefix once, snapshots the accepted branch-point state, and restores it before each candidate branch/repeated root visit. This reduces repeated prefix replay cost for accepted worlds; it does **not** make live hidden-state snapshots acceptable for hidden-info search, because those contain oracle private state. |
+| Forking = **constructed belief world plus per-decision snapshot restore** | **built; W5 validation running** | `search.py`, `local_showdown.py`, `scripts/battle_bridge.mjs` — Tier 1 snapshots an accepted sampled world once and restores it per branch/visit. Tier 2 starts a fresh belief-sampled world, applies only the source player's public state, then snapshots that constructed branch point. It preserves public HP, status, boosts, Spikes, weather, and timed screens. It deliberately fails closed for active volatiles, Future Sight, and self-benched spent PP. The live rollout is never serialized into search. |
 | Root PUCT with optional visit/time budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` supports an optional root visit budget and wall-clock budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits until the visit cap or time budget is exhausted. The mandatory first legal-action sweep is always completed and can exceed the configured time budget; the budget suppresses additional post-sweep visits once exhausted. Multi-scenario opponent planning uses a per-scenario visit budget, while time-budgeted searches receive the remaining decision budget when each scenario is searched. Repeated leaf rollouts use visit-specific rollout seeds, and the controlled foul-play harness can use sampled checkpoint policies inside leaf rollouts. The policy adapter now defaults to a **16-visit root budget** and final root action selection by **most visits**, with equal-visit ties resolved by policy prior before value; final `Q+U` PUCT-score selection remains available only as a diagnostic mode because the exploration bonus is for traversal, not deployment move choice. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
 | Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py`, `scripts/compare_root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons/categories, opponent-action skip categories, replay-illegal opponent-scenario skip counts, unsearched reserve scenario counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. The controlled harness now generates reserve opponent-action candidates by default (`--root-opponent-action-candidate-scenarios 9`) and stops after the configured accepted scenario count (`--root-opponent-action-scenarios`, default 1), reducing hidden-mode fallback storms without always averaging every reserve candidate. When the opponent legal mask is hidden, unrevealed switch slots are treated as exchangeable: move candidates remain distinct, but switch-slot priors are collapsed into one summed switch candidate. Replay still needs a concrete action index, so the representative switch handle is sampled from the collapsed switch-slot prior mass rather than fixed to the first switch slot; the scenario weight continues to carry the total abstract switch probability. The paired comparison wrapper defaults to `--comparison-mode per-seed`: for each seed it runs raw, then root-PUCT, restarting foul-play with a matching per-seed startup seed before advancing. It writes one combined summary, matches completed games by seed, reports marginal per-arm Wilson 95% intervals plus discordant same-seed counts, and marks reads below 300 paired games as diagnostic-only. `--comparison-mode per-arm` preserves the older raw-all-then-search-all order when process startup overhead matters more than useful partial progress. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. If the external foul-play process exits mid-game (e.g. a poke-engine panic), the per-seed comparison retries that seed's arm (`--opponent-crash-retries`, default 1), then records the seed under `opponent_crashes` with foul-play's stderr tail, excludes it from paired stats and aggregates (`comparison.opponent_crashed_seeds` is the caveat field), and continues with the remaining seeds instead of aborting the run. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. The comparison artifact records that the opponent is not deterministic and the win-rate delta is descriptive rather than a paired statistical test. Replay-illegal skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
-| **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; generic replay audits can still check the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. Root search now validates the sampled world at the branch-point observation instead of every intermediate prefix observation, and reports the first mismatching observation field when sampled worlds drift. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Root-PUCT can also split each opponent-action scenario across multiple sampled belief start overrides (`--belief-start-override-samples` in the foul-play harness), so one opponent switch action can be scored against multiple plausible hidden backline worlds instead of a single sampled team. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
+| **Belief determinizer / start overrides** | **built; W5 validation running** | `belief.py` emits concrete opponent realizations from the belief view, and the Gen 3 planner materializes our request-known team plus sampled public-belief opponent teams. Tier 2 now constructs the current branch point from that sampled world plus the public source state, rather than requiring a full sampled-team root replay to reproduce history. It remains PIMC-style averaging rather than an information-set tree, and unsupported public effects fail closed. The pending W5 jobs measure whether this removes the historical replay-driven fallback problem without reducing FoulPlay strength. |
 | poke-engine reversible backend | **probe only** | `engine_cli.py`, `poke_engine_backend.py` — apply/reverse smoke exists, but **Gen-3 outcome equivalence is unproven** (`poke_engine_assessment.md`); not a usable backend yet. |
 | Unit tests for search / search_policy / benchmark | **built** | `tests/test_search*.py` |
 
@@ -256,23 +262,19 @@ runs are useful only as oracle diagnostics and must not be reported as real net+
 
 ## Component design (extending what exists)
 
-- **Forking (WS-C) + compute budget (the real viability gate):** keep **replay-from-root** as the
-  materialization path for now, but use **Showdown snapshot/restore** after an accepted prefix.
-  MIT's budget is **1000–2000 rollouts/move at 10 s/move, and the env step — not GPU inference — is
-  the bottleneck** (`mit_thesis_reference_config.md:78-80`). Replay-from-root re-simulates a full line
-  per accepted sampled world, while candidate branches can now restore the accepted prefix snapshot
-  instead of replaying the full prefix again. This is still likely infeasible at MIT-scale rollout
-  counts without a stronger current-state materializer, poke-engine, or a much smaller rollout budget.
-  **Design decision to make explicit:** pick a target
-  rollouts-or-leaf-depth budget tied to a measured per-move cost (from `search_benchmark`'s
-  `average_elapsed_seconds`), and treat forking cost as the gating constraint, not a checkbox.
-- **Determinization:** finish wiring the **existing** `belief.sample_opponent_determinizations` into
-  the branch env and re-sample **per branch replay/visit**. The generic **payload/replay seam** now
-  exists (`BattleStartOverride`, replay/search `start_override`, callable start-override sources, and
-  `RootPUCTSearchPolicy.start_override_planner`), but it only accepts complete two-sided
-  `gen3customgame` packed-team materializations and verifies the searched player's replay-prefix
-  observation features. The remaining work is the belief-world-to-packed-team materializer,
-  especially fully hidden backline slots. See the theory note below.
+> **Historical proposal note:** this section predates W5. The active construction path is Tier 2
+> direct public-state materialization followed by snapshot restore; use
+> [`test_time_search_plan_v2.md`](test_time_search_plan_v2.md) for the current execution order.
+
+- **Forking (WS-C) + compute budget (the real viability gate):** W5 replaces current-state
+  replay with direct public-state construction, then uses Showdown snapshot/restore for every
+  branch/visit. The active W5 jobs measure the post-redesign per-move cost and fallback rate before
+  leaf depth, batching, tree reuse, or a reversible engine are repriced.
+- **Determinization:** `belief.sample_opponent_determinizations` is wired through
+  `BattleStartOverride` into Tier 2 construction. It uses the source player's request-known team,
+  public battle state, and sampled opponent realizations without exposing an opponent request.
+  Effects that cannot be reconstructed faithfully are rejected rather than filled with private or
+  guessed state.
 - **Search core (WS-D):** two extension questions — (a) go from the 1-ply single-pass scorer to a real
   iterated loop (visit accumulation / a multi-ply tree), and (b) is **1-ply + deeper leaf rollouts**
   enough to recover delayed-value lines? Note the roadmap's own leaf-depth results are **non-monotonic**
@@ -409,14 +411,13 @@ first time we'd actually measure this.
 
 1. **Value-head search-readiness** — the single biggest risk and gate (E1); current heads look *not*
    ready (Pearson ~0.12).
-2. **Forking cost vs budget** — replay-from-root at MIT rollout counts may be minutes/move; this is the
-   viability gate, not a checkbox.
+2. **W5 cost and fallback evidence** — the direct path must meet the measured visit-rate and fallback
+   gates before further search-budget work is justified.
 3. **1-ply single-pass → iterated loop / tree** — needed for genuine multi-rollout averaging (chance,
    simultaneous moves) and for depth on delayed-value lines; leaf-depth results are non-monotonic.
-4. **Belief materialization seam** — the custom-game branch start override exists, but the existing
-   belief sampler still needs conversion into complete packed teams, including our known team and
-   plausible unrevealed opponent backline Pokémon; PIMC strategy-fusion persists (ISMCTS only if it
-   bites).
+4. **Unsupported public effects and PIMC limits** — active volatiles, Future Sight, and unknown
+   self-benched PP currently fail closed; PIMC strategy-fusion remains a later question (ISMCTS only
+   if it bites).
 5. **fpdistill prior over-narrowness** — root prior temperature is now built; it still needs a sweep
    against foul-play to determine whether softening the prior gives search enough room to improve on
    the raw checkpoint.
@@ -425,11 +426,8 @@ first time we'd actually measure this.
 
 ## Next step
 
-**E1 gates E0.** First measure leaf-value ranking/calibration on self-play-1.5M + fpdistill against a
-concrete bar; if a head clears it, wire fpdistill into `select_action_with_context` and build a **new
-full-game head-to-head harness** (vs foul-play headline; vs net-alone/fpdistill-alone diagnostic;
-≥300 games, fixed seeds) — **not** the existing counterfactual benchmark, which leaks the recorded
-opponent action. This reuses most existing machinery (forking, scorer, calibration tooling), needs the
-new strength harness + fpdistill wiring, and is independent of the runs currently training — the
-fastest honest read on whether search is viable. If no head is search-ready, E1's outcome is itself
-the finding: value work (WS-E) precedes any strength claim.
+**W5 gates the next search repricing.** Use
+[`test_time_search_plan_v2.md`](test_time_search_plan_v2.md) for the active order: first collect the
+direct-construction mechanics and paired FoulPlay evidence, then reprice leaf work, batching, tree
+reuse, early termination, and deeper search on the measured fast path. Value-head quality remains a
+named caveat for search strength, but it is not a reason to postpone the W5 materialization read.
