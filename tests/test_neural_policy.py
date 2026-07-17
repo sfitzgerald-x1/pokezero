@@ -3779,6 +3779,33 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertNotIn("root_puct_fallbacks", payload)
         self.assertNotIn("root_puct_fallback_categories", payload)
 
+    def test_root_puct_progress_callback_ignores_malformed_optional_diagnostics(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(1)
+
+        with contextlib.redirect_stderr(stderr):
+            for games_completed, root_puct_by_player in (
+                (1, ["not-a-mapping"]),
+                (2, {"p1": "not-a-mapping"}),
+            ):
+                callback(
+                    SimpleNamespace(
+                        matchup_label="root-puct vs max-damage",
+                        matchup_index=0,
+                        matchup_count=1,
+                        games_completed=games_completed,
+                        games_total=2,
+                        seed=80 + games_completed,
+                        matchup_elapsed_seconds=float(games_completed),
+                        root_puct_by_player=root_puct_by_player,
+                    )
+                )
+
+        for line in stderr.getvalue().splitlines():
+            payload = json.loads(line.split(": ", 1)[1])
+            self.assertNotIn("root_puct_searches", payload)
+            self.assertNotIn("root_puct_fallback_categories", payload)
+
     def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
