@@ -253,6 +253,14 @@ def _missing_sampled_world_reason_category(detail: str) -> str:
         return "observation_metadata_missing"
     if "belief_view is missing or invalid" in normalized:
         return "belief_view_invalid"
+    if "request-known self_team has an unexpected member count" in normalized:
+        return "self_team_member_count_invalid"
+    if "request-known self_team contains an invalid member" in normalized:
+        return "self_team_member_invalid"
+    if "request-known self_team member is missing species or moves" in normalized:
+        return "self_team_member_identity_incomplete"
+    if "request-known self_team fixture stats cannot be reconstructed" in normalized:
+        return "self_team_fixture_stats_unavailable"
     if "request-known self_team is missing or inconsistent" in normalized:
         return "self_team_unavailable"
     if "public opponent switch constraints are inconsistent" in normalized:

@@ -40,6 +40,17 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             },
         )
 
+    def test_classifies_safe_self_team_fixture_failure(self) -> None:
+        reason = (
+            "start override planner did not produce a sampled world: "
+            "request-known self_team fixture stats cannot be reconstructed"
+        )
+
+        self.assertEqual(
+            root_puct_missing_sampled_world_reason_counts(reason),
+            {"self_team_fixture_stats_unavailable": 1},
+        )
+
     def test_classifies_missing_world_source_without_detail(self) -> None:
         self.assertEqual(
             root_puct_missing_sampled_world_reason_counts(
