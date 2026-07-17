@@ -1018,6 +1018,19 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertEqual(baton_passed.leech_seed_source_sides, {"p2": "p1"})
         self.assertEqual(baton_passed.direct_materialization_blockers["p2"], ())
 
+        unknown_baton_passed = parse_showdown_replay(
+            [
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|move|p2a: Charizard|Baton Pass|p2a: Charizard",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(unknown_baton_passed.leech_seed_source_sides, {})
+        self.assertEqual(
+            unknown_baton_passed.direct_materialization_blockers["p2"],
+            ("leechseed-source-unknown",),
+        )
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.

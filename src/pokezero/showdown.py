@@ -781,6 +781,12 @@ class _ReplayParser:
                         )
                     if "leechseed" not in transferred_volatiles:
                         self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
+                    elif pokemon.showdown_slot not in self.leech_seed_source_sides:
+                        # Preserve the fail-closed marker when an incomplete protocol prefix
+                        # carried Leech Seed through Baton Pass without its public source move.
+                        self.direct_materialization_blockers[pokemon.showdown_slot].add(
+                            "leechseed-source-unknown"
+                        )
                 else:
                     # Volatile statuses are tied to the Pokemon that left the field.
                     self.volatiles[pokemon.showdown_slot] = set()
