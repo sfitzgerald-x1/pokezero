@@ -667,6 +667,44 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertNotIn("reflect", final_materialization.replay.side_condition_counts["p1"])
 
+    def test_public_materialization_preserves_toxic_residual_stage(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Toxic", "Protect")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Harden",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=31, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Bulbasaur badly poisons Squirtle.
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+            # Non-damaging choices isolate the deterministic toxic residual from future move RNG.
+            expected_branch = source.step({"p1": 1, "p2": 0})
+
+            self.assertEqual(materialization.replay.toxic_stage["p2"], 2)
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=31,
+            )
+            actual = search_env.observe("p1")
+            branch = search_env.step({"p1": 1, "p2": 0})
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
+        self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
+
     def test_public_materialization_fails_closed_when_actor_pp_history_is_unavailable(self) -> None:
         config = integration_config()
         assert config is not None
