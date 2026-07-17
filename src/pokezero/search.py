@@ -85,6 +85,11 @@ class RootPUCTSearchTiming:
     ``opponent_scenario_planning`` includes any neural policy work performed by
     an opponent-action scenario planner; recorded-prefix benchmarks have no
     such planner and report this bucket as zero.
+
+    ``observation_encoding`` and ``neural_forward`` are intentionally
+    overlapping diagnostic sub-slices of policy/value/scenario work. They are
+    emitted for W2's stage profile, but excluded from residual accounting so
+    they do not double-count the end-to-end decision wall time.
     """
 
     prefix_replay_seconds: float = 0.0
@@ -99,6 +104,10 @@ class RootPUCTSearchTiming:
     opponent_scenario_planning_count: int = 0
     policy_evaluation_seconds: float = 0.0
     policy_evaluation_count: int = 0
+    observation_encoding_seconds: float = 0.0
+    observation_encoding_count: int = 0
+    neural_forward_seconds: float = 0.0
+    neural_forward_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
     rollout_tail_seconds: float = 0.0
@@ -144,6 +153,28 @@ class RootPUCTSearchTiming:
             policy_evaluation_count=self.policy_evaluation_count + 1,
         )
 
+    def with_neural_subtiming(
+        self,
+        *,
+        observation_encoding_seconds: float,
+        observation_encoding_count: int,
+        neural_forward_seconds: float,
+        neural_forward_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Attach non-additive transformer sub-timings to this decision."""
+
+        return replace(
+            self,
+            observation_encoding_seconds=(
+                self.observation_encoding_seconds + observation_encoding_seconds
+            ),
+            observation_encoding_count=(
+                self.observation_encoding_count + observation_encoding_count
+            ),
+            neural_forward_seconds=self.neural_forward_seconds + neural_forward_seconds,
+            neural_forward_count=self.neural_forward_count + neural_forward_count,
+        )
+
     def with_total(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(self, total_seconds=elapsed_seconds)
 
@@ -168,6 +199,14 @@ class RootPUCTSearchTiming:
             ),
             policy_evaluation_seconds=sum(timing.policy_evaluation_seconds for timing in timings),
             policy_evaluation_count=sum(timing.policy_evaluation_count for timing in timings),
+            observation_encoding_seconds=sum(
+                timing.observation_encoding_seconds for timing in timings
+            ),
+            observation_encoding_count=sum(
+                timing.observation_encoding_count for timing in timings
+            ),
+            neural_forward_seconds=sum(timing.neural_forward_seconds for timing in timings),
+            neural_forward_count=sum(timing.neural_forward_count for timing in timings),
             value_evaluation_seconds=sum(timing.value_evaluation_seconds for timing in timings),
             value_evaluation_count=sum(timing.value_evaluation_count for timing in timings),
             rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
@@ -189,6 +228,10 @@ class RootPUCTSearchTiming:
             "opponent_scenario_planning_count": self.opponent_scenario_planning_count,
             "policy_evaluation_seconds": self.policy_evaluation_seconds,
             "policy_evaluation_count": self.policy_evaluation_count,
+            "observation_encoding_seconds": self.observation_encoding_seconds,
+            "observation_encoding_count": self.observation_encoding_count,
+            "neural_forward_seconds": self.neural_forward_seconds,
+            "neural_forward_count": self.neural_forward_count,
             "value_evaluation_seconds": self.value_evaluation_seconds,
             "value_evaluation_count": self.value_evaluation_count,
             "policy_value_evaluation_seconds": self.policy_value_evaluation_seconds,

@@ -51,6 +51,59 @@ ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorV
 OpponentActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
 RootVisitBudgetSelector = Callable[[PolicyContext, RootPUCTVisitBudgetContext], int | None]
+NeuralTimingSnapshot = Callable[[], Mapping[str, float | int]]
+
+_NEURAL_TIMING_SECONDS = ("observation_encoding_seconds", "neural_forward_seconds")
+_NEURAL_TIMING_COUNTS = ("observation_encoding_count", "neural_forward_count")
+
+
+def _neural_timing_snapshot(source: NeuralTimingSnapshot | None) -> dict[str, float | int] | None:
+    """Normalize a cumulative evaluator-timing snapshot for one root decision."""
+
+    if source is None:
+        return None
+    payload = source()
+    if not isinstance(payload, Mapping):
+        raise ValueError("neural_timing_snapshot must return a mapping.")
+    result: dict[str, float | int] = {}
+    for field in _NEURAL_TIMING_SECONDS:
+        value = payload.get(field, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (float, int)) or value < 0.0:
+            raise ValueError(f"neural_timing_snapshot has invalid {field}.")
+        result[field] = float(value)
+    for field in _NEURAL_TIMING_COUNTS:
+        value = payload.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"neural_timing_snapshot has invalid {field}.")
+        result[field] = value
+    return result
+
+
+def _neural_timing_delta(
+    before: Mapping[str, float | int] | None,
+    after: Mapping[str, float | int] | None,
+) -> dict[str, float | int]:
+    """Return a validated per-decision delta from cumulative evaluator counters."""
+
+    if before is None or after is None:
+        return {
+            "observation_encoding_seconds": 0.0,
+            "observation_encoding_count": 0,
+            "neural_forward_seconds": 0.0,
+            "neural_forward_count": 0,
+        }
+    result: dict[str, float | int] = {}
+    for field in _NEURAL_TIMING_SECONDS:
+        delta = float(after[field]) - float(before[field])
+        if delta < 0.0:
+            raise ValueError(f"neural_timing_snapshot moved backwards for {field}.")
+        result[field] = delta
+    for field in _NEURAL_TIMING_COUNTS:
+        delta = int(after[field]) - int(before[field])
+        if delta < 0:
+            raise ValueError(f"neural_timing_snapshot moved backwards for {field}.")
+        result[field] = delta
+    return result
 
 
 @dataclass(frozen=True)
@@ -373,6 +426,10 @@ class RootPUCTSearchPolicy:
     # end to preserve the existing positional constructor contract.
     checkpoint_path: str | None = None
     weights_sha256: str | None = None
+    # Optional snapshot source for transformer encode/forward sub-timings.
+    # Its counters are cumulative across decisions; ``select_action_with_context``
+    # records only the local delta in RootPUCTSearchTiming.
+    neural_timing_snapshot: NeuralTimingSnapshot | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
@@ -393,6 +450,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.root_visit_budget_selector is not None and not callable(self.root_visit_budget_selector):
             raise ValueError("root_visit_budget_selector must be callable when set.")
+        if self.neural_timing_snapshot is not None and not callable(self.neural_timing_snapshot):
+            raise ValueError("neural_timing_snapshot must be callable when set.")
         if self.root_time_budget_seconds is not None and (
             self.root_time_budget_seconds <= 0.0 or not math.isfinite(self.root_time_budget_seconds)
         ):
@@ -452,6 +511,8 @@ class RootPUCTSearchPolicy:
         *,
         rng: random.Random,
     ) -> PolicyDecision:
+        timing_started_at = _timing_perf_counter()
+        neural_timing_before = _neural_timing_snapshot(self.neural_timing_snapshot)
         decision = self.fallback_policy.select_action(observation, rng=rng)
         return PolicyDecision(
             action_index=decision.action_index,
@@ -465,6 +526,10 @@ class RootPUCTSearchPolicy:
                 "root_puct_fallback_reason": "missing policy context",
                 "root_puct_fallback_category": root_puct_fallback_category("missing policy context"),
                 "fallback_policy_id": decision.policy_id,
+                **self._fallback_timing_metadata(
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                ),
             },
         )
 
@@ -474,14 +539,30 @@ class RootPUCTSearchPolicy:
         *,
         rng: random.Random,
     ) -> PolicyDecision:
-        if context.player_id not in context.requested_players:
-            return self._fallback(context, rng=rng, reason="player is not requested")
         timing_started_at = _timing_perf_counter()
+        neural_timing_before = _neural_timing_snapshot(self.neural_timing_snapshot)
+        if context.player_id not in context.requested_players:
+            return self._fallback(
+                context,
+                rng=rng,
+                reason="player is not requested",
+                timing_started_at=timing_started_at,
+                neural_timing_before=neural_timing_before,
+            )
         opponent_scenario_planning_started_at = _timing_perf_counter()
         try:
             opponent_scenarios = _opponent_action_scenarios(self, context, rng)
         except ValueError as exc:
-            return self._fallback(context, rng=rng, reason=str(exc))
+            return self._fallback(
+                context,
+                rng=rng,
+                reason=str(exc),
+                timing_started_at=timing_started_at,
+                neural_timing_before=neural_timing_before,
+                opponent_scenario_planning_seconds=(
+                    _timing_perf_counter() - opponent_scenario_planning_started_at
+                ),
+            )
         opponent_scenario_planning_seconds = _timing_perf_counter() - opponent_scenario_planning_started_at
         legality_checked = False
         for scenario in opponent_scenarios:
@@ -491,16 +572,37 @@ class RootPUCTSearchPolicy:
                 opponent_actions=scenario.actions,
             )
             if planner_error is not None:
-                return self._fallback(context, rng=rng, reason=planner_error)
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=planner_error,
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                )
             legality_report = _opponent_action_legality_report(context, scenario.actions)
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
-                return self._fallback(context, rng=rng, reason=legality_report.error)
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=legality_report.error,
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                )
         try:
             start_override_samples_per_scenario = _start_override_samples_per_scenario(self, context)
             start_override_sampling_metadata = _start_override_sampling_metadata(self, context)
         except ValueError as exc:
-            return self._fallback(context, rng=rng, reason=str(exc))
+            return self._fallback(
+                context,
+                rng=rng,
+                reason=str(exc),
+                timing_started_at=timing_started_at,
+                neural_timing_before=neural_timing_before,
+                opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+            )
         search_scenario_groups = _start_override_sampled_scenario_groups(
             opponent_scenarios,
             samples_per_scenario=(
@@ -523,6 +625,9 @@ class RootPUCTSearchPolicy:
             temperature=self.root_prior_temperature,
         )
         policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
+        # Successful scenario branches are available even if a later branch triggers
+        # a graceful fallback. Preserve their measured stage timing in that result.
+        completed_search_timings: list[RootPUCTSearchTiming] = []
         priors, root_dirichlet_metadata = _root_dirichlet_action_priors(
             base_priors,
             context=context,
@@ -661,6 +766,7 @@ class RootPUCTSearchPolicy:
                             else:
                                 scenario_search = search
                                 scenario_start_override = start_override
+                                completed_search_timings.append(search.timing)
                                 break
                         if scenario_search is None:
                             skipped_scenarios.append(
@@ -737,9 +843,23 @@ class RootPUCTSearchPolicy:
                     rng=rng,
                     reason=str(exc),
                     extra_metadata=exc.metadata,
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    policy_evaluation_seconds=policy_evaluation_seconds,
+                    completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             except Exception as exc:
-                return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=f"search failed: {exc}",
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    policy_evaluation_seconds=policy_evaluation_seconds,
+                    completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
+                )
             elapsed_seconds = perf_counter() - search_started_at
             timing = (
                 RootPUCTSearchTiming.aggregate(
@@ -748,6 +868,16 @@ class RootPUCTSearchPolicy:
                 .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
                 .with_policy_evaluation(policy_evaluation_seconds)
                 .with_total(_timing_perf_counter() - timing_started_at)
+            )
+            neural_timing = _neural_timing_delta(
+                neural_timing_before,
+                _neural_timing_snapshot(self.neural_timing_snapshot),
+            )
+            timing = timing.with_neural_subtiming(
+                observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
+                observation_encoding_count=int(neural_timing["observation_encoding_count"]),
+                neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
+                neural_forward_count=int(neural_timing["neural_forward_count"]),
             )
         finally:
             close = getattr(env, "close", None)
@@ -931,6 +1061,11 @@ class RootPUCTSearchPolicy:
         rng: random.Random,
         reason: str,
         extra_metadata: Mapping[str, object] | None = None,
+        timing_started_at: float | None = None,
+        neural_timing_before: Mapping[str, float | int] | None = None,
+        opponent_scenario_planning_seconds: float | None = None,
+        policy_evaluation_seconds: float | None = None,
+        completed_search_timing: RootPUCTSearchTiming | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
@@ -948,9 +1083,49 @@ class RootPUCTSearchPolicy:
                 "root_puct_fallback_reason": reason,
                 "root_puct_fallback_category": category,
                 "fallback_policy_id": decision.policy_id,
+                **self._fallback_timing_metadata(
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    policy_evaluation_seconds=policy_evaluation_seconds,
+                    completed_search_timing=completed_search_timing,
+                ),
                 **dict(extra_metadata or {}),
             },
         )
+
+    def _fallback_timing_metadata(
+        self,
+        *,
+        timing_started_at: float | None,
+        neural_timing_before: Mapping[str, float | int] | None,
+        opponent_scenario_planning_seconds: float | None = None,
+        policy_evaluation_seconds: float | None = None,
+        completed_search_timing: RootPUCTSearchTiming | None = None,
+    ) -> dict[str, object]:
+        """Attach all work done before a graceful fallback to the decision artifact."""
+
+        if timing_started_at is None:
+            return {}
+        timing = completed_search_timing or RootPUCTSearchTiming()
+        if opponent_scenario_planning_seconds is not None:
+            timing = timing.with_opponent_scenario_planning(opponent_scenario_planning_seconds)
+        if policy_evaluation_seconds is not None:
+            timing = timing.with_policy_evaluation(policy_evaluation_seconds)
+        neural_timing = _neural_timing_delta(
+            neural_timing_before,
+            _neural_timing_snapshot(self.neural_timing_snapshot),
+        )
+        timing = timing.with_neural_subtiming(
+            observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
+            observation_encoding_count=int(neural_timing["observation_encoding_count"]),
+            neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
+            neural_forward_count=int(neural_timing["neural_forward_count"]),
+        ).with_total(_timing_perf_counter() - timing_started_at)
+        return {
+            "root_puct_elapsed_seconds": timing.total_seconds,
+            "root_puct_timing": timing.to_dict(),
+        }
 
 
 def _opponent_action_planner_error(

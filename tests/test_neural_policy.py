@@ -47,6 +47,7 @@ from pokezero.neural_policy import (
     NEURAL_INSTALL_MESSAGE,
     EntityTokenTransformerPolicy,
     TorchUnavailableError,
+    TransformerInferenceTimingAccumulator,
     TransformerSoftmaxPolicy,
     TransformerEpochMetrics,
     TransformerPolicyConfig,
@@ -771,6 +772,56 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertGreater(priors[1], priors[0])
         self.assertEqual(priors[2], 0.0)
 
+    def test_transformer_evaluator_timing_splits_encoding_and_forward_work(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=1,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class FakeModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                del kwargs
+                return SimpleNamespace(
+                    policy_logits=torch.zeros(1, ACTION_COUNT),
+                    opponent_action_logits=torch.zeros(1, ACTION_COUNT),
+                    value=torch.tensor([0.25]),
+                )
+
+        timing = TransformerInferenceTimingAccumulator()
+        result = SimpleNamespace(model_config=config)
+        observations = (observation(1),)
+        evaluate_transformer_action_priors(
+            model=FakeModel(), result=result, observations=observations, device="cpu", timing=timing
+        )
+        evaluate_transformer_opponent_action_priors(
+            model=FakeModel(), result=result, observations=observations, device="cpu", timing=timing
+        )
+        evaluate_transformer_observation_value(
+            model=FakeModel(), result=result, observations=observations, device="cpu", timing=timing
+        )
+
+        snapshot = timing.snapshot()
+        self.assertEqual(snapshot.observation_encoding_count, 3)
+        self.assertEqual(snapshot.neural_forward_count, 3)
+        self.assertGreater(snapshot.observation_encoding_seconds, 0.0)
+        self.assertGreater(snapshot.neural_forward_seconds, 0.0)
+
     def test_transformer_policy_records_value_estimate_on_decision(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")
@@ -799,6 +850,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 logits[0, 1] = 2.0
                 return SimpleNamespace(policy_logits=logits, value=torch.tensor([0.37]))
 
+        timing = TransformerInferenceTimingAccumulator()
         policy = TransformerSoftmaxPolicy(
             model=FakePolicyModel(),
             result=TransformerTrainingResult(
@@ -807,12 +859,18 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 epochs=(),
                 value_calibration_transform=ValueCalibrationTransform(scale=2.0, bias=0.0),
             ),
+            inference_timing=timing,
         )
 
         decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
 
         self.assertEqual(decision.action_index, 1)
         self.assertAlmostEqual(decision.value_estimate, 0.37, places=6)
+        snapshot = timing.snapshot()
+        self.assertEqual(snapshot.observation_encoding_count, 1)
+        self.assertEqual(snapshot.neural_forward_count, 1)
+        self.assertGreater(snapshot.observation_encoding_seconds, 0.0)
+        self.assertGreater(snapshot.neural_forward_seconds, 0.0)
 
     def test_transformer_policy_forward_fn_seam_preserves_decisions(self) -> None:
         # WS-L1: a forward_fn that round-trips logits/value through python lists (the RPC
@@ -3371,6 +3429,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertIsNone(deterministic_search_policy.root_dirichlet_alpha)
             self.assertEqual(search_policy.value_fn((observation(1),)), 0.25)
             self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
+            self.assertIsNotNone(search_policy.neural_timing_snapshot)
             self.assertEqual(search_policy.root_prior_temperature, 2.5)
             context = PolicyContext(
                 player_id="p1",
@@ -3944,7 +4003,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(captured["search_policy"].checkpoint_path, str(policy_checkpoint.resolve()))
         self.assertEqual(captured["search_policy"].weights_sha256, raw_checkpoint_sha256)
         self.assertIs(value_eval.call_args.kwargs["model"], value_model)
+        self.assertIsNotNone(value_eval.call_args.kwargs["timing"])
         self.assertIs(prior_eval.call_args.kwargs["model"], policy_model)
+        self.assertIsNotNone(prior_eval.call_args.kwargs["timing"])
         expected_root_config = {
             "max_decision_rounds": 250,
             "temperature": 1.0,

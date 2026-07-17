@@ -70,6 +70,7 @@ from .neural_policy import (
     DEFAULT_CATEGORY_OOV_BUCKETS,
     LEARNING_RATE_SCHEDULES,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
+    TransformerInferenceTimingAccumulator,
     TransformerPolicyConfig,
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
@@ -3832,7 +3833,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         for dirichlet_enabled in root_puct_variants
     }
 
-    def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
+    def make_raw_policy(
+        policy_id: str | None = None,
+        *,
+        inference_timing: TransformerInferenceTimingAccumulator | None = None,
+    ) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
             model=model,
             result=result,
@@ -3842,6 +3847,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             policy_id=policy_id,
             checkpoint_path=raw_policy_checkpoint,
             weights_sha256=raw_policy_checkpoint_sha256,
+            inference_timing=inference_timing,
         )
 
     def make_leaf_rollout_policy(
@@ -3850,36 +3856,50 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         search_player_id: str,
         benchmark_opponent_policy: Policy | None,
         player_id: str,
+        inference_timing: TransformerInferenceTimingAccumulator,
     ) -> Policy:
         if benchmark_opponent_policy is not None and player_id != search_player_id:
             return benchmark_opponent_policy
-        return make_raw_policy(policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}")
-
-    def value_fn(history):
-        return evaluate_transformer_observation_value(
-            model=value_model,
-            result=value_result,
-            observations=history,
-            device=args.device,
+        return make_raw_policy(
+            policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}",
+            inference_timing=inference_timing,
         )
 
-    def prior_fn(history):
-        return evaluate_transformer_action_priors(
-            model=model,
-            result=result,
-            observations=history,
-            temperature=1.0,
-            device=args.device,
-        )
+    def make_evaluators(
+        inference_timing: TransformerInferenceTimingAccumulator,
+    ):
+        """Bind one cumulative timing sink to one Root-PUCT policy instance."""
 
-    def opponent_prior_fn(history):
-        return evaluate_transformer_opponent_action_priors(
-            model=model,
-            result=result,
-            observations=history,
-            temperature=args.temperature,
-            device=args.device,
-        )
+        def value_fn(history):
+            return evaluate_transformer_observation_value(
+                model=value_model,
+                result=value_result,
+                observations=history,
+                device=args.device,
+                timing=inference_timing,
+            )
+
+        def prior_fn(history):
+            return evaluate_transformer_action_priors(
+                model=model,
+                result=result,
+                observations=history,
+                temperature=1.0,
+                device=args.device,
+                timing=inference_timing,
+            )
+
+        def opponent_prior_fn(history):
+            return evaluate_transformer_opponent_action_priors(
+                model=model,
+                result=result,
+                observations=history,
+                temperature=args.temperature,
+                device=args.device,
+                timing=inference_timing,
+            )
+
+        return value_fn, prior_fn, opponent_prior_fn
 
     def make_search_policy(
         *,
@@ -3889,6 +3909,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         benchmark_opponent_spec: str,
         dirichlet_enabled: bool,
     ) -> RootPUCTSearchPolicy:
+        inference_timing = TransformerInferenceTimingAccumulator()
+        value_fn, prior_fn, opponent_prior_fn = make_evaluators(inference_timing)
         root_opponent_player_id = "p2" if search_player_id == "p1" else "p1"
         opponent_action_scenario_planner = None
         if args.root_opponent_action_policy == "benchmark":
@@ -3919,6 +3941,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 search_player_id=search_player_id,
                 benchmark_opponent_policy=benchmark_opponent_policy,
                 player_id=player_id,
+                inference_timing=inference_timing,
             )
             leaf_rollout_metadata = {
                 "root_puct_leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
@@ -3930,11 +3953,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,
-            fallback_policy=make_raw_policy(policy_id=f"{raw_policy_id}-fallback"),
+            fallback_policy=make_raw_policy(
+                policy_id=f"{raw_policy_id}-fallback",
+                inference_timing=inference_timing,
+            ),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
             checkpoint_path=raw_policy_checkpoint,
             weights_sha256=raw_policy_checkpoint_sha256,
+            neural_timing_snapshot=lambda: inference_timing.snapshot().to_dict(),
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,

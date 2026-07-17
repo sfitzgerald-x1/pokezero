@@ -53,6 +53,12 @@ _TIMING_KEYS = (
     "opponent_scenario_planning_count",
     "policy_evaluation_seconds",
     "policy_evaluation_count",
+    # These overlap policy/value/scenario timings and are diagnostic W2
+    # sub-slices rather than additive components of total_seconds.
+    "observation_encoding_seconds",
+    "observation_encoding_count",
+    "neural_forward_seconds",
+    "neural_forward_count",
     "value_evaluation_seconds",
     "value_evaluation_count",
     "rollout_tail_seconds",

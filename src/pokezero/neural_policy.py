@@ -76,6 +76,55 @@ TORCH_NUM_INTEROP_THREADS_ENV = "POKEZERO_TORCH_NUM_INTEROP_THREADS"
 _TORCH_THREAD_ENV_APPLIED = False
 
 
+@dataclass(frozen=True)
+class TransformerInferenceTiming:
+    """A snapshot of encode and inference work for transformer evaluations.
+
+    The two components intentionally overlap higher-level Root-PUCT timing
+    buckets. They are diagnostic sub-slices, not inputs to residual timing
+    accounting.
+    """
+
+    observation_encoding_seconds: float = 0.0
+    observation_encoding_count: int = 0
+    neural_forward_seconds: float = 0.0
+    neural_forward_count: int = 0
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "observation_encoding_seconds": self.observation_encoding_seconds,
+            "observation_encoding_count": self.observation_encoding_count,
+            "neural_forward_seconds": self.neural_forward_seconds,
+            "neural_forward_count": self.neural_forward_count,
+        }
+
+
+@dataclass
+class TransformerInferenceTimingAccumulator:
+    """Mutable per-policy timing sink shared by Root-PUCT evaluator closures."""
+
+    observation_encoding_seconds: float = 0.0
+    observation_encoding_count: int = 0
+    neural_forward_seconds: float = 0.0
+    neural_forward_count: int = 0
+
+    def add_observation_encoding(self, elapsed_seconds: float) -> None:
+        self.observation_encoding_seconds += elapsed_seconds
+        self.observation_encoding_count += 1
+
+    def add_neural_forward(self, elapsed_seconds: float) -> None:
+        self.neural_forward_seconds += elapsed_seconds
+        self.neural_forward_count += 1
+
+    def snapshot(self) -> TransformerInferenceTiming:
+        return TransformerInferenceTiming(
+            observation_encoding_seconds=self.observation_encoding_seconds,
+            observation_encoding_count=self.observation_encoding_count,
+            neural_forward_seconds=self.neural_forward_seconds,
+            neural_forward_count=self.neural_forward_count,
+        )
+
+
 def collect_categorical_ids(
     paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
 ) -> tuple[int, ...]:
@@ -1132,6 +1181,7 @@ def evaluate_transformer_observation_value(
     result: TransformerTrainingResult,
     observations: Sequence[PokeZeroObservationV0],
     device: str | Any | None = None,
+    timing: TransformerInferenceTimingAccumulator | None = None,
 ) -> float:
     """Evaluate the transformer's value head for a player-relative observation history."""
 
@@ -1142,11 +1192,15 @@ def evaluate_transformer_observation_value(
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
+    encoding_started_at = perf_counter()
     tensors = observation_window_to_torch(
         observations[-result.model_config.window_size :],
         window_size=result.model_config.window_size,
         device=device,
     )
+    if timing is not None:
+        timing.add_observation_encoding(perf_counter() - encoding_started_at)
+    forward_started_at = perf_counter()
     with torch_module.no_grad():
         output = model(
             categorical_ids=tensors["categorical_ids"],
@@ -1155,7 +1209,11 @@ def evaluate_transformer_observation_value(
             attention_mask=tensors["attention_mask"],
             history_mask=tensors["history_mask"],
         )
-    value = float(output.value[0].detach().cpu().item())
+        value = float(output.value[0].detach().cpu().item())
+    if timing is not None:
+        # Reading the scalar synchronizes asynchronous accelerators, so this
+        # interval is the wall-clock inference cost rather than kernel enqueue time.
+        timing.add_neural_forward(perf_counter() - forward_started_at)
     transform = getattr(result, "value_calibration_transform", None)
     if isinstance(transform, ValueCalibrationTransform):
         return transform.apply(value)
@@ -1169,6 +1227,7 @@ def evaluate_transformer_action_priors(
     observations: Sequence[PokeZeroObservationV0],
     temperature: float = 1.0,
     device: str | Any | None = None,
+    timing: TransformerInferenceTimingAccumulator | None = None,
 ) -> tuple[float, ...]:
     """Evaluate masked legal-action priors from the transformer's policy head."""
 
@@ -1181,11 +1240,15 @@ def evaluate_transformer_action_priors(
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
+    encoding_started_at = perf_counter()
     tensors = observation_window_to_torch(
         observations[-result.model_config.window_size :],
         window_size=result.model_config.window_size,
         device=device,
     )
+    if timing is not None:
+        timing.add_observation_encoding(perf_counter() - encoding_started_at)
+    forward_started_at = perf_counter()
     with torch_module.no_grad():
         output = model(
             categorical_ids=tensors["categorical_ids"],
@@ -1199,7 +1262,10 @@ def evaluate_transformer_action_priors(
             tensors["legal_action_mask"][0],
             temperature=temperature,
         )
-    return tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
+        values = tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
+    if timing is not None:
+        timing.add_neural_forward(perf_counter() - forward_started_at)
+    return values
 
 
 def evaluate_transformer_opponent_action_priors(
@@ -1209,6 +1275,7 @@ def evaluate_transformer_opponent_action_priors(
     observations: Sequence[PokeZeroObservationV0],
     temperature: float = 1.0,
     device: str | Any | None = None,
+    timing: TransformerInferenceTimingAccumulator | None = None,
 ) -> tuple[float, ...]:
     """Evaluate unmasked opponent-action priors from the auxiliary opponent head."""
 
@@ -1221,11 +1288,15 @@ def evaluate_transformer_opponent_action_priors(
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
+    encoding_started_at = perf_counter()
     tensors = observation_window_to_torch(
         observations[-result.model_config.window_size :],
         window_size=result.model_config.window_size,
         device=device,
     )
+    if timing is not None:
+        timing.add_observation_encoding(perf_counter() - encoding_started_at)
+    forward_started_at = perf_counter()
     with torch_module.no_grad():
         output = model(
             categorical_ids=tensors["categorical_ids"],
@@ -1238,7 +1309,10 @@ def evaluate_transformer_opponent_action_priors(
             output.opponent_action_logits[0],
             temperature=temperature,
         )
-    return tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
+        values = tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
+    if timing is not None:
+        timing.add_neural_forward(perf_counter() - forward_started_at)
+    return values
 
 
 @dataclass
@@ -1261,6 +1335,9 @@ class TransformerSoftmaxPolicy:
     # masking, rng sampling, behavior-prob, value) is shared verbatim between local and remote
     # — parity is structural, and determinism (sampling stays client-side) is untouched.
     forward_fn: "Callable[[Mapping[str, Any]], TransformerPolicyOutput] | None" = None
+    # Optional shared sink for a Root-PUCT fallback or leaf rollout. It records
+    # the same encode/forward boundary as the evaluator closures.
+    inference_timing: TransformerInferenceTimingAccumulator | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
 
     def __post_init__(self) -> None:
@@ -1306,12 +1383,16 @@ class TransformerSoftmaxPolicy:
         history_by_player = self._history_by_player if self._history_by_player is not None else {}
         history = history_by_player.setdefault(player_key, [])
         history.append(observation)
+        encoding_started_at = perf_counter()
         tensors = observation_window_to_torch(
             history[-self.result.model_config.window_size :],
             window_size=self.result.model_config.window_size,
             device=self.device,
         )
+        if self.inference_timing is not None:
+            self.inference_timing.add_observation_encoding(perf_counter() - encoding_started_at)
         forward_fn = self.forward_fn if self.forward_fn is not None else self._default_forward
+        forward_started_at = perf_counter()
         with torch_module.no_grad():
             output = forward_fn(tensors)
             probabilities = _masked_action_probabilities(
@@ -1319,9 +1400,15 @@ class TransformerSoftmaxPolicy:
                 tensors["legal_action_mask"][0],
                 temperature=self.sampling_temperature,
             )
+            probability_values = tuple(
+                float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT)
+            )
+            raw_value_estimate = float(output.value[0].detach().cpu().item())
+        if self.inference_timing is not None:
+            self.inference_timing.add_neural_forward(perf_counter() - forward_started_at)
         legal = legal_action_indices(observation.legal_action_mask)
         greedy_action = _greedy_action_index(
-            probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+            probabilities=probability_values,
             legal=legal,
             family_gated=self.family_gated_selection,
         )
@@ -1331,15 +1418,14 @@ class TransformerSoftmaxPolicy:
         elif self.deterministic:
             action_index = greedy_action
         else:
-            action_index = _sample_action(tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)), legal, rng)
-        raw_value_estimate = float(output.value[0].detach().cpu().item())
+            action_index = _sample_action(probability_values, legal, rng)
         value_estimate = raw_value_estimate if math.isfinite(raw_value_estimate) else None
         return PolicyDecision(
             action_index=action_index,
             policy_id=str(self.policy_id),
             action_probability=_behavior_probability(
                 action_index=action_index,
-                probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+                probabilities=probability_values,
                 legal=legal,
                 deterministic=self.deterministic,
                 greedy_action=greedy_action,
