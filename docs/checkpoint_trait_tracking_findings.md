@@ -35,9 +35,9 @@ continuation legs automatically; run names drift as new legs are added, so the i
 each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
 **Data.** 86 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — **70 checkpoints**, following the active lineages to their current frontiers:
-v22-lr3m 100k→2700k (27 pts), m50-ep7 →2400k (24), l200-ep7-wu75 →1900k (19); v22-flat2m has no
-grid point yet. Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
+5000 at 500k) — **80 checkpoints**, following the active lineages to their current frontiers:
+v22-lr3m 100k→2900k (29 pts), m50-ep7 →2700k (27), l200-ep7-wu75 →2200k (22), and v22-flat2m
+(2100k–2200k, the fork). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
 per lineage — 6 checkpoints. **Foul-play was not re-run for the latest refreshes, so its
 checkpoints trail the self-play frontiers badly** (m50-ep7 foul-play is @1000k while self-play now
 reaches 2400k); the foul-play panel and the trait↔win-rate correlations describe those specific
