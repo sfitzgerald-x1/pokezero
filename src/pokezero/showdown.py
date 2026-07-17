@@ -557,6 +557,9 @@ class ShowdownReplayState:
     # For an active Leech Seed target, the public side whose current active slot receives the
     # residual heal. The protocol exposes this through the original move declaration.
     leech_seed_source_sides: Mapping[str, str] = field(default_factory=dict)
+    # A declared Baton Pass creates a public forced-switch boundary. The incoming Pokemon must
+    # inherit boosts and transferable volatiles when that boundary is resolved.
+    pending_baton_pass: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -716,6 +719,7 @@ class _ReplayParser:
         }
         parser.wish_set_turns = dict(snapshot.wish_set_turns)
         parser.leech_seed_source_sides = dict(snapshot.leech_seed_source_sides)
+        parser.pending_baton_pass = set(snapshot.pending_baton_pass)
         return parser
 
     def feed(self, lines: Sequence[str]) -> None:
@@ -965,6 +969,7 @@ class _ReplayParser:
             },
             wish_set_turns=dict(self.wish_set_turns),
             leech_seed_source_sides=dict(self.leech_seed_source_sides),
+            pending_baton_pass=tuple(sorted(self.pending_baton_pass)),
         )
 
 

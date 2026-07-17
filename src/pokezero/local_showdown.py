@@ -1161,6 +1161,9 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         # Wish to the direct constructor.
         "wishSetTurns": _pending_wish_set_turns(replay),
         "leechSeedSourceSides": _active_leech_seed_source_sides(replay),
+        # A Baton Pass declaration is public and its forced switch has not yet resolved. The
+        # bridge needs the source-effect id so Showdown preserves the carried battle state.
+        "pendingBatonPassSides": list(replay.pending_baton_pass),
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's

@@ -1140,6 +1140,56 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(search_hp, source_hp)
 
+    def test_public_materialization_preserves_pending_baton_pass_at_forced_switch(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Swords Dance", "Baton Pass", "Protect"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle", "Protect"),
+                        ),
+                    )
+                ),
+                "p2": pack_team((FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=73, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Swords Dance
+            source.step({"p1": 1, "p2": 0})  # Baton Pass, then p1 must select a switch.
+            self.assertEqual(source.requested_players(), ("p1",))
+            materialization = source.public_materialization_state("p1")
+            self.assertEqual(materialization.replay.pending_baton_pass, ("p1",))
+            self.assertEqual(
+                _public_materialization_payload(materialization)["pendingBatonPassSides"], ["p1"]
+            )
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=73,
+            )
+            self.assertEqual(search_env.requested_players(), ("p1",))
+
+            source.step({"p1": 4})
+            search_env.step({"p1": 4})
+
+        # The opposing turn action is hidden at this forced-switch boundary and is deliberately
+        # not replayed by direct materialization. The required mechanical invariant is that the
+        # chosen replacement inherits the outgoing Pokemon's Baton Pass state.
+        self.assertEqual(source._parser.snapshot().boosts["p1"], {"atk": 2})
+        self.assertEqual(search_env._parser.snapshot().boosts["p1"], {"atk": 2})
+
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()
         assert config is not None

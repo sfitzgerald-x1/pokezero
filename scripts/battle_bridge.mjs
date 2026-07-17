@@ -386,6 +386,16 @@ function applyPublicState(snapshot, publicState) {
   if (leechSeedSourceSides != null && typeof leechSeedSourceSides !== "object") {
     throw new Error("Materialize received invalid Leech Seed provenance.");
   }
+  const pendingBatonPassSides = publicState.pendingBatonPassSides ?? [];
+  if (!Array.isArray(pendingBatonPassSides) ||
+      !pendingBatonPassSides.every(sideId => sideId === "p1" || sideId === "p2")) {
+    throw new Error("Materialize received invalid Baton Pass state.");
+  }
+  if (pendingBatonPassSides.length > 1 ||
+      (pendingBatonPassSides.length === 1 &&
+       (pendingBatonPassSides[0] !== publicState.selfPlayer || !selfForceSwitch))) {
+    throw new Error("Materialize received a Baton Pass state without its forced switch.");
+  }
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -470,6 +480,12 @@ function applyPublicState(snapshot, publicState) {
         const matchingIndex = serializedSide.pokemon.findIndex(pokemon => sameSpecies(pokemon, row.species));
         if (matchingIndex >= 0) applyKnownMoveState(serializedSide.pokemon[matchingIndex], row.moves);
       }
+    }
+    if (pendingBatonPassSides.includes(sideId)) {
+      // BattleQueue turns this exact flag into the Baton Pass source effect when it resolves the
+      // switch. The skip flag mirrors the already-completed BeforeSwitchOut phase.
+      active.switchFlag = "batonpass";
+      active.skipBeforeSwitchOutEventFlag = true;
     }
     applyPublicSideConditions(serializedSide, publicSide, sideId, publicState.turn);
     serializedSide.slotConditions = [{}];

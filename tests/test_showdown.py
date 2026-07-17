@@ -1033,20 +1033,29 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
 
     def test_replay_snapshot_restore_preserves_pending_public_conditions(self) -> None:
-        snapshot = parse_showdown_replay(
+        parser = _ReplayParser()
+        parser.feed(
             [
                 "|turn|7",
                 "|move|p1a: Jirachi|Wish|p1a: Jirachi",
                 "|move|p2a: Bulbasaur|Leech Seed|p1a: Jirachi",
                 "|-start|p1a: Jirachi|move: Leech Seed",
+                "|-boost|p1a: Jirachi|atk|2",
+                "|move|p1a: Jirachi|Baton Pass",
             ]
         )
+        snapshot = parser.snapshot()
 
-        restored = _ReplayParser.from_snapshot(snapshot).snapshot()
+        restored_parser = _ReplayParser.from_snapshot(snapshot)
+        self.assertEqual(restored_parser.snapshot(), snapshot)
+        self.assertEqual(snapshot.wish_set_turns, {"p1": 7})
+        self.assertEqual(snapshot.leech_seed_source_sides, {"p1": "p2"})
+        self.assertEqual(snapshot.pending_baton_pass, ("p1",))
 
-        self.assertEqual(restored, snapshot)
-        self.assertEqual(restored.wish_set_turns, {"p1": 7})
-        self.assertEqual(restored.leech_seed_source_sides, {"p1": "p2"})
+        restored_parser.feed(["|switch|p1a: Snorlax|Snorlax, L78|100/100"])
+        restored = restored_parser.snapshot()
+        self.assertEqual(restored.boosts["p1"], {"atk": 2})
+        self.assertEqual(restored.pending_baton_pass, ())
 
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
