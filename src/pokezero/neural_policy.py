@@ -1335,6 +1335,9 @@ class TransformerSoftmaxPolicy:
     # masking, rng sampling, behavior-prob, value) is shared verbatim between local and remote
     # — parity is structural, and determinism (sampling stays client-side) is untouched.
     forward_fn: "Callable[[Mapping[str, Any]], TransformerPolicyOutput] | None" = None
+    # Optional shared sink for a Root-PUCT fallback or leaf rollout. It records
+    # the same encode/forward boundary as the evaluator closures.
+    inference_timing: TransformerInferenceTimingAccumulator | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
 
     def __post_init__(self) -> None:
@@ -1380,12 +1383,16 @@ class TransformerSoftmaxPolicy:
         history_by_player = self._history_by_player if self._history_by_player is not None else {}
         history = history_by_player.setdefault(player_key, [])
         history.append(observation)
+        encoding_started_at = perf_counter()
         tensors = observation_window_to_torch(
             history[-self.result.model_config.window_size :],
             window_size=self.result.model_config.window_size,
             device=self.device,
         )
+        if self.inference_timing is not None:
+            self.inference_timing.add_observation_encoding(perf_counter() - encoding_started_at)
         forward_fn = self.forward_fn if self.forward_fn is not None else self._default_forward
+        forward_started_at = perf_counter()
         with torch_module.no_grad():
             output = forward_fn(tensors)
             probabilities = _masked_action_probabilities(
@@ -1393,9 +1400,15 @@ class TransformerSoftmaxPolicy:
                 tensors["legal_action_mask"][0],
                 temperature=self.sampling_temperature,
             )
+            probability_values = tuple(
+                float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT)
+            )
+            raw_value_estimate = float(output.value[0].detach().cpu().item())
+        if self.inference_timing is not None:
+            self.inference_timing.add_neural_forward(perf_counter() - forward_started_at)
         legal = legal_action_indices(observation.legal_action_mask)
         greedy_action = _greedy_action_index(
-            probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+            probabilities=probability_values,
             legal=legal,
             family_gated=self.family_gated_selection,
         )
@@ -1405,15 +1418,14 @@ class TransformerSoftmaxPolicy:
         elif self.deterministic:
             action_index = greedy_action
         else:
-            action_index = _sample_action(tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)), legal, rng)
-        raw_value_estimate = float(output.value[0].detach().cpu().item())
+            action_index = _sample_action(probability_values, legal, rng)
         value_estimate = raw_value_estimate if math.isfinite(raw_value_estimate) else None
         return PolicyDecision(
             action_index=action_index,
             policy_id=str(self.policy_id),
             action_probability=_behavior_probability(
                 action_index=action_index,
-                probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+                probabilities=probability_values,
                 legal=legal,
                 deterministic=self.deterministic,
                 greedy_action=greedy_action,

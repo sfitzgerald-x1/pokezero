@@ -1,4 +1,5 @@
 import random
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -8,7 +9,7 @@ from pokezero.env import BattleStartOverride, StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
-from pokezero.search import puct_branch_search
+from pokezero.search import RootPUCTSearchTiming, puct_branch_search
 from pokezero.search_policy import (
     EntropyMarginVisitBudgetSelector,
     FixedExtraVisitBudgetSelector,
@@ -76,6 +77,19 @@ class ResettableFixedPolicy(FixedPolicy):
 
     def reset(self) -> None:
         self.reset_calls += 1
+
+
+class TimingFallbackPolicy(FixedPolicy):
+    def __init__(self, action_index: int, timing: dict[str, float | int]) -> None:
+        super().__init__(action_index, policy_id="timing-fallback")
+        self.timing = timing
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        self.timing["observation_encoding_seconds"] += 0.01
+        self.timing["observation_encoding_count"] += 1
+        self.timing["neural_forward_seconds"] += 0.02
+        self.timing["neural_forward_count"] += 1
+        return super().select_action(observation, rng=rng)
 
 
 class ContextRecordingPolicy:
@@ -3084,15 +3098,22 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             ).run(seed=92, battle_id="search-policy")
 
     def test_root_puct_policy_falls_back_when_opponent_planner_returns_illegal_action(self) -> None:
+        neural_timing: dict[str, float | int] = {
+            "observation_encoding_seconds": 0.0,
+            "observation_encoding_count": 0,
+            "neural_forward_seconds": 0.0,
+            "neural_forward_count": 0,
+        }
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
             rollout_config=RolloutConfig(max_decision_rounds=3),
             value_fn=lambda history: 0.0,
             prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
             opponent_action_planner=lambda context, rng: {"p2": 99},
-            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed", value_estimate=0.25),
+            fallback_policy=TimingFallbackPolicy(1, neural_timing),
             allow_fallback=True,
             cpuct=0.0,
+            neural_timing_snapshot=lambda: dict(neural_timing),
         )
 
         result = RolloutDriver(
@@ -3105,8 +3126,68 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.action_index, 1)
         self.assertTrue(step.metadata["root_puct_fallback"])
         self.assertIn("illegal action for p2", step.metadata["root_puct_fallback_reason"])
-        self.assertEqual(step.metadata["fallback_policy_id"], "fallback-fixed")
-        self.assertEqual(step.value_estimate, 0.25)
+        self.assertEqual(step.metadata["fallback_policy_id"], "timing-fallback")
+        timing = step.metadata["root_puct_timing"]
+        self.assertEqual(timing["opponent_scenario_planning_count"], 1)
+        self.assertAlmostEqual(timing["observation_encoding_seconds"], 0.01)
+        self.assertEqual(timing["observation_encoding_count"], 1)
+        self.assertAlmostEqual(timing["neural_forward_seconds"], 0.02)
+        self.assertEqual(timing["neural_forward_count"], 1)
+        self.assertGreater(timing["total_seconds"], 0.0)
+        self.assertEqual(step.metadata["root_puct_elapsed_seconds"], timing["total_seconds"])
+
+    def test_root_puct_fallback_keeps_completed_search_stage_timing(self) -> None:
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 0}, weight=0.5, label="first"),
+                OpponentActionScenario(actions={"p2": 1}, weight=0.5, label="second"),
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            allow_fallback=True,
+            cpuct=0.0,
+            root_visit_budget=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+        completed_timing = RootPUCTSearchTiming(
+            prefix_replay_seconds=0.04,
+            prefix_replay_count=1,
+            branch_simulator_step_seconds=0.03,
+            branch_simulator_step_count=2,
+            total_seconds=0.07,
+        )
+
+        with patch(
+            "pokezero.search_policy.puct_branch_search",
+            side_effect=(SimpleNamespace(timing=completed_timing), RuntimeError("branch crashed")),
+        ):
+            decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["prefix_replay_seconds"], 0.04)
+        self.assertEqual(timing["prefix_replay_count"], 1)
+        self.assertEqual(timing["branch_simulator_step_seconds"], 0.03)
+        self.assertEqual(timing["branch_simulator_step_count"], 2)
+        self.assertEqual(timing["policy_evaluation_count"], 1)
+        self.assertGreater(timing["total_seconds"], 0.0)
 
     def test_root_puct_policy_falls_back_when_all_hidden_opponent_scenarios_are_replay_rejected(self) -> None:
         def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:

@@ -38,6 +38,7 @@ from pokezero.foulplay_bridge import (
     _observation_with_search_metadata,
     _player_state,
     _root_puct_prior_action_change_details,
+    _root_puct_timing_from_metadata,
     _run_single_game,
     _requested_legal_action_masks_for_context,
     _is_terminal_protocol_line,
@@ -59,6 +60,7 @@ from pokezero.public_decision_corpus import load_public_decision_corpus
 from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero.search import RootPUCTSearchTiming
 from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import evaluate_value_calibration
@@ -297,6 +299,63 @@ class FoulPlayBridgeTest(unittest.TestCase):
             payload["outcome_scoring"],
             {"win": 1.0, "tie": 0.5, "capped": 0.5, "loss": 0.0},
         )
+
+    def test_benchmark_payload_preserves_root_puct_stage_timings(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=1,
+            policy_mode="root-puct",
+        )
+        decision_timing = RootPUCTSearchTiming(
+            opponent_scenario_planning_seconds=0.01,
+            opponent_scenario_planning_count=1,
+            observation_encoding_seconds=0.02,
+            observation_encoding_count=2,
+            neural_forward_seconds=0.03,
+            neural_forward_count=2,
+            total_seconds=0.06,
+        ).to_dict()
+        result = ControlledFoulPlayBenchmarkResult(
+            config=config,
+            policy_id="checkpoint-root-puct",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="timed",
+                    seed=1,
+                    winner="PokeZeroBot",
+                    pokezero_won=True,
+                    decision_rounds=2,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=1,
+                    root_puct_timings=(decision_timing,),
+                ),
+            ),
+        )
+
+        payload = result.to_dict()
+
+        self.assertEqual(payload["game_results"][0]["root_puct_timing"], [decision_timing])
+        self.assertEqual(payload["root_puct"]["timing"], decision_timing)
+
+    def test_root_puct_timing_persistence_keeps_derived_timing_fields(self) -> None:
+        persisted = _root_puct_timing_from_metadata(
+            {
+                "root_puct_timing": RootPUCTSearchTiming(
+                    policy_evaluation_seconds=0.02,
+                    policy_evaluation_count=1,
+                    total_seconds=0.05,
+                ).to_dict()
+            }
+        )
+
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted["policy_value_evaluation_seconds"], 0.02)
+        self.assertEqual(persisted["policy_value_evaluation_count"], 1)
+        self.assertAlmostEqual(persisted["raw_residual_seconds"], 0.03)
+        self.assertAlmostEqual(persisted["residual_seconds"], 0.03)
 
     def test_benchmark_payload_preserves_immutable_calibrated_leaf_provenance(self) -> None:
         config = ControlledFoulPlayConfig(

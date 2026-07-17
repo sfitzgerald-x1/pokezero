@@ -3833,7 +3833,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         for dirichlet_enabled in root_puct_variants
     }
 
-    def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
+    def make_raw_policy(
+        policy_id: str | None = None,
+        *,
+        inference_timing: TransformerInferenceTimingAccumulator | None = None,
+    ) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
             model=model,
             result=result,
@@ -3843,6 +3847,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             policy_id=policy_id,
             checkpoint_path=raw_policy_checkpoint,
             weights_sha256=raw_policy_checkpoint_sha256,
+            inference_timing=inference_timing,
         )
 
     def make_leaf_rollout_policy(
@@ -3851,10 +3856,14 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         search_player_id: str,
         benchmark_opponent_policy: Policy | None,
         player_id: str,
+        inference_timing: TransformerInferenceTimingAccumulator,
     ) -> Policy:
         if benchmark_opponent_policy is not None and player_id != search_player_id:
             return benchmark_opponent_policy
-        return make_raw_policy(policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}")
+        return make_raw_policy(
+            policy_id=f"{deterministic_search_policy_id}-leaf-{player_id}",
+            inference_timing=inference_timing,
+        )
 
     def make_evaluators(
         inference_timing: TransformerInferenceTimingAccumulator,
@@ -3932,6 +3941,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 search_player_id=search_player_id,
                 benchmark_opponent_policy=benchmark_opponent_policy,
                 player_id=player_id,
+                inference_timing=inference_timing,
             )
             leaf_rollout_metadata = {
                 "root_puct_leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
@@ -3943,7 +3953,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,
-            fallback_policy=make_raw_policy(policy_id=f"{raw_policy_id}-fallback"),
+            fallback_policy=make_raw_policy(
+                policy_id=f"{raw_policy_id}-fallback",
+                inference_timing=inference_timing,
+            ),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
             checkpoint_path=raw_policy_checkpoint,

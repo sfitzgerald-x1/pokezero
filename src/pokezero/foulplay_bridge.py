@@ -18,7 +18,7 @@ import hashlib
 import json
 import math
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 import random
 import sys
@@ -73,6 +73,7 @@ from .search_policy import (
     greedy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
 )
+from .search import RootPUCTSearchTiming
 from .showdown import (
     PlayerRelativeBattleState,
     normalize_for_player,
@@ -96,6 +97,7 @@ ControlledFoulPlayComparisonProgressCallback = Callable[["ControlledFoulPlayComp
 ControlledFoulPlayTrajectoryCallback = Callable[[BattleTrajectory], None]
 ControlledFoulPlayCaptureProgressCallback = Callable[[Mapping[str, Any]], None]
 _COMPARISON_MODES = {"per-seed", "per-arm"}
+_ROOT_PUCT_TIMING_FIELD_NAMES = tuple(entry.name for entry in fields(RootPUCTSearchTiming))
 
 
 @dataclass(frozen=True)
@@ -348,6 +350,9 @@ class ControlledFoulPlayGameResult:
     # This deliberately includes the dispatch boundary, so capstone reports measure the cost a
     # caller observes rather than only root-PUCT's internal timer.
     policy_elapsed_seconds: tuple[float, ...] = ()
+    # Per-decision Root-PUCT timing is retained so W2 can recover stage splits
+    # and include graceful fallbacks in the same accounting.
+    root_puct_timings: tuple[Mapping[str, float | int], ...] = ()
     tied: bool = False
     capped: bool = False
     # Seats observed while the bridge ran, rather than the requested config values. These make
@@ -452,6 +457,8 @@ class ControlledFoulPlayGameResult:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
         if self.policy_elapsed_seconds:
             payload["policy_elapsed_seconds"] = list(self.policy_elapsed_seconds)
+        if self.root_puct_timings:
+            payload["root_puct_timing"] = [dict(timing) for timing in self.root_puct_timings]
         if self.root_puct_prior_action_change_details:
             payload["root_puct_prior_action_change_details"] = [
                 dict(detail)
@@ -620,6 +627,11 @@ class ControlledFoulPlayBenchmarkResult:
             for game in self.games
             for elapsed in game.policy_elapsed_seconds
         ]
+        root_puct_timings = [
+            timing
+            for game in self.games
+            for timing in game.root_puct_timings
+        ]
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": str(self.config.checkpoint),
@@ -702,6 +714,8 @@ class ControlledFoulPlayBenchmarkResult:
                 "average_elapsed_seconds": sum(policy_elapsed_values) / len(policy_elapsed_values),
                 "p95_elapsed_seconds": _nearest_rank_percentile(policy_elapsed_values, percentile=0.95),
             }
+        if root_puct_timings:
+            payload["root_puct"]["timing"] = _aggregate_root_puct_timings(root_puct_timings).to_dict()
         if self.foulplay_random_seed_schedule is not None:
             payload["foulplay_random_seed_schedule"] = _foulplay_random_seed_schedule_payload(
                 self.foulplay_random_seed_schedule
@@ -1977,6 +1991,7 @@ def _build_policy(
         policy_id_override: str | None = None,
         *,
         deterministic: bool = True,
+        inference_timing: TransformerInferenceTimingAccumulator | None = None,
     ) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
             model=model,
@@ -1987,6 +2002,7 @@ def _build_policy(
             policy_id=policy_id_override,
             checkpoint_path=raw_checkpoint,
             weights_sha256=raw_checkpoint_sha256,
+            inference_timing=inference_timing,
         )
 
     if config.policy_mode == "raw":
@@ -2039,6 +2055,7 @@ def _build_policy(
         leaf_rollout_policy_factory = lambda player_id: raw_policy(
             f"{search_policy_id}-leaf-{player_id}",
             deterministic=not config.leaf_rollout_sampling,
+            inference_timing=inference_timing,
         )
 
     start_override_planner = None
@@ -2054,7 +2071,10 @@ def _build_policy(
         prior_fn=prior_fn,
         opponent_action_planner=greedy_opponent_action_planner(opponent_prior_fn),
         opponent_action_scenario_planner=scenario_planner,
-        fallback_policy=raw_policy(f"{search_policy_id}-fallback"),
+        fallback_policy=raw_policy(
+            f"{search_policy_id}-fallback",
+            inference_timing=inference_timing,
+        ),
         allow_fallback=config.allow_search_fallback,
         policy_id=search_policy_id,
         checkpoint_path=raw_checkpoint,
@@ -2289,7 +2309,11 @@ async def _run_single_game(
     elapsed = [
         float(decision.metadata["root_puct_elapsed_seconds"])
         for decision in state.decisions
-        if "root_puct_elapsed_seconds" in decision.metadata
+        if (
+            decision.metadata.get("policy_family") == "root-puct-search"
+            and not decision.metadata.get("root_puct_fallback")
+            and "root_puct_elapsed_seconds" in decision.metadata
+        )
     ]
     policy_elapsed = tuple(
         float(decision.metadata["policy_elapsed_seconds"])
@@ -2542,8 +2566,55 @@ async def _run_single_game(
         root_puct_fallback_categories=root_fallback_categories,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
         policy_elapsed_seconds=policy_elapsed,
+        root_puct_timings=tuple(
+            timing
+            for decision in state.decisions
+            if (
+                timing := _root_puct_timing_from_metadata(decision.metadata)
+            ) is not None
+        ),
         pokezero_decision_players=tuple(state.pokezero_decision_players),
         pokezero_submitted_choice_players=tuple(state.pokezero_submitted_choice_players),
+    )
+
+
+def _root_puct_timing_from_metadata(
+    metadata: Mapping[str, Any],
+) -> Mapping[str, float | int] | None:
+    """Normalize a decision timing map before writing it to a FoulPlay artifact."""
+
+    payload = metadata.get("root_puct_timing")
+    if not isinstance(payload, Mapping):
+        return None
+    normalized: dict[str, float | int] = {}
+    for name in _ROOT_PUCT_TIMING_FIELD_NAMES:
+        value = payload.get(name, 0)
+        if name.endswith("_count"):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return None
+            normalized[name] = value
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            return None
+        normalized[name] = float(value)
+    return RootPUCTSearchTiming(**normalized).to_dict()
+
+
+def _aggregate_root_puct_timings(
+    timings: Sequence[Mapping[str, float | int]],
+) -> RootPUCTSearchTiming:
+    """Aggregate persisted timing records without summing derived residual fields."""
+
+    return RootPUCTSearchTiming.aggregate(
+        tuple(
+            RootPUCTSearchTiming(
+                **{
+                    name: timing[name]
+                    for name in _ROOT_PUCT_TIMING_FIELD_NAMES
+                }
+            )
+            for timing in timings
+        )
     )
 
 

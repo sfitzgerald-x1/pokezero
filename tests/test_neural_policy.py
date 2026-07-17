@@ -850,6 +850,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 logits[0, 1] = 2.0
                 return SimpleNamespace(policy_logits=logits, value=torch.tensor([0.37]))
 
+        timing = TransformerInferenceTimingAccumulator()
         policy = TransformerSoftmaxPolicy(
             model=FakePolicyModel(),
             result=TransformerTrainingResult(
@@ -858,12 +859,18 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 epochs=(),
                 value_calibration_transform=ValueCalibrationTransform(scale=2.0, bias=0.0),
             ),
+            inference_timing=timing,
         )
 
         decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
 
         self.assertEqual(decision.action_index, 1)
         self.assertAlmostEqual(decision.value_estimate, 0.37, places=6)
+        snapshot = timing.snapshot()
+        self.assertEqual(snapshot.observation_encoding_count, 1)
+        self.assertEqual(snapshot.neural_forward_count, 1)
+        self.assertGreater(snapshot.observation_encoding_seconds, 0.0)
+        self.assertGreater(snapshot.neural_forward_seconds, 0.0)
 
     def test_transformer_policy_forward_fn_seam_preserves_decisions(self) -> None:
         # WS-L1: a forward_fn that round-trips logits/value through python lists (the RPC
