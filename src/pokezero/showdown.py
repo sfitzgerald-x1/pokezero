@@ -537,6 +537,7 @@ class ShowdownReplayState:
     side_condition_counts: Mapping[str, Mapping[str, int]]
     boosts: Mapping[str, Mapping[str, int]]
     volatiles: Mapping[str, tuple[str, ...]]
+    direct_materialization_blockers: Mapping[str, tuple[str, ...]]
     future_sight: Mapping[str, int]
     toxic_stage: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
@@ -660,6 +661,7 @@ class _ReplayParser:
         self.side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
+        self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
         self.pending_baton_pass: set[str] = set()
@@ -690,6 +692,10 @@ class _ReplayParser:
         parser.boosts = {slot: dict(snapshot.boosts.get(slot, {})) for slot in ("p1", "p2")}
         parser.volatiles = {
             slot: set(snapshot.volatiles.get(slot, ())) for slot in ("p1", "p2")
+        }
+        parser.direct_materialization_blockers = {
+            slot: set(snapshot.direct_materialization_blockers.get(slot, ()))
+            for slot in ("p1", "p2")
         }
         parser.future_sight = dict(snapshot.future_sight)
         parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
@@ -753,10 +759,24 @@ class _ReplayParser:
                 self.pending_baton_pass.discard(pokemon.showdown_slot)
                 if not is_baton_pass:
                     self.boosts[pokemon.showdown_slot] = {}
-                # Volatile statuses are tied to the mon on the field, so a new mon clears them
-                # (Baton Pass passes some volatiles, but conservatively resetting is the simple,
-                # rarely-wrong choice and keeps the volatile set honest about the current mon).
-                self.volatiles[pokemon.showdown_slot] = set()
+                if is_baton_pass:
+                    transferred_volatiles = (
+                        self.volatiles[pokemon.showdown_slot]
+                        & _BATON_PASS_TRANSFERRED_VOLATILES
+                    )
+                    self.volatiles[pokemon.showdown_slot] = transferred_volatiles
+                    self.direct_materialization_blockers[pokemon.showdown_slot].intersection_update(
+                        f"baton-pass:{name}" for name in transferred_volatiles
+                    )
+                    unsupported = transferred_volatiles - _DIRECT_MATERIALIZATION_VOLATILES
+                    if unsupported:
+                        self.direct_materialization_blockers[pokemon.showdown_slot].update(
+                            f"baton-pass:{name}" for name in unsupported
+                        )
+                else:
+                    # Volatile statuses are tied to the Pokemon that left the field.
+                    self.volatiles[pokemon.showdown_slot] = set()
+                    self.direct_materialization_blockers[pokemon.showdown_slot].clear()
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
             self.public_events.append(_public_event_from_line(line))
@@ -784,11 +804,19 @@ class _ReplayParser:
         self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
+        self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
         _update_toxic_stage(parts, self.toxic_stage)
         _flag_baton_pass(parts, self.pending_baton_pass)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _prune_direct_materialization_blockers(self) -> None:
+        """Keep Baton Pass blockers only while their public volatile still exists."""
+
+        for slot, blockers in self.direct_materialization_blockers.items():
+            active_markers = {f"baton-pass:{name}" for name in self.volatiles[slot]}
+            blockers.intersection_update(active_markers)
 
     def _update_weather_meta(self, parts: Sequence[str], line: str) -> None:
         """Track the current weather's set turn + ability source from |-weather| lines.
@@ -863,6 +891,10 @@ class _ReplayParser:
             },
             boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
+            direct_materialization_blockers={
+                slot: tuple(sorted(blockers))
+                for slot, blockers in self.direct_materialization_blockers.items()
+            },
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
             public_events=tuple(self.public_events),
@@ -1407,6 +1439,19 @@ TRACKED_VOLATILES = frozenset({
     "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
     "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
     "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire",
+})
+
+# Pokemon Showdown's Gen 3 `Pokemon.copyVolatileFrom` carries conditions whose
+# `noCopy` flag is false. This is the tracked subset. The parser preserves these
+# public facts through Baton Pass, then direct materialization rejects any whose
+# serialized state is not yet fully public and reconstructable.
+_BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
+    "confusion", "leechseed", "substitute", "taunt", "curse", "ingrain", "lockon",
+    "grudge", "focusenergy", "charge", "bide", "uproar", "magiccoat", "snatch",
+    "mudsport", "watersport", "rage", "partiallytrapped", "perishsong",
+})
+_DIRECT_MATERIALIZATION_VOLATILES = frozenset({
+    "focusenergy", "ingrain", "mudsport", "watersport",
 })
 
 

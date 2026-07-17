@@ -877,14 +877,23 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                         seed=seed,
                     )
                     actual = with_effect.observe("p1")
+                    # Re-seeding both worlds at the request boundary makes this a direct
+                    # Showdown-equivalence assertion instead of a paired-only effect check.
+                    source.reseed_simulator_rng(911)
+                    with_effect.reseed_simulator_rng(911)
+                    source.step(branch_actions)
                     with_effect.step(branch_actions)
                     without_effect.step(branch_actions)
+                    source_hp = _active_hp_from_snapshot(source.snapshot(), affected_side)
                     with_hp = _active_hp_from_snapshot(with_effect.snapshot(), affected_side)
                     without_hp = _active_hp_from_snapshot(without_effect.snapshot(), affected_side)
 
                 self.assertEqual(actual.categorical_ids, expected.categorical_ids)
                 self.assertEqual(actual.numeric_features, expected.numeric_features)
                 self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+                # The reconstructed world intentionally has a shorter public-event history,
+                # so compare simulator behavior rather than history-derived feature rows.
+                self.assertEqual(with_hp, source_hp)
                 if expected_direction == "higher":
                     self.assertGreater(with_hp, without_hp)
                 else:
@@ -930,6 +939,104 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
         self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
+
+    def test_public_materialization_preserves_ingrain_through_baton_pass(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Ingrain", "Baton Pass", "Protect"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle", "Protect"),
+                        ),
+                    )
+                ),
+                "p2": pack_team((FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=37, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Ingrain
+            source.step({"p1": 1, "p2": 0})  # Baton Pass
+            self.assertEqual(source.requested_players(), ("p1",))
+            source.step({"p1": 4})  # Switch to Bulbasaur.
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+
+            self.assertIn("ingrain", materialization.replay.volatiles["p1"])
+            self.assertEqual(materialization.replay.direct_materialization_blockers["p1"], ())
+            self.assertTrue(source._latest_requests["p1"]["active"][0]["trapped"])
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=37,
+            )
+            actual = search_env.observe("p1")
+            self.assertFalse(actual.legal_action_mask[4])
+
+            source.reseed_simulator_rng(919)
+            search_env.reseed_simulator_rng(919)
+            source.step({"p1": 1, "p2": 0})
+            search_env.step({"p1": 1, "p2": 0})
+            source_hp = _active_hp_from_snapshot(source.snapshot(), "p1")
+            search_hp = _active_hp_from_snapshot(search_env.snapshot(), "p1")
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(search_hp, source_hp)
+
+    def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Substitute", "Baton Pass"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle",),
+                        ),
+                    )
+                ),
+                "p2": pack_team((FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=41, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            source.step({"p1": 1, "p2": 0})
+            source.step({"p1": 4})
+            materialization = source.public_materialization_state("p1")
+
+            self.assertIn("substitute", materialization.replay.volatiles["p1"])
+            self.assertEqual(
+                materialization.replay.direct_materialization_blockers["p1"],
+                ("baton-pass:substitute",),
+            )
+            with self.assertRaisesRegex(LocalShowdownError, "baton-pass:substitute"):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=41,
+                )
 
     def test_public_materialization_fails_closed_when_actor_pp_history_is_unavailable(self) -> None:
         config = integration_config()

@@ -314,6 +314,15 @@ function applyPublicState(snapshot, publicState) {
     if (!Array.isArray(publicSide.volatiles)) {
       throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
     }
+    if (!Array.isArray(publicSide.materializationBlockers)) {
+      throw new Error(`Materialize received invalid state blockers for ${sideId}.`);
+    }
+    if (publicSide.materializationBlockers.length > 0) {
+      throw new Error(
+        `Materialize cannot reconstruct public state for ${sideId}: ` +
+        publicSide.materializationBlockers.join(", "),
+      );
+    }
     const rows = Array.isArray(publicSide.pokemon) ? publicSide.pokemon : [];
     const serializedSide = snapshot.sides[sideIndex];
     let activeIndex = null;

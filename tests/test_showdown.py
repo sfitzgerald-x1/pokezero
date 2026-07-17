@@ -780,6 +780,34 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"spe": 2})
 
+    def test_baton_pass_carries_public_volatiles_and_marks_direct_state_gaps(self) -> None:
+        replay = parse_showdown_replay(
+            [
+                "|-start|p2a: Charizard|move: Ingrain",
+                "|-start|p2a: Charizard|Substitute",
+                "|move|p2a: Charizard|Baton Pass",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ],
+            battle_id="battle-gen3randombattle-1",
+        )
+
+        # Both effects copy in Gen 3. Ingrain has a complete direct-state payload, while
+        # Substitute's private remaining HP makes direct materialization fail closed.
+        self.assertEqual(replay.volatiles["p2"], ("ingrain", "substitute"))
+        self.assertEqual(replay.direct_materialization_blockers["p2"], ("baton-pass:substitute",))
+
+        cleared = parse_showdown_replay(
+            [
+                "|-start|p2a: Charizard|Substitute",
+                "|move|p2a: Charizard|Baton Pass",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+                "|switch|p2a: Charizard|Charizard, L78|100/100",
+            ],
+            battle_id="battle-gen3randombattle-1",
+        )
+        self.assertEqual(cleared.volatiles["p2"], ())
+        self.assertEqual(cleared.direct_materialization_blockers["p2"], ())
+
     def test_psych_up_copies_opponent_boosts(self) -> None:
         # -copyboost: the self mon (p2) copies the opponent's (p1) boost stages.
         state = self._replay_with(
