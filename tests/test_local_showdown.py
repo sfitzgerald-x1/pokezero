@@ -10,6 +10,7 @@ import unittest
 from pokezero.local_showdown import (
     DEFAULT_SHOWDOWN_ROOT,
     LocalShowdownConfig,
+    LocalShowdownError,
     LocalShowdownEnv,
     _drain_stderr,
     _drain_stdout,
@@ -349,6 +350,39 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
+
+    def test_public_materialization_fails_closed_after_a_benched_self_pokemon_used_a_move(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Ember", "Tackle")),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                        FixturePokemon(species="Wartortle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 0, "p2": 1})  # Charmander spends PP before switching out.
+            source.step({"p1": 4, "p2": 1})
+            materialization = source.public_materialization_state("p1")
+
+            with self.assertRaisesRegex(LocalShowdownError, "spent PP for a benched"):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=7,
+                )
 
     def test_reset_with_start_override_rejects_format_mismatch(self) -> None:
         config = integration_config()
