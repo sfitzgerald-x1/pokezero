@@ -77,6 +77,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "fallback": False,
                     "root_puct_total_visits": 10,
                     "root_puct_effective_total_visits": 8,
+                    "root_puct_start_override_direct_materializations": 2,
+                    "root_puct_start_override_replay_materializations": 1,
                     "root_puct_opponent_action_scenario_count": 2,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 1,
@@ -91,6 +93,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "fallback_category": "replay_request_mismatch",
                     "root_puct_total_visits": 2,
                     "root_puct_effective_total_visits": 1,
+                    "root_puct_start_override_direct_materializations": 1,
+                    "root_puct_start_override_replay_materializations": 3,
                     "root_puct_opponent_action_scenario_count": 1,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 2,
@@ -121,6 +125,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "scenarios_skipped": 3,
             },
         )
+        self.assertEqual(report["materialization_counts"], {"direct": 3, "replay": 4})
         self.assertEqual(
             report["scenario_failure_taxonomy"],
             {
