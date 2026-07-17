@@ -1697,7 +1697,13 @@ def _top_prior_action_choices(
     if limit <= 0:
         raise ValueError("opponent action scenario limit must be positive.")
     if allowed_action_indices is not None:
-        candidates = tuple((index, priors[index]) for index in allowed_action_indices)
+        legal = _requested_legal_action_indices_for_player(context, player)
+        indices = (
+            tuple(index for index in allowed_action_indices if index in legal)
+            if legal
+            else allowed_action_indices
+        )
+        candidates = tuple((index, priors[index]) for index in indices)
     else:
         legal = _requested_legal_action_indices_for_player(context, player)
         candidates = (
