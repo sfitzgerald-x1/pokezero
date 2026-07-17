@@ -16,6 +16,7 @@ from pokezero.search_policy import (
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
+    _opponent_action_scenarios,
     _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
     _root_dirichlet_action_priors,
@@ -401,6 +402,34 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+
+    def test_greedy_planner_becomes_deferred_scenario_at_baton_pass_switch(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.0,) * ACTION_COUNT,
+            opponent_action_planner=greedy_opponent_action_planner(
+                lambda history: (0.1, 0.8, 0.1) + (0.0,) * (ACTION_COUNT - 3)
+            ),
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1",),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            public_materialization_state=SimpleNamespace(deferred_opponent_action_player="p2"),
+        )
+
+        scenarios = _opponent_action_scenarios(policy, context, random.Random(1))
+
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(dict(scenarios[0].actions), {})
+        self.assertEqual(dict(scenarios[0].deferred_actions), {"p2": 1})
 
     def test_greedy_opponent_action_planner_rejects_bad_prior_width(self) -> None:
         planner = greedy_opponent_action_planner(lambda history: (1.0,))
