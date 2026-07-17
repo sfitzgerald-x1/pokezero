@@ -3663,6 +3663,7 @@ def _root_puct_benchmark_progress_callback(
     cumulative_searches = 0
     cumulative_fallbacks = 0
     cumulative_fallback_categories: dict[str, int] = {}
+    cumulative_missing_sampled_world_reason_categories: dict[str, int] = {}
     active_matchup_index: int | None = None
     has_root_puct_diagnostics = False
 
@@ -3675,6 +3676,7 @@ def _root_puct_benchmark_progress_callback(
             cumulative_searches = 0
             cumulative_fallbacks = 0
             cumulative_fallback_categories.clear()
+            cumulative_missing_sampled_world_reason_categories.clear()
             has_root_puct_diagnostics = False
         root_puct_by_player = getattr(progress, "root_puct_by_player", {})
         if not isinstance(root_puct_by_player, Mapping):
@@ -3690,15 +3692,25 @@ def _root_puct_benchmark_progress_callback(
             if isinstance(fallbacks, int) and not isinstance(fallbacks, bool):
                 cumulative_fallbacks += fallbacks
                 has_root_puct_diagnostics = True
-            categories = diagnostics.get("root_puct_fallback_categories")
-            if not isinstance(categories, Mapping):
-                continue
-            for category, count in categories.items():
-                if not isinstance(category, str) or not isinstance(count, int) or isinstance(count, bool):
+            for categories, target in (
+                (
+                    diagnostics.get("root_puct_fallback_categories"),
+                    cumulative_fallback_categories,
+                ),
+                (
+                    diagnostics.get(
+                        "root_puct_opponent_action_missing_sampled_world_reason_categories"
+                    ),
+                    cumulative_missing_sampled_world_reason_categories,
+                ),
+            ):
+                if not isinstance(categories, Mapping):
                     continue
-                cumulative_fallback_categories[category] = (
-                    cumulative_fallback_categories.get(category, 0) + count
-                )
+                for category, count in categories.items():
+                    if not isinstance(category, str) or not isinstance(count, int) or isinstance(count, bool):
+                        continue
+                    target[category] = target.get(category, 0) + count
+                    has_root_puct_diagnostics = True
         if progress.games_completed % interval_games != 0 and progress.games_completed != progress.games_total:
             return
         payload: dict[str, Any] = {
@@ -3723,6 +3735,10 @@ def _root_puct_benchmark_progress_callback(
                     "root_puct_fallback_categories": dict(sorted(cumulative_fallback_categories.items())),
                 }
             )
+            if cumulative_missing_sampled_world_reason_categories:
+                payload["root_puct_missing_sampled_world_reason_categories"] = dict(
+                    sorted(cumulative_missing_sampled_world_reason_categories.items())
+                )
         print(
             "root_puct_play_benchmark_progress: " + json.dumps(payload, sort_keys=True),
             file=sys.stderr,
