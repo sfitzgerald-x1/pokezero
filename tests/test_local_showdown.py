@@ -351,6 +351,45 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
 
+    def test_public_materialization_preserves_three_member_actor_request_order(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Charizard", ability="Blaze", moves=("Ember", "Tackle")),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                        FixturePokemon(species="Wartortle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 5, "p2": 0})  # p1 switches to the third team member.
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+
+        self.assertEqual(search_env._latest_requests["p1"], materialization.self_request)
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+
     def test_public_materialization_preserves_actor_known_pp_after_switching_out(self) -> None:
         config = integration_config()
         assert config is not None
