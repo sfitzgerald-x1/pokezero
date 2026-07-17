@@ -51,6 +51,21 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             {"self_team_fixture_stats_unavailable": 1},
         )
 
+    def test_classifies_safe_self_team_structural_failures(self) -> None:
+        cases = {
+            "request-known self_team has an unexpected member count": "self_team_member_count_invalid",
+            "request-known self_team contains an invalid member": "self_team_member_invalid",
+            "request-known self_team member is missing species or moves": "self_team_member_identity_incomplete",
+        }
+
+        for detail, expected in cases.items():
+            with self.subTest(detail=detail):
+                reason = f"start override planner did not produce a sampled world: {detail}"
+                self.assertEqual(
+                    root_puct_missing_sampled_world_reason_counts(reason),
+                    {expected: 1},
+                )
+
     def test_classifies_missing_world_source_without_detail(self) -> None:
         self.assertEqual(
             root_puct_missing_sampled_world_reason_counts(
