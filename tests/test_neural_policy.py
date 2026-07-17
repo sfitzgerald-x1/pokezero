@@ -4357,7 +4357,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["belief_world_coverage_gaps_allowed"])
         self.assertEqual(payload["belief_world_coverage_mode"], "mechanics-only-gaps-allowed")
-        self.assertEqual(payload["belief_world_coverage"]["coverage_rate"], 1.0)
+        self.assertFalse(payload["strength_evidence_eligible"])
+        self.assertEqual(payload["artifact_scope"], "w5-mechanics-only-not-strength-evidence")
+        self.assertEqual(payload["belief_world_coverage"]["per_game_any_materialization_rate"], 1.0)
 
     def test_root_puct_belief_benchmark_rejects_missing_world_checksums(self) -> None:
         result = SimpleNamespace(
@@ -4392,10 +4394,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             search_policy_ids=("search",),
         )
 
-        self.assertEqual(coverage["expected_games"], 3)
-        self.assertEqual(coverage["materialized_games"], 2)
-        self.assertEqual(coverage["missing_games"], 1)
-        self.assertEqual(coverage["coverage_rate"], 2 / 3)
+        self.assertEqual(coverage["scope"], "per-game-any-decision")
+        self.assertEqual(coverage["expected_game_count"], 3)
+        self.assertEqual(coverage["games_with_materialized_world"], 2)
+        self.assertEqual(coverage["games_without_materialized_world"], 1)
+        self.assertEqual(coverage["per_game_any_materialization_rate"], 2 / 3)
         self.assertEqual(coverage["matchups"][0]["missing_seeds"], [13])
 
     def test_root_puct_belief_world_coverage_gaps_flag_parses(self) -> None:

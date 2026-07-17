@@ -4276,14 +4276,20 @@ def _belief_world_benchmark_coverage(
                 "expected_seeds": sorted(expected_seeds),
                 "materialized_seeds": sorted(materialized_seeds),
                 "missing_seeds": sorted(missing_seeds),
-                "coverage_rate": len(materialized_seeds) / len(expected_seeds) if expected_seeds else 1.0,
+                # A checksum is emitted when at least one decision in the game materializes a
+                # public world. This is intentionally not a per-decision search-success rate;
+                # use Root-PUCT fallback telemetry for that W5 gate.
+                "per_game_any_materialization_rate": (
+                    len(materialized_seeds) / len(expected_seeds) if expected_seeds else 1.0
+                ),
             }
         )
     return {
-        "expected_games": expected_total,
-        "materialized_games": materialized_total,
-        "missing_games": expected_total - materialized_total,
-        "coverage_rate": materialized_total / expected_total if expected_total else 1.0,
+        "scope": "per-game-any-decision",
+        "expected_game_count": expected_total,
+        "games_with_materialized_world": materialized_total,
+        "games_without_materialized_world": expected_total - materialized_total,
+        "per_game_any_materialization_rate": materialized_total / expected_total if expected_total else 1.0,
         "matchups": matchups,
     }
 
@@ -4359,6 +4365,9 @@ def _root_puct_play_payload(
         payload["belief_world_coverage_mode"] = (
             "mechanics-only-gaps-allowed" if belief_world_coverage_gaps_allowed else "strict"
         )
+    payload["strength_evidence_eligible"] = not belief_world_coverage_gaps_allowed
+    if belief_world_coverage_gaps_allowed:
+        payload["artifact_scope"] = "w5-mechanics-only-not-strength-evidence"
     return payload
 
 

@@ -109,6 +109,17 @@ def validate_admission_guard(
             source=comparison_vectors.path,
         ),
     ]
+    if payload.get("strength_evidence_eligible") is False:
+        checks.append(
+            AdmissionGuardCheck(
+                name="strength_evidence_eligible",
+                passed=False,
+                observed=0,
+                threshold=1,
+                message="artifact explicitly forbids use as strength evidence",
+                source="strength_evidence_eligible",
+            )
+        )
     if resolved_config.require_vector_distance:
         checks.append(
             AdmissionGuardCheck(

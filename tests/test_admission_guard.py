@@ -14,6 +14,21 @@ from pokezero.refutation_cli import main as refutation_cli_main
 
 
 class AdmissionGuardTest(unittest.TestCase):
+    def test_rejects_artifact_explicitly_ineligible_for_strength_use(self) -> None:
+        result = validate_admission_guard(
+            {
+                "strength_evidence_eligible": False,
+                "min_benchmark_win_rate": 0.5,
+                "min_vector_distance": 0.1,
+                "comparison_vectors": ["candidate-a"],
+                "vector_distance": 0.2,
+            }
+        )
+
+        self.assertFalse(result.passed)
+        checks = {check.name: check for check in result.checks}
+        self.assertFalse(checks["strength_evidence_eligible"].passed)
+
     def test_rejects_vacuous_zero_floor_and_no_vectors(self) -> None:
         result = validate_admission_guard(
             {
