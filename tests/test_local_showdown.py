@@ -268,7 +268,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
                 ),
                 "p2": pack_team(
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                    # Withdraw stays private: p2 never selects it before p1 snapshots the public
+                    # branch point below.
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Withdraw")),)
                 ),
             },
         )
@@ -308,6 +310,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(materialization.replay.requests, {})
             self.assertEqual(materialization.self_request["side"]["id"], "p1")
             self.assertFalse(hasattr(materialization, "bridge_snapshot"))
+            public_payload = json.dumps(_public_materialization_payload(materialization), sort_keys=True)
+            self.assertNotIn("Withdraw", public_payload)
 
             search_env.materialize_public_world(
                 state=materialization,
