@@ -274,6 +274,82 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertIn("|move|p2a: Squirtle|Water Gun|p1a: Charmander", lines)
         self.assertFalse(any(line.startswith("|error|") for line in lines))
 
+    def test_public_materialization_constructs_a_fresh_sampled_branch_point(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+
+            self.assertEqual(materialization.replay.requests, {})
+            self.assertEqual(materialization.self_request["side"]["id"], "p1")
+            self.assertFalse(hasattr(materialization, "bridge_snapshot"))
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+            branch = search_env.step({"p1": 1, "p2": 1})
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(branch.requested_players, ("p1", "p2"))
+
+    def test_public_materialization_preserves_a_switched_active_pokemon(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Ember", "Tackle")),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                        FixturePokemon(species="Wartortle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 4, "p2": 0})  # p1 switches to Charmeleon.
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+            branch = search_env.step({"p1": 0, "p2": 0})
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(branch.requested_players, ("p1", "p2"))
+
     def test_reset_with_start_override_rejects_format_mismatch(self) -> None:
         config = integration_config()
         assert config is not None

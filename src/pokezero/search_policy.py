@@ -40,6 +40,7 @@ from .search import (
     StartOverrideSource,
     _materialize_start_override,
     _puct_candidate,
+    prepare_direct_materialization_prefix,
     prepare_replay_prefix,
     player_observation_history,
     puct_branch_search,
@@ -222,6 +223,7 @@ class _OpponentActionScenarioGroup:
 class _SharedStartOverrideSamples:
     overrides: tuple[BattleStartOverride | None, ...]
     prepared_prefixes: tuple[PreparedReplayPrefix | None, ...]
+    materialization_modes: tuple[str | None, ...]
     rejection_reasons: tuple[str | None, ...]
     attempts_used: int
     duplicate_attempts: int = 0
@@ -661,6 +663,8 @@ class RootPUCTSearchPolicy:
                 belief_world_materialization_seconds = 0.0
                 belief_world_materialization_count = 0
                 shared_start_override_samples = None
+                direct_materialization_count = 0
+                replay_materialization_count = 0
                 if _uses_scenario_independent_start_overrides(self):
                     def record_belief_world_materialization_attempt() -> None:
                         nonlocal belief_world_materialization_count
@@ -683,6 +687,12 @@ class RootPUCTSearchPolicy:
                         )
                 if shared_start_override_samples is not None:
                     start_override_attempts_used += shared_start_override_samples.attempts_used
+                    direct_materialization_count = sum(
+                        mode == "direct" for mode in shared_start_override_samples.materialization_modes
+                    )
+                    replay_materialization_count = sum(
+                        mode == "replay" for mode in shared_start_override_samples.materialization_modes
+                    )
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                     for sample_index, scenario in enumerate(scenario_group.samples):
@@ -746,6 +756,21 @@ class RootPUCTSearchPolicy:
                                     return self.root_visit_budget_selector(context, budget_context)
 
                             try:
+                                if start_override is not None and prepared_prefix is None:
+                                    prepared_prefix = prepare_direct_materialization_prefix(
+                                        env=env,
+                                        trajectory=search_trajectory,
+                                        player_id=context.player_id,
+                                        prefix_decision_round_count=context.decision_round_index,
+                                        start_override=start_override,
+                                        public_materialization_state=context.public_materialization_state,
+                                        expected_current_observation=context.observation,
+                                        replay_hp_fraction_tolerance=(
+                                            self.start_override_hp_fraction_tolerance
+                                        ),
+                                    )
+                                    if prepared_prefix is not None:
+                                        direct_materialization_count += 1
                                 search = puct_branch_search(
                                     env=env,
                                     trajectory=search_trajectory,
@@ -780,6 +805,12 @@ class RootPUCTSearchPolicy:
                                 if start_override is None:
                                     break
                             else:
+                                if (
+                                    start_override is not None
+                                    and prepared_prefix is None
+                                    and search.timing.prefix_replay_count
+                                ):
+                                    replay_materialization_count += 1
                                 scenario_search = search
                                 scenario_start_override = start_override
                                 completed_search_timings.append(search.timing)
@@ -842,6 +873,12 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_samples_per_scenario": start_override_samples_per_scenario,
                                 "root_puct_start_override_hp_fraction_tolerance": (
                                     self.start_override_hp_fraction_tolerance
+                                ),
+                                "root_puct_start_override_direct_materializations": (
+                                    direct_materialization_count
+                                ),
+                                "root_puct_start_override_replay_materializations": (
+                                    replay_materialization_count
                                 ),
                                 **_shared_start_override_metadata(shared_start_override_samples),
                                 **start_override_sampling_metadata,
@@ -1016,6 +1053,8 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_hp_fraction_tolerance": (
                     self.start_override_hp_fraction_tolerance
                 ),
+                "root_puct_start_override_direct_materializations": direct_materialization_count,
+                "root_puct_start_override_replay_materializations": replay_materialization_count,
                 **_shared_start_override_metadata(shared_start_override_samples),
                 **start_override_sampling_metadata,
             }
@@ -1339,6 +1378,7 @@ def _shared_start_override_samples(
 
     overrides: list[BattleStartOverride | None] = []
     prepared_prefixes: list[PreparedReplayPrefix | None] = []
+    materialization_modes: list[str | None] = []
     rejection_reasons: list[str | None] = []
     attempts_used = 0
     duplicate_attempts = 0
@@ -1375,17 +1415,28 @@ def _shared_start_override_samples(
                 continue
             seen_override_keys.add(override_key)
             try:
-                prepared_prefix = prepare_replay_prefix(
+                prepared_prefix = prepare_direct_materialization_prefix(
                     env=env,
                     trajectory=search_trajectory,
                     player_id=context.player_id,
                     prefix_decision_round_count=context.decision_round_index,
                     start_override=materialized_override,
+                    public_materialization_state=context.public_materialization_state,
                     expected_current_observation=context.observation,
                     # Shared sampled worlds need only prove the branch-point state. Earlier
                     # custom-game replay observations can drift for metadata-only reasons.
                     replay_hp_fraction_tolerance=policy.start_override_hp_fraction_tolerance,
                 )
+                if prepared_prefix is None:
+                    prepared_prefix = prepare_replay_prefix(
+                        env=env,
+                        trajectory=search_trajectory,
+                        player_id=context.player_id,
+                        prefix_decision_round_count=context.decision_round_index,
+                        start_override=materialized_override,
+                        expected_current_observation=context.observation,
+                        replay_hp_fraction_tolerance=policy.start_override_hp_fraction_tolerance,
+                    )
             except ValueError as exc:
                 reason = _opponent_scenario_replay_legality_error(exc, sample_scenario)
                 if reason is None:
@@ -1396,12 +1447,16 @@ def _shared_start_override_samples(
             break
         overrides.append(sampled_override)
         prepared_prefixes.append(prepared_prefix)
+        materialization_modes.append(
+            prepared_prefix.materialization_mode if prepared_prefix is not None else None
+        )
         rejection_reasons.append(
             None if sampled_override is not None else _format_replay_rejection_reasons(sample_rejections)
         )
     return _SharedStartOverrideSamples(
         overrides=tuple(overrides),
         prepared_prefixes=tuple(prepared_prefixes),
+        materialization_modes=tuple(materialization_modes),
         rejection_reasons=tuple(rejection_reasons),
         attempts_used=attempts_used,
         duplicate_attempts=duplicate_attempts,

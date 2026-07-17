@@ -673,6 +673,39 @@ class _ReplayParser:
         self.side_condition_set_turns: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.wish_set_turns: dict[str, int] = {}
 
+    @classmethod
+    def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
+        """Hydrate parser state directly, without replaying its protocol prefix."""
+
+        parser = cls(snapshot.battle_id)
+        parser.players = dict(snapshot.players)
+        parser.requests = dict(snapshot.requests)
+        parser.public_active = dict(snapshot.public_active)
+        parser.public_revealed = {
+            slot: list(pokemon) for slot, pokemon in snapshot.public_revealed.items()
+        }
+        parser.side_condition_counts = {
+            slot: dict(snapshot.side_condition_counts.get(slot, {})) for slot in ("p1", "p2")
+        }
+        parser.boosts = {slot: dict(snapshot.boosts.get(slot, {})) for slot in ("p1", "p2")}
+        parser.volatiles = {
+            slot: set(snapshot.volatiles.get(slot, ())) for slot in ("p1", "p2")
+        }
+        parser.future_sight = dict(snapshot.future_sight)
+        parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
+        parser.public_events = list(snapshot.public_events)
+        parser.public_lines = list(snapshot.public_lines)
+        parser.weather = snapshot.weather
+        parser.turn_number = snapshot.turn_number
+        parser.winner = snapshot.winner
+        parser.weather_set_turn = snapshot.weather_set_turn
+        parser.weather_from_ability = snapshot.weather_from_ability
+        parser.side_condition_set_turns = {
+            slot: dict(snapshot.side_condition_set_turns.get(slot, {})) for slot in ("p1", "p2")
+        }
+        parser.wish_set_turns = dict(snapshot.wish_set_turns)
+        return parser
+
     def feed(self, lines: Sequence[str]) -> None:
         for raw_line in lines:
             self._feed_line(raw_line)
@@ -743,6 +776,7 @@ class _ReplayParser:
             for slot, stage in self.toxic_stage.items():
                 if stage:
                     self.toxic_stage[slot] = min(15, stage + 1)
+        _update_public_pokemon_condition(parts, self.public_active, self.public_revealed)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
         self._update_weather_meta(parts, line)
@@ -1283,6 +1317,58 @@ def _pokemon_from_public_line(parts: Sequence[str]) -> ShowdownPokemon | None:
         active=True,
         details=details,
     )
+
+
+def _update_public_pokemon_condition(
+    parts: Sequence[str],
+    public_active: dict[str, ShowdownPokemon],
+    public_revealed: dict[str, list[ShowdownPokemon]],
+) -> None:
+    """Apply public HP/status protocol updates to the current revealed mon."""
+
+    if len(parts) < 3:
+        return
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type not in {"-damage", "-heal", "-sethp", "-status", "-curestatus", "faint"}:
+        return
+    ident = parts[2]
+    slot = _slot_from_ident(ident)
+    if slot is None:
+        return
+    active = public_active.get(slot)
+    if active is None or active.ident != ident:
+        return
+    condition = _updated_public_condition(active.condition, event_type=event_type, parts=parts)
+    if condition is None:
+        return
+    updated = replace(active, condition=condition)
+    public_active[slot] = updated
+    public_revealed[slot] = [
+        updated if _same_public_pokemon(pokemon, updated) else pokemon
+        for pokemon in public_revealed.get(slot, ())
+    ]
+
+
+def _updated_public_condition(
+    condition: str | None,
+    *,
+    event_type: str,
+    parts: Sequence[str],
+) -> str | None:
+    if event_type in {"-damage", "-heal", "-sethp"}:
+        return parts[3] if len(parts) > 3 else None
+    if event_type == "faint":
+        return "0 fnt"
+    current = str(condition or "").split()
+    hp = current[0] if current else ""
+    statuses = [status for status in current[1:] if status != "fnt"]
+    if event_type == "-status" and len(parts) > 3:
+        status = _normalize_identifier(parts[3])
+        if hp:
+            return " ".join((hp, status))
+    if event_type == "-curestatus" and hp:
+        return hp
+    return None
 
 
 def _side_conditions_from_counts(side_condition_counts: Mapping[str, Mapping[str, int]]) -> dict[str, set[str]]:

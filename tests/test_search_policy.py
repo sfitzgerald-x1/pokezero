@@ -180,6 +180,22 @@ class SnapshotStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
         self._terminal = snapshot
 
 
+class DirectSnapshotStartOverrideOutcomeEnv(SnapshotStartOverrideOutcomeEnv):
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.direct_materializations: list[tuple[object, BattleStartOverride, int]] = []
+
+    def materialize_public_world(
+        self,
+        *,
+        state: object,
+        start_override: BattleStartOverride,
+        seed: int,
+    ) -> None:
+        self.direct_materializations.append((state, start_override, seed))
+        self._terminal = None
+
+
 class RejectingStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
     def __init__(self, *, label: str) -> None:
         super().__init__(label=label)
@@ -1048,6 +1064,66 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["prefix_replay_count"], 0)
         self.assertEqual(timing["state_snapshot_count"], 0)
         self.assertEqual(timing["state_restore_count"], 3)
+
+    def test_root_puct_policy_directly_materializes_shared_public_worlds(self) -> None:
+        branch_envs: list[DirectSnapshotStartOverrideOutcomeEnv] = []
+
+        def branch_env_factory() -> DirectSnapshotStartOverrideOutcomeEnv:
+            env = DirectSnapshotStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(context, scenario, scenario_index, rng):
+            del context, scenario, scenario_index, rng
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": "Xatu||||Psychic|||||||",
+                    }
+                )
+
+            return sample_override
+
+        start_override_planner.scenario_independent = True  # type: ignore[attr-defined]
+        start_override_planner.sample_count_for_context = lambda context: 1  # type: ignore[attr-defined]
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=3,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=None,
+        )
+        public_state = object()
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=public_state,
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(len(branch_envs), 1)
+        self.assertEqual(len(branch_envs[0].direct_materializations), 1)
+        self.assertEqual(branch_envs[0].direct_materializations[0][0], public_state)
+        self.assertEqual(branch_envs[0].reset_calls, [])
+        self.assertEqual(branch_envs[0].snapshot_calls, 1)
+        self.assertEqual(branch_envs[0].restore_calls, 3)
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 1)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
 
     def test_root_puct_policy_falls_back_when_dynamic_world_count_is_invalid(self) -> None:
         def start_override_planner(context, scenario, scenario_index, rng):

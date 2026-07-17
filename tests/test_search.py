@@ -13,6 +13,7 @@ from pokezero.search import (
     _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
+    prepare_direct_materialization_prefix,
     prepare_replay_prefix,
     terminal_value_for_player,
     value_branch_search,
@@ -190,6 +191,20 @@ class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
     def restore(self, snapshot) -> None:
         time.sleep(0.001)
         super().restore(snapshot)
+
+
+class DirectMaterializationValueBranchEnv(SnapshotValueBranchEnv):
+    def __init__(self, *, reject_materialization: bool = False) -> None:
+        super().__init__()
+        self.reject_materialization = reject_materialization
+        self.materialize_calls: list[tuple[object, BattleStartOverride, int]] = []
+
+    def materialize_public_world(self, *, state: object, start_override: BattleStartOverride, seed: int) -> None:
+        self.materialize_calls.append((state, start_override, seed))
+        if self.reject_materialization:
+            raise RuntimeError("unsupported public state")
+        self._terminal = None
+        self._requested = ("p1", "p2")
 
 
 class StrictLegalValueBranchEnv(ValueBranchEnv):
@@ -463,6 +478,45 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(env.restore_calls, 3)
         self.assertEqual(len(env.all_step_calls), 4)
         self.assertEqual(env.all_step_calls[0], {"p1": 0, "p2": 0})
+
+    def test_direct_materialization_prepares_a_sampled_world_without_prefix_replay(self) -> None:
+        env = DirectMaterializationValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        public_state = object()
+
+        prepared = prepare_direct_materialization_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            public_materialization_state=public_state,
+            expected_current_observation=_observation(0),
+        )
+
+        self.assertIsNotNone(prepared)
+        assert prepared is not None
+        self.assertEqual(prepared.materialization_mode, "direct")
+        self.assertEqual(env.materialize_calls, [(public_state, _start_override(), 77)])
+        self.assertEqual(env.reset_calls, [])
+        self.assertEqual(env.snapshot_calls, 1)
+
+    def test_direct_materialization_fails_closed_to_tier_one(self) -> None:
+        env = DirectMaterializationValueBranchEnv(reject_materialization=True)
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        prepared = prepare_direct_materialization_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            public_materialization_state=object(),
+            expected_current_observation=_observation(0),
+        )
+
+        self.assertIsNone(prepared)
+        self.assertEqual(len(env.materialize_calls), 1)
 
     def test_puct_branch_search_reuses_prepared_sampled_world_prefix_without_replay(self) -> None:
         env = TimedSnapshotValueBranchEnv()

@@ -84,6 +84,10 @@ class PolicyContext:
     # Privileged: contains every requested player's private observation. Context-aware policies
     # should only read other players' observations when intentionally building search/eval tooling.
     requested_observations: Mapping[str, PokeZeroObservationV0] = field(default_factory=dict)
+    # Ephemeral public-only simulator state for direct search materialization. It is deliberately
+    # carried outside the observation and trajectory so rollouts/cache records do not grow with
+    # the battle's protocol history.
+    public_materialization_state: object | None = None
 
 
 @runtime_checkable

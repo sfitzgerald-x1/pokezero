@@ -214,6 +214,13 @@ def continue_rollout_from_current_state(
         for player_id in requested_players:
             policy = requested_policies[player_id]
             observation = observations[player_id]
+            public_state_provider = getattr(env, "public_materialization_state", None)
+            public_materialization_state = (
+                public_state_provider(player_id)
+                if callable(public_state_provider)
+                and callable(getattr(policy, "select_action_with_context", None))
+                else None
+            )
             context = PolicyContext(
                 player_id=player_id,
                 decision_round_index=decision_round_index,
@@ -233,6 +240,7 @@ def continue_rollout_from_current_state(
                     for requested_player, requested_observation in observations.items()
                     if not config.hide_opponent_legal_action_masks or requested_player == player_id
                 },
+                public_materialization_state=public_materialization_state,
             )
             policy_started = perf_counter()
             decision = _select_policy_decision(

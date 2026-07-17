@@ -686,6 +686,13 @@ class PublicBattleBeliefEngine:
         ``set_source`` — and resolve the twin. Equivalent to a throwaway
         ``from_events`` engine's resolve+snapshot, but O(belief-state) instead of O(events).
         """
+        twin = self.clone()
+        twin.resolve_pending_switches_at_boundary()
+        return twin.snapshot().for_player(showdown_slot)
+
+    def clone(self) -> "PublicBattleBeliefEngine":
+        """Copy only the public-evidence state needed to continue a sampled world."""
+
         twin = PublicBattleBeliefEngine(format_id=self.format_id, set_source=self.set_source)
         twin._event_count = self._event_count
         twin._sides = copy.deepcopy(self._sides)
@@ -697,8 +704,7 @@ class PublicBattleBeliefEngine:
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
         twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
-        twin.resolve_pending_switches_at_boundary()
-        return twin.snapshot().for_player(showdown_slot)
+        return twin
 
     def snapshot(self) -> BattleBeliefSnapshot:
         return BattleBeliefSnapshot(

@@ -26,6 +26,7 @@ import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
+from .belief import PublicBattleBeliefEngine
 from .category_vocab import CategoryVocabulary
 from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
@@ -35,6 +36,7 @@ from .local_showdown import (
     BRIDGE_PATH,
     LocalShowdownConfig,
     LocalShowdownEnv,
+    PublicBattleMaterializationState,
     belief_set_source_env_enabled,
     showdown_seed_from_int,
 )
@@ -2858,6 +2860,15 @@ async def _handle_decision_boundary(
     decisions: dict[PlayerId, PolicyDecision] = {}
     pokezero_context: PolicyContext | None = None
     if pokezero_player in requested_players:
+        public_materialization_state = (
+            _public_materialization_state(
+                state,
+                pokezero_player,
+                set_source=belief_set_source,
+            )
+            if isinstance(policy, RootPUCTSearchPolicy)
+            else None
+        )
         pokezero_context = PolicyContext(
             player_id=pokezero_player,
             decision_round_index=decision_round,
@@ -2877,6 +2888,7 @@ async def _handle_decision_boundary(
                 acting_player=pokezero_player,
                 opponent_legal_mask_mode=config.opponent_legal_mask_mode,
             ),
+            public_materialization_state=public_materialization_state,
         )
         # Match the local benchmark boundary: policy selection begins after the
         # observation/context are ready and ends at the returned decision.
@@ -3115,6 +3127,41 @@ def _player_state(
         format_id=state.format_id,
         set_source=set_source,
         include_turn_merged=include_turn_merged,
+    )
+
+
+def _public_materialization_state(
+    state: _ControlledBattleState,
+    player: PlayerId,
+    *,
+    set_source=None,
+) -> PublicBattleMaterializationState:
+    """Build a direct-search source from public protocol plus the actor's own request.
+
+    The controlled bridge stores both request streams so it can drive the external opponent, but
+    this boundary intentionally parses only the omniscient/public transcript and admits exactly
+    one private payload: the PokeZero player's current request.
+    """
+
+    request_line = state.request_lines.get(player)
+    if request_line is None or not request_line.startswith("|request|"):
+        raise RuntimeError(f"missing current request for direct materialization player {player!r}.")
+    request = json.loads(request_line[len("|request|") :])
+    if not isinstance(request, Mapping):
+        raise RuntimeError("direct materialization request must be a JSON object.")
+    public_replay = parse_showdown_replay(state.public_lines, battle_id=state.battle_id)
+    belief_engine = PublicBattleBeliefEngine.from_events(
+        public_replay.public_events,
+        format_id=state.format_id,
+        set_source=set_source,
+    )
+    return PublicBattleMaterializationState(
+        player_id=player,
+        format_id=state.format_id,
+        observation_format_id=state.format_id,
+        replay=public_replay,
+        belief_engine=belief_engine,
+        self_request=json.loads(json.dumps(request, separators=(",", ":"))),
     )
 
 

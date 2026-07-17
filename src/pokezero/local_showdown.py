@@ -32,6 +32,8 @@ from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
+    ShowdownPokemon,
+    ShowdownReplayState,
     _ReplayParser,
     normalize_for_player,
     observation_from_player_state,
@@ -193,6 +195,23 @@ class LocalShowdownSnapshot:
     latest_requests: Mapping[PlayerId, Mapping[str, Any]]
     latest_turn: int
     terminal: TerminalState | None
+
+
+@dataclass(frozen=True)
+class PublicBattleMaterializationState:
+    """Public/player-known source state for direct sampled-world construction.
+
+    This intentionally excludes a simulator snapshot and the other player's request. The
+    captured replay fold and belief engine contain only public protocol facts; ``self_request``
+    is allowed because it belongs to the policy's acting player.
+    """
+
+    player_id: PlayerId
+    format_id: BattleFormat
+    observation_format_id: BattleFormat
+    replay: ShowdownReplayState
+    belief_engine: PublicBattleBeliefEngine
+    self_request: Mapping[str, Any]
 
 
 class LocalShowdownEnv:
@@ -364,6 +383,82 @@ class LocalShowdownEnv:
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:
         return self.observe(player).legal_action_mask
+
+    def public_materialization_state(self, player: PlayerId) -> PublicBattleMaterializationState:
+        """Capture public/player-known state for a separate search environment.
+
+        This is intentionally not ``snapshot()``: no Node simulator serialization and no opponent
+        request crosses from the live rollout into search. The receiving environment starts a fresh
+        belief-sampled world and uses this state only to construct its public branch point.
+        """
+
+        if player not in PLAYER_IDS:
+            raise ValueError(f"player must be one of {', '.join(PLAYER_IDS)}; got {player!r}.")
+        if self._terminal is not None:
+            raise LocalShowdownError("Cannot materialize a terminal battle state.")
+        request = self._latest_requests.get(player)
+        if request is None:
+            raise LocalShowdownError(f"Cannot materialize without a request for {player}.")
+        self._sync_incremental_state()
+        replay = self._parser.snapshot()
+        return PublicBattleMaterializationState(
+            player_id=player,
+            format_id=self._format_id,
+            observation_format_id=self._observation_format_id,
+            # A replay snapshot contains request payloads, so explicitly strip them before the
+            # state leaves the live environment. The acting player's request is carried separately.
+            replay=replace(replay, requests={}),
+            belief_engine=self._belief_engine.clone(),
+            self_request=_json_clone_mapping(request),
+        )
+
+    def materialize_public_world(
+        self,
+        *,
+        state: PublicBattleMaterializationState,
+        start_override: BattleStartOverride,
+        seed: int,
+    ) -> None:
+        """Construct a belief-sampled branch point without replaying prior choices."""
+
+        if state.format_id != state.observation_format_id:
+            raise LocalShowdownError("Direct materialization requires matching source observation format.")
+        if state.replay.winner is not None:
+            raise LocalShowdownError("Cannot materialize a terminal public replay state.")
+        self.reset_with_start_override(seed=seed, start_override=start_override)
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot materialize before the sampled world starts.")
+        self._send_command(
+            {
+                "type": "materialize",
+                "battleId": self._battle_token,
+                "publicState": _public_materialization_payload(state),
+            }
+        )
+        event = self._read_until_event_type("materialized")
+        requests = event.get("boundaryRequests")
+        if not isinstance(requests, Mapping):
+            raise LocalShowdownError(f"Bridge emitted malformed materialization event: {event!r}")
+        direct_requests = _json_clone_requests(requests)
+        if not direct_requests:
+            raise LocalShowdownError("Direct materialization produced no actionable request boundary.")
+        replay = replace(
+            state.replay,
+            battle_id=self._battle_id,
+            requests=direct_requests,
+        )
+        self._lines = []
+        self._latest_requests = direct_requests
+        self._first_requests = dict(direct_requests)
+        self._latest_turn = replay.turn_number
+        self._terminal = None
+        self._last_step_had_error = False
+        self._parser = _ReplayParser.from_snapshot(replay)
+        self._belief_engine = state.belief_engine.clone()
+        self._parsed_line_count = 0
+        self._belief_fed_count = len(replay.public_events)
+        self._tier2_trackers = {}
+        self._investment_trackers = {}
 
     def snapshot(self) -> LocalShowdownSnapshot:
         """Capture a restorable snapshot of the current live battle.
@@ -906,6 +1001,93 @@ def _json_clone_requests(
 ) -> dict[PlayerId, Mapping[str, Any]]:
     cloned = _json_clone_mapping(value)
     return {player: request for player in PLAYER_IDS if isinstance((request := cloned.get(player)), Mapping)}
+
+
+def _public_materialization_payload(state: PublicBattleMaterializationState) -> dict[str, Any]:
+    replay = state.replay
+    sides: dict[PlayerId, dict[str, Any]] = {}
+    for player in PLAYER_IDS:
+        rows = (
+            _request_materialization_rows(state.self_request)
+            if player == state.player_id
+            else [_pokemon_materialization_row(pokemon) for pokemon in replay.public_revealed.get(player, ())]
+        )
+        sides[player] = {
+            "pokemon": rows,
+            "boosts": dict(replay.boosts.get(player, {})),
+            "volatiles": list(replay.volatiles.get(player, ())),
+            "sideConditions": dict(replay.side_condition_counts.get(player, {})),
+        }
+    return {
+        "turn": replay.turn_number,
+        "weather": replay.weather,
+        "futureSight": dict(replay.future_sight),
+        "selfPlayer": state.player_id,
+        "selfActiveMoves": _request_active_moves(state.self_request),
+        "sides": sides,
+    }
+
+
+def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
+    return {
+        "species": pokemon.species,
+        "condition": pokemon.condition,
+        "active": pokemon.active,
+    }
+
+
+def _request_materialization_rows(request: Mapping[str, Any]) -> list[dict[str, Any]]:
+    side = request.get("side") if isinstance(request.get("side"), Mapping) else {}
+    pokemon_rows = side.get("pokemon") if isinstance(side, Mapping) else None
+    if not isinstance(pokemon_rows, list):
+        raise LocalShowdownError("Direct materialization requires the acting player's team request.")
+    rows: list[dict[str, Any]] = []
+    for raw_row in pokemon_rows:
+        if not isinstance(raw_row, Mapping):
+            continue
+        details = str(raw_row.get("details") or "")
+        species = details.split(",", 1)[0].strip()
+        if not species:
+            ident = str(raw_row.get("ident") or "")
+            species = ident.split(":", 1)[-1].strip()
+        condition = raw_row.get("condition")
+        if not species or not isinstance(condition, str):
+            raise LocalShowdownError("Direct materialization found an invalid acting-player team row.")
+        rows.append(
+            {
+                "species": species,
+                "condition": condition,
+                "active": bool(raw_row.get("active")),
+            }
+        )
+    if not rows:
+        raise LocalShowdownError("Direct materialization requires a non-empty acting-player team.")
+    return rows
+
+
+def _request_active_moves(request: Mapping[str, Any]) -> list[dict[str, Any]]:
+    active = request.get("active")
+    active_row = active[0] if isinstance(active, list) and active else None
+    moves = active_row.get("moves") if isinstance(active_row, Mapping) else None
+    if not isinstance(moves, list):
+        return []
+    copied: list[dict[str, Any]] = []
+    for move in moves:
+        if not isinstance(move, Mapping) or not isinstance(move.get("id"), str):
+            continue
+        pp = move.get("pp")
+        maxpp = move.get("maxpp")
+        if not isinstance(pp, int) or not isinstance(maxpp, int):
+            continue
+        copied.append(
+            {
+                "id": move["id"],
+                "pp": pp,
+                "maxpp": maxpp,
+                "disabled": bool(move.get("disabled")),
+            }
+        )
+    return copied
 
 
 def _drain_stdout(stream: TextIO, target: queue.Queue[str | None]) -> None:

@@ -36,6 +36,7 @@ from pokezero.foulplay_bridge import (
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
     _observation_with_search_metadata,
+    _public_materialization_state,
     _player_state,
     _root_puct_prior_action_change_details,
     _root_puct_timing_from_metadata,
@@ -617,6 +618,30 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "include_turn_merged": True,
             },
         )
+
+    def test_direct_materialization_state_excludes_the_opponent_request(self) -> None:
+        state = _ControlledBattleState(
+            battle_id="battle-gen3randombattle-controlled-1",
+            seed=7,
+            format_id="gen3randombattle",
+            public_lines=[
+                "|player|p1|PokeZero p1|",
+                "|player|p2|FoulPlay|",
+                "|switch|p1a: Charizard|Charizard, L80|250/250",
+                "|switch|p2a: Xatu|Xatu, L80|220/220",
+            ],
+            request_lines={
+                "p1": '|request|{"active":[{"moves":[]}],"side":{"id":"p1","pokemon":[]}}',
+                "p2": '|request|{"active":[{"moves":[{"id":"psychic","pp":16}]}],"side":{"id":"p2"}}',
+            },
+        )
+
+        materialization = _public_materialization_state(state, "p1")
+
+        self.assertEqual(materialization.replay.requests, {})
+        self.assertEqual(materialization.self_request["side"]["id"], "p1")
+        self.assertNotIn("psychic", json.dumps(materialization.self_request))
+        self.assertEqual(materialization.replay.public_active["p2"].species, "Xatu")
 
     def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
         spec = DEFAULT_REPLAY_OBSERVATION_SPEC
