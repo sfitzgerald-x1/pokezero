@@ -418,6 +418,28 @@ class _RestorablePrefix:
 
 
 @dataclass(frozen=True)
+class PreparedReplayPrefix:
+    """A sampled-world branch point captured after public replay validation.
+
+    This is intentionally created only from a caller-provided start override,
+    never from a live hidden-information battle. The concrete override identity
+    and validated public observation are retained so callers cannot accidentally
+    reuse this snapshot with a different sampled world or decision state. The
+    snapshot remains tied to the environment that materialized it and can be
+    restored for every root visit without replaying the recorded prefix again.
+    """
+
+    trajectory_seed: int
+    format_id: str
+    player_id: PlayerId
+    prefix_decision_round_count: int
+    start_override_key: tuple[object, ...]
+    expected_current_observation: PokeZeroObservationV0
+    prefix: ReplayPrefixResult
+    snapshot: Any
+
+
+@dataclass(frozen=True)
 class PUCTBranchSearchCandidate:
     action_index: int
     prior: float
@@ -554,6 +576,7 @@ def value_branch_search(
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
+    prepared_prefix: PreparedReplayPrefix | None = None,
 ) -> ValueBranchSearchResult:
     result, _restorable_prefix = _value_branch_search_with_prefix(
         env=env,
@@ -569,6 +592,7 @@ def value_branch_search(
         start_override=start_override,
         expected_current_observation=expected_current_observation,
         replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        prepared_prefix=prepared_prefix,
     )
     return result
 
@@ -589,6 +613,7 @@ def _value_branch_search_with_prefix(
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
     timing: _RootPUCTSearchTimingAccumulator | None = None,
+    prepared_prefix: PreparedReplayPrefix | None = None,
 ) -> tuple[ValueBranchSearchResult, _RestorablePrefix | None]:
     """Enumerate legal root actions and score branch leaves.
 
@@ -623,16 +648,25 @@ def _value_branch_search_with_prefix(
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
     )
-    restorable_prefix = _restorable_prefix_snapshot(
-        env=env,
+    restorable_prefix = _restorable_prefix_from_prepared(
+        prepared_prefix,
         trajectory=trajectory,
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
         start_override=start_override,
         expected_current_observation=expected_current_observation,
-        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
-        timing=timing,
     )
+    if restorable_prefix is None:
+        restorable_prefix = _restorable_prefix_snapshot(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            start_override=start_override,
+            expected_current_observation=expected_current_observation,
+            replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            timing=timing,
+        )
     candidates: list[ValueBranchSearchCandidate] = []
     for action_index in candidate_indices:
         branch_actions = {
@@ -714,6 +748,7 @@ def puct_branch_search(
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
+    prepared_prefix: PreparedReplayPrefix | None = None,
 ) -> PUCTBranchSearchResult:
     """Score root replay branches with PUCT-style policy-prior exploration.
 
@@ -753,6 +788,7 @@ def puct_branch_search(
         expected_current_observation=expected_current_observation,
         replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
         timing=timing,
+        prepared_prefix=prepared_prefix,
     )
     legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
     if (
@@ -1097,6 +1133,101 @@ def _materialize_start_override(start_override: StartOverrideSource) -> BattleSt
             raise ValueError(START_OVERRIDE_MISSING_WORLD_MESSAGE)
         return sampled_override
     return start_override
+
+
+def _prepared_start_override_key(start_override: BattleStartOverride) -> tuple[object, ...]:
+    """Return an immutable identity for one concrete determinized world."""
+
+    return (
+        start_override.format_id,
+        start_override.observation_format_id,
+        tuple(sorted((str(player), str(team)) for player, team in start_override.player_teams.items())),
+    )
+
+
+def prepare_replay_prefix(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    start_override: BattleStartOverride | None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
+) -> PreparedReplayPrefix | None:
+    """Replay a determinized world once and retain its branch-point snapshot.
+
+    ``start_override`` must already be a concrete sampled world. Callers use
+    this before search only after the override has been generated from public
+    information and the branch point has passed the existing observation check.
+    Environments without snapshot support still perform the replay validation
+    and return ``None`` so search retains its replay-from-root fallback.
+    """
+
+    if start_override is None:
+        raise ValueError("prepared replay prefix requires a concrete sampled start override.")
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
+    _require_current_observation_for_start_override(
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
+    prefix = replay_trajectory_prefix(
+        env,
+        trajectory,
+        decision_round_count=prefix_decision_round_count,
+        start_override=start_override,
+        consistency_player_id=player_id,
+        expected_current_observation=expected_current_observation,
+        check_prefix_observations=False,
+        hp_fraction_tolerance=replay_hp_fraction_tolerance,
+    )
+    if prefix.terminal is not None:
+        raise ValueError("cannot branch from a terminal replay prefix.")
+    snapshotter = getattr(env, "snapshot", None)
+    restorer = getattr(env, "restore", None)
+    if not callable(snapshotter) or not callable(restorer):
+        return None
+    return PreparedReplayPrefix(
+        trajectory_seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        start_override_key=_prepared_start_override_key(start_override),
+        expected_current_observation=expected_current_observation,
+        prefix=prefix,
+        snapshot=snapshotter(),
+    )
+
+
+def _restorable_prefix_from_prepared(
+    prepared_prefix: PreparedReplayPrefix | None,
+    *,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+) -> _RestorablePrefix | None:
+    if prepared_prefix is None:
+        return None
+    if prepared_prefix.trajectory_seed != trajectory.seed or prepared_prefix.format_id != trajectory.format_id:
+        raise ValueError("prepared replay prefix belongs to a different trajectory.")
+    if prepared_prefix.player_id != player_id:
+        raise ValueError("prepared replay prefix belongs to a different player.")
+    if prepared_prefix.prefix_decision_round_count != prefix_decision_round_count:
+        raise ValueError("prepared replay prefix belongs to a different decision round.")
+    if expected_current_observation != prepared_prefix.expected_current_observation:
+        raise ValueError("prepared replay prefix belongs to a different public decision state.")
+    if (
+        callable(start_override)
+        or start_override is None
+        or _prepared_start_override_key(start_override) != prepared_prefix.start_override_key
+    ):
+        raise ValueError("prepared replay prefix belongs to a different sampled world.")
+    if prepared_prefix.prefix.terminal is not None:
+        raise ValueError("cannot branch from a terminal prepared replay prefix.")
+    return _RestorablePrefix(prefix=prepared_prefix.prefix, snapshot=prepared_prefix.snapshot)
 
 
 def _restorable_prefix_snapshot(

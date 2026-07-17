@@ -393,12 +393,16 @@ class LocalShowdownEnv:
         )
 
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
-        """Restore a snapshot captured from this live bridge battle."""
+        """Restore a snapshot into the current live bridge battle shell.
+
+        Search uses this only for snapshots it created after replaying a
+        sampled public-information world. The snapshot payload may come from
+        an earlier shell in the same warm bridge process, which lets multiple
+        determinized worlds coexist without ever serializing the live battle.
+        """
 
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
-        if snapshot.battle_token != self._battle_token:
-            raise ValueError("LocalShowdownSnapshot can only be restored into its original live battle.")
         self._send_command(
             {
                 "type": "restore",
