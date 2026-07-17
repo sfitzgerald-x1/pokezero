@@ -382,6 +382,10 @@ function applyPublicState(snapshot, publicState) {
   if (wishSetTurns != null && typeof wishSetTurns !== "object") {
     throw new Error("Materialize received invalid Wish timing.");
   }
+  const leechSeedSourceSides = publicState.leechSeedSourceSides;
+  if (leechSeedSourceSides != null && typeof leechSeedSourceSides !== "object") {
+    throw new Error("Materialize received invalid Leech Seed provenance.");
+  }
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -428,6 +432,7 @@ function applyPublicState(snapshot, publicState) {
         serializedSide.pokemon[index],
         row.active ? publicSide.volatiles : [],
         sideId,
+        leechSeedSourceSides,
       );
       serializedSide.pokemon[index].lastMove = null;
       serializedSide.pokemon[index].lastMoveUsed = null;
@@ -668,7 +673,7 @@ function normalizedBoosts(boosts) {
   return normalized;
 }
 
-function applyPublicVolatiles(pokemon, rawVolatiles, sideId) {
+function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSides) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
   }
@@ -679,6 +684,25 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId) {
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === "leechseed") {
+      const sourceSide = leechSeedSourceSides?.[sideId];
+      if (!["p1", "p2"].includes(sourceSide) || sourceSide === sideId) {
+        throw new Error(`Materialize cannot restore Leech Seed on ${sideId} without a public source side.`);
+      }
+      if (seen.has(volatile)) {
+        throw new Error(`Materialize received duplicate volatile effect ${rawVolatile}.`);
+      }
+      seen.add(volatile);
+      const sourceSlot = `${sourceSide}a`;
+      pokemon.volatiles[volatile] = {
+        id: volatile,
+        effectOrder: 0,
+        target: `[Pokemon:${sideId}a]`,
+        source: `[Pokemon:${sourceSlot}]`,
+        sourceSlot,
+      };
+      continue;
+    }
     if (!STATIC_PUBLIC_VOLATILES.has(volatile)) {
       throw new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
     }

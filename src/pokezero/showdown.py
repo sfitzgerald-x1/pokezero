@@ -554,6 +554,9 @@ class ShowdownReplayState:
     side_condition_set_turns: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
     # Pending Wish per side: the turn each side declared Wish (heals its slot end of next turn).
     wish_set_turns: Mapping[str, int] = field(default_factory=dict)
+    # For an active Leech Seed target, the public side whose current active slot receives the
+    # residual heal. The protocol exposes this through the original move declaration.
+    leech_seed_source_sides: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -674,6 +677,8 @@ class _ReplayParser:
         self.weather_from_ability: bool = False
         self.side_condition_set_turns: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.wish_set_turns: dict[str, int] = {}
+        self.leech_seed_source_sides: dict[str, str] = {}
+        self._pending_leech_seed_source_sides: dict[str, str] = {}
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
@@ -710,6 +715,7 @@ class _ReplayParser:
             slot: dict(snapshot.side_condition_set_turns.get(slot, {})) for slot in ("p1", "p2")
         }
         parser.wish_set_turns = dict(snapshot.wish_set_turns)
+        parser.leech_seed_source_sides = dict(snapshot.leech_seed_source_sides)
         return parser
 
     def feed(self, lines: Sequence[str]) -> None:
@@ -773,10 +779,13 @@ class _ReplayParser:
                         self.direct_materialization_blockers[pokemon.showdown_slot].update(
                             f"baton-pass:{name}" for name in unsupported
                         )
+                    if "leechseed" not in transferred_volatiles:
+                        self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
                 else:
                     # Volatile statuses are tied to the Pokemon that left the field.
                     self.volatiles[pokemon.showdown_slot] = set()
                     self.direct_materialization_blockers[pokemon.showdown_slot].clear()
+                    self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
             self.public_events.append(_public_event_from_line(line))
@@ -804,6 +813,7 @@ class _ReplayParser:
         self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
+        self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
         _update_toxic_stage(parts, self.toxic_stage)
@@ -815,8 +825,48 @@ class _ReplayParser:
         """Keep Baton Pass blockers only while their public volatile still exists."""
 
         for slot, blockers in self.direct_materialization_blockers.items():
+            has_unknown_leech_seed_source = (
+                "leechseed-source-unknown" in blockers and "leechseed" in self.volatiles[slot]
+            )
             active_markers = {f"baton-pass:{name}" for name in self.volatiles[slot]}
             blockers.intersection_update(active_markers)
+            if "leechseed" not in self.volatiles[slot]:
+                self.leech_seed_source_sides.pop(slot, None)
+            elif has_unknown_leech_seed_source:
+                blockers.add("leechseed-source-unknown")
+
+    def _update_leech_seed(self, parts: Sequence[str]) -> None:
+        """Track the public source side needed to reconstruct an active Leech Seed.
+
+        The ``|-start|...|move: Leech Seed`` line names the target but not the source. Its
+        preceding public ``|move|`` declaration does, so record the source until the start line
+        confirms that the move hit. The simulator resolves the source through its active slot,
+        which intentionally continues to work after that side switches.
+        """
+
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type == "move" and len(parts) >= 5 and _normalize_identifier(parts[3]) == "leechseed":
+            source_slot = _slot_from_ident(parts[2])
+            target_slot = _slot_from_ident(parts[4])
+            if source_slot in {"p1", "p2"} and target_slot in {"p1", "p2"} and source_slot != target_slot:
+                self._pending_leech_seed_source_sides[target_slot] = source_slot
+            return
+        if len(parts) < 4:
+            return
+        target_slot = _slot_from_ident(parts[2])
+        if target_slot not in {"p1", "p2"} or _side_condition_identifier(parts[3]) != "leechseed":
+            return
+        if event_type == "-start":
+            source_slot = self._pending_leech_seed_source_sides.pop(target_slot, None)
+            if source_slot in {"p1", "p2"} and source_slot != target_slot:
+                self.leech_seed_source_sides[target_slot] = source_slot
+                self.direct_materialization_blockers[target_slot].discard("leechseed-source-unknown")
+            else:
+                self.leech_seed_source_sides.pop(target_slot, None)
+                self.direct_materialization_blockers[target_slot].add("leechseed-source-unknown")
+        elif event_type == "-end":
+            self.leech_seed_source_sides.pop(target_slot, None)
+            self.direct_materialization_blockers[target_slot].discard("leechseed-source-unknown")
 
     def _update_weather_meta(self, parts: Sequence[str], line: str) -> None:
         """Track the current weather's set turn + ability source from |-weather| lines.
@@ -908,6 +958,7 @@ class _ReplayParser:
                 slot: dict(turns) for slot, turns in self.side_condition_set_turns.items()
             },
             wish_set_turns=dict(self.wish_set_turns),
+            leech_seed_source_sides=dict(self.leech_seed_source_sides),
         )
 
 
@@ -1451,7 +1502,7 @@ _BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
     "mudsport", "watersport", "rage", "partiallytrapped", "perishsong",
 })
 _DIRECT_MATERIALIZATION_VOLATILES = frozenset({
-    "focusenergy", "ingrain", "mudsport", "watersport",
+    "focusenergy", "ingrain", "leechseed", "mudsport", "watersport",
 })
 
 

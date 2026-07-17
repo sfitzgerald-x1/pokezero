@@ -395,6 +395,44 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             expected.observations["p1"].metadata["self_team"][0]["condition"],
         )
 
+    def test_public_materialization_preserves_leech_seed_residual(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Leech Seed", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Splash", "Tackle")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=39, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Bulbasaur seeds Squirtle.
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+            self.assertEqual(materialization.replay.leech_seed_source_sides, {"p2": "p1"})
+            self.assertEqual(payload["leechSeedSourceSides"], {"p2": "p1"})
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=39,
+            )
+            # Materialization starts a fresh simulator, so align post-boundary randomness before
+            # comparing the next damage-plus-residual transition.
+            source.reseed_simulator_rng(919)
+            search_env.reseed_simulator_rng(919)
+            source.step({"p1": 1, "p2": 0})
+            search_env.step({"p1": 1, "p2": 0})
+            source_hp = _active_hp_from_snapshot(source.snapshot(), "p2")
+            search_hp = _active_hp_from_snapshot(search_env.snapshot(), "p2")
+
+        self.assertEqual(search_hp, source_hp)
+
     def test_public_materialization_omits_expired_full_hp_wish(self) -> None:
         config = integration_config()
         assert config is not None

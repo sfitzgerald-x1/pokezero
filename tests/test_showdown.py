@@ -979,6 +979,45 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertIn(stable_category_id("volatile:confusion"), volatile_cols)
         self.assertIn(stable_category_id("volatile:leechseed"), volatile_cols)
 
+    def test_leech_seed_tracks_public_source_side_and_fails_closed_without_one(self) -> None:
+        seeded = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+            ]
+        )
+        self.assertEqual(seeded.leech_seed_source_sides, {"p2": "p1"})
+        self.assertEqual(seeded.direct_materialization_blockers["p2"], ())
+
+        unknown_source = parse_showdown_replay(
+            ["|-start|p2a: Charizard|move: Leech Seed"]
+        )
+        self.assertEqual(unknown_source.leech_seed_source_sides, {})
+        self.assertEqual(
+            unknown_source.direct_materialization_blockers["p2"],
+            ("leechseed-source-unknown",),
+        )
+
+        cleared = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(cleared.leech_seed_source_sides, {})
+
+        baton_passed = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|move|p2a: Charizard|Baton Pass|p2a: Charizard",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(baton_passed.leech_seed_source_sides, {"p2": "p1"})
+        self.assertEqual(baton_passed.direct_materialization_blockers["p2"], ())
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.

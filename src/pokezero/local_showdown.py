@@ -1160,6 +1160,7 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         # the landing Pokemon was already at full HP, so only expose a still-pending
         # Wish to the direct constructor.
         "wishSetTurns": _pending_wish_set_turns(replay),
+        "leechSeedSourceSides": _active_leech_seed_source_sides(replay),
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's
@@ -1196,6 +1197,21 @@ def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
         # but they are no longer a live simulator condition.
         and replay.turn_number - set_turn in {0, 1}
     }
+
+
+def _active_leech_seed_source_sides(replay: ShowdownReplayState) -> dict[str, str]:
+    """Return public Leech Seed provenance only for targets still carrying the effect."""
+
+    source_sides: dict[str, str] = {}
+    for target_side, source_side in replay.leech_seed_source_sides.items():
+        if (
+            target_side in PLAYER_IDS
+            and source_side in PLAYER_IDS
+            and target_side != source_side
+            and "leechseed" in replay.volatiles.get(target_side, ())
+        ):
+            source_sides[target_side] = source_side
+    return source_sides
 
 
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
