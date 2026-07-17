@@ -3774,10 +3774,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             )
 
         payload = json.loads(stderr.getvalue().split(": ", 1)[1])
-        self.assertIsNone(payload["root_puct_fallback_rate"])
-        self.assertEqual(payload["root_puct_searches"], 0)
-        self.assertEqual(payload["root_puct_fallbacks"], 0)
-        self.assertEqual(payload["root_puct_fallback_categories"], {})
+        self.assertNotIn("root_puct_fallback_rate", payload)
+        self.assertNotIn("root_puct_searches", payload)
+        self.assertNotIn("root_puct_fallbacks", payload)
+        self.assertNotIn("root_puct_fallback_categories", payload)
 
     def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
         if not torch_available():
