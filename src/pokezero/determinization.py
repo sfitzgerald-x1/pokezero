@@ -348,13 +348,13 @@ def _gen3_randbat_belief_start_override_result(
     view = player_belief_view_from_payload(metadata.get("belief_view"))
     if view is None:
         return None, "belief_view is missing or invalid"
-    self_team = _self_team_from_metadata(
+    self_team, self_team_failure = _self_team_from_metadata_result(
         _root_self_team_payload(context, team_size=team_size) or metadata.get("self_team"),
         team_size=team_size,
         set_source=set_source,
     )
     if self_team is None:
-        return None, "request-known self_team is missing or inconsistent"
+        return None, self_team_failure or "request-known self_team is missing or inconsistent"
     team_index_constraints = _public_opponent_team_index_constraints(
         context,
         opponent_slot=view.opponent_slot,
@@ -765,17 +765,35 @@ def _self_team_from_metadata(
     team_size: int,
     set_source: Gen3RandbatSource,
 ) -> tuple[FixturePokemon, ...] | None:
+    """Return a reconstructible request-known team without exposing diagnostic details."""
+
+    team, _failure = _self_team_from_metadata_result(
+        payload,
+        team_size=team_size,
+        set_source=set_source,
+    )
+    return team
+
+
+def _self_team_from_metadata_result(
+    payload: Any,
+    *,
+    team_size: int,
+    set_source: Gen3RandbatSource,
+) -> tuple[tuple[FixturePokemon, ...] | None, str | None]:
+    """Return a fixture team or a stable public failure category for Root-PUCT telemetry."""
+
     rows = _as_sequence(payload)
     if len(rows) != team_size:
-        return None
+        return None, "request-known self_team has an unexpected member count"
     team: list[FixturePokemon] = []
     for row in rows:
         if not isinstance(row, Mapping):
-            return None
+            return None, "request-known self_team contains an invalid member"
         species = _optional_text(row.get("species"))
         request_moves = _moves_from_payload(row.get("moves"))
         if species is None or not request_moves:
-            return None
+            return None, "request-known self_team member is missing species or moves"
         # Showdown uses resolved-power request IDs such as ``return102``. Custom
         # replay teams require the canonical move ID (``return``) instead.
         moves = tuple(canonical_move_id(move) for move in request_moves)
@@ -789,7 +807,7 @@ def _self_team_from_metadata(
             set_source=set_source,
         )
         if spread is None:
-            return None
+            return None, "request-known self_team fixture stats cannot be reconstructed"
         team.append(
             FixturePokemon(
                 species=species,
@@ -801,7 +819,7 @@ def _self_team_from_metadata(
                 ivs=spread["ivs"],
             )
         )
-    return tuple(team)
+    return tuple(team), None
 
 
 def _gen3_randbat_fixture_spread(

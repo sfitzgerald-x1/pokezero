@@ -329,6 +329,30 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertIsNone(override)
 
+    def test_planner_reports_safe_self_team_stat_reconstruction_failure(self) -> None:
+        metadata = _metadata()
+        metadata["self_team"][0]["stats"] = {  # type: ignore[index]
+            "hp": 999,
+            "atk": 139,
+            "def": 169,
+            "spa": 217,
+            "spd": 180,
+            "spe": 204,
+        }
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        with self.assertRaisesRegex(ValueError, "fixture stats cannot be reconstructed"):
+            source()
+
     def test_planner_returns_memoized_source_for_supported_format(self) -> None:
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
         context = _context(_metadata())
