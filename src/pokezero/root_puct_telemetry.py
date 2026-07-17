@@ -21,8 +21,9 @@ ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION = "pokezero.root_puct_telemetry_report
 _SCALAR_COUNT_FIELDS = (
     "root_puct_total_visits",
     "root_puct_effective_total_visits",
-    # W5 records which reconstructed sampled worlds used direct public-state
-    # deserialization versus the Tier 1 replay fallback.
+    # W5 records distinct reconstructed sampled worlds that supplied at least
+    # one completed branch search, split by direct public-state construction
+    # versus the Tier 1 replay fallback.
     "root_puct_start_override_direct_materializations",
     "root_puct_start_override_replay_materializations",
     "root_puct_opponent_action_scenario_count",
