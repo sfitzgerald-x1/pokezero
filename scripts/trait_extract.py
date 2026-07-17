@@ -157,6 +157,14 @@ class GameParse:
                     self._pending_switch_immunity = (seat, sp)
             elif tag == "move":
                 seat = seat_of(a[0]); move = mid(a[1]) if len(a) > 1 else None
+                # A move re-emitted with `[from] lockedmove` is the FORCED continuation of a
+                # multi-turn move, not a chosen action: Solar Beam charges (`[still]` + `-prepare`)
+                # and is re-emitted next turn locked. Counting that line double-counts the move —
+                # and because a Solar Beam only charges when there is NO sun, the double-count lands
+                # entirely on the no-sun side and deflates the in-sun rate (v22-lr3m@2600k read
+                # 91.0% but is 95.1% at decision level). The charge is the decision; skip the fire.
+                if any("lockedmove" in str(x) for x in a[2:]):
+                    continue
                 if seat and move:
                     self.moves_total[seat] += 1
                     self.move_counts[seat][a[1]] += 1
@@ -365,7 +373,14 @@ def extract(files, lineage=None, milestone=None):
                 if carried:
                     cat_present_games[cat] += 1
                     cat_uses[cat] += gp.ev[seat][cat]
-            for extra in ("cat_rapidspin_spikesdown","cat_phaze_justified","cat_phaze_neutral",
+            # NOTE: these are UNGATED (every occurrence), whereas move_categories[*].total_uses is
+            # gated on the seat's moveset carrying the move. Mixing the two across a ratio is a bug
+            # — a move used but not carried (Metronome/Mimic) lifts the numerator without the
+            # denominator and can push a "conditional %" above 100. Conditional rates must therefore
+            # be computed from an ungated pair here (e.g. sun/(sun+nosun)), never against
+            # total_uses. cat_rapidspin_total is carried here for exactly that reason.
+            for extra in ("cat_rapidspin_spikesdown","cat_rapidspin_total",
+                          "cat_phaze_justified","cat_phaze_neutral",
                           "focuspunch_attempt","focuspunch_executed","focuspunch_disrupted",
                           "cat_solarbeam_sun","cat_solarbeam_nosun","bp_switch","bp_stat_or_sub"):
                 cat_extra[extra] += gp.ev[seat][extra]

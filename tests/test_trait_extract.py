@@ -81,6 +81,32 @@ class MoveClassification(unittest.TestCase):
         self.assertEqual(gp.ev["p1"]["cat_solarbeam_sun"], 1)
         self.assertEqual(gp.ev["p1"]["cat_solarbeam_nosun"], 1)
 
+    def test_lockedmove_continuation_is_not_a_decision(self):
+        # Solar Beam with no sun charges (the decision), then is re-emitted next turn as
+        # [from] lockedmove (forced). Counting the locked line double-counts the move and, since
+        # only no-sun beams ever charge, deflates the in-sun rate. Only the charge should count.
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: Tangela|Solar Beam||[still]",      # charge = the decision
+            "|-prepare|p1a: Tangela|Solar Beam",
+            "|turn|2",
+            "|move|p1a: Tangela|Solar Beam|p2a: Y|[from] lockedmove",   # forced, not a decision
+            "|-damage|p2a: Y|100/262",
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_solarbeam"], 1)
+        self.assertEqual(gp.moves_total["p1"], 1)
+
+    def test_instant_solarbeam_in_sun_counts_once(self):
+        gp = parse([
+            "|turn|1",
+            "|-weather|SunnyDay",
+            "|move|p1a: Sunflora|Solar Beam||[still]",     # under sun: fires same turn
+            "|-anim|p1a: Sunflora|Solar Beam|p2a: Y",
+            "|-damage|p2a: Y|50/262",
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_solarbeam"], 1)
+        self.assertEqual(gp.ev["p1"]["cat_solarbeam_sun"], 1)
+
     def test_weather_move_not_ability(self):
         gp = parse([
             "|turn|1",

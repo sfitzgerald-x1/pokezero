@@ -178,9 +178,23 @@ def _extra(r, k):
     return (r.get("move_category_extras") or {}).get(k, 0)
 
 
-def _fracpct(r, num_key, total, in_extras=False):
+def _fracpct(r, num_key, denom_key):
+    """Conditional rate from an UNGATED pair, both out of move_category_extras.
+
+    Never divide an extras counter by move_categories[*].total_uses: extras count every
+    occurrence while total_uses is gated on the seat's moveset carrying the move, so a move used
+    but not carried (Metronome/Mimic) inflates the numerator only — that mismatch produced a
+    100.4% "solar beam in sun". Denominator here is the sum of the mutually exclusive outcomes.
+    """
     n = _extra(r, num_key)
-    t = _extra(r, total) if in_extras else _cattotal(r, total)
+    t = _extra(r, denom_key)
+    return (100.0 * n / t) if t else None
+
+
+def _fracpct2(r, num_key, *parts):
+    """Same, where the denominator is the sum of several ungated outcome counters."""
+    n = _extra(r, num_key)
+    t = sum(_extra(r, x) for x in parts)
     return (100.0 * n / t) if t else None
 
 
@@ -205,10 +219,10 @@ TRAJECTORY_CHARTS = [
         ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
     ]),
     ("conditional breakdowns (%)", [
-        ("phaze: enemy boosted/sub %", lambda r: _fracpct(r, "cat_phaze_justified", "cat_phaze")),
+        ("phaze: enemy boosted/sub %", lambda r: _fracpct2(r, "cat_phaze_justified", "cat_phaze_justified", "cat_phaze_neutral")),
         ("rapid spin: spikes-down %", lambda r: _fracpct(r, "cat_rapidspin_spikesdown", "cat_rapidspin_total")),
-        ("solar beam: in sun %", lambda r: _fracpct(r, "cat_solarbeam_sun", "cat_solarbeam")),
-        ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "cat_batonpass")),
+        ("solar beam: in sun %", lambda r: _fracpct2(r, "cat_solarbeam_sun", "cat_solarbeam_sun", "cat_solarbeam_nosun")),
+        ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "bp_switch")),
         ("focus punch success %", lambda r: _pct(r.get("focus_punch_success_rate"))),
         ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
     ]),
@@ -500,10 +514,10 @@ def phase2_panel(rows, opponent, checkpoints):
         return f'{c}/{t} <span class="dim">({c / t * 100:.0f}%)</span>'
 
     out.append('<tr class="grp"><td colspan="%d">conditional breakdowns — occurrences meeting the condition / category total</td></tr>' % (len(lineages) + 1))
-    out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), cat_total(r, "cat_rapidspin_total"))))
-    out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), cat_total(r, "cat_phaze"))))
-    out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), cat_total(r, "cat_solarbeam"))))
-    out.append(row("BP w/ stat or sub", lambda r: cond(ex(r, "bp_stat_or_sub"), cat_total(r, "cat_batonpass"))))
+    out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), ex(r, "cat_rapidspin_total"))))
+    out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), ex(r, "cat_phaze_justified") + ex(r, "cat_phaze_neutral"))))
+    out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), ex(r, "cat_solarbeam_sun") + ex(r, "cat_solarbeam_nosun"))))
+    out.append(row("BP w/ stat or sub", lambda r: cond(ex(r, "bp_stat_or_sub"), ex(r, "bp_switch"))))
     out.append(row("focus punch success rate", lambda r: f'{_fmt(r.get("focus_punch_success_rate"))} <span class="dim">(n={ex(r, "focuspunch_attempt") or r.get("focus_punch_attempts", 0)})</span>'))
     out.append(row("opp focus punch disrupted", lambda r: f'{_fmt(r.get("opp_focus_punch_disruption_rate"))} <span class="dim">(n={r.get("opp_focus_punch_attempts", 0)})</span>'))
 

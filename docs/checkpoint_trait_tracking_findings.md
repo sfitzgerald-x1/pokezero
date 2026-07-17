@@ -50,10 +50,11 @@ Each point is one checkpoint; no aggregation.
 - **Conditional move use is *learned*, not innate.** Early checkpoints fire conditional moves
   blindly; later ones gate them on the condition that makes them good:
   - *Solar Beam in sun* — the sharpest signal in the dataset, and all three tracked lineages
-    develop it. Start → frontier: m50-ep7 17.1%→95.7% (2400k), l200-ep7-wu75 20.4%→98.7% (1900k),
-    v22-lr3m 14.3%→**100.0%** (2700k). v22-lr3m dipped to 91.0% at 2600k and recovered to 100.0% at
-    2700k, confirming that dip was frontier noise on a small denominator, not unlearning — the
-    trait is stable once acquired.
+    develop it. Start → frontier: m50-ep7 **25.4%→97.5%** (2400k), l200-ep7-wu75 **31.1%→99.4%**
+    (1900k), v22-lr3m **23.5%→99.3%** (2700k). It converges and stays converged (v22-lr3m reads
+    95.1% at 2600k, 99.3% at 2700k — that wobble is a small denominator, ~270–320 uses/checkpoint).
+    *These figures were corrected — see "Measurement corrections" below; earlier drafts reported a
+    much lower start (~14–20%) and even an impossible 100.4%.*
   - *Phazing when justified* (enemy boosted or behind a Substitute) rises off ~0% early, but
     **unlike Solar Beam it does not converge** — it stays volatile and non-monotonic. At the
     current frontiers: v22-lr3m 67.6% (2700k), l200-ep7-wu75 31.7% (1900k), m50-ep7 26.7% (2400k).
@@ -113,6 +114,33 @@ Substitute and healing tracking *losses* is almost certainly **reverse causality
 and heal when you are behind — not evidence that they lose games. Read these as association within
 game context. The clean version would be a per-decision propensity analysis, which is a much
 bigger lift.
+
+## Measurement corrections
+
+Two bugs were found by chasing a hypothesis that the v22-lr3m Solar-Beam dip reflected *learned
+weather counterplay* (the opponent removing sun). **That hypothesis was not supported** — sun is
+overwritten only ~16–22 times per 2000 games (~1% of games), the rate is flat from 1500k→2700k, and
+every no-sun Solar Beam had `weather=None` rather than rain/sand. But the investigation exposed two
+real defects in how the rates were computed:
+
+1. **Locked continuations were counted as decisions.** A no-sun Solar Beam charges
+   (`|move|…|[still]` + `-prepare`) and is re-emitted the next turn as `[from] lockedmove` — a
+   forced continuation the policy never chose. Counting that second line double-counted the move,
+   and since *only no-sun beams ever charge*, the double-count landed entirely on the no-sun side
+   and deflated the in-sun rate. Now skipped (`lockedmove` lines are not decisions). Impact is
+   narrow: only 12 of 41,008 `|move|` lines in a shard, **all Solar Beam** (15.4% of its count).
+2. **Conditional rates mixed gated and ungated counters.** `move_category_extras` counts every
+   occurrence, but `move_categories[*].total_uses` is gated on the acting seat's *moveset carrying*
+   the move. A move used but not carried (Metronome/Mimic) lifts the numerator and not the
+   denominator — which produced a literally impossible **100.4%** "Solar Beam in sun". All
+   conditional rates now divide an **ungated pair** (e.g. `sun/(sun+nosun)`,
+   `justified/(justified+neutral)`, `bp_stat_or_sub/bp_switch`). A regression test asserts no rate
+   can exceed 100%.
+
+Both fixes raise the *early* Solar-Beam-in-sun baseline (early checkpoints fire many no-sun beams,
+which were the double-counted ones), so the learning curve is real but less dramatic than first
+reported: ~23–31%→97–99%, not ~14–20%→100%. Anything computed as a ratio in this report should be
+checked for the gated/ungated trap before being trusted.
 
 **A trap worth recording:** the first cut of this chart ranked `forced_switch` first at r≈−0.65,
 sign-consistent everywhere. It is circular: a forced switch happens *because your mon fainted*, so
