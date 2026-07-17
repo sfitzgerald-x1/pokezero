@@ -1022,6 +1022,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Allowed HP-fraction drift when validating public belief-world replay prefixes.",
     )
     root_puct_play.add_argument(
+        "--record-belief-world-coverage-gaps",
+        action="store_true",
+        help=(
+            "W5 mechanics-only mode: persist public belief-world checksum coverage and allow "
+            "missing worlds so fallback rate can be measured. This does not produce strength evidence; "
+            "the default remains fail-closed. Requires --belief-start-overrides."
+        ),
+    )
+    root_puct_play.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Disable fallback to the raw checkpoint action when root-PUCT branch search fails.",
@@ -3789,6 +3798,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             raise ValueError("--belief-start-override-hp-fraction-tolerance must be non-negative.")
         # Latch masks through the same belief-enabled environment used for both live and branch play.
         env_config = replace(env_config, set_belief_source=True)
+    elif args.record_belief_world_coverage_gaps:
+        raise ValueError("--record-belief-world-coverage-gaps requires --belief-start-overrides.")
     policy_showdown_root = env_config.resolved_showdown_root()
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
@@ -3882,6 +3893,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "belief_world_sample_cap": args.belief_world_sample_cap,
             "belief_start_override_attempts": args.belief_start_override_attempts,
             "belief_start_override_hp_fraction_tolerance": args.belief_start_override_hp_fraction_tolerance,
+            "record_belief_world_coverage_gaps": args.record_belief_world_coverage_gaps,
             "opponent_legal_mask_mode": opponent_legal_mask_mode,
             "allow_search_fallback": not args.no_search_fallback,
             "root_dirichlet_alpha": args.root_dirichlet_alpha if dirichlet_enabled else None,
@@ -4116,8 +4128,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             args.progress_interval_games
         )
     report = benchmark_rollouts(**benchmark_kwargs)
+    belief_world_coverage: Mapping[str, Any] | None = None
     if belief_start_override_planner is not None:
-        _require_belief_world_benchmark_coverage(report, search_policy_ids=search_policy_ids)
+        belief_world_coverage = _belief_world_benchmark_coverage(report, search_policy_ids=search_policy_ids)
+        if not args.record_belief_world_coverage_gaps:
+            _require_belief_world_benchmark_coverage(belief_world_coverage)
     payload = _root_puct_play_payload(
         report,
         raw_policy_id=raw_policy_id,
@@ -4138,6 +4153,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         root_visit_budget_selector_config=(
             root_visit_budget_selector.to_dict() if root_visit_budget_selector is not None else None
         ),
+        belief_world_coverage=belief_world_coverage,
+        belief_world_coverage_gaps_allowed=args.record_belief_world_coverage_gaps,
     )
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
@@ -4233,24 +4250,61 @@ def _format_optional_fraction(value: object) -> str:
     return "n/a"
 
 
-def _require_belief_world_benchmark_coverage(
+def _belief_world_benchmark_coverage(
     report: Any,
     *,
     search_policy_ids: Sequence[str],
-) -> None:
-    """Fail closed when an opt-in belief benchmark fell back before materializing worlds."""
+) -> dict[str, Any]:
+    """Summarize public belief-world materialization coverage for searched matchups only."""
 
     search_ids = set(search_policy_ids)
-    missing: list[str] = []
+    matchups: list[dict[str, Any]] = []
+    expected_total = 0
+    materialized_total = 0
     for result in report.matchups:
         if result.p1_policy_id not in search_ids and result.p2_policy_id not in search_ids:
             continue
         expected_seeds = set(range(result.seed_start, result.seed_start + result.metrics.games))
         observed_seeds = set((result.root_puct_belief_public_checksums_by_seed or {}).keys())
-        if expected_seeds - observed_seeds:
+        materialized_seeds = expected_seeds & observed_seeds
+        missing_seeds = expected_seeds - observed_seeds
+        expected_total += len(expected_seeds)
+        materialized_total += len(materialized_seeds)
+        matchups.append(
+            {
+                "label": result.label,
+                "expected_seeds": sorted(expected_seeds),
+                "materialized_seeds": sorted(materialized_seeds),
+                "missing_seeds": sorted(missing_seeds),
+                "coverage_rate": len(materialized_seeds) / len(expected_seeds) if expected_seeds else 1.0,
+            }
+        )
+    return {
+        "expected_games": expected_total,
+        "materialized_games": materialized_total,
+        "missing_games": expected_total - materialized_total,
+        "coverage_rate": materialized_total / expected_total if expected_total else 1.0,
+        "matchups": matchups,
+    }
+
+
+def _require_belief_world_benchmark_coverage(coverage: Mapping[str, Any]) -> None:
+    """Fail closed unless every searched game materialized a public belief world."""
+
+    missing: list[str] = []
+    matchups = coverage.get("matchups", ())
+    if not isinstance(matchups, Sequence) or isinstance(matchups, (str, bytes)):
+        raise RuntimeError("belief-world coverage summary has an invalid matchup list.")
+    for matchup in matchups:
+        if not isinstance(matchup, Mapping):
+            raise RuntimeError("belief-world coverage summary contains an invalid matchup.")
+        missing_seeds = matchup.get("missing_seeds")
+        if not isinstance(missing_seeds, Sequence) or isinstance(missing_seeds, (str, bytes)):
+            raise RuntimeError("belief-world coverage summary contains invalid missing-seed data.")
+        if missing_seeds:
             missing.append(
-                f"{result.label}: missing belief-world checksum for seeds "
-                f"{', '.join(str(seed) for seed in sorted(expected_seeds - observed_seeds))}"
+                f"{matchup.get('label', 'unknown matchup')}: missing belief-world checksum for seeds "
+                f"{', '.join(str(seed) for seed in missing_seeds)}"
             )
     if missing:
         raise RuntimeError(
@@ -4270,6 +4324,8 @@ def _root_puct_play_payload(
     root_dirichlet_config: Mapping[str, object] | None = None,
     value_leaf_provenance: Mapping[str, object] | None,
     root_visit_budget_selector_config: Mapping[str, object] | None = None,
+    belief_world_coverage: Mapping[str, Any] | None = None,
+    belief_world_coverage_gaps_allowed: bool = False,
 ) -> dict[str, Any]:
     payload = dict(report.to_dict())
     comparisons = _root_puct_play_comparisons(
@@ -4297,6 +4353,12 @@ def _root_puct_play_payload(
             payload["adaptive_root_visit_budget"] = dict(root_visit_budget_selector_config)
         else:
             payload["root_visit_budget_selector"] = dict(root_visit_budget_selector_config)
+    if belief_world_coverage is not None:
+        payload["belief_world_coverage"] = dict(belief_world_coverage)
+        payload["belief_world_coverage_gaps_allowed"] = belief_world_coverage_gaps_allowed
+        payload["belief_world_coverage_mode"] = (
+            "mechanics-only-gaps-allowed" if belief_world_coverage_gaps_allowed else "strict"
+        )
     return payload
 
 
