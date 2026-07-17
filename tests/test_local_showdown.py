@@ -351,6 +351,114 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
 
+    def test_public_materialization_preserves_actor_known_pp_after_switching_out(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Ember", "Tackle")),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Tackle",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Charmander uses Ember.
+            expected_pp = source._latest_requests["p1"]["active"][0]["moves"][0]["pp"]
+            source.step({"p1": 4, "p2": 0})  # Charmander switches out.
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+
+            self.assertIn("charmander", materialization.self_move_states)
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+            search_env.step({"p1": 4, "p2": 0})  # Switch back to Charmander.
+            actual_pp = search_env._latest_requests["p1"]["active"][0]["moves"][0]["pp"]
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual_pp, expected_pp)
+
+    def test_public_materialization_preserves_actor_known_trapped_constraint(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Tackle",)),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Tackle",)),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Diglett", ability="Arena Trap", moves=("Tackle",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+            self.assertTrue(materialization.self_request["active"][0]["maybeTrapped"])
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+
+    def test_public_materialization_preserves_force_switch_boundary(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Tackle",), level=5),
+                        FixturePokemon(species="Charmeleon", ability="Blaze", moves=("Tackle",)),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Mewtwo", ability="Pressure", moves=("Psychic",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+            self.assertTrue(materialization.self_request["forceSwitch"][0])
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=7,
+            )
+            actual = search_env.observe("p1")
+
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+
     def test_public_materialization_preserves_spikes_layers(self) -> None:
         config = integration_config()
         assert config is not None
@@ -510,7 +618,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertNotIn("reflect", final_materialization.replay.side_condition_counts["p1"])
 
-    def test_public_materialization_fails_closed_after_a_benched_self_pokemon_used_a_move(self) -> None:
+    def test_public_materialization_fails_closed_when_actor_pp_history_is_unavailable(self) -> None:
         config = integration_config()
         assert config is not None
         start_override = BattleStartOverride(
@@ -535,6 +643,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             source.step({"p1": 0, "p2": 1})  # Charmander spends PP before switching out.
             source.step({"p1": 4, "p2": 1})
             materialization = source.public_materialization_state("p1")
+            # The runtime retains actor-owned history. Confirm the safety check remains closed
+            # when that player-known state is unavailable rather than inventing benched PP.
+            materialization = replace(materialization, self_move_states={})
 
             with self.assertRaisesRegex(LocalShowdownError, "spent PP for a benched"):
                 search_env.materialize_public_world(

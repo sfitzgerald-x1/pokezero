@@ -644,13 +644,21 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 "p1": '|request|{"active":[{"moves":[]}],"side":{"id":"p1","pokemon":[]}}',
                 "p2": '|request|{"active":[{"moves":[{"id":"psychic","pp":16}]}],"side":{"id":"p2"}}',
             },
+            request_history=[
+                ("p1", '|request|{"active":[{"moves":[]}],"side":{"id":"p1","pokemon":[]}}'),
+                ("p2", '|request|{"active":[{"moves":[{"id":"psychic","pp":16}]}],"side":{"id":"p2"}}'),
+            ],
         )
 
         materialization = _public_materialization_state(state, "p1")
 
         self.assertEqual(materialization.replay.requests, {})
         self.assertEqual(materialization.self_request["side"]["id"], "p1")
+        self.assertEqual(materialization.self_move_states, {})
+        self.assertEqual(materialization.self_initial_request["side"]["id"], "p1")
         self.assertNotIn("psychic", json.dumps(materialization.self_request))
+        self.assertNotIn("psychic", json.dumps(materialization.self_move_states))
+        self.assertNotIn("psychic", json.dumps(materialization.self_initial_request))
         self.assertEqual(materialization.replay.public_active["p2"].species, "Xatu")
 
     def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
