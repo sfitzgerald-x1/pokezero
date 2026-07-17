@@ -660,6 +660,10 @@ class RootPUCTSearchPolicy:
                 belief_world_materialization_count = 0
                 shared_start_override_samples = None
                 if _uses_scenario_independent_start_overrides(self):
+                    def record_belief_world_materialization_attempt() -> None:
+                        nonlocal belief_world_materialization_count
+                        belief_world_materialization_count += 1
+
                     belief_world_materialization_started_at = _timing_perf_counter()
                     try:
                         shared_start_override_samples = _shared_start_override_samples(
@@ -669,14 +673,12 @@ class RootPUCTSearchPolicy:
                             rng=rng,
                             sample_scenarios=search_scenario_groups[0].samples,
                             search_trajectory=search_trajectory,
+                            on_attempt=record_belief_world_materialization_attempt,
                         )
                     finally:
                         belief_world_materialization_seconds = (
                             _timing_perf_counter() - belief_world_materialization_started_at
                         )
-                    belief_world_materialization_count = (
-                        shared_start_override_samples.attempts_used
-                    )
                 if shared_start_override_samples is not None:
                     start_override_attempts_used += shared_start_override_samples.attempts_used
                 for group_index, scenario_group in enumerate(search_scenario_groups):
@@ -1325,6 +1327,7 @@ def _shared_start_override_samples(
     rng: random.Random,
     sample_scenarios: Sequence[OpponentActionScenario],
     search_trajectory: BattleTrajectory,
+    on_attempt: Callable[[], None] | None = None,
 ) -> _SharedStartOverrideSamples:
     if policy.start_override_planner is None:
         raise ValueError("start_override_planner is required for shared start overrides.")
@@ -1339,6 +1342,8 @@ def _shared_start_override_samples(
         sample_rejections: list[str] = []
         for _attempt_index in range(policy.start_override_attempts):
             attempts_used += 1
+            if on_attempt is not None:
+                on_attempt()
             start_override = policy.start_override_planner(
                 context,
                 sample_scenario,
