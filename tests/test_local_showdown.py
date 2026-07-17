@@ -377,6 +377,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             source.step({"p1": 5, "p2": 0})  # p1 switches to the third team member.
             expected = source.observe("p1")
             materialization = source.public_materialization_state("p1")
+            expected_branch = source.step({"p1": 4, "p2": 0})
 
             search_env.materialize_public_world(
                 state=materialization,
@@ -384,11 +385,20 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 seed=7,
             )
             actual = search_env.observe("p1")
+            self.assertEqual(search_env._latest_requests["p1"], materialization.self_request)
+            branch = search_env.step({"p1": 4, "p2": 0})
 
-        self.assertEqual(search_env._latest_requests["p1"], materialization.self_request)
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(
+            branch.observations["p1"].categorical_ids,
+            expected_branch.observations["p1"].categorical_ids,
+        )
+        self.assertEqual(
+            branch.observations["p1"].legal_action_mask,
+            expected_branch.observations["p1"].legal_action_mask,
+        )
 
     def test_public_materialization_preserves_actor_known_pp_after_switching_out(self) -> None:
         config = integration_config()

@@ -351,6 +351,7 @@ function applyPublicState(snapshot, publicState) {
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
     if (sideId === publicState.selfPlayer) {
+      preserveActorTeamOrder(serializedSide, publicState.selfTeamOrder);
       if (selfForceSwitch) active.switchFlag = true;
       applyKnownMoveState(active, publicState.selfActiveMoves);
       applySelfActiveRequestState(active, publicState.selfActiveRequestState);
@@ -429,10 +430,40 @@ function remainingTimedTurns(currentTurn, setTurn, label) {
 }
 
 function moveActivePokemonToFront(serializedSide, activeIndex) {
-  const originalPokemon = serializedSide.pokemon;
   const originalIndices = [activeIndex];
-  for (let index = 0; index < originalPokemon.length; index++) {
+  for (let index = 0; index < serializedSide.pokemon.length; index++) {
     if (index !== activeIndex) originalIndices.push(index);
+  }
+  return reorderSerializedSide(serializedSide, originalIndices);
+}
+
+function preserveActorTeamOrder(serializedSide, teamOrder) {
+  if (!Array.isArray(teamOrder) || teamOrder.length !== serializedSide.pokemon.length) {
+    throw new Error("Materialize requires the acting player's full team order.");
+  }
+  const indices = [];
+  const used = new Set();
+  for (const species of teamOrder) {
+    const matches = serializedSide.pokemon
+      .map((pokemon, index) => (sameSpecies(pokemon, species) && !used.has(index) ? index : -1))
+      .filter(index => index >= 0);
+    if (matches.length !== 1) {
+      throw new Error(`Materialize cannot uniquely preserve acting team order for ${species}.`);
+    }
+    const index = matches[0];
+    used.add(index);
+    indices.push(index);
+  }
+  if (indices[0] !== 0) {
+    throw new Error("Materialize acting team order must keep the active Pokemon first.");
+  }
+  reorderSerializedSide(serializedSide, indices);
+}
+
+function reorderSerializedSide(serializedSide, originalIndices) {
+  const originalPokemon = serializedSide.pokemon;
+  if (originalIndices.length !== originalPokemon.length || new Set(originalIndices).size !== originalPokemon.length) {
+    throw new Error("Materialize received an invalid serialized team permutation.");
   }
   const originalIndexByCurrentIndex = originalTeamIndexByCurrentIndex(
     serializedSide.team,
