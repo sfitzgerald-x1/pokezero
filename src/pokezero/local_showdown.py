@@ -1038,6 +1038,9 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
+            "materializationBlockers": list(
+                replay.direct_materialization_blockers.get(player, ())
+            ),
             # The parser's observation feature advances the toxic value at a new turn. The
             # simulator state at the request boundary is one residual behind that feature.
             "toxicStage": _materialization_toxic_stage(replay, player),
