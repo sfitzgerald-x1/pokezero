@@ -279,6 +279,9 @@ function applyPublicState(snapshot, publicState) {
   if (!publicState.sides || typeof publicState.sides !== "object") {
     throw new Error("Materialize requires public state for both sides.");
   }
+  if (publicState.selfBenchedMoveHistory) {
+    throw new Error("Materialize cannot reconstruct spent PP for a benched acting Pokemon.");
+  }
   if (publicState.weather || hasEntries(publicState.futureSight)) {
     throw new Error("Materialize does not yet support active weather or Future Sight.");
   }

@@ -1024,6 +1024,10 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "futureSight": dict(replay.future_sight),
         "selfPlayer": state.player_id,
         "selfActiveMoves": _request_active_moves(state.self_request),
+        # A request gives exact PP only for the current active Pokemon. Do not construct a
+        # sampled branch that could later switch to a benched Pokemon whose spent PP cannot be
+        # reconstructed from the request; the bridge rejects this shape and search uses Tier 1.
+        "selfBenchedMoveHistory": _has_self_benched_move_history(state),
         "sides": sides,
     }
 
@@ -1088,6 +1092,22 @@ def _request_active_moves(request: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return copied
+
+
+def _has_self_benched_move_history(state: PublicBattleMaterializationState) -> bool:
+    """Whether direct construction would lose known PP for a currently benched self mon."""
+
+    active = state.replay.public_active.get(state.player_id)
+    active_ident = active.ident if active is not None else None
+    if active_ident is None:
+        raise LocalShowdownError("Direct materialization requires an acting-player active Pokemon.")
+    return any(
+        event.event_type == "move"
+        and event.actor_slot == state.player_id
+        and event.actor_ident is not None
+        and event.actor_ident != active_ident
+        for event in state.replay.public_events
+    )
 
 
 def _drain_stdout(stream: TextIO, target: queue.Queue[str | None]) -> None:
