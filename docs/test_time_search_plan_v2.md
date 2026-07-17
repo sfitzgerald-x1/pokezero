@@ -27,6 +27,19 @@ untouched in case a formally defensible run is ever wanted.
   value-leaf evaluation. No multi-ply tree, no in-tree chance nodes, no
   batched NN evaluation, no tree reuse across moves. "Deeper search" today
   means more root visits, scenarios, and longer tails — not depth.
+- **Fallback rate measured (W1): 19.4% of decisions**, dominated by
+  missing_sampled_world (59% of failures); first fix wave (force-switch
+  screening, reserve candidates, world-sampling retries) brought live reads to
+  ~15.3%. Diagnosis is complete; taxonomy work is closed as a workstream.
+- **Search cost is scale-independent (W4): ~5–6.5 visits/sec at BOTH 50M and
+  200M** — H4 (NN-eval-bound) is refuted. No 2s budget exists at any scale
+  today; only extra-{0,24} fit a ~10s envelope (docs/w4_scale_cost_preliminary.md).
+- **Root cause of both, identified in code**: branch evaluation resets the env
+  and replays the recorded prefix from the battle root per visit
+  (replay_branching.py — its own header calls this a paused-search-era
+  placeholder). O(game-length) reconstruction per visit is the latency floor,
+  and replay divergence *is* the missing_sampled_world fallback class. One
+  mechanism, both symptoms.
 - Value-leaf calibration (Step 0) is a repeatable job. The 1M frozen isotonic
   leaf: Pearson 0.503, sign 0.758, ECE 0.063 — with a known weak late-game
   slice (phase ECE 0.089/0.054/0.136). Timing and hazard artifacts exist; no
@@ -92,21 +105,41 @@ The initial cost-only probe is recorded in
 not a strength result or a final budget choice: W2 must supply the paired
 strength-vs-cost curve, and W1 must reduce the visible fallback rate first.
 
-### W5 — Search efficiency (strictly after W2's profile)
+### W5 — Replace replay-from-root materialization (owner-priority, 2026-07-17; not gated on W2)
 
-Attack what the profile says dominates. Candidates going in, confirmed or
-discarded by data: caching/reusing determinized worlds instead of per-visit
-materialization, batched leaf NN evaluation, tree reuse across consecutive
-turns, early termination on forced lines, vectorized sim stepping. The bigger
-structural option — an actual multi-ply tree — is only on the table if W2
-shows the one-ply budget curve saturating while wall-clock headroom remains.
-Deliverable: measured speedup, then the W2 value curve re-run — success is
-**more winrate at fixed wall-clock**, not more visits.
+The profile already told us what dominates: prefix replay. Supersedes further
+W1 taxonomy slicing — the redesign removes the failure mechanism instead of
+classifying it.
+
+1. **Tier 1 — snapshot-per-decision:** materialize each determinized world
+   once per decision (replay once if still needed), then snapshot it with the
+   engine's own `State.serializeBattle`/`deserializeBattle`
+   (pokemon-showdown `sim/state.ts`; `Battle#toJSON` exists for this) and
+   clone the snapshot per visit and per scenario. Per-visit cost O(1);
+   expected ~10× at late-game decisions.
+2. **Tier 2 — direct state construction:** build the determinized battle
+   directly from public state + the belief-sampled opponent (teams, HP,
+   statuses, boosts, side conditions, field) as a constructed
+   `deserializeBattle` payload — no protocol replay anywhere. This eliminates
+   replay divergence, i.e. most of `missing_sampled_world`.
+3. **Correctness constraint:** never serialize the live battle — only
+   determinized worlds built from public information. The P-1 anti-leakage
+   checksum gate must pass unchanged on the new path.
+4. **Validation gates:** W2 mechanics stage-breakdown re-run on the new path
+   (visits/sec up ~an order of magnitude; fallback toward low single digits);
+   one 200-seed paired FoulPlay read confirming no strength regression.
+
+Deferred until this lands: batched leaf NN evaluation, tree reuse, early
+termination, vectorized stepping, and the multi-ply question — all get
+re-priced on the fast path. Success remains **more winrate at fixed
+wall-clock**, not more visits.
 
 ## Order and cost
 
-W1 ∥ W2 first (cheap; W1's fallback rate reframes everything else). W3 after
-its leaf refit; W4 anytime on eval GPUs; W5 only after W2. Every strength
+W5 (materialization redesign) is now first — W1's diagnosis and W4's cost
+table are complete and both point at it. W2's value curve continues in
+parallel (its data is still wanted and re-runs cheaply on the fast path); W3
+proceeds once its leaf refit lands. Every strength
 claim uses the paired harness, both arms on shared seeds; no strength claims
 from unpaired or single-arm runs.
 
