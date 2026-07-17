@@ -269,6 +269,10 @@ class LocalShowdownEnv:
         # token; events from a prior battle carry a stale token and are ignored (see _apply_event).
         self._battle_counter = 0
         self._battle_token: str | None = None
+        # Search-only snapshots are safe only after this environment is initialized from an
+        # explicit belief-sampled world. Keep the generic snapshot API available for diagnostics,
+        # but reject the fast bridge-resident path for a live rollout.
+        self._search_snapshot_permitted = False
 
     @property
     def belief_set_source_hash(self) -> str | None:
@@ -316,6 +320,7 @@ class LocalShowdownEnv:
         )
         self._battle_counter += 1
         self._battle_token = f"b{self._battle_counter}"
+        self._search_snapshot_permitted = start_override is not None
         self._lines = []
         self._latest_requests = {}
         self._latest_turn = 0
@@ -508,6 +513,37 @@ class LocalShowdownEnv:
             terminal=self._terminal,
         )
 
+    def snapshot_for_search(self) -> LocalShowdownSnapshot:
+        """Store a sampled search-world snapshot inside the bridge and return only its handle.
+
+        Search calls this only after a belief-sampled world has been materialized or replayed.
+        Keeping the serialized simulator state in Node avoids copying it through the Python bridge
+        for every root visit. This must never be used to snapshot a live hidden-information game.
+        """
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot snapshot before reset.")
+        if not self._search_snapshot_permitted:
+            raise LocalShowdownError(
+                "Bridge-resident search snapshots require a belief-sampled start override."
+            )
+        self._send_command({"type": "snapshot_search", "battleId": self._battle_token})
+        event = self._read_until_event_type("search_snapshot")
+        snapshot_id = event.get("snapshotId")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise LocalShowdownError(f"Bridge emitted malformed search snapshot event: {event!r}")
+        return LocalShowdownSnapshot(
+            battle_token=self._battle_token,
+            battle_id=self._battle_id,
+            format_id=self._format_id,
+            observation_format_id=self._observation_format_id,
+            bridge_snapshot={"snapshot_id": snapshot_id},
+            protocol_lines=tuple(self._lines),
+            latest_requests=_json_clone_requests(self._latest_requests),
+            latest_turn=self._latest_turn,
+            terminal=self._terminal,
+        )
+
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
         """Restore a snapshot into the current live bridge battle shell.
 
@@ -532,6 +568,57 @@ class LocalShowdownEnv:
             }
         )
         self._read_until_event_type("restored")
+        self._restore_local_snapshot_state(snapshot)
+
+    def restore_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> None:
+        """Clone a bridge-resident sampled-world snapshot into the current search shell."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot restore before reset.")
+        if not self._search_snapshot_permitted:
+            raise LocalShowdownError(
+                "Bridge-resident search snapshots require a belief-sampled start override."
+            )
+        if (
+            self._format_id != snapshot.format_id
+            or self._observation_format_id != snapshot.observation_format_id
+        ):
+            raise ValueError("LocalShowdownSnapshot format does not match the current live battle shell.")
+        snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
+        self._send_command(
+            {
+                "type": "restore_search",
+                "battleId": self._battle_token,
+                "snapshotId": snapshot_id,
+            }
+        )
+        self._read_until_event_type("search_restored")
+        self._restore_local_snapshot_state(snapshot)
+
+    def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
+        """Release a bridge-resident search snapshot once its prepared world is no longer needed."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot release a search snapshot before reset.")
+        snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
+        self._send_command(
+            {
+                "type": "release_search_snapshot",
+                "battleId": self._battle_token,
+                "snapshotId": snapshot_id,
+            }
+        )
+        event = self._read_until_event_type("search_snapshot_released")
+        released = event.get("released")
+        if not isinstance(released, bool):
+            raise LocalShowdownError(f"Bridge emitted malformed search snapshot release event: {event!r}")
+        return released
+
+    def _restore_local_snapshot_state(self, snapshot: LocalShowdownSnapshot) -> None:
         self._battle_id = snapshot.battle_id
         self._format_id = snapshot.format_id
         self._observation_format_id = snapshot.observation_format_id

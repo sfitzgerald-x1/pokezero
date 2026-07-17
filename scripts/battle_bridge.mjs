@@ -48,6 +48,8 @@ try {
 // reused process. battleId is optional; it defaults to "default" for single-battle callers.
 const DEFAULT_BATTLE_ID = "default";
 const battles = new Map();
+const searchSnapshots = new Map();
+let nextSearchSnapshotId = 1;
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -223,6 +225,50 @@ function snapshotBattle(command) {
   });
 }
 
+function snapshotSearchBattle(command) {
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  const snapshotId = `search-${nextSearchSnapshotId}`;
+  nextSearchSnapshotId += 1;
+  // This is only called from a separate, belief-sampled search environment. Keep the
+  // serialized state in Node so each visit sends a tiny handle, never a live-battle payload.
+  searchSnapshots.set(snapshotId, {
+    // Match the existing JSON bridge contract before retaining the snapshot. In particular,
+    // State.deserializeBattle expects the JSON-normalized form that generic snapshots receive
+    // after their round trip through Python, not JavaScript-only undefined-valued properties.
+    battle: jsonSnapshotClone(State.serializeBattle(battle.battleStream.battle)),
+    boundaryRequests: jsonSnapshotClone(battle.boundaryRequests),
+    terminalScheduled: battle.terminalScheduled,
+  });
+  emit({ type: "search_snapshot", battleId: battle.battleId, snapshotId });
+}
+
+function jsonSnapshotClone(value) {
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? null : JSON.parse(encoded);
+}
+
+function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {}) {
+  const send = battle.battleStream.battle.send;
+  // Search restores clone the retained serialized world for every root visit. Keep the generic
+  // snapshot path byte-for-byte compatible with its prior bridge contract.
+  battle.battleStream.battle = State.deserializeBattle(
+    cloneSnapshot ? structuredClone(snapshot.battle) : snapshot.battle
+  );
+  battle.battleStream.battle.restart(send);
+  battle.boundaryRequests =
+    snapshot.boundaryRequests && typeof snapshot.boundaryRequests === "object"
+      ? cloneSnapshot
+        ? structuredClone(snapshot.boundaryRequests)
+        : snapshot.boundaryRequests
+      : {};
+  battle.readyScheduled = false;
+  battle.terminalScheduled = Boolean(snapshot.terminalScheduled);
+  battle.tRecv = null;
+}
+
 function restoreBattle(command) {
   const battle = requireBattle(command);
   const snapshot = command.snapshot;
@@ -232,20 +278,47 @@ function restoreBattle(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
-  const send = battle.battleStream.battle.send;
-  battle.battleStream.battle = State.deserializeBattle(snapshot.battle);
-  battle.battleStream.battle.restart(send);
-  battle.boundaryRequests =
-    snapshot.boundaryRequests && typeof snapshot.boundaryRequests === "object"
-      ? snapshot.boundaryRequests
-      : {};
-  battle.readyScheduled = false;
-  battle.terminalScheduled = Boolean(snapshot.terminalScheduled);
-  battle.tRecv = null;
+  restoreSerializedBattle(battle, snapshot);
   emit({
     type: "restored",
     battleId: battle.battleId,
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+  });
+}
+
+function restoreSearchBattle(command) {
+  const battle = requireBattle(command);
+  const snapshotId = command.snapshotId;
+  if (typeof snapshotId !== "string" || snapshotId.length === 0) {
+    throw new Error("Search restore requires a snapshotId.");
+  }
+  const snapshot = searchSnapshots.get(snapshotId);
+  if (!snapshot) {
+    throw new Error(`Unknown search snapshot ${snapshotId}.`);
+  }
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  restoreSerializedBattle(battle, snapshot, { cloneSnapshot: true });
+  emit({
+    type: "search_restored",
+    battleId: battle.battleId,
+    requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+  });
+}
+
+function releaseSearchSnapshot(command) {
+  requireBattle(command);
+  const snapshotId = command.snapshotId;
+  if (typeof snapshotId !== "string" || snapshotId.length === 0) {
+    throw new Error("Search snapshot release requires a snapshotId.");
+  }
+  const released = searchSnapshots.delete(snapshotId);
+  emit({
+    type: "search_snapshot_released",
+    battleId: battleIdOf(command),
+    snapshotId,
+    released,
   });
 }
 
@@ -738,6 +811,7 @@ async function closeAll() {
     await teardownBattle(battle);
   }
   battles.clear();
+  searchSnapshots.clear();
   emit({ type: "closed" });
 }
 
@@ -755,8 +829,17 @@ async function handleCommand(command) {
     case "snapshot":
       snapshotBattle(command);
       break;
+    case "snapshot_search":
+      snapshotSearchBattle(command);
+      break;
     case "restore":
       restoreBattle(command);
+      break;
+    case "restore_search":
+      restoreSearchBattle(command);
+      break;
+    case "release_search_snapshot":
+      releaseSearchSnapshot(command);
       break;
     case "materialize":
       materializeBattle(command);

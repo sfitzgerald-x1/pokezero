@@ -15,6 +15,7 @@ from pokezero.search import (
     puct_branch_search,
     prepare_direct_materialization_prefix,
     prepare_replay_prefix,
+    release_prepared_replay_prefix,
     terminal_value_for_player,
     value_branch_search,
 )
@@ -181,6 +182,28 @@ class SnapshotValueBranchEnv(ValueBranchEnv):
     def restore(self, snapshot) -> None:
         self.restore_calls += 1
         self._requested, self._terminal = snapshot
+
+
+class BridgeSnapshotValueBranchEnv(SnapshotValueBranchEnv):
+    """Test double for the search-only bridge-resident snapshot API."""
+
+    def __init__(self, terminal_winners_by_action: dict[int, str | None] | None = None) -> None:
+        super().__init__(terminal_winners_by_action)
+        self.search_snapshot_calls = 0
+        self.search_restore_calls = 0
+        self.released_search_snapshots: list[tuple[tuple[str, ...], TerminalState | None]] = []
+
+    def snapshot_for_search(self):
+        self.search_snapshot_calls += 1
+        return self._requested, self._terminal
+
+    def restore_search_snapshot(self, snapshot) -> None:
+        self.search_restore_calls += 1
+        self._requested, self._terminal = snapshot
+
+    def release_search_snapshot(self, snapshot) -> bool:
+        self.released_search_snapshots.append(snapshot)
+        return True
 
 
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
@@ -596,6 +619,84 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["prefix_replay_count"], 0)
         self.assertEqual(timing["state_snapshot_count"], 0)
         self.assertEqual(timing["state_restore_count"], 5)
+
+    def test_puct_branch_search_prefers_bridge_resident_snapshot_handles(self) -> None:
+        env = BridgeSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+        assert prepared_prefix is not None
+        self.assertEqual(prepared_prefix.snapshot_restore_mode, "bridge-handle")
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(env.search_snapshot_calls, 1)
+        self.assertEqual(env.search_restore_calls, 5)
+        self.assertEqual(env.snapshot_calls, 0)
+        self.assertEqual(env.restore_calls, 0)
+
+    def test_prepared_bridge_snapshot_can_be_released_after_search(self) -> None:
+        env = BridgeSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+
+        self.assertIsNotNone(prepared_prefix)
+        assert prepared_prefix is not None
+        self.assertEqual(prepared_prefix.snapshot_restore_mode, "bridge-handle")
+        self.assertTrue(release_prepared_replay_prefix(env, prepared_prefix))
+        self.assertEqual(env.released_search_snapshots, [(('p1', 'p2'), None)])
+
+    def test_puct_branch_search_uses_generic_snapshot_for_an_oracle_world(self) -> None:
+        env = BridgeSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(env.snapshot_calls, 1)
+        self.assertEqual(env.restore_calls, 5)
+        self.assertEqual(env.search_snapshot_calls, 0)
+        self.assertEqual(env.search_restore_calls, 0)
 
     def test_puct_branch_search_rejects_prepared_prefix_from_a_different_world(self) -> None:
         env = TimedSnapshotValueBranchEnv()
