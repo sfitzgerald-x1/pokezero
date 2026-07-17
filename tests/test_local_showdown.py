@@ -705,6 +705,129 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
         self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
 
+    def test_public_materialization_preserves_static_public_volatiles(self) -> None:
+        config = integration_config()
+        assert config is not None
+        cases = (
+            ("Charmander", "Blaze", "Focus Energy", "focusenergy"),
+            ("Shuckle", "Sturdy", "Ingrain", "ingrain"),
+            ("Mudkip", "Torrent", "Mud Sport", "mudsport"),
+            ("Poliwag", "Water Absorb", "Water Sport", "watersport"),
+        )
+
+        for species, ability, setup_move, volatile in cases:
+            with self.subTest(volatile=volatile):
+                start_override = BattleStartOverride(
+                    player_teams={
+                        "p1": pack_team(
+                            (FixturePokemon(
+                                species=species,
+                                ability=ability,
+                                moves=(setup_move, "Protect"),
+                            ),)
+                        ),
+                        "p2": pack_team(
+                            (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)
+                        ),
+                    },
+                )
+                with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+                    source.reset_with_start_override(seed=37, start_override=start_override)
+                    source.step({"p1": 0, "p2": 0})
+                    expected = source.observe("p1")
+                    materialization = source.public_materialization_state("p1")
+                    expected_branch = source.step({"p1": 1, "p2": 0})
+
+                    self.assertIn(volatile, materialization.replay.volatiles["p1"])
+
+                    search_env.materialize_public_world(
+                        state=materialization,
+                        start_override=start_override,
+                        seed=37,
+                    )
+                    actual = search_env.observe("p1")
+                    branch = search_env.step({"p1": 1, "p2": 0})
+
+                self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+                self.assertEqual(actual.numeric_features, expected.numeric_features)
+                self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+                self.assertEqual(
+                    branch.observations["p1"].categorical_ids,
+                    expected_branch.observations["p1"].categorical_ids,
+                )
+                self.assertEqual(
+                    branch.observations["p1"].numeric_features,
+                    expected_branch.observations["p1"].numeric_features,
+                )
+
+    def test_public_materialization_fails_closed_for_volatile_without_complete_public_state(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Pikachu", ability="Static", moves=("Substitute",)),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=41, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+
+            self.assertIn("substitute", materialization.replay.volatiles["p1"])
+            with self.assertRaisesRegex(LocalShowdownError, "volatile effect substitute"):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=41,
+                )
+
+    def test_public_materialization_preserves_opponent_static_public_volatile(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(
+                        species="Shuckle",
+                        ability="Sturdy",
+                        moves=("Ingrain", "Protect"),
+                    ),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=43, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            expected = source.observe("p1")
+            materialization = source.public_materialization_state("p1")
+            expected_branch = source.step({"p1": 0, "p2": 1})
+
+            self.assertIn("ingrain", materialization.replay.volatiles["p2"])
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=43,
+            )
+            actual = search_env.observe("p1")
+            branch = search_env.step({"p1": 0, "p2": 1})
+
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(branch.observations["p1"].categorical_ids, expected_branch.observations["p1"].categorical_ids)
+        self.assertEqual(branch.observations["p1"].numeric_features, expected_branch.observations["p1"].numeric_features)
+
     def test_public_materialization_fails_closed_when_actor_pp_history_is_unavailable(self) -> None:
         config = integration_config()
         assert config is not None

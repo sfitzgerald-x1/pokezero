@@ -311,8 +311,8 @@ function applyPublicState(snapshot, publicState) {
     if (!publicSide || typeof publicSide !== "object") {
       throw new Error(`Materialize is missing public state for ${sideId}.`);
     }
-    if (hasEntries(publicSide.volatiles)) {
-      throw new Error("Materialize does not yet support volatile effects.");
+    if (!Array.isArray(publicSide.volatiles)) {
+      throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
     }
     const rows = Array.isArray(publicSide.pokemon) ? publicSide.pokemon : [];
     const serializedSide = snapshot.sides[sideIndex];
@@ -338,7 +338,11 @@ function applyPublicState(snapshot, publicState) {
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
         : normalizedBoosts(null);
-      serializedSide.pokemon[index].volatiles = {};
+      applyPublicVolatiles(
+        serializedSide.pokemon[index],
+        row.active ? publicSide.volatiles : [],
+        sideId,
+      );
       serializedSide.pokemon[index].lastMove = null;
       serializedSide.pokemon[index].lastMoveUsed = null;
       serializedSide.pokemon[index].attackedBy = [];
@@ -380,6 +384,11 @@ function applyPublicState(snapshot, publicState) {
 }
 
 const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "mist"]);
+// These conditions are persistent, public flags. They neither carry an unknown duration nor
+// require a source/target relationship to reproduce their Gen 3 mechanics.
+const STATIC_PUBLIC_VOLATILES = new Set([
+  "focusenergy", "ingrain", "mudsport", "watersport",
+]);
 
 function applyPublicWeather(field, publicState) {
   const weather = normalizeId(publicState.weather);
@@ -535,6 +544,32 @@ function normalizedBoosts(boosts) {
     if (Number.isInteger(boosts[key])) normalized[key] = boosts[key];
   }
   return normalized;
+}
+
+function applyPublicVolatiles(pokemon, rawVolatiles, sideId) {
+  if (!Array.isArray(rawVolatiles)) {
+    throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
+  }
+  pokemon.volatiles = {};
+  const seen = new Set();
+  for (const rawVolatile of rawVolatiles) {
+    if (typeof rawVolatile !== "string") {
+      throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
+    }
+    const volatile = normalizeId(rawVolatile);
+    if (!STATIC_PUBLIC_VOLATILES.has(volatile)) {
+      throw new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
+    }
+    if (seen.has(volatile)) {
+      throw new Error(`Materialize received duplicate volatile effect ${rawVolatile}.`);
+    }
+    seen.add(volatile);
+    pokemon.volatiles[volatile] = {
+      id: volatile,
+      effectOrder: 0,
+      target: `[Pokemon:${sideId}a]`,
+    };
+  }
 }
 
 function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage) {
