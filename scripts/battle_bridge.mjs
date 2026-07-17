@@ -286,7 +286,8 @@ function applyPublicState(snapshot, publicState) {
     throw new Error("Materialize does not yet support Future Sight.");
   }
   snapshot.turn = publicState.turn;
-  snapshot.requestState = "move";
+  const selfForceSwitch = publicState.selfRequestKind === "force-switch";
+  snapshot.requestState = selfForceSwitch ? "switch" : "move";
   snapshot.lastMove = null;
   snapshot.lastMoveLine = 0;
   snapshot.lastSuccessfulMoveThisTurn = null;
@@ -350,7 +351,13 @@ function applyPublicState(snapshot, publicState) {
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
     if (sideId === publicState.selfPlayer) {
-      applySelfActiveMoveState(active, publicState.selfActiveMoves);
+      if (selfForceSwitch) active.switchFlag = true;
+      applyKnownMoveState(active, publicState.selfActiveMoves);
+      applySelfActiveRequestState(active, publicState.selfActiveRequestState);
+      for (const row of rows) {
+        const matchingIndex = serializedSide.pokemon.findIndex(pokemon => sameSpecies(pokemon, row.species));
+        if (matchingIndex >= 0) applyKnownMoveState(serializedSide.pokemon[matchingIndex], row.moves);
+      }
     }
     applyPublicSideConditions(serializedSide, publicSide, sideId, publicState.turn);
     serializedSide.slotConditions = [{}];
@@ -518,7 +525,7 @@ function applyPokemonCondition(pokemon, condition, sideId, species) {
   pokemon.statusState = {id: status, effectOrder: 0};
 }
 
-function applySelfActiveMoveState(pokemon, moves) {
+function applyKnownMoveState(pokemon, moves) {
   if (!Array.isArray(moves)) return;
   for (const state of moves) {
     if (!state || typeof state.id !== "string" || !Number.isInteger(state.pp) || !Number.isInteger(state.maxpp)) {
@@ -532,6 +539,15 @@ function applySelfActiveMoveState(pokemon, moves) {
     slot.pp = state.pp;
     slot.disabled = Boolean(state.disabled);
     slot.used = state.pp < state.maxpp;
+  }
+}
+
+function applySelfActiveRequestState(pokemon, state) {
+  if (!state || typeof state !== "object") return;
+  // These are actor-visible request flags, not inferred opponent state. They must survive
+  // reconstruction so the direct branch exposes the same legal action boundary as the live turn.
+  for (const name of ["trapped", "maybeTrapped", "maybeDisabled", "maybeLocked"]) {
+    if (state[name] === true) pokemon[name] = true;
   }
 }
 

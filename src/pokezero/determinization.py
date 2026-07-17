@@ -815,6 +815,7 @@ def _self_team_from_metadata_result(
                 ability=_optional_text(row.get("ability")),
                 item=_optional_text(row.get("item")),
                 level=level,
+                gender=_gender_from_details(_optional_text(row.get("details"))),
                 evs=spread["evs"],
                 ivs=spread["ivs"],
             )
@@ -1548,6 +1549,16 @@ def _level_from_details(details: str | None) -> int | None:
         token = part.strip()
         if token.startswith("L") and token[1:].isdigit():
             return int(token[1:])
+    return None
+
+
+def _gender_from_details(details: str | None) -> str | None:
+    if not details:
+        return None
+    for part in details.split(","):
+        token = part.strip().upper()
+        if token in {"M", "F", "N"}:
+            return token
     return None
 
 

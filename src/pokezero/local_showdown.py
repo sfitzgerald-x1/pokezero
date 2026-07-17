@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import os
@@ -202,8 +202,10 @@ class PublicBattleMaterializationState:
     """Public/player-known source state for direct sampled-world construction.
 
     This intentionally excludes a simulator snapshot and the other player's request. The
-    captured replay fold and belief engine contain only public protocol facts; ``self_request``
-    is allowed because it belongs to the policy's acting player.
+    captured replay fold and belief engine contain only public protocol facts. The ``self_*``
+    fields contain only the acting player's request-known state. In particular, cached move
+    states retain PP for a Pokemon after it switches out, while the first request preserves exact
+    team stats after a Pokemon faints.
     """
 
     player_id: PlayerId
@@ -212,6 +214,8 @@ class PublicBattleMaterializationState:
     replay: ShowdownReplayState
     belief_engine: PublicBattleBeliefEngine
     self_request: Mapping[str, Any]
+    self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
+    self_initial_request: Mapping[str, Any] = field(default_factory=dict)
 
 
 class LocalShowdownEnv:
@@ -255,6 +259,7 @@ class LocalShowdownEnv:
         # pre-#505 checkpoints (whose provenance latches tier2_residuals=False) pay
         # nothing and encode byte-identically.
         self._first_requests: dict[PlayerId, Mapping[str, Any]] = {}
+        self._request_history: dict[PlayerId, list[Mapping[str, Any]]] = {player: [] for player in PLAYER_IDS}
         self._tier2_trackers: dict[PlayerId, Tier2LiveTracker] = {}
         # Defender-side investment trackers (v2.1 batch 2): same lazy per-perspective
         # pattern, active only under the tier2 channel AND the tier2_investment mask
@@ -323,6 +328,7 @@ class LocalShowdownEnv:
         self._parsed_line_count = 0
         self._belief_fed_count = 0
         self._first_requests = {}
+        self._request_history = {player: [] for player in PLAYER_IDS}
         self._tier2_trackers = {}
         self._investment_trackers = {}
         # Reuse a live bridge process across battles (warm pool); only spawn when there is none or
@@ -410,6 +416,8 @@ class LocalShowdownEnv:
             replay=replace(replay, requests={}),
             belief_engine=self._belief_engine.clone(),
             self_request=_json_clone_mapping(request),
+            self_move_states=actor_move_states_from_request_history(self._request_history[player]),
+            self_initial_request=_json_clone_mapping(self._first_requests.get(player) or request),
         )
 
     def materialize_public_world(
@@ -449,7 +457,14 @@ class LocalShowdownEnv:
         )
         self._lines = []
         self._latest_requests = direct_requests
-        self._first_requests = dict(direct_requests)
+        initial_request = (
+            state.self_initial_request if state.self_initial_request else direct_requests.get(state.player_id)
+        )
+        self._first_requests = (
+            {state.player_id: _json_clone_mapping(initial_request)}
+            if isinstance(initial_request, Mapping)
+            else dict(direct_requests)
+        )
         self._latest_turn = replay.turn_number
         self._terminal = None
         self._last_step_had_error = False
@@ -773,6 +788,7 @@ class LocalShowdownEnv:
                     if side_id == stream:
                         self._latest_requests[stream] = request
                         self._first_requests.setdefault(stream, request)
+                        self._request_history[stream].append(_json_clone_mapping(request))
                         self._lines.append(line)
         return False
 
@@ -1008,7 +1024,7 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
     sides: dict[PlayerId, dict[str, Any]] = {}
     for player in PLAYER_IDS:
         rows = (
-            _request_materialization_rows(state.self_request)
+            _request_materialization_rows(state.self_request, self_move_states=state.self_move_states)
             if player == state.player_id
             else [_pokemon_materialization_row(pokemon) for pokemon in replay.public_revealed.get(player, ())]
         )
@@ -1026,10 +1042,11 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "weatherFromAbility": replay.weather_from_ability,
         "futureSight": dict(replay.future_sight),
         "selfPlayer": state.player_id,
+        "selfRequestKind": _request_materialization_kind(state.self_request),
         "selfActiveMoves": _request_active_moves(state.self_request),
-        # A request gives exact PP only for the current active Pokemon. Do not construct a
-        # sampled branch that could later switch to a benched Pokemon whose spent PP cannot be
-        # reconstructed from the request; the bridge rejects this shape and search uses Tier 1.
+        "selfActiveRequestState": _request_active_materialization_state(state.self_request),
+        # The actor's request history retains exact PP state for Pokemon that were previously
+        # active. If a used benched Pokemon has no such request-known snapshot, fail closed.
         "selfBenchedMoveHistory": _has_self_benched_move_history(state),
         "sides": sides,
     }
@@ -1043,7 +1060,11 @@ def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
     }
 
 
-def _request_materialization_rows(request: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _request_materialization_rows(
+    request: Mapping[str, Any],
+    *,
+    self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]],
+) -> list[dict[str, Any]]:
     side = request.get("side") if isinstance(request.get("side"), Mapping) else {}
     pokemon_rows = side.get("pokemon") if isinstance(side, Mapping) else None
     if not isinstance(pokemon_rows, list):
@@ -1065,6 +1086,7 @@ def _request_materialization_rows(request: Mapping[str, Any]) -> list[dict[str, 
                 "species": species,
                 "condition": condition,
                 "active": bool(raw_row.get("active")),
+                "moves": [dict(move) for move in self_move_states.get(_request_pokemon_identity(raw_row), ())],
             }
         )
     if not rows:
@@ -1097,18 +1119,90 @@ def _request_active_moves(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     return copied
 
 
+def _request_materialization_kind(request: Mapping[str, Any]) -> str:
+    force_switch = request.get("forceSwitch")
+    if isinstance(force_switch, list) and any(bool(entry) for entry in force_switch):
+        return "force-switch"
+    return "move"
+
+
+def _request_active_materialization_state(request: Mapping[str, Any]) -> dict[str, bool]:
+    """Return request-visible active constraints that affect the action boundary.
+
+    These flags are supplied to the acting player by Showdown. Restoring them keeps the direct
+    branch's legal action mask aligned even if the sampled simulator world cannot re-derive a
+    public constraint from its freshly constructed internal state.
+    """
+
+    active = request.get("active")
+    active_row = active[0] if isinstance(active, list) and active else None
+    if not isinstance(active_row, Mapping):
+        return {}
+    return {
+        name: True
+        for name in ("trapped", "maybeTrapped", "maybeDisabled", "maybeLocked")
+        if bool(active_row.get(name))
+    }
+
+
+def actor_move_states_from_request_history(
+    requests: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Return each actor-known active move state from its most recent request.
+
+    A normal Showdown request carries exact PP only for the current active Pokemon. Keeping the
+    most recent such state per own Pokemon is player-known information and lets direct search
+    restore a previously active Pokemon after it has switched out.
+    """
+
+    states: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for request in requests:
+        identity = _request_active_pokemon_identity(request)
+        moves = _request_active_moves(request)
+        if identity is not None and moves:
+            states[identity] = tuple(_json_clone_mapping(move) for move in moves)
+    return states
+
+
+def _request_active_pokemon_identity(request: Mapping[str, Any]) -> str | None:
+    side = request.get("side") if isinstance(request.get("side"), Mapping) else {}
+    pokemon_rows = side.get("pokemon") if isinstance(side, Mapping) else None
+    if not isinstance(pokemon_rows, list):
+        return None
+    for row in pokemon_rows:
+        if isinstance(row, Mapping) and bool(row.get("active")):
+            return _request_pokemon_identity(row)
+    return None
+
+
+def _request_pokemon_identity(row: Mapping[str, Any]) -> str:
+    ident = str(row.get("ident") or "")
+    if not ident:
+        ident = str(row.get("details") or "").split(",", 1)[0]
+    return _materialization_identity(ident)
+
+
+def _materialization_identity(value: str) -> str:
+    """Normalize request and protocol identifiers without retaining the player-side prefix."""
+
+    return value.split(":", 1)[-1].strip().casefold()
+
+
 def _has_self_benched_move_history(state: PublicBattleMaterializationState) -> bool:
-    """Whether direct construction would lose known PP for a currently benched self mon."""
+    """Whether a previously active self Pokemon lacks a request-known move-state snapshot."""
 
     active = state.replay.public_active.get(state.player_id)
     active_ident = active.ident if active is not None else None
     if active_ident is None:
         raise LocalShowdownError("Direct materialization requires an acting-player active Pokemon.")
+    active_identity = _materialization_identity(active_ident)
+    known_identities = set(state.self_move_states)
     return any(
         event.event_type == "move"
         and event.actor_slot == state.player_id
         and event.actor_ident is not None
-        and event.actor_ident != active_ident
+        and _materialization_identity(event.actor_ident) != active_identity
+        and _materialization_identity(event.actor_ident) not in known_identities
         for event in state.replay.public_events
     )
 

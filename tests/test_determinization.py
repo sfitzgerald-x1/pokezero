@@ -526,7 +526,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         row = {
             "species": "Noctowl",
-            "details": "Noctowl, L93",
+            "details": "Noctowl, L93, F",
             "moves": ["hypnosis", "whirlwind", "toxic", "return102"],
             "item": "Leftovers",
             "stats": {"hp": 337, "atk": 146, "def": 146, "spa": 194, "spd": 231, "spe": 183},
@@ -549,6 +549,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertIsNotNone(team)
         assert team is not None
         self.assertEqual(team[0].moves[-1], "return")
+        self.assertEqual(team[0].gender, "F")
         self.assertIn("hypnosis,whirlwind,toxic,return", pack_team(team))
         self.assertNotIn("return102", pack_team(team))
 

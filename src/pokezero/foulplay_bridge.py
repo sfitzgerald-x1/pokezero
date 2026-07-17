@@ -37,6 +37,7 @@ from .local_showdown import (
     LocalShowdownConfig,
     LocalShowdownEnv,
     PublicBattleMaterializationState,
+    actor_move_states_from_request_history,
     belief_set_source_env_enabled,
     showdown_seed_from_int,
 )
@@ -3169,6 +3170,16 @@ def _public_materialization_state(
     request = json.loads(request_line[len("|request|") :])
     if not isinstance(request, Mapping):
         raise RuntimeError("direct materialization request must be a JSON object.")
+    # The controlled bridge has both request streams to drive FoulPlay, but direct search may
+    # carry only the acting player's historical requests. They retain PP for a Pokemon that was
+    # active earlier and is now benched; the opponent's request payload remains excluded.
+    actor_requests: list[Mapping[str, Any]] = []
+    for request_player, historical_line in state.request_history:
+        if request_player != player or not historical_line.startswith("|request|"):
+            continue
+        historical_request = json.loads(historical_line[len("|request|") :])
+        if isinstance(historical_request, Mapping):
+            actor_requests.append(historical_request)
     public_replay = parse_showdown_replay(state.public_lines, battle_id=state.battle_id)
     belief_engine = PublicBattleBeliefEngine.from_events(
         public_replay.public_events,
@@ -3182,6 +3193,10 @@ def _public_materialization_state(
         replay=public_replay,
         belief_engine=belief_engine,
         self_request=json.loads(json.dumps(request, separators=(",", ":"))),
+        self_move_states=actor_move_states_from_request_history(actor_requests),
+        self_initial_request=json.loads(
+            json.dumps(actor_requests[0] if actor_requests else request, separators=(",", ":"))
+        ),
     )
 
 
