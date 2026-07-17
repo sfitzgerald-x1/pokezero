@@ -282,8 +282,8 @@ function applyPublicState(snapshot, publicState) {
   if (publicState.selfBenchedMoveHistory) {
     throw new Error("Materialize cannot reconstruct spent PP for a benched acting Pokemon.");
   }
-  if (publicState.weather || hasEntries(publicState.futureSight)) {
-    throw new Error("Materialize does not yet support active weather or Future Sight.");
+  if (hasEntries(publicState.futureSight)) {
+    throw new Error("Materialize does not yet support Future Sight.");
   }
   snapshot.turn = publicState.turn;
   snapshot.requestState = "move";
@@ -297,8 +297,7 @@ function applyPublicState(snapshot, publicState) {
   snapshot.activeMove = null;
   snapshot.activePokemon = null;
   snapshot.activeTarget = null;
-  snapshot.field.weather = "";
-  snapshot.field.weatherState = {id: "", effectOrder: 0};
+  applyPublicWeather(snapshot.field, publicState);
   snapshot.field.pseudoWeather = {};
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
@@ -306,8 +305,8 @@ function applyPublicState(snapshot, publicState) {
     if (!publicSide || typeof publicSide !== "object") {
       throw new Error(`Materialize is missing public state for ${sideId}.`);
     }
-    if (hasEntries(publicSide.sideConditions) || hasEntries(publicSide.volatiles)) {
-      throw new Error("Materialize does not yet support side conditions or volatile effects.");
+    if (hasEntries(publicSide.volatiles)) {
+      throw new Error("Materialize does not yet support volatile effects.");
     }
     const rows = Array.isArray(publicSide.pokemon) ? publicSide.pokemon : [];
     const serializedSide = snapshot.sides[sideIndex];
@@ -353,12 +352,73 @@ function applyPublicState(snapshot, publicState) {
     if (sideId === publicState.selfPlayer) {
       applySelfActiveMoveState(active, publicState.selfActiveMoves);
     }
-    serializedSide.sideConditions = {};
+    applyPublicSideConditions(serializedSide, publicSide, sideId, publicState.turn);
     serializedSide.slotConditions = [{}];
     serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+}
+
+const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "mist"]);
+
+function applyPublicWeather(field, publicState) {
+  const weather = normalizeId(publicState.weather);
+  if (!weather) {
+    field.weather = "";
+    field.weatherState = {id: "", effectOrder: 0};
+    return;
+  }
+  const weatherState = {id: weather, effectOrder: 0, target: "[Field]"};
+  if (!publicState.weatherFromAbility) {
+    weatherState.duration = remainingTimedTurns(
+      publicState.turn,
+      publicState.weatherSetTurn,
+      "weather",
+    );
+  }
+  field.weather = weather;
+  field.weatherState = weatherState;
+}
+
+function applyPublicSideConditions(serializedSide, publicSide, sideId, currentTurn) {
+  const sideConditions = publicSide.sideConditions;
+  if (sideConditions != null && typeof sideConditions !== "object") {
+    throw new Error(`Materialize received invalid side conditions for ${sideId}.`);
+  }
+  const setTurns = publicSide.sideConditionSetTurns;
+  if (setTurns != null && typeof setTurns !== "object") {
+    throw new Error(`Materialize received invalid side-condition timing for ${sideId}.`);
+  }
+  serializedSide.sideConditions = {};
+  for (const [rawCondition, rawCount] of Object.entries(sideConditions || {})) {
+    const condition = normalizeId(rawCondition);
+    const count = Number(rawCount);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new Error(`Materialize received invalid ${rawCondition} count for ${sideId}.`);
+    }
+    const state = {id: condition, effectOrder: 2, target: `[Side:${sideId}]`};
+    if (condition === "spikes") {
+      if (count > 3) throw new Error(`Materialize received invalid Spikes layers for ${sideId}.`);
+      state.layers = count;
+    } else if (TIMED_SIDE_CONDITIONS.has(condition)) {
+      state.duration = remainingTimedTurns(currentTurn, setTurns?.[rawCondition], condition);
+    } else {
+      throw new Error(`Materialize does not yet support side condition ${rawCondition}.`);
+    }
+    serializedSide.sideConditions[condition] = state;
+  }
+}
+
+function remainingTimedTurns(currentTurn, setTurn, label) {
+  if (!Number.isInteger(currentTurn) || currentTurn < 1 || !Number.isInteger(setTurn) || setTurn < 1) {
+    throw new Error(`Materialize requires a public set turn for active ${label}.`);
+  }
+  const remaining = 5 - (currentTurn - setTurn);
+  if (remaining < 1 || remaining > 5) {
+    throw new Error(`Materialize received an expired or invalid ${label} duration.`);
+  }
+  return remaining;
 }
 
 function moveActivePokemonToFront(serializedSide, activeIndex) {
