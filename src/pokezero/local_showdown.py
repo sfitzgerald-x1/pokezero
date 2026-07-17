@@ -1048,6 +1048,10 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
         "weatherFromAbility": replay.weather_from_ability,
         "futureSight": dict(replay.future_sight),
         "selfPlayer": state.player_id,
+        # The actor's request exposes the active-first team permutation used for both future
+        # observations and `switch N` choices. This is player-known state, unlike the opponent's
+        # party order, and lets the constructed simulator preserve it beyond the first boundary.
+        "selfTeamOrder": [row["species"] for row in sides[state.player_id]["pokemon"]],
         "selfRequestKind": _request_materialization_kind(state.self_request),
         "selfActiveMoves": _request_active_moves(state.self_request),
         "selfActiveRequestState": _request_active_materialization_state(state.self_request),
