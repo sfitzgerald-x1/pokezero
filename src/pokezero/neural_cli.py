@@ -3655,15 +3655,53 @@ def _validate_root_opponent_action_scenario_counts(args: argparse.Namespace) -> 
 def _root_puct_benchmark_progress_callback(
     interval_games: int,
 ) -> Callable[[BenchmarkProgress], None]:
-    """Return compact stderr liveness reporting for a long Root-PUCT benchmark."""
+    """Return compact stderr liveness and fallback-taxonomy reporting."""
 
     if interval_games <= 0:
         raise ValueError("root PUCT progress interval must be positive.")
 
+    cumulative_searches = 0
+    cumulative_fallbacks = 0
+    cumulative_fallback_categories: dict[str, int] = {}
+    active_matchup_index: int | None = None
+    has_root_puct_diagnostics = False
+
     def emit(progress: BenchmarkProgress) -> None:
+        nonlocal active_matchup_index, cumulative_searches, cumulative_fallbacks, has_root_puct_diagnostics
+        # The log event names one matchup, so never carry its fallback rate
+        # into the next matchup in a multi-opponent benchmark.
+        if active_matchup_index != progress.matchup_index:
+            active_matchup_index = progress.matchup_index
+            cumulative_searches = 0
+            cumulative_fallbacks = 0
+            cumulative_fallback_categories.clear()
+            has_root_puct_diagnostics = False
+        root_puct_by_player = getattr(progress, "root_puct_by_player", {})
+        if not isinstance(root_puct_by_player, Mapping):
+            root_puct_by_player = {}
+        for diagnostics in root_puct_by_player.values():
+            if not isinstance(diagnostics, Mapping):
+                continue
+            searches = diagnostics.get("root_puct_searches")
+            fallbacks = diagnostics.get("root_puct_fallbacks")
+            if isinstance(searches, int) and not isinstance(searches, bool):
+                cumulative_searches += searches
+                has_root_puct_diagnostics = True
+            if isinstance(fallbacks, int) and not isinstance(fallbacks, bool):
+                cumulative_fallbacks += fallbacks
+                has_root_puct_diagnostics = True
+            categories = diagnostics.get("root_puct_fallback_categories")
+            if not isinstance(categories, Mapping):
+                continue
+            for category, count in categories.items():
+                if not isinstance(category, str) or not isinstance(count, int) or isinstance(count, bool):
+                    continue
+                cumulative_fallback_categories[category] = (
+                    cumulative_fallback_categories.get(category, 0) + count
+                )
         if progress.games_completed % interval_games != 0 and progress.games_completed != progress.games_total:
             return
-        payload = {
+        payload: dict[str, Any] = {
             "matchup_label": progress.matchup_label,
             "matchup_index": progress.matchup_index + 1,
             "matchup_count": progress.matchup_count,
@@ -3672,6 +3710,19 @@ def _root_puct_benchmark_progress_callback(
             "seed": progress.seed,
             "matchup_elapsed_seconds": round(progress.matchup_elapsed_seconds, 3),
         }
+        if has_root_puct_diagnostics:
+            payload.update(
+                {
+                    "root_puct_searches": cumulative_searches,
+                    "root_puct_fallbacks": cumulative_fallbacks,
+                    "root_puct_fallback_rate": (
+                        round(cumulative_fallbacks / cumulative_searches, 6)
+                        if cumulative_searches
+                        else None
+                    ),
+                    "root_puct_fallback_categories": dict(sorted(cumulative_fallback_categories.items())),
+                }
+            )
         print(
             "root_puct_play_benchmark_progress: " + json.dumps(payload, sort_keys=True),
             file=sys.stderr,

@@ -3676,6 +3676,32 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         games_total=3,
                         seed=80 + games_completed,
                         matchup_elapsed_seconds=1.23456 * games_completed,
+                        root_puct_by_player={
+                            "p1": {
+                                "root_puct_searches": 2,
+                                "root_puct_fallbacks": 1,
+                                "root_puct_fallback_categories": {"missing_sampled_world": 1},
+                            }
+                        },
+                    )
+                )
+            for games_completed in (1, 2):
+                callback(
+                    SimpleNamespace(
+                        matchup_label="root-puct vs foul-play",
+                        matchup_index=2,
+                        matchup_count=4,
+                        games_completed=games_completed,
+                        games_total=2,
+                        seed=90 + games_completed,
+                        matchup_elapsed_seconds=2.0 * games_completed,
+                        root_puct_by_player={
+                            "p2": {
+                                "root_puct_searches": 1,
+                                "root_puct_fallbacks": 0,
+                                "root_puct_fallback_categories": {},
+                            }
+                        },
                     )
                 )
 
@@ -3684,7 +3710,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             for line in stderr.getvalue().splitlines()
             if line.startswith("root_puct_play_benchmark_progress:")
         ]
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 3)
         self.assertEqual(
             [json.loads(line.split(": ", 1)[1]) for line in lines],
             [
@@ -3695,6 +3721,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_elapsed_seconds": 2.469,
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
+                    "root_puct_fallback_categories": {"missing_sampled_world": 2},
+                    "root_puct_fallback_rate": 0.5,
+                    "root_puct_fallbacks": 2,
+                    "root_puct_searches": 4,
                     "seed": 82,
                 },
                 {
@@ -3704,10 +3734,79 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_elapsed_seconds": 3.704,
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
+                    "root_puct_fallback_categories": {"missing_sampled_world": 3},
+                    "root_puct_fallback_rate": 0.5,
+                    "root_puct_fallbacks": 3,
+                    "root_puct_searches": 6,
                     "seed": 83,
+                },
+                {
+                    "games_completed": 2,
+                    "games_total": 2,
+                    "matchup_count": 4,
+                    "matchup_elapsed_seconds": 4.0,
+                    "matchup_index": 3,
+                    "matchup_label": "root-puct vs foul-play",
+                    "root_puct_fallback_categories": {},
+                    "root_puct_fallback_rate": 0.0,
+                    "root_puct_fallbacks": 0,
+                    "root_puct_searches": 2,
+                    "seed": 92,
                 },
             ],
         )
+
+    def test_root_puct_progress_callback_tolerates_legacy_progress_without_diagnostics(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(1)
+
+        with contextlib.redirect_stderr(stderr):
+            callback(
+                SimpleNamespace(
+                    matchup_label="root-puct vs max-damage",
+                    matchup_index=0,
+                    matchup_count=1,
+                    games_completed=1,
+                    games_total=1,
+                    seed=81,
+                    matchup_elapsed_seconds=1.0,
+                )
+            )
+
+        payload = json.loads(stderr.getvalue().split(": ", 1)[1])
+        self.assertNotIn("root_puct_fallback_rate", payload)
+        self.assertNotIn("root_puct_searches", payload)
+        self.assertNotIn("root_puct_fallbacks", payload)
+        self.assertNotIn("root_puct_fallback_categories", payload)
+
+    def test_root_puct_progress_callback_ignores_malformed_optional_diagnostics(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_benchmark_progress_callback(1)
+
+        with contextlib.redirect_stderr(stderr):
+            for games_completed, root_puct_by_player in (
+                (1, ["not-a-mapping"]),
+                (2, {"p1": "not-a-mapping"}),
+            ):
+                callback(
+                    SimpleNamespace(
+                        matchup_label="root-puct vs max-damage",
+                        matchup_index=0,
+                        matchup_count=1,
+                        games_completed=games_completed,
+                        games_total=2,
+                        seed=80 + games_completed,
+                        matchup_elapsed_seconds=float(games_completed),
+                        root_puct_by_player=root_puct_by_player,
+                    )
+                )
+
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        for line in lines:
+            payload = json.loads(line.split(": ", 1)[1])
+            self.assertNotIn("root_puct_searches", payload)
+            self.assertNotIn("root_puct_fallback_categories", payload)
 
     def test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap(self) -> None:
         if not torch_available():

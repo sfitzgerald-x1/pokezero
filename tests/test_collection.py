@@ -723,6 +723,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(telemetry["full_decision_elapsed_seconds"], timing["p1"][0])
 
     def test_per_seed_benchmark_search_diagnostics_sanitize_fallback_reasons(self) -> None:
+        progress = []
         report = benchmark_rollouts(
             games=1,
             env_factory=OneTurnEnv,
@@ -734,6 +735,7 @@ class CollectionTest(unittest.TestCase):
                     RandomLegalPolicy(),
                 ),
             ),
+            progress_callback=progress.append,
         )
 
         diagnostics = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_by_player"]["p1"]
@@ -744,6 +746,14 @@ class CollectionTest(unittest.TestCase):
         telemetry = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_decision_telemetry_by_player"]["p1"][0]
         self.assertEqual(telemetry["fallback_category"], "unknown")
         self.assertNotIn("root_puct_fallback_reason", telemetry)
+        self.assertEqual(
+            progress[0].root_puct_by_player["p1"]["root_puct_fallback_categories"],
+            {"search_failed": 1},
+        )
+        self.assertNotIn(
+            "root_puct_fallback_reasons",
+            progress[0].root_puct_by_player["p1"],
+        )
 
     def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
         checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
