@@ -3725,7 +3725,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 2},
-                    "root_puct_missing_sampled_world_reason_categories": {
+                    "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 4,
                     },
                     "root_puct_fallback_rate": 0.5,
@@ -3741,7 +3741,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 3},
-                    "root_puct_missing_sampled_world_reason_categories": {
+                    "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 6,
                     },
                     "root_puct_fallback_rate": 0.5,
@@ -3819,7 +3819,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         payload = json.loads(stderr.getvalue().split(": ", 1)[1])
         self.assertEqual(
-            payload["root_puct_missing_sampled_world_reason_categories"],
+            payload["root_puct_opponent_action_missing_sampled_world_reason_categories"],
             {"belief_view_invalid": 2},
         )
 

@@ -30,7 +30,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "root_puct_opponent_action_skip_categories": {"replay_request_mismatch": 3},
                 "root_puct_opponent_action_replay_request_mismatch_players": {"p2": 3},
                 "root_puct_opponent_action_missing_sampled_world_reason_categories": {
-                    "self_team_unavailable": 2
+                    "self_team_unavailable": 2,
+                    "private replay detail": 8,
+                    "opponent_belief_unavailable": -1,
                 },
             },
             decision_index=4,

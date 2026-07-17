@@ -741,7 +741,11 @@ class CollectionTest(unittest.TestCase):
                     MetadataPolicy(
                         policy_id="root-puct-fallback",
                         fallback=True,
-                        missing_sampled_world_reason_categories={"opponent_belief_unavailable": 2},
+                        missing_sampled_world_reason_categories={
+                            "opponent_belief_unavailable": 2,
+                            "raw replay detail: p2 move": 5,
+                            "belief_view_invalid": -1,
+                        },
                     ),
                     RandomLegalPolicy(),
                 ),

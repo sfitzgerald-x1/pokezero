@@ -49,6 +49,7 @@ from .determinization import (
     DEFAULT_BELIEF_WORLD_SAMPLE_CAP,
     gen3_randbat_belief_start_override_planner,
 )
+from .mcts_diagnostics import sanitize_root_puct_missing_sampled_world_reason_categories
 from .prior_belief_profile import (
     MINIMUM_PROFILE_DECISIONS,
     PriorBeliefProfileConfig,
@@ -3692,25 +3693,22 @@ def _root_puct_benchmark_progress_callback(
             if isinstance(fallbacks, int) and not isinstance(fallbacks, bool):
                 cumulative_fallbacks += fallbacks
                 has_root_puct_diagnostics = True
-            for categories, target in (
-                (
-                    diagnostics.get("root_puct_fallback_categories"),
-                    cumulative_fallback_categories,
-                ),
-                (
-                    diagnostics.get(
-                        "root_puct_opponent_action_missing_sampled_world_reason_categories"
-                    ),
-                    cumulative_missing_sampled_world_reason_categories,
-                ),
-            ):
-                if not isinstance(categories, Mapping):
-                    continue
+            categories = diagnostics.get("root_puct_fallback_categories")
+            if isinstance(categories, Mapping):
                 for category, count in categories.items():
                     if not isinstance(category, str) or not isinstance(count, int) or isinstance(count, bool):
                         continue
-                    target[category] = target.get(category, 0) + count
+                    cumulative_fallback_categories[category] = (
+                        cumulative_fallback_categories.get(category, 0) + count
+                    )
                     has_root_puct_diagnostics = True
+            for category, count in sanitize_root_puct_missing_sampled_world_reason_categories(
+                diagnostics.get("root_puct_opponent_action_missing_sampled_world_reason_categories")
+            ).items():
+                cumulative_missing_sampled_world_reason_categories[category] = (
+                    cumulative_missing_sampled_world_reason_categories.get(category, 0) + count
+                )
+                has_root_puct_diagnostics = True
         if progress.games_completed % interval_games != 0 and progress.games_completed != progress.games_total:
             return
         payload: dict[str, Any] = {
@@ -3736,7 +3734,7 @@ def _root_puct_benchmark_progress_callback(
                 }
             )
             if cumulative_missing_sampled_world_reason_categories:
-                payload["root_puct_missing_sampled_world_reason_categories"] = dict(
+                payload["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
                     sorted(cumulative_missing_sampled_world_reason_categories.items())
                 )
         print(

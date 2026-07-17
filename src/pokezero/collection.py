@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Te
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
-from .mcts_diagnostics import root_puct_fallback_category
+from .mcts_diagnostics import (
+    root_puct_fallback_category,
+    sanitize_root_puct_missing_sampled_world_reason_categories,
+)
 from .root_puct_telemetry import root_puct_decision_telemetry
 from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
@@ -1557,10 +1560,13 @@ class _PolicyDecisionAccumulator:
         self.decisions += 1
         if metadata.get("policy_family") != "root-puct-search":
             return
-        _merge_count_mapping(
-            self.root_puct_opponent_action_missing_sampled_world_reason_categories,
-            metadata.get("root_puct_opponent_action_missing_sampled_world_reason_categories"),
-        )
+        for category, count in sanitize_root_puct_missing_sampled_world_reason_categories(
+            metadata.get("root_puct_opponent_action_missing_sampled_world_reason_categories")
+        ).items():
+            self.root_puct_opponent_action_missing_sampled_world_reason_categories[category] = (
+                self.root_puct_opponent_action_missing_sampled_world_reason_categories.get(category, 0)
+                + count
+            )
         if bool(metadata.get("root_puct_fallback")):
             self.root_puct_fallbacks += 1
             reason = str(metadata.get("root_puct_fallback_reason") or "unknown")

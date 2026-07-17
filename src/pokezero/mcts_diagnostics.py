@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Mapping
 
 _DECISION_ROUND_RE = re.compile(r"\bdecision round\s+(\d+)\b", re.IGNORECASE)
 _REQUEST_MISMATCH_ROUND_RE = re.compile(
@@ -36,6 +37,30 @@ _MISSING_WORLD_PLANNER_NONE_RE = re.compile(
     re.IGNORECASE,
 )
 _REJECTION_ATTEMPT_SUFFIX_RE = re.compile(r"\s+\((?P<count>[2-9]\d*) attempts\)\s*$", re.IGNORECASE)
+
+_MISSING_SAMPLED_WORLD_REASON_CATEGORIES = frozenset(
+    {
+        "unsupported_format",
+        "observation_metadata_missing",
+        "belief_view_invalid",
+        "self_team_member_count_invalid",
+        "self_team_member_invalid",
+        "self_team_member_identity_incomplete",
+        "self_team_fixture_stats_unavailable",
+        "self_team_unavailable",
+        "opponent_switch_constraints_inconsistent",
+        "revealed_team_overfull",
+        "constrained_hidden_backline_unavailable",
+        "hidden_backline_unavailable",
+        "team_slot_constraints_unsatisfied",
+        "belief_view_slots_invalid",
+        "revealed_opponent_unavailable",
+        "opponent_belief_unavailable",
+        "source_none",
+        "planner_none",
+        "other",
+    }
+)
 
 
 def root_puct_fallback_category(reason: object) -> str:
@@ -205,6 +230,25 @@ def root_puct_missing_sampled_world_reason_counts(reason: object) -> dict[str, i
     for match in _MISSING_WORLD_PLANNER_NONE_RE.finditer(text):
         counts["planner_none"] = counts.get("planner_none", 0) + _rejection_attempt_count(match.group(0))
     return counts
+
+
+def sanitize_root_puct_missing_sampled_world_reason_categories(value: object) -> dict[str, int]:
+    """Keep only the fixed public-safe taxonomy for persisted world failures."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    sanitized: dict[str, int] = {}
+    for category, count in value.items():
+        if (
+            not isinstance(category, str)
+            or category not in _MISSING_SAMPLED_WORLD_REASON_CATEGORIES
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+        ):
+            continue
+        sanitized[category] = count
+    return dict(sorted(sanitized.items()))
 
 
 def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str, int]:
