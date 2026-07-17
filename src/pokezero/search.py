@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv, TerminalState
+from .mcts_diagnostics import root_puct_first_observation_mismatch_path_counts
 from .observation import PokeZeroObservationV0
 from .policy import Policy
 from .replay_branching import (
@@ -1234,6 +1235,8 @@ def prepare_direct_materialization_prefix(
     public_materialization_state: object | None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
+    on_unavailable: Callable[[str], None] | None = None,
+    on_observation_mismatch_path: Callable[[str], None] | None = None,
 ) -> PreparedReplayPrefix | None:
     """Construct a sampled branch point from public state without replaying its prefix.
 
@@ -1242,7 +1245,11 @@ def prepare_direct_materialization_prefix(
     unknown simulator state with an approximation.
     """
 
-    if start_override is None or public_materialization_state is None:
+    if start_override is None:
+        _record_direct_materialization_unavailable(on_unavailable, "missing_start_override")
+        return None
+    if public_materialization_state is None:
+        _record_direct_materialization_unavailable(on_unavailable, "missing_public_state")
         return None
     if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
         raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
@@ -1254,6 +1261,7 @@ def prepare_direct_materialization_prefix(
     snapshotter = getattr(env, "snapshot", None)
     restorer = getattr(env, "restore", None)
     if not callable(materializer) or not callable(snapshotter) or not callable(restorer):
+        _record_direct_materialization_unavailable(on_unavailable, "environment_unavailable")
         return None
     try:
         materializer(
@@ -1269,7 +1277,16 @@ def prepare_direct_materialization_prefix(
                 turn_index=prefix_decision_round_count,
                 hp_fraction_tolerance=replay_hp_fraction_tolerance,
             )
-    except (RuntimeError, ValueError):
+    except (RuntimeError, ValueError) as error:
+        category = _direct_materialization_rejection_category(error)
+        _record_direct_materialization_unavailable(
+            on_unavailable,
+            category,
+        )
+        if category == "observation_mismatch" and on_observation_mismatch_path is not None:
+            for path, count in root_puct_first_observation_mismatch_path_counts(error).items():
+                for _ in range(count):
+                    on_observation_mismatch_path(path)
         return None
     prefix = ReplayPrefixResult(
         replayed_round_count=prefix_decision_round_count,
@@ -1277,6 +1294,7 @@ def prepare_direct_materialization_prefix(
         terminal=env.terminal(),
     )
     if prefix.terminal is not None:
+        _record_direct_materialization_unavailable(on_unavailable, "terminal_state")
         return None
     return PreparedReplayPrefix(
         trajectory_seed=trajectory.seed,
@@ -1293,6 +1311,39 @@ def prepare_direct_materialization_prefix(
         snapshot=snapshotter(),
         materialization_mode="direct",
     )
+
+
+def _record_direct_materialization_unavailable(
+    callback: Callable[[str], None] | None,
+    category: str,
+) -> None:
+    if callback is not None:
+        callback(category)
+
+
+def _direct_materialization_rejection_category(error: Exception) -> str:
+    """Map direct-construction failures to public-safe, stable telemetry categories."""
+
+    message = str(error).lower()
+    if "does not reproduce recorded replay prefix observations" in message:
+        return "observation_mismatch"
+    if "spent pp for a benched acting pokemon" in message:
+        return "self_benched_move_history"
+    if "future sight" in message:
+        return "future_sight"
+    if "volatile effects" in message:
+        return "volatile_effects"
+    if "side condition" in message:
+        return "unsupported_side_condition"
+    if "cannot uniquely match" in message:
+        return "ambiguous_species"
+    if "positive integer turn" in message:
+        return "invalid_turn"
+    if "requires one active" in message:
+        return "missing_active"
+    if "no actionable request boundary" in message:
+        return "no_actionable_boundary"
+    return "materializer_error"
 
 
 def _restorable_prefix_from_prepared(

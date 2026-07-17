@@ -196,6 +196,23 @@ class DirectSnapshotStartOverrideOutcomeEnv(SnapshotStartOverrideOutcomeEnv):
         self._terminal = None
 
 
+class DirectFailureReplayFallbackEnv(SnapshotStartOverrideOutcomeEnv):
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.direct_materialization_attempts = 0
+
+    def materialize_public_world(
+        self,
+        *,
+        state: object,
+        start_override: BattleStartOverride,
+        seed: int,
+    ) -> None:
+        del state, start_override, seed
+        self.direct_materialization_attempts += 1
+        raise RuntimeError("Materialize does not yet support Future Sight.")
+
+
 class RetryingDirectStartOverrideOutcomeEnv(DirectSnapshotStartOverrideOutcomeEnv):
     def step(self, actions: dict[str, int]) -> StepResult:
         current_override = self.direct_materializations[-1][1]
@@ -1132,6 +1149,58 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(branch_envs[0].restore_calls, 3)
         self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 1)
         self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 0)
+
+    def test_root_puct_policy_reports_direct_failure_before_replay_fallback(self) -> None:
+        branch_envs: list[DirectFailureReplayFallbackEnv] = []
+
+        def branch_env_factory() -> DirectFailureReplayFallbackEnv:
+            env = DirectFailureReplayFallbackEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(context, scenario, scenario_index, rng):
+            del context, scenario, scenario_index, rng
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": "Xatu||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=3,
+            start_override_planner=start_override_planner,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(branch_envs[0].direct_materialization_attempts, 1)
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 0)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 1)
+        self.assertEqual(
+            decision.metadata["root_puct_direct_materialization_rejection_categories"],
+            {"future_sight": 1},
+        )
+        self.assertNotIn("root_puct_direct_materialization_observation_mismatch_paths", decision.metadata)
 
     def test_root_puct_policy_falls_back_when_dynamic_world_count_is_invalid(self) -> None:
         def start_override_planner(context, scenario, scenario_index, rng):
