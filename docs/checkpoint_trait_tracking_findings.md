@@ -24,15 +24,17 @@ through (it previously fell back to the nearest leg and clamped the iteration to
 pre-fork checkpoints), and **G0** only demands a sha-pinned 500k from lineages that actually span
 500k. Both are covered by `tests/test_trait_inventory.py`.
 
-> **v22-flat2m has no milestone yet.** It has trained 2,000,000→2,054,400 (34 iterations, ~54k
-> games past the fork), so it has not reached its first 100k-grid point at 2,100k. It is registered
-> and will populate automatically on the next refresh once it crosses that line.
+> **v22-flat2m now has its first grid points** at 2100k and 2200k (it crossed the fork's first
+> 100k boundary). Early read of the anneal-vs-flat A/B at the shared 2200k milestone: the flat-LR
+> twin runs slightly longer games (47.3 vs 43.4 turns) and uses more Substitute (3.51 vs 2.91/sg)
+> and stat-boost (3.59 vs 2.64/sg); Solar-Beam-in-sun and toxic are near-identical. Two points is
+> too few to conclude — noted to watch as it extends.
 
 Lineages are resolved from run-directory names by pattern (`trait_inventory.py`), which absorbs
 continuation legs automatically; run names drift as new legs are added, so the inventory is re-run
 each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
-**Data.** 76 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+**Data.** 86 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
 5000 at 500k) — **70 checkpoints**, following the active lineages to their current frontiers:
 v22-lr3m 100k→2700k (27 pts), m50-ep7 →2400k (24), l200-ep7-wu75 →1900k (19); v22-flat2m has no
 grid point yet. Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
@@ -95,7 +97,7 @@ Point-biserial across games, computed *within* each checkpoint, then aggregated 
 mean r and the min..max range across checkpoints. Self-play is a **paired design** — both seats
 are the same policy in the same game, so comparing winner against loser holds policy strength and
 game length fixed by construction (a game-level quantity has no within-game variance and correctly
-falls out at r≈0). **70** self-play checkpoints / **294,326** decided seat-games; 6 foul-play /
+falls out at r≈0). **80** self-play checkpoints / **334,034** decided seat-games; 6 foul-play /
 5,864.
 
 **Headline: per-game behavior barely predicts winning.** Every effect is |r| ≤ 0.11 — under ~1% of
