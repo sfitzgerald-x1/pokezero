@@ -57,6 +57,7 @@ SPECIES_METADATA = {
     "blissey": {"baseStats": {"hp": 255, "atk": 10, "def": 10, "spa": 75, "spd": 135, "spe": 55}},
     "charizard": {"baseStats": {"hp": 78, "atk": 84, "def": 78, "spa": 109, "spd": 85, "spe": 100}},
     "registeel": {"baseStats": {"hp": 80, "atk": 75, "def": 150, "spa": 75, "spd": 150, "spe": 50}},
+    "shedinja": {"baseStats": {"hp": 1, "atk": 90, "def": 45, "spa": 30, "spd": 30, "spe": 40}},
     "snorlax": {"baseStats": {"hp": 160, "atk": 110, "def": 65, "spa": 65, "spd": 110, "spe": 30}},
     "tauros": {"baseStats": {"hp": 75, "atk": 100, "def": 95, "spa": 40, "spd": 70, "spe": 110}},
     "unown": {"baseStats": {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}},
@@ -552,6 +553,35 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(team[0].gender, "F")
         self.assertIn("hypnosis,whirlwind,toxic,return", pack_team(team))
         self.assertNotIn("return102", pack_team(team))
+
+    def test_gen3_spread_accepts_shedinjas_fixed_hp(self) -> None:
+        set_source = Gen3RandbatSource.from_data(
+            {},
+            move_metadata=MOVE_METADATA,
+            species_metadata=SPECIES_METADATA,
+        )
+        row = {
+            "species": "Shedinja",
+            "details": "Shedinja",
+            "moves": ["hiddenpowerfighting", "shadowball", "toxic", "silverwind"],
+            "item": "lumberry",
+            # This is the request-known Gen 3 Shedinja shape: ordinary stats follow the
+            # randbat IV recipe while HP remains fixed at one.
+            "stats": {"hp": 1, "atk": 237, "def": 146, "spa": 116, "spd": 116, "spe": 136},
+        }
+
+        spread = _gen3_randbat_fixture_spread(
+            row,
+            species="Shedinja",
+            moves=("hiddenpowerfighting", "shadowball", "toxic", "silverwind"),
+            item="lumberry",
+            level=100,
+            set_source=set_source,
+        )
+
+        self.assertIsNotNone(spread)
+        team = _self_team_from_metadata([row], team_size=1, set_source=set_source)
+        self.assertIsNotNone(team)
 
     def test_revealed_opponent_absolute_hp_filters_sampled_variants(self) -> None:
         metadata = {
