@@ -668,18 +668,20 @@ class RootPUCTSearchPolicy:
                 # Count only worlds that supplied a completed branch search. A
                 # prepared shared world can serve several action scenarios, so
                 # its identity also prevents duplicate credits.
-                used_prepared_prefixes: set[int] = set()
+                used_shared_sample_indices: set[int] = set()
 
                 def record_materialization_usage(
                     prepared_prefix: PreparedReplayPrefix | None,
                     search: PUCTBranchSearchResult,
+                    *,
+                    shared_sample_index: int | None,
                 ) -> None:
                     nonlocal direct_materialization_count, replay_materialization_count
                     if prepared_prefix is not None:
-                        prepared_prefix_id = id(prepared_prefix)
-                        if prepared_prefix_id in used_prepared_prefixes:
-                            return
-                        used_prepared_prefixes.add(prepared_prefix_id)
+                        if shared_sample_index is not None:
+                            if shared_sample_index in used_shared_sample_indices:
+                                return
+                            used_shared_sample_indices.add(shared_sample_index)
                         if prepared_prefix.materialization_mode == "direct":
                             direct_materialization_count += 1
                         elif prepared_prefix.materialization_mode == "replay":
@@ -826,7 +828,15 @@ class RootPUCTSearchPolicy:
                                 if start_override is None:
                                     break
                             else:
-                                record_materialization_usage(prepared_prefix, search)
+                                record_materialization_usage(
+                                    prepared_prefix,
+                                    search,
+                                    shared_sample_index=(
+                                        sample_index
+                                        if shared_start_override_samples is not None
+                                        else None
+                                    ),
+                                )
                                 scenario_search = search
                                 scenario_start_override = start_override
                                 completed_search_timings.append(search.timing)
