@@ -30,6 +30,7 @@ from pokezero.showdown import (
     NUMERIC_SELF_HP_COST,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
+    _ReplayParser,
     _actual_stats_from_request_row,
     _encode_move_mechanics,
     _max_hp_from_condition,
@@ -1030,6 +1031,22 @@ class Phase2DynamicStateTest(unittest.TestCase):
             unknown_baton_passed.direct_materialization_blockers["p2"],
             ("leechseed-source-unknown",),
         )
+
+    def test_replay_snapshot_restore_preserves_pending_public_conditions(self) -> None:
+        snapshot = parse_showdown_replay(
+            [
+                "|turn|7",
+                "|move|p1a: Jirachi|Wish|p1a: Jirachi",
+                "|move|p2a: Bulbasaur|Leech Seed|p1a: Jirachi",
+                "|-start|p1a: Jirachi|move: Leech Seed",
+            ]
+        )
+
+        restored = _ReplayParser.from_snapshot(snapshot).snapshot()
+
+        self.assertEqual(restored, snapshot)
+        self.assertEqual(restored.wish_set_turns, {"p1": 7})
+        self.assertEqual(restored.leech_seed_source_sides, {"p1": "p2"})
 
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
