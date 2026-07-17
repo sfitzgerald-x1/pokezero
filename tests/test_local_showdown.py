@@ -1163,6 +1163,46 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(restored_suffix, expected_suffix)
         self.assertEqual(repeated_restored_suffix, expected_suffix)
 
+    def test_search_snapshot_handle_restores_direct_materialized_public_state(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=17, start_override=start_override)
+            source.step({"p1": 0, "p2": 1})
+            materialization = source.public_materialization_state("p1")
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=17,
+            )
+            expected = search_env.observe("p1")
+            expected_replay = search_env._parser.snapshot()
+            expected_belief = expected.metadata["belief_view"]
+            snapshot = search_env.snapshot_for_search()
+
+            search_env.step({"p1": 0, "p2": 1})
+            search_env.reset_with_start_override(seed=19, start_override=start_override)
+            search_env.restore_search_snapshot(snapshot)
+            actual = search_env.observe("p1")
+
+        self.assertEqual(search_env._parser.snapshot(), expected_replay)
+        self.assertEqual(actual.metadata["belief_view"], expected_belief)
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+
     def test_search_snapshot_handle_rejects_live_rollout(self) -> None:
         config = integration_config()
         assert config is not None
