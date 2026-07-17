@@ -87,6 +87,11 @@ strength. In order:
    only if M-scale feasible budget is nontrivial: one paired probe at M with
    a refit M leaf.
 
+The initial cost-only probe is recorded in
+[`w4_scale_cost_preliminary.md`](w4_scale_cost_preliminary.md). It is deliberately
+not a strength result or a final budget choice: W2 must supply the paired
+strength-vs-cost curve, and W1 must reduce the visible fallback rate first.
+
 ### W5 — Search efficiency (strictly after W2's profile)
 
 Attack what the profile says dominates. Candidates going in, confirmed or
