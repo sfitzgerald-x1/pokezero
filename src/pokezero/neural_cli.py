@@ -3655,12 +3655,33 @@ def _validate_root_opponent_action_scenario_counts(args: argparse.Namespace) -> 
 def _root_puct_benchmark_progress_callback(
     interval_games: int,
 ) -> Callable[[BenchmarkProgress], None]:
-    """Return compact stderr liveness reporting for a long Root-PUCT benchmark."""
+    """Return compact stderr liveness and fallback-taxonomy reporting."""
 
     if interval_games <= 0:
         raise ValueError("root PUCT progress interval must be positive.")
 
+    cumulative_searches = 0
+    cumulative_fallbacks = 0
+    cumulative_fallback_categories: dict[str, int] = {}
+
     def emit(progress: BenchmarkProgress) -> None:
+        nonlocal cumulative_searches, cumulative_fallbacks
+        for diagnostics in progress.root_puct_by_player.values():
+            searches = diagnostics.get("root_puct_searches")
+            fallbacks = diagnostics.get("root_puct_fallbacks")
+            if isinstance(searches, int) and not isinstance(searches, bool):
+                cumulative_searches += searches
+            if isinstance(fallbacks, int) and not isinstance(fallbacks, bool):
+                cumulative_fallbacks += fallbacks
+            categories = diagnostics.get("root_puct_fallback_categories")
+            if not isinstance(categories, Mapping):
+                continue
+            for category, count in categories.items():
+                if not isinstance(category, str) or not isinstance(count, int) or isinstance(count, bool):
+                    continue
+                cumulative_fallback_categories[category] = (
+                    cumulative_fallback_categories.get(category, 0) + count
+                )
         if progress.games_completed % interval_games != 0 and progress.games_completed != progress.games_total:
             return
         payload = {
@@ -3671,6 +3692,14 @@ def _root_puct_benchmark_progress_callback(
             "games_total": progress.games_total,
             "seed": progress.seed,
             "matchup_elapsed_seconds": round(progress.matchup_elapsed_seconds, 3),
+            "root_puct_searches": cumulative_searches,
+            "root_puct_fallbacks": cumulative_fallbacks,
+            "root_puct_fallback_rate": (
+                round(cumulative_fallbacks / cumulative_searches, 6)
+                if cumulative_searches
+                else None
+            ),
+            "root_puct_fallback_categories": dict(sorted(cumulative_fallback_categories.items())),
         }
         print(
             "root_puct_play_benchmark_progress: " + json.dumps(payload, sort_keys=True),

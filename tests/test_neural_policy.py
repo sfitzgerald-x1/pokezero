@@ -3676,6 +3676,13 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         games_total=3,
                         seed=80 + games_completed,
                         matchup_elapsed_seconds=1.23456 * games_completed,
+                        root_puct_by_player={
+                            "p1": {
+                                "root_puct_searches": 2,
+                                "root_puct_fallbacks": 1,
+                                "root_puct_fallback_categories": {"missing_sampled_world": 1},
+                            }
+                        },
                     )
                 )
 
@@ -3695,6 +3702,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_elapsed_seconds": 2.469,
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
+                    "root_puct_fallback_categories": {"missing_sampled_world": 2},
+                    "root_puct_fallback_rate": 0.5,
+                    "root_puct_fallbacks": 2,
+                    "root_puct_searches": 4,
                     "seed": 82,
                 },
                 {
@@ -3704,6 +3715,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_elapsed_seconds": 3.704,
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
+                    "root_puct_fallback_categories": {"missing_sampled_world": 3},
+                    "root_puct_fallback_rate": 0.5,
+                    "root_puct_fallbacks": 3,
+                    "root_puct_searches": 6,
                     "seed": 83,
                 },
             ],

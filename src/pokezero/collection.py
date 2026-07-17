@@ -57,6 +57,9 @@ class BenchmarkProgress:
     games_total: int
     seed: int
     matchup_elapsed_seconds: float
+    # Compact current-game diagnostics let long-running search benchmarks
+    # report a cumulative fallback taxonomy without changing result artifacts.
+    root_puct_by_player: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -482,7 +485,8 @@ def benchmark_rollouts(
                     battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
                 )
                 accumulator.add(record)
-                game_results.append(_benchmark_game_result(record))
+                game_result = _benchmark_game_result(record)
+                game_results.append(game_result)
                 checksums = tuple(
                     sorted(
                         {
@@ -508,6 +512,7 @@ def benchmark_rollouts(
                             games_total=games,
                             seed=seed,
                             matchup_elapsed_seconds=matchup_elapsed_seconds,
+                            root_puct_by_player=game_result.root_puct_by_player,
                         )
                     )
                     progress_callback_seconds += perf_counter() - callback_started
