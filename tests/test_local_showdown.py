@@ -1193,15 +1193,23 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             snapshot = search_env.snapshot_for_search()
 
             search_env.step({"p1": 0, "p2": 1})
+            expected_next = search_env.observe("p1")
             search_env.reset_with_start_override(seed=19, start_override=start_override)
             search_env.restore_search_snapshot(snapshot)
             actual = search_env.observe("p1")
+            actual_replay = search_env._parser.snapshot()
+            search_env.step({"p1": 0, "p2": 1})
+            actual_next = search_env.observe("p1")
 
-        self.assertEqual(search_env._parser.snapshot(), expected_replay)
+        self.assertEqual(actual_replay, expected_replay)
         self.assertEqual(actual.metadata["belief_view"], expected_belief)
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
+        self.assertEqual(actual_next.metadata["belief_view"], expected_next.metadata["belief_view"])
+        self.assertEqual(actual_next.categorical_ids, expected_next.categorical_ids)
+        self.assertEqual(actual_next.numeric_features, expected_next.numeric_features)
+        self.assertEqual(actual_next.legal_action_mask, expected_next.legal_action_mask)
 
     def test_search_snapshot_handle_rejects_live_rollout(self) -> None:
         config = integration_config()
