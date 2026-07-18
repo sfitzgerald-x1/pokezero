@@ -32,6 +32,7 @@ from .search import (
     ActionPriorVector,
     ObservationValueBatchFunction,
     ObservationValueFunction,
+    PUCTBranchSearchRequest,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
     PreparedReplayPrefix,
@@ -46,6 +47,7 @@ from .search import (
     prepare_replay_prefix,
     player_observation_history,
     puct_branch_search,
+    puct_branch_search_group,
     release_prepared_replay_prefix,
 )
 from .trajectory import BattleTrajectory, TrajectoryStep
@@ -759,6 +761,8 @@ class RootPUCTSearchPolicy:
                 puct_search_rejected_call_seconds = 0.0
                 puct_search_rejected_call_count = 0
                 completed_search_call_seconds_by_id: dict[int, float] = {}
+                cross_world_initial_value_batch_count = 0
+                cross_world_initial_value_batch_world_count = 0
                 scenario_dispatch_started_at: float | None = None
 
                 def current_scenario_dispatch_orchestration_seconds() -> float:
@@ -840,7 +844,96 @@ class RootPUCTSearchPolicy:
 
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
-                    for sample_index, scenario in enumerate(scenario_group.samples):
+                    batch_shared_world_initial_values = (
+                        self.value_batch_fn is not None
+                        and self.leaf_rollout_decision_rounds == 0
+                        and self.root_time_budget_seconds is None
+                        and shared_start_override_samples is not None
+                        and len(scenario_group.samples) > 1
+                        and all(
+                            shared_start_override_samples.overrides[sample_index] is not None
+                            and shared_start_override_samples.prepared_prefixes[sample_index] is not None
+                            for sample_index in range(len(scenario_group.samples))
+                        )
+                    )
+                    if batch_shared_world_initial_values:
+                        visit_budget_resolver: RootVisitBudgetResolver | None = None
+                        if self.root_visit_budget_selector is not None:
+
+                            def visit_budget_resolver(
+                                budget_context: RootPUCTVisitBudgetContext,
+                            ) -> int | None:
+                                return self.root_visit_budget_selector(context, budget_context)
+
+                        batch_requests = tuple(
+                            PUCTBranchSearchRequest(
+                                opponent_actions=scenario.actions,
+                                start_override=shared_start_override_samples.overrides[sample_index],
+                                prepared_prefix=shared_start_override_samples.prepared_prefixes[sample_index],
+                                root_visit_budget_resolver=visit_budget_resolver,
+                            )
+                            for sample_index, scenario in enumerate(scenario_group.samples)
+                        )
+                        flat_scenario_index += len(batch_requests)
+                        puct_search_call_count += len(batch_requests)
+                        puct_search_started_at = _timing_perf_counter()
+                        try:
+                            batch_searches = puct_branch_search_group(
+                                env=env,
+                                trajectory=search_trajectory,
+                                player_id=context.player_id,
+                                prefix_decision_round_count=context.decision_round_index,
+                                legal_action_mask=context.observation.legal_action_mask,
+                                requests=batch_requests,
+                                value_fn=self.value_fn,
+                                value_batch_fn=self.value_batch_fn,
+                                action_priors=priors,
+                                cpuct=self.cpuct,
+                                leaf_rollout_policies=leaf_rollout_policies,
+                                leaf_rollout_config=self.rollout_config,
+                                leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                root_visit_budget=self.root_visit_budget,
+                                budget_action_priors=base_priors,
+                                expected_current_observation=context.observation,
+                                replay_hp_fraction_tolerance=self.start_override_hp_fraction_tolerance,
+                            )
+                        except Exception:
+                            puct_search_elapsed_seconds = _timing_perf_counter() - puct_search_started_at
+                            puct_search_call_seconds += puct_search_elapsed_seconds
+                            puct_search_rejected_call_seconds += puct_search_elapsed_seconds
+                            puct_search_rejected_call_count += 1
+                            raise
+                        else:
+                            if len(batch_searches) != len(scenario_group.samples):
+                                raise ValueError(
+                                    "cross-world initial-value batch returned a different number of searches."
+                                )
+                            completed_batch_seconds = sum(
+                                scenario_search.timing.total_seconds
+                                for scenario_search in batch_searches
+                            )
+                            puct_search_call_seconds += completed_batch_seconds
+                            puct_search_completed_call_seconds += completed_batch_seconds
+                            puct_search_completed_call_count += len(batch_searches)
+                            cross_world_initial_value_batch_count += 1
+                            cross_world_initial_value_batch_world_count += len(batch_searches)
+                            for sample_index, (scenario, scenario_search) in enumerate(
+                                zip(scenario_group.samples, batch_searches, strict=True)
+                            ):
+                                completed_search_call_seconds_by_id[id(scenario_search)] = (
+                                    scenario_search.timing.total_seconds
+                                )
+                                record_materialization_usage(
+                                    shared_start_override_samples.prepared_prefixes[sample_index],
+                                    scenario_search,
+                                    shared_sample_index=sample_index,
+                                )
+                                completed_search_timings.append(scenario_search.timing)
+                                group_search_pairs.append((scenario, scenario_search))
+                                start_override_sources_used += 1
+                    for sample_index, scenario in (
+                        () if batch_shared_world_initial_values else enumerate(scenario_group.samples)
+                    ):
                         scenario_index = flat_scenario_index
                         flat_scenario_index += 1
                         scenario_search: PUCTBranchSearchResult | None = None
@@ -1377,6 +1470,12 @@ class RootPUCTSearchPolicy:
                 "root_puct_timing": timing.to_dict(),
                 "root_puct_opponent_actions": dict(used_scenarios[0].actions),
                 "root_puct_opponent_action_scenario_count": len(used_scenarios),
+                "root_puct_cross_world_initial_value_batch_count": (
+                    cross_world_initial_value_batch_count
+                ),
+                "root_puct_cross_world_initial_value_batch_world_count": (
+                    cross_world_initial_value_batch_world_count
+                ),
                 **_opponent_scenario_skip_metadata(
                     opponent_scenarios=search_scenarios,
                     used_scenarios=used_scenarios,

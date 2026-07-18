@@ -9,10 +9,12 @@ from pokezero.policy import RandomLegalPolicy
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig
 from pokezero.search import (
+    PUCTBranchSearchRequest,
     RootPUCTSearchTiming,
     _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
+    puct_branch_search_group,
     prepare_direct_materialization_prefix,
     prepare_replay_prefix,
     release_prepared_replay_prefix,
@@ -721,6 +723,92 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(len(scalar_histories), 3)
         self.assertEqual(result.total_visits, 5)
         self.assertEqual(result.timing.value_evaluation_count, 5)
+
+    def test_puct_branch_search_group_batches_initial_leaves_across_worlds(self) -> None:
+        trajectory = BattleTrajectory(battle_id="batch-worlds", format_id="gen3randombattle", seed=77)
+        batch_histories = []
+        group_scalar_histories = []
+
+        def scalar_value(history):
+            group_scalar_histories.append(history)
+            return float(_only_legal_action(history[-1]))
+
+        def batch_values(histories):
+            batch_histories.append(histories)
+            return tuple(float(_only_legal_action(history[-1])) for history in histories)
+
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+        }
+        reference = tuple(
+            puct_branch_search(
+                env=TimedSnapshotValueBranchEnv(),
+                opponent_actions=opponent_actions,
+                value_fn=lambda history: float(_only_legal_action(history[-1])),
+                **common_kwargs,
+            )
+            for opponent_actions in ({"p2": 0}, {"p2": 1})
+        )
+
+        results = puct_branch_search_group(
+            env=TimedSnapshotValueBranchEnv(),
+            requests=(
+                PUCTBranchSearchRequest(opponent_actions={"p2": 0}),
+                PUCTBranchSearchRequest(opponent_actions={"p2": 1}),
+            ),
+            value_fn=scalar_value,
+            value_batch_fn=batch_values,
+            **common_kwargs,
+        )
+
+        self.assertEqual(len(batch_histories), 1)
+        self.assertEqual(len(batch_histories[0]), 4)
+        # Each world's adaptive visits remain scalar because their choices
+        # depend on its own preceding backups.
+        self.assertEqual(len(group_scalar_histories), 6)
+        self.assertEqual(
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in results
+            ],
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in reference
+            ],
+        )
+        self.assertEqual(
+            sum(result.timing.value_evaluation_count for result in results),
+            10,
+        )
+
+    def test_puct_branch_search_group_rejects_leaf_rollouts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "zero leaf rollout"):
+            puct_branch_search_group(
+                env=TimedSnapshotValueBranchEnv(),
+                trajectory=BattleTrajectory(battle_id="batch-worlds", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                requests=(PUCTBranchSearchRequest(opponent_actions={"p2": 0}),),
+                value_fn=lambda _history: 0.0,
+                value_batch_fn=lambda histories: tuple(0.0 for _history in histories),
+                action_priors=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                leaf_rollout_decision_rounds=1,
+            )
 
     def test_puct_branch_search_rejects_mismatched_batched_value_count(self) -> None:
         with self.assertRaisesRegex(ValueError, "different number of values"):
