@@ -349,6 +349,18 @@ class DelayedOutcomeEnv:
 
 
 class RootPUCTSearchPolicyTest(unittest.TestCase):
+    def test_root_puct_policy_preserves_positional_policy_id_argument(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            lambda: ImmediateOutcomeEnv(label="branch"),
+            RolloutConfig(max_decision_rounds=3),
+            lambda _history: 0.0,
+            lambda _history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            "positional-policy-id",
+        )
+
+        self.assertEqual(policy.policy_id, "positional-policy-id")
+        self.assertIsNone(policy.value_batch_fn)
+
     def test_root_puct_policy_exposes_raw_checkpoint_provenance(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
