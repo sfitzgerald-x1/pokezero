@@ -16,19 +16,22 @@ import os
 from collections import defaultdict
 
 # stable lineage order + display names
-LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "m50-seq", "l200-seq"]
-PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed"]
+# v22-flat2m is a FORK of v22-lr3m at 2M (flat-LR twin) — a separate entity, ordered next to its
+# parent so the post-fork divergence is easy to read off the trajectories.
+LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m", "m50-seq", "l200-seq"]
+PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
 # Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k and
 # are no longer being tracked. Their metrics remain on disk, so this is reversible — clear the set
 # to bring them back.
 REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq"}
 
-# (lineage, milestone) points dropped from the Phase-1 basics charts only. v22-lr3m@100k stalls
-# ~50% of its games to the turn cap; its scale compresses every other lineage's line. The point is
-# real and stays in the by-checkpoint trajectories — it is excluded here for legibility, and the
-# exclusion is stated in the section rather than hidden.
-BASICS_EXCLUDE = {("v22-lr3m", 100000)}
+# (lineage, milestone) points dropped from ALL trajectory charts (Phase-1 basics and Phase-2
+# breakdowns) for legibility. v22-lr3m@100k stalls ~50% of its games to the turn cap; several of its
+# metrics are distorted by that (e.g. per-game counts inflated by ~1000-turn stalls), and its scale
+# compresses every other lineage's line. The point still exists in the underlying metrics — it is
+# excluded from the charts only, and the exclusion is stated in each section rather than hidden.
+TRAJECTORY_EXCLUDE = {("v22-lr3m", 100000)}
 
 # Lineages held out of the trait <-> foul-play correlation. m50-ep7 was held out while foul-play
 # existed only at 500k: it won ~0.20 against a 0.31-0.34 cluster, so at n=5 it was a single
@@ -117,7 +120,7 @@ def phase1_section(rows_self):
     for r in rows_self:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in BASICS_EXCLUDE:
+        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
             dropped.append(f'{r.get("lineage")}@{r.get("milestone") // 1000}k')
             continue
         by_lin[r.get("lineage")].append(r)
@@ -176,9 +179,23 @@ def _extra(r, k):
     return (r.get("move_category_extras") or {}).get(k, 0)
 
 
-def _fracpct(r, num_key, total, in_extras=False):
+def _fracpct(r, num_key, denom_key):
+    """Conditional rate from an UNGATED pair, both out of move_category_extras.
+
+    Never divide an extras counter by move_categories[*].total_uses: extras count every
+    occurrence while total_uses is gated on the seat's moveset carrying the move, so a move used
+    but not carried (Metronome/Mimic) inflates the numerator only — that mismatch produced a
+    100.4% "solar beam in sun". Denominator here is the sum of the mutually exclusive outcomes.
+    """
     n = _extra(r, num_key)
-    t = _extra(r, total) if in_extras else _cattotal(r, total)
+    t = _extra(r, denom_key)
+    return (100.0 * n / t) if t else None
+
+
+def _fracpct2(r, num_key, *parts):
+    """Same, where the denominator is the sum of several ungated outcome counters."""
+    n = _extra(r, num_key)
+    t = sum(_extra(r, x) for x in parts)
     return (100.0 * n / t) if t else None
 
 
@@ -201,25 +218,72 @@ TRAJECTORY_CHARTS = [
         ("phaze", lambda r: _catrate(r, "cat_phaze")),
         ("rest", lambda r: _catrate(r, "cat_rest")),
         ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
+        ("knock off", lambda r: _catrate(r, "cat_knockoff")),
+        ("leech seed", lambda r: _catrate(r, "cat_leechseed")),
+    ]),
+    ("status-inducing moves / seat-game", [
+        ("status move (any)", lambda r: _catrate(r, "cat_status_move")),
+        ("paralysis (T-Wave/Stun/Glare)", lambda r: _catrate(r, "cat_para")),
+        ("burn (Will-O-Wisp)", lambda r: _catrate(r, "cat_burn")),
+        ("toxic", lambda r: _catrate(r, "cat_toxic")),
+        ("sleep move", lambda r: _catrate(r, "cat_sleep")),
+        ("yawn", lambda r: _catrate(r, "cat_yawn")),
     ]),
     ("conditional breakdowns (%)", [
-        ("phaze: enemy boosted/sub %", lambda r: _fracpct(r, "cat_phaze_justified", "cat_phaze")),
+        ("phaze: enemy boosted/sub %", lambda r: _fracpct2(r, "cat_phaze_justified", "cat_phaze_justified", "cat_phaze_neutral")),
         ("rapid spin: spikes-down %", lambda r: _fracpct(r, "cat_rapidspin_spikesdown", "cat_rapidspin_total")),
-        ("solar beam: in sun %", lambda r: _fracpct(r, "cat_solarbeam_sun", "cat_solarbeam")),
-        ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "cat_batonpass")),
+        ("solar beam: in sun %", lambda r: _fracpct2(r, "cat_solarbeam_sun", "cat_solarbeam_sun", "cat_solarbeam_nosun")),
+        ("BP w/ stat or sub %", lambda r: _fracpct(r, "bp_stat_or_sub", "bp_switch")),
         ("focus punch success %", lambda r: _pct(r.get("focus_punch_success_rate"))),
         ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
+        ("destiny bond success %", lambda r: _pct(r.get("destinybond_success_rate"))),
+        ("enemy boom blocked %", lambda r: _pct(r.get("boom_block_rate"))),
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
         ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
         ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
     ]),
-    ("resource / endgame", [
-        ("bot PP exhaust/game", lambda r: r.get("pp_exhaustion_bot_per_game")),
-        ("opp PP exhaust/game", lambda r: r.get("pp_exhaustion_opp_per_game")),
-        ("mons alive on win", lambda r: r.get("avg_bot_mons_alive_on_win")),
-        ("opp mons alive on loss", lambda r: r.get("avg_opp_mons_alive_on_loss")),
+    # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
+    # opp-mons-on-loss ≈ mons-on-win (the winner's margin) — the paired plots are essentially
+    # identical, so only one of each is shown here. The bot-vs-opp split IS kept in the 500k panel,
+    # where the foul-play column has a genuinely different opponent (FoulPlay).
+    ("resource / endgame (self-play — opp mirrors bot, shown once)", [
+        ("PP exhausted / game", lambda r: r.get("pp_exhaustion_bot_per_game")),
+        ("mons alive at game end (winner)", lambda r: r.get("avg_bot_mons_alive_on_win")),
+    ]),
+    ("setup payoff", [
+        # Reversal/Flail avg BP rises if the policy learns to fire them at low HP; Belly Drum avg
+        # KOs measures whether the setup pays off (mons the drummer removes after using it).
+        ("reversal/flail avg BP", lambda r: r.get("reversal_avg_bp")),
+        ("belly drum: avg KOs after", lambda r: r.get("bellydrum_avg_kos")),
+        ("belly drum: % uses w/ a KO", lambda r: _pct(r.get("bellydrum_ko_rate"))),
+    ]),
+    ("priority moves (Quick Attack / Extreme Speed / Mach Punch)", [
+        # column 1: how often priority is used; column 2: the skilled use — fired when the opponent
+        # outspeeds us (from turn order); column 3: the payoff — fraction of uses that land the KO.
+        ("use / seat-game", lambda r: _catrate(r, "cat_priority")),
+        ("vs faster opp %", lambda r: _pct(r.get("priority_vs_faster_rate"))),
+        ("KO rate %", lambda r: _pct(r.get("priority_ko_rate"))),
+    ]),
+    ("intentional weather (use / seat-game when carried)", [
+        # use rate conditioned on the move being in the team's pool (games-present denominator).
+        ("sunny day", lambda r: _catrate(r, "cat_weather_sun")),
+        ("rain dance", lambda r: _catrate(r, "cat_weather_rain")),
+    ]),
+    ("ability reads (per game, only games the ability is on the team)", [
+        ("intimidate activations / game", lambda r: r.get("intimidate_activations_per_game")),
+        ("absorb switch-in reads / game", lambda r: r.get("absorb_switchins_per_game")),
+    ]),
+    ("hazard stacking (when Spikes is carried)", [
+        # avg peak Spikes layers stacked on the opponent; rising toward 3 = fully setting the hazard.
+        ("spikes: avg max layers", lambda r: r.get("spikes_avg_max_layers")),
+    ]),
+    ("toxic / leech-seed management", [
+        # avg peak toxic stage / avg turns a leech-seeded mon stays in before it leaves. Falling over
+        # training = the policy pivots statused mons out earlier rather than eating the residual drain.
+        ("avg toxic stage reached", lambda r: r.get("avg_toxic_stage")),
+        ("avg leech-seed turns in", lambda r: r.get("avg_leechseed_turns")),
     ]),
 ]
 
@@ -229,6 +293,8 @@ def _series(rows, fn):
     for r in rows:
         if r.get("milestone") is None:
             continue
+        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
+            continue   # drop distorted stall checkpoints from the trajectories (see TRAJECTORY_EXCLUDE)
         v = fn(r)
         if v is not None:
             by[r.get("lineage")].append((r["milestone"], v))
@@ -245,6 +311,11 @@ def phase2_trajectories(rows_self):
     multi = any(sum(1 for l2, m in checkpoints if l2 == l) > 1 for l in lineages)
     note = "" if multi else ('<p class="sub">Only 500k checkpoints present so far — each line is a single '
                              'point until the milestone sweep fills in the trajectory.</p>')
+    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if (l, m) in TRAJECTORY_EXCLUDE)
+    if excluded:
+        note += (f'<p class="sub">Excluded for legibility: {esc(", ".join(excluded))} '
+                 f'(stalls ~50% of games to the turn cap, distorting per-game counts and compressing '
+                 f'the scale — same exclusion as the Phase-1 basics).</p>')
     blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
@@ -307,7 +378,12 @@ def phase2_correlations(rows):
     winr = {c: foulm[c].get("bot_win_rate") for c in cks}
     vals = [w for w in winr.values() if w is not None]
     spread = (max(vals) - min(vals)) if vals else 0.0
-    traits = [(lbl, fn) for _, charts in TRAJECTORY_CHARTS for lbl, fn in charts] + _CORR_EXTRA
+    # a trait can appear in more than one trajectory group (e.g. "toxic" is under both category-use
+    # and status-inducing moves), so de-dupe by label — otherwise it shows twice in this table.
+    seen, traits = set(), []
+    for lbl, fn in ([lf for _, charts in TRAJECTORY_CHARTS for lf in charts] + _CORR_EXTRA):
+        if lbl not in seen:
+            seen.add(lbl); traits.append((lbl, fn))
     results = []
     for lbl, fn in traits:
         xs, ys = [], []
@@ -498,10 +574,10 @@ def phase2_panel(rows, opponent, checkpoints):
         return f'{c}/{t} <span class="dim">({c / t * 100:.0f}%)</span>'
 
     out.append('<tr class="grp"><td colspan="%d">conditional breakdowns — occurrences meeting the condition / category total</td></tr>' % (len(lineages) + 1))
-    out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), cat_total(r, "cat_rapidspin_total"))))
-    out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), cat_total(r, "cat_phaze"))))
-    out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), cat_total(r, "cat_solarbeam"))))
-    out.append(row("BP w/ stat or sub", lambda r: cond(ex(r, "bp_stat_or_sub"), cat_total(r, "cat_batonpass"))))
+    out.append(row("rapid spin: spikes on own side", lambda r: cond(ex(r, "cat_rapidspin_spikesdown"), ex(r, "cat_rapidspin_total"))))
+    out.append(row("phaze: enemy boosted / behind sub", lambda r: cond(ex(r, "cat_phaze_justified"), ex(r, "cat_phaze_justified") + ex(r, "cat_phaze_neutral"))))
+    out.append(row("solar beam: in sun", lambda r: cond(ex(r, "cat_solarbeam_sun"), ex(r, "cat_solarbeam_sun") + ex(r, "cat_solarbeam_nosun"))))
+    out.append(row("BP w/ stat or sub", lambda r: cond(ex(r, "bp_stat_or_sub"), ex(r, "bp_switch"))))
     out.append(row("focus punch success rate", lambda r: f'{_fmt(r.get("focus_punch_success_rate"))} <span class="dim">(n={ex(r, "focuspunch_attempt") or r.get("focus_punch_attempts", 0)})</span>'))
     out.append(row("opp focus punch disrupted", lambda r: f'{_fmt(r.get("opp_focus_punch_disruption_rate"))} <span class="dim">(n={r.get("opp_focus_punch_attempts", 0)})</span>'))
 
@@ -515,6 +591,21 @@ def phase2_panel(rows, opponent, checkpoints):
     out.append(row("opp mons alive on loss", lambda r: _fmt(r.get("avg_opp_mons_alive_on_loss"), 2)))
     out.append(row("focus-punch success", lambda r: _fmt(r.get("focus_punch_success_rate"))))
     out.append(row("top closer on win", lambda r: esc((r.get("top5_last_active_on_win") or [["—"]])[0][0])))
+    out.append('<tr class="grp"><td colspan="%d">setup payoff (avg over uses)</td></tr>' % (len(lineages) + 1))
+    out.append(row("reversal/flail avg BP", lambda r: f'{_fmt(r.get("reversal_avg_bp"), 1)} <span class="dim">(n={r.get("reversal_uses", 0)})</span>'))
+    out.append(row("belly drum: avg KOs after", lambda r: f'{_fmt(r.get("bellydrum_avg_kos"), 2)} <span class="dim">(n={r.get("bellydrum_uses", 0)})</span>'))
+    out.append(row("belly drum: % uses w/ a KO", lambda r: f'{_pct(r.get("bellydrum_ko_rate"))} <span class="dim">(n={r.get("bellydrum_uses", 0)})</span>'))
+    out.append('<tr class="grp"><td colspan="%d">priority moves &amp; destiny bond (rate over uses)</td></tr>' % (len(lineages) + 1))
+    out.append(row("priority vs faster opp", lambda r: f'{_fmt(r.get("priority_vs_faster_rate"))} <span class="dim">(n={r.get("priority_uses", 0)})</span>'))
+    out.append(row("priority KO rate", lambda r: _fmt(r.get("priority_ko_rate"))))
+    out.append(row("destiny bond success", lambda r: f'{_fmt(r.get("destinybond_success_rate"))} <span class="dim">(n={r.get("destinybond_uses", 0)})</span>'))
+    out.append('<tr class="grp"><td colspan="%d">ability reads / toxic / boom</td></tr>' % (len(lineages) + 1))
+    out.append(row("intimidate activations / game", lambda r: f'{_fmt(r.get("intimidate_activations_per_game"), 2)} <span class="dim">(g={r.get("intimidate_present_seat_games", 0)})</span>'))
+    out.append(row("absorb switch-in reads / game", lambda r: f'{_fmt(r.get("absorb_switchins_per_game"), 2)} <span class="dim">(g={r.get("absorb_present_seat_games", 0)})</span>'))
+    out.append(row("avg toxic stage reached", lambda r: f'{_fmt(r.get("avg_toxic_stage"), 2)} <span class="dim">(n={r.get("toxic_episodes", 0)})</span>'))
+    out.append(row("avg leech-seed turns in", lambda r: f'{_fmt(r.get("avg_leechseed_turns"), 2)} <span class="dim">(n={r.get("leechseed_episodes", 0)})</span>'))
+    out.append(row("spikes: avg max layers", lambda r: f'{_fmt(r.get("spikes_avg_max_layers"), 2)} <span class="dim">(g={r.get("spikes_present_seat_games", 0)})</span>'))
+    out.append(row("enemy boom blocked", lambda r: f'{_fmt(r.get("boom_block_rate"))} <span class="dim">(n={r.get("boom_faced", 0)})</span>'))
     out.append("</table></div>")
     return "".join(out)
 

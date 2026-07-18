@@ -58,7 +58,10 @@ def _team_movesets(request):
     for mon in side.get("pokemon") or []:
         details = mon.get("details") or ""
         species = details.split(",")[0].strip()
-        out.append({"species": species, "moves": list(mon.get("moves") or [])})
+        # ability lets trait_extract gate ability-dependent traits (Intimidate, Volt/Water Absorb,
+        # Flash Fire) exactly on team composition; older captures without it fall back to inference.
+        ability = mon.get("baseAbility") or mon.get("ability") or ""
+        out.append({"species": species, "moves": list(mon.get("moves") or []), "ability": ability})
     return out
 
 
