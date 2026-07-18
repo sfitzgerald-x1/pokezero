@@ -202,6 +202,8 @@ def root_puct_fallback_signature(reason: object) -> str | None:
     """
 
     raw_reason = str(reason or "")
+    if root_puct_fallback_category(raw_reason) != "force_switch_illegal_action":
+        return None
     match = _FORCE_SWITCH_ILLEGAL_ACTION_RE.search(raw_reason)
     if match is None:
         return None

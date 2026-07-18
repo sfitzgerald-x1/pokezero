@@ -890,10 +890,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-fallback"]["decisions"], 2)
         self.assertEqual(summary["root-puct-fallback"]["root_puct_searches"], 0)
         self.assertEqual(summary["root-puct-fallback"]["root_puct_fallbacks"], 2)
-        self.assertEqual(
-            summary["root-puct-fallback"]["root_puct_fallback_reasons"],
-            {"search failed: boom": 2},
-        )
+        self.assertNotIn("root_puct_fallback_reasons", summary["root-puct-fallback"])
         self.assertEqual(
             summary["root-puct-fallback"]["root_puct_fallback_categories"],
             {"search_failed": 2},
@@ -985,8 +982,8 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("2=1", output)
         self.assertIn("1=3", output)
         self.assertIn("rollout_terminal=2", output)
-        self.assertIn("fallback_reasons:", output)
-        self.assertIn("search failed: boom=1", output)
+        self.assertIn("fallback_categories:", output)
+        self.assertIn("search_failed=1", output)
 
     def test_benchmark_rollouts_reuses_seed_range_for_each_matchup(self) -> None:
         reset_seeds = []

@@ -195,6 +195,13 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             "force-switch:search:p1:move",
         )
         self.assertIsNone(root_puct_fallback_signature("search failed: private observation mismatch"))
+        self.assertIsNone(
+            root_puct_fallback_signature(
+                "all opponent action scenarios were replay-illegal: "
+                "p2: action_index 6 is not legal for the current request "
+                "(request_kind=force_switch); start override planner did not produce a sampled world."
+            )
+        )
 
     def test_classifies_mixed_replay_prefix_divergence(self) -> None:
         reason = (

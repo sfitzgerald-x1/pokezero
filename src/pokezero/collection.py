@@ -1714,10 +1714,6 @@ class _PolicyDecisionAccumulator:
                 result["root_puct_leaf_evaluations"] = dict(
                     sorted(self.root_puct_leaf_evaluations.items())
                 )
-            if self.root_puct_fallback_reasons:
-                result["root_puct_fallback_reasons"] = dict(
-                    sorted(self.root_puct_fallback_reasons.items())
-                )
             if self.root_puct_fallback_categories:
                 result["root_puct_fallback_categories"] = dict(
                     sorted(self.root_puct_fallback_categories.items())
