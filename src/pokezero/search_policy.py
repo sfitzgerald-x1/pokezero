@@ -209,11 +209,15 @@ class OpponentActionScenario:
     # An opponent action that was committed before a player-only forced-switch request. It is
     # reconstructed into the direct world's queue, not submitted alongside the root action.
     deferred_actions: Mapping[PlayerId, int] = field(default_factory=dict)
+    # The opponent has no request at a forced-switch boundary. These player-local move-slot
+    # priors are resolved against the sampled world's legal slots by direct materialization.
+    deferred_action_priors: Mapping[PlayerId, tuple[float, ...]] = field(default_factory=dict)
 
     def normalized(self, *, total_weight: float) -> "OpponentActionScenario":
         return OpponentActionScenario(
             actions=dict(self.actions),
             deferred_actions=dict(self.deferred_actions),
+            deferred_action_priors=dict(self.deferred_action_priors),
             weight=self.weight / total_weight,
             label=self.label,
         )
@@ -284,12 +288,14 @@ def prior_top_k_opponent_action_scenario_planner(
     *,
     scenario_count: int,
 ) -> OpponentActionScenarioPlanner:
-    """Enumerate likely opponent root-action scenarios from player-local opponent priors.
+    """Enumerate likely requested-opponent scenarios from player-local opponent priors.
 
     The prior function only sees the acting player's observation history. Requested-opponent legal
     masks are still a privileged benchmark safety guard, and they affect scenario support and
     weights so replay branches stay submit-valid. For multi-opponent turns, the final joint scenario
-    set is capped to ``scenario_count`` after combining per-opponent choices.
+    set is capped to ``scenario_count`` after combining per-opponent choices. A move committed
+    before a player-only forced switch has no live request; its four move-slot priors are instead
+    conditioned on the sampled world's legal slots during direct materialization.
     """
 
     if scenario_count <= 0:
@@ -326,31 +332,32 @@ def prior_top_k_opponent_action_scenario_planner(
                     ),
                 ),
             )
-            for player in scenario_players
+            for player in requested_opponents
         )
         scenarios: list[OpponentActionScenario] = []
-        for combination in product(*(choices for _player, choices in choices_by_player)):
+        combinations = product(*(choices for _player, choices in choices_by_player))
+        deferred_action_priors = {
+            player: tuple(priors[:MOVE_ACTION_COUNT])
+            for player in deferred_opponents
+        }
+        for combination in combinations:
             actions = {
                 player: action
                 for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
                 if player in requested_opponents
             }
-            deferred_actions = {
-                player: action
-                for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
-                if player in deferred_opponents
-            }
             weight = math.prod(weight for _action, weight in combination)
-            label = ",".join(
+            label_parts = [
                 f"{player}:{action}"
                 for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
-            )
+            ]
+            label_parts.extend(f"{player}:sampled-move" for player in deferred_opponents)
             scenarios.append(
                 OpponentActionScenario(
                     actions=actions,
-                    deferred_actions=deferred_actions,
+                    deferred_action_priors=dict(deferred_action_priors),
                     weight=weight,
-                    label=label,
+                    label=",".join(label_parts),
                 )
             )
         scenarios.sort(key=lambda scenario: (-scenario.weight, tuple(sorted(scenario.actions.items()))))
@@ -614,6 +621,7 @@ class RootPUCTSearchPolicy:
             deferred_error = _deferred_opponent_action_planner_error(
                 context=context,
                 deferred_actions=scenario.deferred_actions,
+                deferred_action_priors=scenario.deferred_action_priors,
             )
             if deferred_error is not None:
                 return self._fallback(
@@ -742,7 +750,7 @@ class RootPUCTSearchPolicy:
                     elif search.timing.prefix_replay_count:
                         replay_materialization_count += 1
 
-                if _uses_scenario_independent_start_overrides(self):
+                if _uses_scenario_independent_start_overrides(self, context):
                     def record_belief_world_materialization_attempt() -> None:
                         nonlocal belief_world_materialization_count
                         belief_world_materialization_count += 1
@@ -848,6 +856,7 @@ class RootPUCTSearchPolicy:
                                         start_override=start_override,
                                         public_materialization_state=context.public_materialization_state,
                                         deferred_opponent_actions=scenario.deferred_actions,
+                                        deferred_opponent_action_priors=scenario.deferred_action_priors,
                                         expected_current_observation=context.observation,
                                         replay_hp_fraction_tolerance=(
                                             self.start_override_hp_fraction_tolerance
@@ -1363,10 +1372,12 @@ def _deferred_opponent_action_planner_error(
     *,
     context: PolicyContext,
     deferred_actions: Mapping[PlayerId, int],
+    deferred_action_priors: Mapping[PlayerId, tuple[float, ...]],
 ) -> str | None:
     expected = set(_deferred_opponent_action_players(context))
-    actual = set(deferred_actions)
-    if actual != expected:
+    action_players = set(deferred_actions)
+    prior_players = set(deferred_action_priors)
+    if action_players & prior_players or action_players | prior_players != expected:
         return "deferred opponent action planner returned an unexpected action set"
     for player, action_index in deferred_actions.items():
         if (
@@ -1375,6 +1386,17 @@ def _deferred_opponent_action_planner_error(
             or not 0 <= action_index < MOVE_ACTION_COUNT
         ):
             return f"deferred opponent action planner returned an invalid action for {player}: {action_index!r}"
+    for player, priors in deferred_action_priors.items():
+        if len(priors) != MOVE_ACTION_COUNT:
+            return f"deferred opponent action planner returned invalid move priors for {player}"
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (float, int))
+            or not math.isfinite(value)
+            or value < 0.0
+            for value in priors
+        ) or sum(priors) <= 0.0:
+            return f"deferred opponent action planner returned invalid move priors for {player}"
     return None
 
 
@@ -1471,6 +1493,7 @@ def _start_override_sampled_scenario_groups(
                 OpponentActionScenario(
                     actions=dict(scenario.actions),
                     deferred_actions=dict(scenario.deferred_actions),
+                    deferred_action_priors=dict(scenario.deferred_action_priors),
                     weight=sample_weight,
                     label=f"{scenario.label}/belief-sample-{sample_index + 1}",
                 )
@@ -1518,10 +1541,13 @@ def _flatten_scenario_groups(
     return tuple(scenario for group in scenario_groups for scenario in group.samples)
 
 
-def _uses_scenario_independent_start_overrides(policy: RootPUCTSearchPolicy) -> bool:
+def _uses_scenario_independent_start_overrides(
+    policy: RootPUCTSearchPolicy,
+    context: PolicyContext,
+) -> bool:
     return policy.start_override_planner is not None and bool(
         getattr(policy.start_override_planner, "scenario_independent", False)
-    )
+    ) and not _deferred_opponent_action_players(context)
 
 
 def _shared_start_override_samples(
@@ -1901,6 +1927,11 @@ def _opponent_action_scenario_payload(scenario: OpponentActionScenario) -> dict[
     }
     if scenario.deferred_actions:
         payload["deferred_actions"] = dict(scenario.deferred_actions)
+    if scenario.deferred_action_priors:
+        payload["deferred_action_priors"] = {
+            player: list(priors)
+            for player, priors in scenario.deferred_action_priors.items()
+        }
     return payload
 
 

@@ -517,31 +517,45 @@ function applyPublicState(snapshot, publicState) {
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
-  const entries = Object.entries(publicState.deferredOpponentActions || {});
-  if (!entries.length) return;
-  const [sideId, actionIndex] = entries[0];
+  const actionEntries = Object.entries(publicState.deferredOpponentActions || {});
+  const priorEntries = Object.entries(publicState.deferredOpponentActionPriors || {});
+  if (!actionEntries.length && !priorEntries.length) return;
+  if (actionEntries.length && priorEntries.length) {
+    throw new Error("Materialize received both a deferred action and deferred move priors.");
+  }
+  const [sideId, deferredValue] = (actionEntries.length ? actionEntries : priorEntries)[0];
   const side = simulatorBattle.sides[sideId === "p1" ? 0 : 1];
   const pokemon = side?.active?.[0];
   if (!pokemon || pokemon.fainted) {
     throw new Error("Materialize cannot restore a deferred action without an active opponent.");
   }
-  if (!Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4) {
-    throw new Error("Materialize cannot restore a non-move deferred opponent action.");
-  }
-  // The planner has no live opponent request at a Baton Pass replacement boundary. It supplies
-  // one ranked action index from player-knowable history; this sampled determinization then
-  // checks its own private move slots and falls through to another legal slot if needed. That is
-  // not a read from the live battle and keeps an unavailable hypothesis from discarding a world.
-  const candidateIndices = [
-    actionIndex,
-    ...[0, 1, 2, 3].filter(index => index !== actionIndex),
-  ];
-  const moveSlotIndex = candidateIndices.find(index => {
+  const availableSlots = [0, 1, 2, 3].filter(index => {
     const candidate = pokemon.moveSlots?.[index];
     return candidate && !candidate.disabled && candidate.pp > 0;
   });
-  if (moveSlotIndex === undefined) {
+  if (!availableSlots.length) {
     throw new Error("Materialize sampled an unavailable deferred opponent move.");
+  }
+  let moveSlotIndex;
+  if (actionEntries.length) {
+    if (!Number.isInteger(deferredValue) || deferredValue < 0 || deferredValue >= 4) {
+      throw new Error("Materialize cannot restore a non-move deferred opponent action.");
+    }
+    if (!availableSlots.includes(deferredValue)) {
+      throw new Error("Materialize sampled an unavailable deferred opponent move.");
+    }
+    moveSlotIndex = deferredValue;
+  } else {
+    if (!Array.isArray(deferredValue) || deferredValue.length !== 4 || deferredValue.some(
+      value => typeof value !== "number" || !Number.isFinite(value) || value < 0,
+    )) {
+      throw new Error("Materialize received invalid deferred opponent move priors.");
+    }
+    // The priors are player-local. Conditioning them on the sampled world's legal slots avoids
+    // both a live opponent-request read and duplicate action scenarios for short move lists.
+    moveSlotIndex = availableSlots.reduce((best, index) => (
+      deferredValue[index] > deferredValue[best] ? index : best
+    ));
   }
   const moveSlot = pokemon.moveSlots[moveSlotIndex];
   simulatorBattle.queue.addChoice({

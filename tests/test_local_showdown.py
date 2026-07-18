@@ -1262,22 +1262,22 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             search_env.step({"p1": 4})
             protocol = "\n".join(search_env.protocol_lines)
 
-            # A hidden-mode planner can rank an unavailable slot because this forced-switch
-            # boundary has no opponent request. The sampled world selects the next available
-            # move without reading the source battle's private request.
+            # A hidden-mode planner can rank slots that do not exist in the sampled world. Its
+            # public priors are conditioned on sampled legal slots without reading a source
+            # battle request, so the best available slot is selected without duplicate worlds.
             search_env.materialize_public_world(
                 state=materialization,
                 start_override=start_override,
                 seed=79,
-                deferred_opponent_actions={"p2": 3},
+                deferred_opponent_action_priors={"p2": (0.10, 0.90, 0.30, 0.40)},
             )
             search_env.step({"p1": 4})
-            unavailable_slot_protocol = "\n".join(search_env.protocol_lines)
+            conditioned_protocol = "\n".join(search_env.protocol_lines)
 
         self.assertIn("|move|p2a: Ditto|Protect|", protocol)
         self.assertNotIn("|move|p2a: Ditto|Harden|", protocol)
-        self.assertIn("|move|p2a: Ditto|Harden|", unavailable_slot_protocol)
-        self.assertNotIn("|move|p2a: Ditto|Protect|", unavailable_slot_protocol)
+        self.assertIn("|move|p2a: Ditto|Protect|", conditioned_protocol)
+        self.assertNotIn("|move|p2a: Ditto|Harden|", conditioned_protocol)
 
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()

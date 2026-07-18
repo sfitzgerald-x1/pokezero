@@ -1241,6 +1241,7 @@ def prepare_direct_materialization_prefix(
     start_override: BattleStartOverride | None,
     public_materialization_state: object | None,
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+    deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
     on_unavailable: Callable[[str], None] | None = None,
@@ -1279,6 +1280,10 @@ def prepare_direct_materialization_prefix(
         }
         if deferred_opponent_actions:
             materialization_kwargs["deferred_opponent_actions"] = dict(deferred_opponent_actions)
+        if deferred_opponent_action_priors:
+            materialization_kwargs["deferred_opponent_action_priors"] = dict(
+                deferred_opponent_action_priors
+            )
         materializer(**materialization_kwargs)
         if expected_current_observation is not None:
             require_current_observation_match(

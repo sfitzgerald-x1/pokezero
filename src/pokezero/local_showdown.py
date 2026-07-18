@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -452,6 +453,7 @@ class LocalShowdownEnv:
         start_override: BattleStartOverride,
         seed: int,
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+        deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -469,6 +471,7 @@ class LocalShowdownEnv:
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
+                    deferred_opponent_action_priors=deferred_opponent_action_priors,
                 ),
             }
         )
@@ -1151,6 +1154,7 @@ def _public_materialization_payload(
     state: PublicBattleMaterializationState,
     *,
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+    deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
 ) -> dict[str, Any]:
     replay = state.replay
     sides: dict[PlayerId, dict[str, Any]] = {}
@@ -1174,14 +1178,35 @@ def _public_materialization_payload(
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
     deferred_actions = dict(deferred_opponent_actions or {})
+    deferred_priors = {
+        player: tuple(values)
+        for player, values in (deferred_opponent_action_priors or {}).items()
+    }
     deferred_player = state.deferred_opponent_action_player
+    if deferred_actions and deferred_priors:
+        raise ValueError("Direct materialization received both a deferred action and deferred move priors.")
     if deferred_actions and set(deferred_actions) != {deferred_player}:
         raise ValueError("Direct materialization received an unexpected deferred opponent action.")
+    if deferred_priors and set(deferred_priors) != {deferred_player}:
+        raise ValueError("Direct materialization received unexpected deferred opponent move priors.")
     if any(
         isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < MOVE_ACTION_COUNT
         for action in deferred_actions.values()
     ):
         raise ValueError("Direct materialization received an invalid deferred opponent action.")
+    if any(
+        len(priors) != MOVE_ACTION_COUNT
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (float, int))
+            or not math.isfinite(value)
+            or value < 0.0
+            for value in priors
+        )
+        or sum(priors) <= 0.0
+        for priors in deferred_priors.values()
+    ):
+        raise ValueError("Direct materialization received invalid deferred opponent move priors.")
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
@@ -1201,6 +1226,9 @@ def _public_materialization_payload(
         # yet protocol-visible. It is supplied by the opponent-action predictor, never the live
         # battle, and the bridge restores it before the actor's forced switch resolves.
         "deferredOpponentActions": deferred_actions,
+        "deferredOpponentActionPriors": {
+            player: list(priors) for player, priors in deferred_priors.items()
+        },
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's
