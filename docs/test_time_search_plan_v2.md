@@ -93,10 +93,13 @@ strength. In order:
 
 **Current readiness (2026-07-18):** `emeta-v2-2-lr3m-3m-belief` continued from
 2M to 3,000,000 total games and produced its frontier checkpoint at iteration
-625. It is the current final-checkpoint candidate. Its previous Step-0 artifact
-targets an earlier iteration and is not reusable for the frontier read. A fresh,
-checkpoint-matched Step-0 capture/refit is in progress; no frontier paired
-search result has been claimed yet.
+625. It is the current final-checkpoint candidate. Its checkpoint-matched Step-0
+capture/refit completed and selected an isotonic value leaf: Pearson `0.593`,
+sign accuracy `0.773`, and ECE `0.143`. The ranking and sign gates pass; the ECE
+miss is recorded as the plan's documented-proceed outcome rather than a clean
+calibration pass. The matching W2 curve is running, with a marker-backed W3
+controller staged to submit the paired frontier read from the resulting knee.
+No frontier paired-search result has been claimed yet.
 
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
    A 1M-fitted isotonic map on a 3M value head confounds the read — the one
