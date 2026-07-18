@@ -1448,6 +1448,53 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(restored_suffix, expected_suffix)
         self.assertEqual(repeated_restored_suffix, expected_suffix)
 
+    def test_search_snapshot_handle_fuses_restore_and_branch_step(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            snapshot = env.snapshot_for_search()
+            prefix_len = len(snapshot.protocol_lines)
+
+            before_explicit = env.root_puct_bridge_timing_snapshot()
+            env.restore_search_snapshot(snapshot)
+            explicit_result = env.step({"p1": 0, "p2": 1})
+            explicit_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+            after_explicit = env.root_puct_bridge_timing_snapshot()
+
+            before_fused = env.root_puct_bridge_timing_snapshot()
+            fused_result = env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 1})
+            fused_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+            after_fused = env.root_puct_bridge_timing_snapshot()
+
+            # The retained handle remains an immutable branch point after a fused visit.
+            env.step_from_search_snapshot(snapshot, {"p1": 1, "p2": 0})
+            env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 1})
+            repeated_fused_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+        self.assertEqual(fused_suffix, explicit_suffix)
+        self.assertEqual(repeated_fused_suffix, explicit_suffix)
+        self.assertEqual(fused_result.requested_players, explicit_result.requested_players)
+        self.assertEqual(fused_result.rewards, explicit_result.rewards)
+        self.assertEqual(fused_result.terminal, explicit_result.terminal)
+        self.assertEqual(after_explicit["bridge_round_trip_count"] - before_explicit["bridge_round_trip_count"], 2)
+        self.assertEqual(after_fused["bridge_round_trip_count"] - before_fused["bridge_round_trip_count"], 1)
+        self.assertEqual(
+            after_fused["bridge_node_processing_count"] - before_fused["bridge_node_processing_count"],
+            1,
+        )
+
     def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
         config = integration_config()
         assert config is not None
@@ -1555,12 +1602,16 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             env.reset(seed=23)
             with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
                 env.restore_search_snapshot(snapshot)
+            with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
+                env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 0})
 
             env.reset_with_start_override(seed=29, start_override=start_override)
             self.assertTrue(env.release_search_snapshot(snapshot))
             self.assertFalse(env.release_search_snapshot(snapshot))
             with self.assertRaisesRegex(LocalShowdownError, "Unknown search snapshot"):
                 env.restore_search_snapshot(snapshot)
+            with self.assertRaisesRegex(LocalShowdownError, "Unknown search snapshot"):
+                env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 0})
 
     def test_snapshot_restore_reuses_prepared_world_in_fresh_bridge_shell(self) -> None:
         config = integration_config()

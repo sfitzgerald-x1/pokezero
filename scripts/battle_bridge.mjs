@@ -324,6 +324,27 @@ function restoreSearchBattle(command) {
   });
 }
 
+async function restoreSearchAndSendChoices(command) {
+  const startedAt = process.hrtime.bigint();
+  const battle = requireBattle(command);
+  const snapshotId = command.snapshotId;
+  if (typeof snapshotId !== "string" || snapshotId.length === 0) {
+    throw new Error("Search restore-and-step requires a snapshotId.");
+  }
+  const snapshot = searchSnapshots.get(snapshotId);
+  if (!snapshot) {
+    throw new Error(`Unknown search snapshot ${snapshotId}.`);
+  }
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  // This command is restricted to retained search handles. It restores one
+  // belief-sampled world and submits the branch action without serializing a
+  // simulator state or touching a live battle.
+  restoreSerializedBattle(battle, snapshot, { cloneSnapshot: true });
+  await submitChoices(battle, command.choices, startedAt);
+}
+
 function releaseSearchSnapshot(command) {
   const startedAt = process.hrtime.bigint();
   requireBattle(command);
@@ -971,16 +992,14 @@ async function sendChoice(command) {
   emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
 }
 
-async function sendChoices(command) {
-  const battle = requireBattle(command);
-  const choices = command.choices;
+async function submitChoices(battle, choices, receivedAt) {
   if (!choices || typeof choices !== "object") {
     throw new Error("Choices must be an object keyed by player.");
   }
   battle.boundaryRequests = {};
   battle.readyScheduled = false;
   battle.terminalScheduled = false;
-  battle.tRecv = process.hrtime.bigint();
+  battle.tRecv = receivedAt;
   for (const player of ["p1", "p2"]) {
     if (!Object.prototype.hasOwnProperty.call(choices, player)) continue;
     const choice = choices[player];
@@ -990,6 +1009,11 @@ async function sendChoices(command) {
     await battle.streams[player].write(choice);
     emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
   }
+}
+
+async function sendChoices(command) {
+  const battle = requireBattle(command);
+  await submitChoices(battle, command.choices, process.hrtime.bigint());
 }
 
 async function endBattle(command) {
@@ -1033,6 +1057,9 @@ async function handleCommand(command) {
       break;
     case "restore_search":
       restoreSearchBattle(command);
+      break;
+    case "restore_search_choices":
+      await restoreSearchAndSendChoices(command);
       break;
     case "release_search_snapshot":
       releaseSearchSnapshot(command);

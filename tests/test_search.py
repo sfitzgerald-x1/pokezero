@@ -239,6 +239,20 @@ class BridgeTimedSnapshotValueBranchEnv(BridgeSnapshotValueBranchEnv):
         return super().step(actions)
 
 
+class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
+    """Bridge-handle double that restores and branches in one transport exchange."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fused_search_step_calls = 0
+
+    def step_from_search_snapshot(self, snapshot, actions: dict[str, int]) -> StepResult:
+        self.fused_search_step_calls += 1
+        self._record_bridge_round_trip(elapsed_seconds=0.020, node_seconds=0.012)
+        self._requested, self._terminal = snapshot
+        return ValueBranchEnv.step(self, actions)
+
+
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
     def snapshot(self):
         time.sleep(0.001)
@@ -737,6 +751,47 @@ class FlatBranchSearchTest(unittest.TestCase):
             - timing["state_restore_seconds"]
             - timing["value_evaluation_seconds"],
         )
+
+    def test_puct_branch_search_fuses_bridge_restore_and_step_per_visit(self) -> None:
+        env = FusedBridgeTimedSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+
+        timing = result.timing.to_dict()
+        self.assertEqual(env.fused_search_step_calls, 5)
+        self.assertEqual(env.search_restore_calls, 0)
+        self.assertEqual(timing["state_restore_count"], 0)
+        self.assertEqual(timing["branch_simulator_step_count"], 5)
+        self.assertEqual(timing["bridge_round_trip_count"], 5)
+        self.assertEqual(timing["bridge_node_processing_count"], 5)
+        self.assertAlmostEqual(timing["bridge_round_trip_seconds"], 0.100)
+        self.assertAlmostEqual(timing["bridge_node_processing_seconds"], 0.060)
+        self.assertAlmostEqual(timing["bridge_python_orchestration_seconds"], 0.040)
+        self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
 
     def test_prepared_bridge_snapshot_can_be_released_after_search(self) -> None:
         env = BridgeSnapshotValueBranchEnv()

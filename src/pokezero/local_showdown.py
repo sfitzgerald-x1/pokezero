@@ -637,6 +637,47 @@ class LocalShowdownEnv:
         )
         self._restore_local_snapshot_state(snapshot)
 
+    def step_from_search_snapshot(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+    ) -> StepResult:
+        """Restore one belief-sampled search handle and advance it in one bridge exchange.
+
+        The retained Node snapshot belongs to a determinized search world, never a live battle.
+        Python restores its paired public parser and belief state before deriving legal choices;
+        the bridge then clones the retained world and submits those choices atomically.
+        """
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot restore before reset.")
+        if not self._search_snapshot_permitted:
+            raise LocalShowdownError(
+                "Bridge-resident search snapshots require a belief-sampled start override."
+            )
+        if (
+            self._format_id != snapshot.format_id
+            or self._observation_format_id != snapshot.observation_format_id
+        ):
+            raise ValueError("LocalShowdownSnapshot format does not match the current live battle shell.")
+        snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
+
+        # Choice conversion uses only the public snapshot paired with this sampled world. Do not
+        # read the current search shell, which may hold a branch from a prior root visit.
+        self._restore_local_snapshot_state(snapshot)
+        choices = self._choices_for_actions(actions)
+        return self._submit_step_choices(
+            choices=choices,
+            payload={
+                "type": "restore_search_choices",
+                "battleId": self._battle_token,
+                "snapshotId": snapshot_id,
+                "choices": choices,
+            },
+        )
+
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
         """Release a bridge-resident search snapshot once its prepared world is no longer needed."""
 
@@ -695,6 +736,13 @@ class LocalShowdownEnv:
         )
 
     def step(self, actions: Mapping[PlayerId, int]) -> StepResult:
+        choices = self._choices_for_actions(actions)
+        return self._submit_step_choices(
+            choices=choices,
+            payload={"type": "choices", "battleId": self._battle_token, "choices": choices},
+        )
+
+    def _choices_for_actions(self, actions: Mapping[PlayerId, int]) -> dict[PlayerId, str]:
         requested = self.requested_players()
         if not requested:
             raise LocalShowdownError("Cannot step without requested players.")
@@ -705,17 +753,23 @@ class LocalShowdownEnv:
         states: dict[PlayerId, PlayerRelativeBattleState] = {
             player: self._state_for_player(player) for player in requested
         }
-        self._last_step_had_error = False
-        self._latest_requests = {}
-        choices = {}
+        choices: dict[PlayerId, str] = {}
         for player in requested:
             try:
                 choices[player] = showdown_choice_for_action(states[player], actions[player])
             except ValueError as exc:
                 raise ValueError(f"{player}: {exc}") from exc
-        self._bridge_request_boundary(
-            {"type": "choices", "battleId": self._battle_token, "choices": choices}
-        )
+        return choices
+
+    def _submit_step_choices(
+        self,
+        *,
+        choices: Mapping[PlayerId, str],
+        payload: Mapping[str, Any],
+    ) -> StepResult:
+        self._last_step_had_error = False
+        self._latest_requests = {}
+        self._bridge_request_boundary(payload)
         if self._last_step_had_error:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
 
