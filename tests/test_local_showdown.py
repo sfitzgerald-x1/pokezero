@@ -1278,6 +1278,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertNotIn("|move|p2a: Ditto|Harden|", protocol)
         self.assertIn("|move|p2a: Ditto|Protect|", conditioned_protocol)
         self.assertNotIn("|move|p2a: Ditto|Harden|", conditioned_protocol)
+        self.assertEqual(protocol.count("|upkeep"), 1)
+        self.assertEqual(conditioned_protocol.count("|upkeep"), 1)
 
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()

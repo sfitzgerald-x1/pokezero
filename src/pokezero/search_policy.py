@@ -325,11 +325,6 @@ def prior_top_k_opponent_action_scenario_planner(
                     priors,
                     limit=scenario_count,
                     rng=_opponent_action_choice_rng(context, player),
-                    # A switch resolves before Baton Pass. Only a previously committed move
-                    # can remain pending across the actor's forced replacement choice.
-                    allowed_action_indices=(
-                        tuple(range(MOVE_ACTION_COUNT)) if player in deferred_opponents else None
-                    ),
                 ),
             )
             for player in requested_opponents

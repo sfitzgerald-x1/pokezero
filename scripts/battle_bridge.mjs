@@ -367,6 +367,7 @@ function applyPublicState(snapshot, publicState) {
   snapshot.turn = publicState.turn;
   const selfForceSwitch = publicState.selfRequestKind === "force-switch";
   const deferredOpponentActions = publicState.deferredOpponentActions ?? {};
+  const deferredOpponentActionPriors = publicState.deferredOpponentActionPriors ?? {};
   snapshot.requestState = selfForceSwitch ? "switch" : "move";
   snapshot.lastMove = null;
   snapshot.lastMoveLine = 0;
@@ -403,19 +404,35 @@ function applyPublicState(snapshot, publicState) {
     throw new Error("Materialize received invalid deferred opponent actions.");
   }
   const deferredEntries = Object.entries(deferredOpponentActions);
+  if (!deferredOpponentActionPriors || typeof deferredOpponentActionPriors !== "object" ||
+      Array.isArray(deferredOpponentActionPriors)) {
+    throw new Error("Materialize received invalid deferred opponent move priors.");
+  }
+  const deferredPriorEntries = Object.entries(deferredOpponentActionPriors);
   if (deferredEntries.length > 1 ||
       deferredEntries.some(([sideId, actionIndex]) =>
         !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
         !Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4)) {
     throw new Error("Materialize received invalid deferred opponent actions.");
   }
-  if (deferredEntries.length && !selfForceSwitch) {
+  if (deferredPriorEntries.length > 1 ||
+      deferredPriorEntries.some(([sideId, priors]) =>
+        !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
+        !Array.isArray(priors) || priors.length !== 4 ||
+        priors.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0) ||
+        priors.reduce((sum, value) => sum + value, 0) <= 0)) {
+    throw new Error("Materialize received invalid deferred opponent move priors.");
+  }
+  if (deferredEntries.length && deferredPriorEntries.length) {
+    throw new Error("Materialize received both a deferred action and deferred move priors.");
+  }
+  if ((deferredEntries.length || deferredPriorEntries.length) && !selfForceSwitch) {
     throw new Error("Materialize received a deferred opponent action without a forced switch.");
   }
   // A direct world normally starts at a decision boundary. When a move was committed before a
   // Baton Pass switch, preserve the interrupted turn so the actor's replacement resolves before
   // the sampled hidden action and its residual phase.
-  if (deferredEntries.length) snapshot.midTurn = true;
+  if (deferredEntries.length || deferredPriorEntries.length) snapshot.midTurn = true;
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -548,7 +565,7 @@ function restoreDeferredOpponentActions(simulatorBattle, publicState) {
   } else {
     if (!Array.isArray(deferredValue) || deferredValue.length !== 4 || deferredValue.some(
       value => typeof value !== "number" || !Number.isFinite(value) || value < 0,
-    )) {
+    ) || deferredValue.reduce((sum, value) => sum + value, 0) <= 0) {
       throw new Error("Materialize received invalid deferred opponent move priors.");
     }
     // The priors are player-local. Conditioning them on the sampled world's legal slots avoids
