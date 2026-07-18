@@ -6,6 +6,7 @@ from pokezero.mcts_diagnostics import (
     root_puct_direct_materialization_rejection_category,
     root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
+    root_puct_fallback_signature,
     root_puct_missing_sampled_world_reason_counts,
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
@@ -175,6 +176,31 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
                 "(request_kind=force_switch)."
             ),
             "force_switch_illegal_action",
+        )
+
+    def test_signs_force_switch_failures_without_retaining_raw_reason(self) -> None:
+        self.assertEqual(
+            root_puct_fallback_signature(
+                "all opponent action scenarios were replay-illegal: "
+                "p2: action_index 6 is not legal for the current request "
+                "(request_kind=force_switch)."
+            ),
+            "force-switch:all-scenarios:p2:switch",
+        )
+        self.assertEqual(
+            root_puct_fallback_signature(
+                "search failed: p1: action_index 1 is not legal for the current request "
+                "(request_kind=force_switch)."
+            ),
+            "force-switch:search:p1:move",
+        )
+        self.assertIsNone(root_puct_fallback_signature("search failed: private observation mismatch"))
+        self.assertIsNone(
+            root_puct_fallback_signature(
+                "all opponent action scenarios were replay-illegal: "
+                "p2: action_index 6 is not legal for the current request "
+                "(request_kind=force_switch); start override planner did not produce a sampled world."
+            )
         )
 
     def test_classifies_mixed_replay_prefix_divergence(self) -> None:

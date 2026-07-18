@@ -164,6 +164,7 @@ class MetadataPolicy:
         leaf_evaluations: dict[str, int] | None = None,
         belief_public_checksum: str | None = None,
         missing_sampled_world_reason_categories: dict[str, int] | None = None,
+        fallback_reason: str = "search failed: boom",
     ) -> None:
         self.policy_id = policy_id
         self.fallback = fallback
@@ -179,13 +180,14 @@ class MetadataPolicy:
         self.leaf_evaluations = leaf_evaluations
         self.belief_public_checksum = belief_public_checksum
         self.missing_sampled_world_reason_categories = missing_sampled_world_reason_categories
+        self.fallback_reason = fallback_reason
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         if self.fallback:
             metadata = {
                 "policy_family": "root-puct-search",
                 "root_puct_fallback": True,
-                "root_puct_fallback_reason": "search failed: boom",
+                "root_puct_fallback_reason": self.fallback_reason,
             }
             if self.missing_sampled_world_reason_categories is not None:
                 metadata["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
@@ -780,6 +782,36 @@ class CollectionTest(unittest.TestCase):
             progress[0].root_puct_by_player["p1"],
         )
 
+    def test_per_seed_benchmark_keeps_public_safe_force_switch_signature(self) -> None:
+        report = benchmark_rollouts(
+            games=1,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            matchups=(
+                BenchmarkMatchup(
+                    "force-switch fallback vs random",
+                    MetadataPolicy(
+                        policy_id="root-puct-fallback",
+                        fallback=True,
+                        fallback_reason=(
+                            "all opponent action scenarios were replay-illegal: "
+                            "p2: action_index 6 is not legal for the current request "
+                            "(request_kind=force_switch)."
+                        ),
+                    ),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        diagnostics = report.to_dict()["matchups"][0]["game_results"][0]["root_puct_by_player"]["p1"]
+
+        self.assertEqual(
+            diagnostics["root_puct_fallback_signatures"],
+            {"force-switch:all-scenarios:p2:switch": 1},
+        )
+        self.assertNotIn("root_puct_fallback_reasons", diagnostics)
+
     def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
         checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
         checkpoint_policy.checkpoint_path = "/tmp/candidate.pt"
@@ -858,10 +890,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-fallback"]["decisions"], 2)
         self.assertEqual(summary["root-puct-fallback"]["root_puct_searches"], 0)
         self.assertEqual(summary["root-puct-fallback"]["root_puct_fallbacks"], 2)
-        self.assertEqual(
-            summary["root-puct-fallback"]["root_puct_fallback_reasons"],
-            {"search failed: boom": 2},
-        )
+        self.assertNotIn("root_puct_fallback_reasons", summary["root-puct-fallback"])
         self.assertEqual(
             summary["root-puct-fallback"]["root_puct_fallback_categories"],
             {"search_failed": 2},
@@ -953,8 +982,8 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("2=1", output)
         self.assertIn("1=3", output)
         self.assertIn("rollout_terminal=2", output)
-        self.assertIn("fallback_reasons:", output)
-        self.assertIn("search failed: boom=1", output)
+        self.assertIn("fallback_categories:", output)
+        self.assertIn("search_failed=1", output)
 
     def test_benchmark_rollouts_reuses_seed_range_for_each_matchup(self) -> None:
         reset_seeds = []

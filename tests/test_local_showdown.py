@@ -24,6 +24,11 @@ from pokezero.observation import ObservationFeatureMasks
 from pokezero.env import BattleStartOverride
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
+from pokezero.search import (
+    prepare_direct_materialization_prefix,
+    puct_branch_search,
+    release_prepared_replay_prefix,
+)
 from pokezero.showdown import (
     V2_1_REPLAY_OBSERVATION_SPEC,
     normalize_for_player,
@@ -31,6 +36,7 @@ from pokezero.showdown import (
     showdown_choice_for_action,
 )
 from pokezero.showdown_fixture import DEFAULT_GEN3_CUSTOM_FORMAT, FixturePokemon, pack_team
+from pokezero.trajectory import BattleTrajectory
 
 
 def _active_hp_from_snapshot(snapshot: LocalShowdownSnapshot, player: str) -> int:
@@ -490,19 +496,44 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertTrue(materialization.self_request["forceSwitch"][0])
             self.assertTrue(source._latest_requests["p2"]["forceSwitch"][0])
             self.assertEqual(_public_materialization_payload(materialization)["wishSetTurns"], {"p1": 1})
-            search_env.materialize_public_world(
-                state=materialization,
+            expected_boundary = source.observe("p1")
+            trajectory = BattleTrajectory(battle_id="double-force-switch", format_id="gen3randombattle", seed=35)
+            prepared = prepare_direct_materialization_prefix(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
                 start_override=start_override,
-                seed=35,
+                public_materialization_state=materialization,
+                expected_current_observation=expected_boundary,
             )
+            self.assertIsNotNone(prepared)
+            assert prepared is not None
             self.assertTrue(search_env.legal_actions("p2")[4])
             expected = source.step({"p1": 4, "p2": 4})
-            actual = search_env.step({"p1": 4, "p2": 4})
+            search = puct_branch_search(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=expected_boundary.legal_action_mask,
+                opponent_actions={"p2": 4},
+                value_fn=lambda _history: 0.0,
+                action_priors=tuple(1.0 if index == 4 else 0.0 for index in range(9)),
+                cpuct=1.0,
+                root_visit_budget=1,
+                start_override=start_override,
+                expected_current_observation=expected_boundary,
+                prepared_prefix=prepared,
+            )
+            release_prepared_replay_prefix(search_env, prepared)
+            actual = search.candidates[0].value_candidate.branch.step_result
 
         self.assertEqual(
             actual.observations["p1"].metadata["self_active"]["condition"],
             expected.observations["p1"].metadata["self_active"]["condition"],
         )
+        self.assertEqual(tuple(candidate.action_index for candidate in search.candidates), (4,))
 
     def test_public_materialization_preserves_three_member_actor_request_order(self) -> None:
         config = integration_config()
@@ -649,17 +680,51 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             expected = source.observe("p1")
             materialization = source.public_materialization_state("p1")
             self.assertTrue(materialization.self_request["forceSwitch"][0])
+            expected_branch = source.step({"p1": 4})
 
-            search_env.materialize_public_world(
-                state=materialization,
+            trajectory = BattleTrajectory(battle_id="force-switch", format_id="gen3randombattle", seed=7)
+            prepared = prepare_direct_materialization_prefix(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
                 start_override=start_override,
-                seed=7,
+                public_materialization_state=materialization,
+                expected_current_observation=expected,
             )
+            self.assertIsNotNone(prepared)
+            assert prepared is not None
             actual = search_env.observe("p1")
+            search = puct_branch_search(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=expected.legal_action_mask,
+                opponent_actions={},
+                value_fn=lambda _history: 0.0,
+                action_priors=tuple(1.0 if index == 4 else 0.0 for index in range(9)),
+                cpuct=1.0,
+                root_visit_budget=1,
+                start_override=start_override,
+                expected_current_observation=expected,
+                prepared_prefix=prepared,
+            )
+            release_prepared_replay_prefix(search_env, prepared)
 
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(search.total_visits, 1)
+        self.assertEqual(tuple(candidate.action_index for candidate in search.candidates), (4,))
+        self.assertEqual(
+            search.candidates[0].value_candidate.branch.step_result.observations["p1"].categorical_ids,
+            expected_branch.observations["p1"].categorical_ids,
+        )
+        self.assertEqual(
+            search.candidates[0].value_candidate.branch.step_result.observations["p1"].numeric_features,
+            expected_branch.observations["p1"].numeric_features,
+        )
 
     def test_public_materialization_preserves_spikes_layers(self) -> None:
         config = integration_config()
@@ -1179,18 +1244,41 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     deferred_opponent_actions={"p2": 4},
                 )
 
-            search_env.materialize_public_world(
-                state=materialization,
+            expected_boundary = source.observe("p1")
+            trajectory = BattleTrajectory(battle_id="pending-baton-pass", format_id="gen3randombattle", seed=73)
+            prepared = prepare_direct_materialization_prefix(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
                 start_override=start_override,
-                seed=73,
+                public_materialization_state=materialization,
                 deferred_opponent_actions={"p2": 0},
+                expected_current_observation=expected_boundary,
             )
+            self.assertIsNotNone(prepared)
+            assert prepared is not None
             self.assertEqual(search_env.requested_players(), ("p1",))
 
             source.step({"p1": 4})
-            search_env.step({"p1": 4})
+            search = puct_branch_search(
+                env=search_env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=expected_boundary.legal_action_mask,
+                opponent_actions={},
+                value_fn=lambda _history: 0.0,
+                action_priors=tuple(1.0 if index == 4 else 0.0 for index in range(9)),
+                cpuct=1.0,
+                root_visit_budget=1,
+                start_override=start_override,
+                expected_current_observation=expected_boundary,
+                prepared_prefix=prepared,
+            )
+            release_prepared_replay_prefix(search_env, prepared)
             expected = source.observe("p1")
-            actual = search_env.observe("p1")
+            actual = search.candidates[0].value_candidate.branch.step_result.observations["p1"]
             ordinary_boundary = source.public_materialization_state("p1")
             stale_actor_boundary = replace(
                 ordinary_boundary,
@@ -1205,6 +1293,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         # it into the restored queue, so both the pass and the interrupted turn resolve normally.
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(tuple(candidate.action_index for candidate in search.candidates), (4,))
         self.assertEqual(source._parser.snapshot().boosts["p1"], {"atk": 2})
         self.assertEqual(search_env._parser.snapshot().boosts["p1"], {"atk": 2})
         self.assertEqual(_public_materialization_payload(stale_actor_boundary)["pendingBatonPassSides"], [])

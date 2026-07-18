@@ -76,6 +76,25 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         )
         self.assertNotIn("root_puct_fallback_reason", telemetry)
 
+    def test_compact_decision_signs_force_switch_without_raw_error(self) -> None:
+        telemetry = root_puct_decision_telemetry(
+            {
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": True,
+                "root_puct_fallback_category": "force_switch_illegal_action",
+                "root_puct_fallback_reason": (
+                    "search failed: p1: action_index 1 is not legal for the current request "
+                    "(request_kind=force_switch)."
+                ),
+            },
+            decision_index=3,
+            turn_index=8,
+        )
+
+        assert telemetry is not None
+        self.assertEqual(telemetry["fallback_signature"], "force-switch:search:p1:move")
+        self.assertNotIn("root_puct_fallback_reason", telemetry)
+
     def test_summary_reports_fallbacks_taxonomy_visits_and_wall_samples(self) -> None:
         report = summarize_root_puct_decision_telemetry(
             (
@@ -127,6 +146,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["searches"], 1)
         self.assertEqual(report["fallbacks"], 1)
         self.assertEqual(report["fallback_categories"], {"replay_request_mismatch": 1})
+        self.assertEqual(report["fallback_signatures"], {})
         self.assertEqual(
             report["scenario_counts"],
             {

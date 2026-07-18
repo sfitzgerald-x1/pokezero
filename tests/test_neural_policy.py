@@ -3620,6 +3620,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "belief_start_override_hp_fraction_tolerance": 0.02,
             "opponent_legal_mask_mode": "hidden",
             "allow_search_fallback": True,
+            "record_belief_world_coverage_gaps": False,
             "root_dirichlet_alpha": None,
             "root_dirichlet_mix": None,
             "root_dirichlet_seed": None,
@@ -3682,6 +3683,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                                 "root_puct_searches": 2,
                                 "root_puct_fallbacks": 1,
                                 "root_puct_fallback_categories": {"missing_sampled_world": 1},
+                                "root_puct_fallback_signatures": {"force-switch:search:p1:move": 1},
                                 "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                                     "opponent_belief_unavailable": 2,
                                 },
@@ -3726,6 +3728,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 2},
+                    "root_puct_fallback_signatures": {"force-switch:search:p1:move": 2},
                     "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 4,
                     },
@@ -3742,6 +3745,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 3},
+                    "root_puct_fallback_signatures": {"force-switch:search:p1:move": 3},
                     "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 6,
                     },
@@ -4176,6 +4180,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "belief_start_override_hp_fraction_tolerance": 0.02,
             "opponent_legal_mask_mode": "hidden",
             "allow_search_fallback": True,
+            "record_belief_world_coverage_gaps": False,
             "root_dirichlet_alpha": None,
             "root_dirichlet_mix": None,
             "root_dirichlet_seed": None,
@@ -4190,6 +4195,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 },
                 "root_puct_config": expected_root_config,
                 "root_puct_policy_configs": {"neural-smoke+root-puct": expected_root_config},
+                "strength_evidence_eligible": True,
                 "value_leaf": {
                     **value_leaf_provenance,
                 },

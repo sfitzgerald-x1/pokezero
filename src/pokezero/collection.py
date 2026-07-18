@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, urlencode
 from .env import PokeZeroEnv, TerminalState
 from .mcts_diagnostics import (
     root_puct_fallback_category,
+    root_puct_fallback_signature,
     sanitize_root_puct_missing_sampled_world_reason_categories,
 )
 from .root_puct_telemetry import root_puct_decision_telemetry
@@ -1545,6 +1546,7 @@ class _PolicyDecisionAccumulator:
     root_puct_time_budget_exhaustions: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_fallback_categories: dict[str, int] = field(default_factory=dict)
+    root_puct_fallback_signatures: dict[str, int] = field(default_factory=dict)
     root_puct_opponent_action_missing_sampled_world_reason_categories: dict[str, int] = field(
         default_factory=dict
     )
@@ -1580,6 +1582,11 @@ class _PolicyDecisionAccumulator:
             self.root_puct_fallback_categories[category] = (
                 self.root_puct_fallback_categories.get(category, 0) + 1
             )
+            signature = root_puct_fallback_signature(reason)
+            if signature is not None:
+                self.root_puct_fallback_signatures[signature] = (
+                    self.root_puct_fallback_signatures.get(signature, 0) + 1
+                )
             return
         self.root_puct_searches += 1
         total_visits = _metadata_optional_int(metadata.get("root_puct_total_visits"))
@@ -1707,13 +1714,13 @@ class _PolicyDecisionAccumulator:
                 result["root_puct_leaf_evaluations"] = dict(
                     sorted(self.root_puct_leaf_evaluations.items())
                 )
-            if self.root_puct_fallback_reasons:
-                result["root_puct_fallback_reasons"] = dict(
-                    sorted(self.root_puct_fallback_reasons.items())
-                )
             if self.root_puct_fallback_categories:
                 result["root_puct_fallback_categories"] = dict(
                     sorted(self.root_puct_fallback_categories.items())
+                )
+            if self.root_puct_fallback_signatures:
+                result["root_puct_fallback_signatures"] = dict(
+                    sorted(self.root_puct_fallback_signatures.items())
                 )
             if self.root_puct_opponent_action_missing_sampled_world_reason_categories:
                 result["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(

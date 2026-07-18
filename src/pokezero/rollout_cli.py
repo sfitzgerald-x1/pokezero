@@ -814,7 +814,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     )
     print(header)
     print("-" * len(header))
-    fallback_reasons = []
+    fallback_categories = []
     selection_modes = []
     opponent_action_policies = []
     opponent_action_scenario_counts = []
@@ -842,10 +842,10 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
             f"{_optional_report_float(average_selected_value):>8} "
             f"{_optional_report_float(average_selected_score):>8}"
         )
-        reasons = metrics.get("root_puct_fallback_reasons")
-        if isinstance(reasons, dict) and reasons:
-            formatted = ", ".join(f"{reason}={count}" for reason, count in reasons.items())
-            fallback_reasons.append(f"{policy_id}: {formatted}")
+        categories = metrics.get("root_puct_fallback_categories")
+        if isinstance(categories, dict) and categories:
+            formatted = ", ".join(f"{category}={count}" for category, count in categories.items())
+            fallback_categories.append(f"{policy_id}: {formatted}")
         modes = metrics.get("root_puct_selection_modes")
         if isinstance(modes, dict) and modes:
             formatted = ", ".join(f"{mode}={count}" for mode, count in modes.items())
@@ -902,10 +902,10 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         print("leaf_evaluations:")
         for leaf_evaluation in leaf_evaluations:
             print(f"  {leaf_evaluation}")
-    if fallback_reasons:
-        print("fallback_reasons:")
-        for reason in fallback_reasons:
-            print(f"  {reason}")
+    if fallback_categories:
+        print("fallback_categories:")
+        for category in fallback_categories:
+            print(f"  {category}")
 
 
 def _optional_report_float(value: object) -> str:
