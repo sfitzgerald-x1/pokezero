@@ -153,7 +153,10 @@ class EngineMctsPolicy:
             attempts += 1
             self.stats.worlds_attempted += 1
             override, sample_failure = _gen3_randbat_belief_start_override_result(
-                context=context, set_source=self._set_source, rng=rng
+                context=context,
+                set_source=self._set_source,
+                rng=rng,
+                witnessed_fallback=True,
             )
             if override is None:
                 self.stats.world_failure_reasons[
@@ -170,7 +173,10 @@ class EngineMctsPolicy:
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
-                self.stats.world_failure_reasons[error.reason] += 1
+                key = error.reason
+                if key in ("volatile_unsupported", "hidden_power_iv_mismatch", "wish_carrier_ambiguous"):
+                    key = f"{error.reason}: {error.detail}"
+                self.stats.world_failure_reasons[key] += 1
                 continue
             worlds.append((world, state))
 

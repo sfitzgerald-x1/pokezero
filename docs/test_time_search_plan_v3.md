@@ -145,6 +145,33 @@ search at ~45% of decisions searched (highest-leverage strength lever,
 upstream of both search stacks), and speed remains decoupled from strength
 until track B puts the learned model on this path.
 
+## Integration endgame: the native search crate (2026-07-18)
+
+The model-cost ladder settles the architecture question. A Python↔engine
+crossing costs ~25µs while a CPU model forward costs ~3,200µs — language is
+irrelevant today — but at the batched-GPU regime track B targets
+(~100µs/leaf), Python orchestration becomes a 25–50% tax, and poke-engine's
+built-in MCTS has no leaf-eval hook, so a custom search loop is required
+regardless. The endgame is therefore NOT an upstream fork but our own
+`pokezero-search` Rust crate (PyO3 extension) that:
+
+- depends on poke-engine as a Cargo dependency with our gen3 patches
+  applied via `[patch]` (the residual-order patch already establishes the
+  vendored-patch mechanism);
+- owns the PUCT tree, in-tree leaf batching, and native model inference
+  (TorchScript via tch-rs or ONNX Runtime; the model is a plain
+  transformer encoder and exports cleanly; fp16/int8 buys 2–4×);
+- implements the v2.2 encoder ONCE, in Rust, exposed to Python via PyO3 so
+  the golden corpus validates it bit-exactly — this becomes track B's
+  deliverable, replacing a Python encoder that would need a Rust rewrite.
+
+Interim (no new machinery): the Python engine loop + shared GPU inference
+service clears >10³ model-priced evals/sec for throughput work (self-play
+collection batches across 64–128 games), with per-leaf Python encoding as
+the known next wall. Depth at the endgame: 10–30k model-priced visits/sec
+supports PV depths of 4–6 turns, more with hybrid pricing (model at shallow
+nodes, the fidelity-validated handcrafted eval below).
+
 ## Integration (serial, single owner)
 
 After A+B land and C passes: swap the branch simulator behind the existing

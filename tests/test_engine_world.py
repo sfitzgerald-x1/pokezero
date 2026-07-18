@@ -226,7 +226,17 @@ class BattleSpecConstructionTests(unittest.TestCase):
 
     def test_fail_closed_taxonomy(self) -> None:
         self._assert_reason(_payload(self.dex, pendingBatonPassSides=["p2"]), "pending_baton_pass")
-        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 6}), "wish_pending")
+        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 3}), "wish_turns_inconsistent")
+
+    def test_pending_wish_constructs_with_engine_semantics(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex, wishSetTurns={"p1": 6}), _override(), dex=self.dex
+        )
+        side = world.spec.side_one
+        # Set turn 6, now turn 7 -> heals end of this turn (counter 1). The
+        # engine ignores the amount (heals resolving active's maxhp/2); we
+        # pass the active's value for forward compatibility.
+        self.assertEqual(side.wish, (1, side.pokemon[side.active_index].maxhp // 2))
         self._assert_reason(_payload(self.dex, futureSight={"p1": 2, "p2": 0}), "future_sight_pending")
         self._assert_reason(_payload(self.dex, deferredOpponentActions={"p2": 3}), "deferred_opponent_action")
         self._assert_reason(_payload(self.dex, selfRequestKind="team-preview"), "boundary_not_move_request")

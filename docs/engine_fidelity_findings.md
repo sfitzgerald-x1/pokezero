@@ -74,6 +74,15 @@ fail-closed IV-consistency guard). This was a track-A bug found by track C —
 without the differential it would have shipped as a silent damage-zeroing of
 a very common move.
 
+## Known engine deviation (low severity): Wish heal amount
+
+poke-engine ignores the `wish` tuple's amount and heals the RESOLVING
+ACTIVE's maxhp/2; gen3 heals by the CASTER's maxhp/2. Observable only when
+the caster switches out before the wish lands and the recipient's maxhp
+differs. Verified empirically on the patched wheel (amount 0/350/999 all
+heal active maxhp/2). Documented rather than patched — low value impact,
+and the world constructor records the timing exactly.
+
 ## Harness notes and scope (what "clean" does and does not mean)
 
 - Damage matching uses a ±16% band around the engine's representative
