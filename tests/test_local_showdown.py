@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 import io
 import json
@@ -6,6 +7,8 @@ from pathlib import Path
 import queue
 import shutil
 import unittest
+from unittest import mock
+from typing import Any
 
 from pokezero.local_showdown import (
     DEFAULT_SHOWDOWN_ROOT,
@@ -311,7 +314,22 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             source.reset_with_start_override(seed=7, start_override=start_override)
             source.step({"p1": 0, "p2": 0})
             expected = source.observe("p1")
-            materialization = source.public_materialization_state("p1")
+
+            # P-1: the live hidden-information battle must never send a Node
+            # snapshot across the bridge. Search receives only public state and
+            # materializes a separate belief-sampled world below.
+            original_request_event = source._bridge_request_event
+
+            def reject_live_snapshot(payload: Mapping[str, Any], event_type: str) -> Mapping[str, Any]:
+                self.assertNotEqual(
+                    payload.get("type"),
+                    "snapshot",
+                    "public materialization must not serialize the live battle",
+                )
+                return original_request_event(payload, event_type)
+
+            with mock.patch.object(source, "_bridge_request_event", side_effect=reject_live_snapshot):
+                materialization = source.public_materialization_state("p1")
 
             self.assertEqual(materialization.replay.requests, {})
             self.assertEqual(materialization.self_request["side"]["id"], "p1")
