@@ -21,10 +21,10 @@ from collections import defaultdict
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m", "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
-# Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k and
-# are no longer being tracked. Their metrics remain on disk, so this is reversible — clear the set
-# to bring them back.
-REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq"}
+# Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k;
+# v22-flat2m (the flat-LR fork of v22-lr3m at 2M) collapsed and is no longer tracked. Their metrics
+# remain on disk, so this is reversible — remove from the set to bring a lineage back.
+REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq", "v22-flat2m"}
 
 # (lineage, milestone) points dropped from ALL trajectory charts (Phase-1 basics and Phase-2
 # breakdowns) for legibility. v22-lr3m@100k stalls ~50% of its games to the turn cap; several of its
