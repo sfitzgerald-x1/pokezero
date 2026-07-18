@@ -80,6 +80,13 @@ strength. In order:
 
 ### W3 — Frontier small checkpoint (v2.2 @ ~2.3M+, then the 3M final)
 
+**Current readiness (2026-07-18):** no qualifying 2.3M+ frontier checkpoint
+is available yet. The current `emeta-v2-2-lr3m-3m-belief` directory contains
+a completed 1M-game run; its `3m` label denotes the learning-rate schedule,
+not completed training games. Its existing Step-0 artifact targets an earlier
+iteration and must not be reused as a frontier leaf. Refit only after a
+checkpoint at the stated game count is available.
+
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
    A 1M-fitted isotonic map on a 2.3M value head confounds the read — the one
    prerequisite kept from the old program.
