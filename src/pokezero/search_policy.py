@@ -1019,7 +1019,6 @@ class RootPUCTSearchPolicy:
                         continue
                     searched_action_group_count += 1
                     group_sample_weight = scenario_group.root.weight / len(group_search_pairs)
-                    action_group_cap_reached = False
                     for scenario, scenario_search in group_search_pairs:
                         scenario_search_pairs.append(
                             (
@@ -1033,18 +1032,18 @@ class RootPUCTSearchPolicy:
                         puct_search_retained_completed_call_count += 1
                         puct_search_completed_result_seconds += scenario_search.timing.total_seconds
                         puct_search_completed_result_count += 1
-                        if (
-                            self.max_opponent_action_scenarios is not None
-                            and searched_action_group_count >= self.max_opponent_action_scenarios
-                        ):
-                            remaining_groups = search_scenario_groups[group_index + 1 :]
-                            unsearched_scenario_count = sum(
-                                len(group.samples) for group in remaining_groups
-                            )
-                            unsearched_action_group_count = len(remaining_groups)
-                            action_group_cap_reached = True
-                            break
-                    if action_group_cap_reached:
+                    # The cap is over abstract opponent-action groups, not
+                    # belief worlds. Retain every valid world in the accepted
+                    # group so their weighted root values are averaged.
+                    if (
+                        self.max_opponent_action_scenarios is not None
+                        and searched_action_group_count >= self.max_opponent_action_scenarios
+                    ):
+                        remaining_groups = search_scenario_groups[group_index + 1 :]
+                        unsearched_scenario_count = sum(
+                            len(group.samples) for group in remaining_groups
+                        )
+                        unsearched_action_group_count = len(remaining_groups)
                         break
                 if not scenario_search_pairs:
                     details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
