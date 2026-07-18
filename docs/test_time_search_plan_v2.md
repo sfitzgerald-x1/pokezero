@@ -180,6 +180,15 @@ classifying it.
    V2 PIMC contract requires. This is a correctness repair, not a claimed
    speedup; batching or otherwise accelerating the required retained worlds is
    the next throughput target.
+   **Cross-world initial-leaf batching (V2 implementation complete; runtime
+   validation pending):** eligible fixed-visit, zero-rollout searches now
+   prepare every retained shared belief world, issue one transformer-value batch
+   over all of their independent mandatory root leaves, then continue each
+   world's adaptive visits sequentially. The batch preserves sampled-world
+   aggregation and never applies to time-budgeted or leaf-rollout search, whose
+   semantics would otherwise change. A fresh mechanics/telemetry probe must
+   verify the lower forward-call count and unchanged P-1 checksum before this is
+   treated as a W5 throughput result.
    A one-round-trip retained-snapshot branch candidate is merged behind the
    belief-sampled bridge-handle guard; direct materialization remains the
    correct path but is no longer the primary throughput lever.

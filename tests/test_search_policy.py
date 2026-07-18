@@ -218,6 +218,21 @@ class DirectSnapshotStartOverrideOutcomeEnv(SnapshotStartOverrideOutcomeEnv):
         self._terminal = None
 
 
+class NonterminalDirectSnapshotStartOverrideEnv(DirectSnapshotStartOverrideOutcomeEnv):
+    """Direct-world double whose root leaves require value evaluation."""
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.step_calls.append(dict(actions))
+        self.all_step_calls.append(dict(actions))
+        action_index = int(actions["p1"])
+        return StepResult(
+            observations={"p1": _observation(action_index), "p2": _observation(0)},
+            rewards={"p1": 0.0, "p2": 0.0},
+            terminal=None,
+            requested_players=("p1", "p2"),
+        )
+
+
 class BridgeDirectSnapshotStartOverrideOutcomeEnv(DirectSnapshotStartOverrideOutcomeEnv):
     """Direct-materialization double that exposes the search-handle lifecycle."""
 
@@ -1702,6 +1717,107 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 4)
         self.assertEqual(metadata["root_puct_opponent_action_groups_used"], 2)
         self.assertEqual(len(branch_envs[0].start_overrides), 10)
+
+    def test_root_puct_policy_batches_initial_values_across_shared_worlds(self) -> None:
+        branch_envs: list[NonterminalDirectSnapshotStartOverrideEnv] = []
+        batch_histories: list[tuple[tuple[PokeZeroObservationV0, ...], ...]] = []
+
+        def branch_env_factory() -> NonterminalDirectSnapshotStartOverrideEnv:
+            env = NonterminalDirectSnapshotStartOverrideEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(context, scenario, scenario_index, rng):
+            del context, scenario, rng
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": f"Xatu||||Psychic|||||||world-{scenario_index}",
+                    }
+                )
+
+            return sample_override
+
+        start_override_planner.scenario_independent = True  # type: ignore[attr-defined]
+
+        def batch_values(histories: tuple[tuple[PokeZeroObservationV0, ...], ...]) -> tuple[float, ...]:
+            batch_histories.append(histories)
+            return tuple(float(tuple(history[-1].legal_action_mask).index(True)) for history in histories)
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("initial leaves must batch")),
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=2,
+            value_batch_fn=batch_values,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(len(batch_histories), 1)
+        self.assertEqual(len(batch_histories[0]), 4)
+        self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_count"], 1)
+        self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_world_count"], 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 2)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["value_evaluation_count"], 4)
+        self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_retained_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_result_count"], 2)
+
+        batch_histories.clear()
+        time_budget_policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("no adaptive visit expected")),
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+            root_time_budget_seconds=1e-9,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=2,
+            value_batch_fn=batch_values,
+        )
+        with patch(
+            "pokezero.search_policy.puct_branch_search_group",
+            side_effect=AssertionError("time-budgeted search must not group worlds"),
+        ):
+            time_budget_decision = time_budget_policy.select_action_with_context(
+                context,
+                rng=random.Random(2),
+            )
+
+        self.assertFalse(time_budget_decision.metadata["root_puct_fallback"])
+        self.assertEqual(len(batch_histories), 2)
+        self.assertEqual([len(histories) for histories in batch_histories], [2, 2])
+        self.assertEqual(time_budget_decision.metadata["root_puct_cross_world_initial_value_batch_count"], 0)
+        self.assertEqual(
+            time_budget_decision.metadata["root_puct_cross_world_initial_value_batch_world_count"],
+            0,
+        )
 
     def test_root_puct_policy_skips_invalid_shared_start_override_sample_once_per_slot(self) -> None:
         branch_envs: list[RejectingStartOverrideOutcomeEnv] = []

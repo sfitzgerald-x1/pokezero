@@ -1047,6 +1047,28 @@ class _RestorablePrefix:
 
 
 @dataclass(frozen=True)
+class _PendingValueBranch:
+    """One non-terminal mandatory-sweep leaf awaiting a value evaluation."""
+
+    action_index: int
+    branch: ReplayBranchResult
+    post_branch_history: tuple[PokeZeroObservationV0, ...]
+
+
+@dataclass
+class _PreparedValueBranchSearch:
+    """Branch-point work that can be completed by one or more value batches."""
+
+    player_id: PlayerId
+    prefix_decision_round_count: int
+    opponent_actions: Mapping[PlayerId, int]
+    candidate_indices: tuple[int, ...]
+    candidates_by_action: dict[int, ValueBranchSearchCandidate]
+    pending_value_branches: tuple[_PendingValueBranch, ...]
+    restorable_prefix: _RestorablePrefix | None
+
+
+@dataclass(frozen=True)
 class PreparedReplayPrefix:
     """A sampled-world branch point captured after public-state validation.
 
@@ -1165,6 +1187,16 @@ class PUCTBranchSearchResult:
 
 
 @dataclass(frozen=True)
+class PUCTBranchSearchRequest:
+    """Scenario-specific inputs for a shared initial Root-PUCT value batch."""
+
+    opponent_actions: Mapping[PlayerId, int]
+    start_override: StartOverrideSource = None
+    prepared_prefix: PreparedReplayPrefix | None = None
+    root_visit_budget_resolver: RootVisitBudgetResolver | None = None
+
+
+@dataclass(frozen=True)
 class FlatBranchSearchResult:
     player_id: PlayerId
     prefix_decision_round_count: int
@@ -1258,6 +1290,60 @@ def _value_branch_search_with_prefix(
     bounded number of decision rounds before scoring the terminal or truncated leaf.
     """
 
+    prepared = _prepare_value_branch_search(
+        env=env,
+        trajectory=trajectory,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        legal_action_mask=legal_action_mask,
+        opponent_actions=opponent_actions,
+        value_fn=value_fn,
+        value_batch_fn=value_batch_fn,
+        leaf_rollout_policies=leaf_rollout_policies,
+        leaf_rollout_config=leaf_rollout_config,
+        leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        timing=timing,
+        prepared_prefix=prepared_prefix,
+    )
+    batch_values = (
+        _timed_value_batch_evaluation(
+            value_batch_fn,
+            histories=tuple(pending.post_branch_history for pending in prepared.pending_value_branches),
+            timing=timing,
+        )
+        if prepared.pending_value_branches
+        else ()
+    )
+    return (
+        _complete_prepared_value_branch_search(prepared, batch_values=batch_values),
+        prepared.restorable_prefix,
+    )
+
+
+def _prepare_value_branch_search(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    legal_action_mask: tuple[bool, ...],
+    opponent_actions: Mapping[PlayerId, int],
+    value_fn: ObservationValueFunction,
+    value_batch_fn: ObservationValueBatchFunction | None,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None,
+    leaf_rollout_config: RolloutConfig | None,
+    leaf_rollout_decision_rounds: int,
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+    replay_hp_fraction_tolerance: float,
+    timing: _RootPUCTSearchTimingAccumulator | None,
+    prepared_prefix: PreparedReplayPrefix | None,
+) -> _PreparedValueBranchSearch:
+    """Build mandatory root leaves, deferring only independent batched values."""
+
     if len(legal_action_mask) != ACTION_COUNT:
         raise ValueError(f"legal_action_mask must contain {ACTION_COUNT} values.")
     candidate_indices = tuple(index for index, legal in enumerate(legal_action_mask) if legal)
@@ -1304,8 +1390,7 @@ def _value_branch_search_with_prefix(
             timing=timing,
         )
     candidates_by_action: dict[int, ValueBranchSearchCandidate] = {}
-    batch_histories: list[tuple[PokeZeroObservationV0, ...]] = []
-    batch_branches: list[tuple[int, ReplayBranchResult]] = []
+    pending_value_branches: list[_PendingValueBranch] = []
     for action_index in candidate_indices:
         branch_actions = {
             **dict(opponent_actions),
@@ -1329,16 +1414,19 @@ def _value_branch_search_with_prefix(
                 continue
             raise
         if value_batch_fn is not None and leaf_rollout_decision_rounds == 0 and branch.step_result.terminal is None:
-            batch_histories.append(
-                _post_branch_history(
-                    env=env,
-                    player_id=player_id,
-                    prefix_history=prefix_history,
+            pending_value_branches.append(
+                _PendingValueBranch(
+                    action_index=action_index,
                     branch=branch,
-                    timing=timing,
+                    post_branch_history=_post_branch_history(
+                        env=env,
+                        player_id=player_id,
+                        prefix_history=prefix_history,
+                        branch=branch,
+                        timing=timing,
+                    ),
                 )
             )
-            batch_branches.append((action_index, branch))
             continue
         candidates_by_action[action_index] = _value_branch_candidate(
             env=env,
@@ -1363,45 +1451,53 @@ def _value_branch_search_with_prefix(
             timing=timing,
         )
 
-    if batch_histories:
-        assert value_batch_fn is not None
-        batch_values = _timed_value_batch_evaluation(
-            value_batch_fn,
-            histories=tuple(batch_histories),
-            timing=timing,
+    return _PreparedValueBranchSearch(
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        opponent_actions=dict(opponent_actions),
+        candidate_indices=candidate_indices,
+        candidates_by_action=candidates_by_action,
+        pending_value_branches=tuple(pending_value_branches),
+        restorable_prefix=restorable_prefix,
+    )
+
+
+def _complete_prepared_value_branch_search(
+    prepared: _PreparedValueBranchSearch,
+    *,
+    batch_values: Sequence[float],
+) -> ValueBranchSearchResult:
+    """Attach batch values to a prepared mandatory root sweep."""
+
+    if len(batch_values) != len(prepared.pending_value_branches):
+        raise ValueError("value batch evaluator returned a different number of values than histories.")
+    for pending, value in zip(prepared.pending_value_branches, batch_values, strict=True):
+        prepared.candidates_by_action[pending.action_index] = ValueBranchSearchCandidate(
+            action_index=pending.action_index,
+            value=_finite_value(value),
+            terminal=None,
+            branch=pending.branch,
+            evaluated_history_length=len(pending.post_branch_history),
+            leaf_evaluation="value_fn",
+            leaf_rollout_decision_round_count=0,
         )
-        for (action_index, branch), history, value in zip(
-            batch_branches,
-            batch_histories,
-            batch_values,
-            strict=True,
-        ):
-            candidates_by_action[action_index] = ValueBranchSearchCandidate(
-                action_index=action_index,
-                value=value,
-                terminal=None,
-                branch=branch,
-                evaluated_history_length=len(history),
-                leaf_evaluation="value_fn",
-                leaf_rollout_decision_round_count=0,
-            )
 
     candidates = [
-        candidates_by_action[action_index]
-        for action_index in candidate_indices
-        if action_index in candidates_by_action
+        prepared.candidates_by_action[action_index]
+        for action_index in prepared.candidate_indices
+        if action_index in prepared.candidates_by_action
     ]
 
     if not candidates:
         raise ValueError("value branch search found no replay-legal root actions.")
 
     result = ValueBranchSearchResult(
-        player_id=player_id,
-        prefix_decision_round_count=prefix_decision_round_count,
-        opponent_actions=dict(opponent_actions),
+        player_id=prepared.player_id,
+        prefix_decision_round_count=prepared.prefix_decision_round_count,
+        opponent_actions=dict(prepared.opponent_actions),
         candidates=tuple(candidates),
     )
-    return result, restorable_prefix
+    return result
 
 
 def puct_branch_search(
@@ -1480,6 +1576,242 @@ def puct_branch_search(
             - (timing.branch_evaluation_seconds - branch_evaluation_before),
         )
     )
+    return _finish_puct_branch_search(
+        env=env,
+        trajectory=trajectory,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        opponent_actions=opponent_actions,
+        value_fn=value_fn,
+        action_priors=action_priors,
+        cpuct=cpuct,
+        leaf_rollout_policies=leaf_rollout_policies,
+        leaf_rollout_config=leaf_rollout_config,
+        leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        root_visit_budget=root_visit_budget,
+        root_visit_budget_resolver=root_visit_budget_resolver,
+        budget_action_priors=budget_action_priors,
+        root_time_budget_seconds=root_time_budget_seconds,
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+        value_search=value_search,
+        restorable_prefix=restorable_prefix,
+        timing=timing,
+        time_budget_start=time_budget_start,
+        bridge_timing_before=bridge_timing_before,
+        timing_started_at=timing_started_at,
+    )
+
+
+def puct_branch_search_group(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    legal_action_mask: tuple[bool, ...],
+    requests: Sequence[PUCTBranchSearchRequest],
+    value_fn: ObservationValueFunction,
+    value_batch_fn: ObservationValueBatchFunction,
+    action_priors: ActionPriorVector,
+    cpuct: float = 1.25,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
+    leaf_rollout_config: RolloutConfig | None = None,
+    leaf_rollout_decision_rounds: int = 0,
+    root_visit_budget: int | None = None,
+    budget_action_priors: ActionPriorVector | None = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
+) -> tuple[PUCTBranchSearchResult, ...]:
+    """Batch mandatory root leaves across independent sampled worlds.
+
+    Each request still constructs, validates, and searches its own determinized
+    world. Only the initial, independent value leaves share one evaluator call.
+    Adaptive visits remain sequential after their own backups, so this cannot
+    alter PUCT selection semantics. Time-budgeted and leaf-rollout searches are
+    intentionally excluded because grouping either would change their budget or
+    continuation semantics.
+    """
+
+    if not requests:
+        raise ValueError("puct branch search group requires at least one request.")
+    if cpuct < 0.0 or not math.isfinite(cpuct):
+        raise ValueError("cpuct must be a finite non-negative value.")
+    if root_visit_budget is not None and root_visit_budget <= 0:
+        raise ValueError("root_visit_budget must be positive when set.")
+    if leaf_rollout_decision_rounds != 0:
+        raise ValueError("puct branch search group supports only zero leaf rollout decision rounds.")
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
+
+    prepared_requests: list[
+        tuple[
+            PUCTBranchSearchRequest,
+            _PreparedValueBranchSearch,
+            _RootPUCTSearchTimingAccumulator,
+            float,
+        ]
+    ] = []
+    for request in requests:
+        timing = _RootPUCTSearchTimingAccumulator()
+        bridge_timing_before = _bridge_timing_snapshot(env)
+        initial_sweep_started_at = _timing_perf_counter()
+        branch_evaluation_before = timing.branch_evaluation_seconds
+        prepared = _prepare_value_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            legal_action_mask=legal_action_mask,
+            opponent_actions=request.opponent_actions,
+            value_fn=value_fn,
+            value_batch_fn=value_batch_fn,
+            leaf_rollout_policies=leaf_rollout_policies,
+            leaf_rollout_config=leaf_rollout_config,
+            leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+            start_override=request.start_override,
+            expected_current_observation=expected_current_observation,
+            replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            timing=timing,
+            prepared_prefix=request.prepared_prefix,
+        )
+        initial_elapsed_seconds = _timing_perf_counter() - initial_sweep_started_at
+        timing.add_root_initial_sweep_orchestration(
+            max(
+                0.0,
+                initial_elapsed_seconds - (timing.branch_evaluation_seconds - branch_evaluation_before),
+            )
+        )
+        bridge_timing = _bridge_timing_delta(
+            bridge_timing_before,
+            _bridge_timing_snapshot(env),
+        )
+        if bridge_timing is not None:
+            timing.add_bridge_subtiming(bridge_timing)
+        prepared_requests.append((request, prepared, timing, initial_elapsed_seconds))
+
+    pending_histories = tuple(
+        pending.post_branch_history
+        for _request, prepared, _timing, _elapsed in prepared_requests
+        for pending in prepared.pending_value_branches
+    )
+    batch_values: tuple[float, ...] = ()
+    batch_elapsed_seconds = 0.0
+    if pending_histories:
+        batch_started_at = _timing_perf_counter()
+        batch_values = tuple(_finite_value(value) for value in value_batch_fn(pending_histories))
+        batch_elapsed_seconds = _timing_perf_counter() - batch_started_at
+        if len(batch_values) != len(pending_histories):
+            raise ValueError(
+                "value batch evaluation returned a different number of values than input histories."
+            )
+
+    completed_value_searches: list[
+        tuple[
+            PUCTBranchSearchRequest,
+            ValueBranchSearchResult,
+            _RestorablePrefix | None,
+            _RootPUCTSearchTimingAccumulator,
+            float,
+        ]
+    ] = []
+    value_offset = 0
+    total_pending_count = len(pending_histories)
+    remaining_pending_count = total_pending_count
+    remaining_batch_seconds = batch_elapsed_seconds
+    for request, prepared, timing, initial_elapsed_seconds in prepared_requests:
+        pending_count = len(prepared.pending_value_branches)
+        request_values = batch_values[value_offset : value_offset + pending_count]
+        value_offset += pending_count
+        if pending_count:
+            if pending_count == remaining_pending_count:
+                request_batch_seconds = remaining_batch_seconds
+            else:
+                request_batch_seconds = batch_elapsed_seconds * pending_count / total_pending_count
+            remaining_batch_seconds -= request_batch_seconds
+            remaining_pending_count -= pending_count
+            timing.add_value_evaluation(request_batch_seconds, count=pending_count)
+        else:
+            request_batch_seconds = 0.0
+        completed_value_searches.append(
+            (
+                request,
+                _complete_prepared_value_branch_search(prepared, batch_values=request_values),
+                prepared.restorable_prefix,
+                timing,
+                initial_elapsed_seconds + request_batch_seconds,
+            )
+        )
+    assert value_offset == len(batch_values)
+
+    results: list[PUCTBranchSearchResult] = []
+    for request, value_search, restorable_prefix, timing, initial_elapsed_seconds in completed_value_searches:
+        adaptive_bridge_timing_before = _bridge_timing_snapshot(env)
+        adaptive_started_at = _timing_perf_counter()
+        results.append(
+            _finish_puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                opponent_actions=request.opponent_actions,
+                value_fn=value_fn,
+                action_priors=action_priors,
+                cpuct=cpuct,
+                leaf_rollout_policies=leaf_rollout_policies,
+                leaf_rollout_config=leaf_rollout_config,
+                leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+                root_visit_budget=root_visit_budget,
+                root_visit_budget_resolver=request.root_visit_budget_resolver,
+                budget_action_priors=budget_action_priors,
+                root_time_budget_seconds=None,
+                start_override=request.start_override,
+                expected_current_observation=expected_current_observation,
+                replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+                value_search=value_search,
+                restorable_prefix=restorable_prefix,
+                timing=timing,
+                time_budget_start=None,
+                bridge_timing_before=adaptive_bridge_timing_before,
+                timing_started_at=adaptive_started_at,
+                initial_elapsed_seconds=initial_elapsed_seconds,
+            )
+        )
+    return tuple(results)
+
+
+def _finish_puct_branch_search(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    opponent_actions: Mapping[PlayerId, int],
+    value_fn: ObservationValueFunction,
+    action_priors: ActionPriorVector,
+    cpuct: float,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None,
+    leaf_rollout_config: RolloutConfig | None,
+    leaf_rollout_decision_rounds: int,
+    root_visit_budget: int | None,
+    root_visit_budget_resolver: RootVisitBudgetResolver | None,
+    budget_action_priors: ActionPriorVector | None,
+    root_time_budget_seconds: float | None,
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+    replay_hp_fraction_tolerance: float,
+    value_search: ValueBranchSearchResult,
+    restorable_prefix: _RestorablePrefix | None,
+    timing: _RootPUCTSearchTimingAccumulator,
+    time_budget_start: float | None,
+    bridge_timing_before: Mapping[str, float | int] | None,
+    timing_started_at: float,
+    initial_elapsed_seconds: float | None = None,
+) -> PUCTBranchSearchResult:
+    """Run adaptive root visits after a completed mandatory value sweep."""
+
+    adaptive_started_at = _timing_perf_counter()
     root_setup_started_at = _timing_perf_counter()
     legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
     if (
@@ -1634,7 +1966,11 @@ def puct_branch_search(
         visit_budget_context=visit_budget_context,
         root_time_budget_seconds=root_time_budget_seconds,
         time_budget_exhausted=time_budget_exhausted,
-        timing=timing.finish(_timing_perf_counter() - timing_started_at),
+        timing=timing.finish(
+            _timing_perf_counter() - timing_started_at
+            if initial_elapsed_seconds is None
+            else initial_elapsed_seconds + (_timing_perf_counter() - adaptive_started_at)
+        ),
     )
 
 
