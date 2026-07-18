@@ -183,7 +183,8 @@ class GameParse:
         self.status = {"p1": {}, "p2": {}}    # species -> status
         self.rest_sleep = {"p1": set(), "p2": set()}  # species whose slp came from their own Rest
         self.sub = {"p1": False, "p2": False}
-        self.spikes = {"p1": 0, "p2": 0}      # layers on that side
+        self.spikes = {"p1": 0, "p2": 0}      # current layers on that side
+        self.spikes_max = {"p1": 0, "p2": 0}  # peak layers ever on that side (survives Rapid Spin)
         self.weather = None
         self.ev = defaultdict(lambda: Counter())   # seat -> Counter of trait events
         self.move_counts = {"p1": Counter(), "p2": Counter()}
@@ -354,6 +355,7 @@ class GameParse:
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1].replace("move: ", "")) == SPIKES:
                     self.spikes[seat] += 1
+                    self.spikes_max[seat] = max(self.spikes_max[seat], self.spikes[seat])
             elif tag == "-sideend":
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1].replace("move: ", "")) == SPIKES:
@@ -410,6 +412,8 @@ class GameParse:
             self._close_bd(s)
             self._end_tox(s)
             self._end_seed(s)
+            # peak Spikes layers seat s stacked on the opponent (Spikes are laid on the other side)
+            self.ev[s]["spikes_max_achieved"] = self.spikes_max[OTHER_SEAT[s]]
 
     def _close_bd(self, seat):
         # close a Belly-Drum KO window: bank its KOs into the running sum, and — separately — count
@@ -599,6 +603,7 @@ def extract(files, lineage=None, milestone=None):
     # the eval captured abilities on the movesets; otherwise inferred from the ability firing at all).
     intim_present = 0; intim_activations = 0
     absorb_present = 0; absorb_switchins = 0
+    spikes_present = 0; spikes_max_sum = 0   # avg peak Spikes layers, over games the seat carries Spikes
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -677,6 +682,11 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, ABSORB_ABILITIES, "absorb_activation"):
                     absorb_present += 1
                     absorb_switchins += gp.ev[seat]["absorb_switchin"]
+            # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
+            # per-game max, so stalls don't inflate it — no need to restrict to decided games).
+            if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
+                spikes_present += 1
+                spikes_max_sum += gp.ev[seat]["spikes_max_achieved"]
         # opponent Focus Punch, for "bot disrupts opponent's Focus Punch": the OTHER seat's
         # attempts and how many the bot disrupted. In foulplay the opponent is FoulPlay (p2); in
         # self-play both seats are opponents of each other.
@@ -801,6 +811,10 @@ def extract(files, lineage=None, milestone=None):
         "leechseed_episodes": cat_extra["seed_episodes"],
         "avg_leechseed_turns": (round(cat_extra["seed_turns_sum"] / cat_extra["seed_episodes"], 3)
                                 if cat_extra["seed_episodes"] else None),
+        # Spikes: average peak layers stacked on the opponent, over games the seat carries Spikes.
+        # Rising toward 3 = the policy learns to fully stack the hazard rather than lay one and move on.
+        "spikes_present_seat_games": spikes_present,
+        "spikes_avg_max_layers": (round(spikes_max_sum / spikes_present, 3) if spikes_present else None),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],

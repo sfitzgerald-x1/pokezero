@@ -275,6 +275,10 @@ TRAJECTORY_CHARTS = [
         ("intimidate activations / game", lambda r: r.get("intimidate_activations_per_game")),
         ("absorb switch-in reads / game", lambda r: r.get("absorb_switchins_per_game")),
     ]),
+    ("hazard stacking (when Spikes is carried)", [
+        # avg peak Spikes layers stacked on the opponent; rising toward 3 = fully setting the hazard.
+        ("spikes: avg max layers", lambda r: r.get("spikes_avg_max_layers")),
+    ]),
     ("toxic / leech-seed management", [
         # avg peak toxic stage / avg turns a leech-seeded mon stays in before it leaves. Falling over
         # training = the policy pivots statused mons out earlier rather than eating the residual drain.
@@ -600,6 +604,7 @@ def phase2_panel(rows, opponent, checkpoints):
     out.append(row("absorb switch-in reads / game", lambda r: f'{_fmt(r.get("absorb_switchins_per_game"), 2)} <span class="dim">(g={r.get("absorb_present_seat_games", 0)})</span>'))
     out.append(row("avg toxic stage reached", lambda r: f'{_fmt(r.get("avg_toxic_stage"), 2)} <span class="dim">(n={r.get("toxic_episodes", 0)})</span>'))
     out.append(row("avg leech-seed turns in", lambda r: f'{_fmt(r.get("avg_leechseed_turns"), 2)} <span class="dim">(n={r.get("leechseed_episodes", 0)})</span>'))
+    out.append(row("spikes: avg max layers", lambda r: f'{_fmt(r.get("spikes_avg_max_layers"), 2)} <span class="dim">(g={r.get("spikes_present_seat_games", 0)})</span>'))
     out.append(row("enemy boom blocked", lambda r: f'{_fmt(r.get("boom_block_rate"))} <span class="dim">(n={r.get("boom_faced", 0)})</span>'))
     out.append("</table></div>")
     return "".join(out)

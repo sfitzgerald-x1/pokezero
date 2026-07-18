@@ -407,6 +407,18 @@ class MoveClassification(unittest.TestCase):
         self.assertEqual(e["seed_episodes"], 1)
         self.assertEqual(e["seed_turns_sum"], 1)                 # closed at removal, no later ticks
 
+    def test_spikes_max_layers_achieved_survives_spin(self):
+        # p1 stacks 3 Spikes on p2's side; p2 then Rapid-Spins them away. The peak (3) is what p1
+        # achieved and must survive the clear; p2 laid nothing, so its achieved is 0.
+        gp = parse([
+            "|turn|1", "|-sidestart|p2: Foe|Spikes",
+            "|turn|2", "|-sidestart|p2: Foe|Spikes",
+            "|turn|3", "|-sidestart|p2: Foe|Spikes",
+            "|turn|4", "|-sideend|p2: Foe|Spikes",     # current -> 0, peak stays 3
+        ])
+        self.assertEqual(gp.ev["p1"]["spikes_max_achieved"], 3)
+        self.assertEqual(gp.ev["p2"]["spikes_max_achieved"], 0)
+
     def test_boom_block_protect_sub_ghost_and_miss(self):
         # p1 blocks four enemy booms four different ways (Protect, Substitute, Ghost immunity) and
         # eats one; boom_faced counts all, boom_block counts the three that were neutralized.
@@ -654,6 +666,28 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["absorb_switchins_per_game"], 1.0)
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
+
+    def test_spikes_avg_max_layers_gated_on_carrier(self):
+        # p1 carries Spikes and stacks 3 layers; p2 does not carry it. Only p1's team is a "present"
+        # seat-game, and its peak is 3, so the average is 3.0 over 1 present seat-game.
+        movesets = {"p1": [{"species": "Skarmory", "moves": ["Spikes", "Roar", "Toxic", "Protect"]}],
+                    "p2": [{"species": "Blissey", "moves": ["Softboiled", "Seismic Toss", "Toxic", "Ice Beam"]}]}
+        protocol = [
+            "|turn|1", "|-sidestart|p2: Foe|Spikes",
+            "|turn|2", "|-sidestart|p2: Foe|Spikes",
+            "|turn|3", "|-sidestart|p2: Foe|Spikes",
+            "|win|Bot p1",
+        ]
+        game = {"seed": 1, "opponent": "self", "winner": "p1", "turn_count": 3, "capped": False,
+                "protocol": protocol, "movesets": movesets, "pp_track": []}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                f.write(json.dumps(game) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["spikes_present_seat_games"], 1)     # only p1 carries Spikes
+        self.assertEqual(m["spikes_avg_max_layers"], 3.0)
 
     def test_toxic_and_boom_output_metrics(self):
         # one badly-poisoned mon reaches stage 1, and one enemy Explosion is blocked by Protect.
