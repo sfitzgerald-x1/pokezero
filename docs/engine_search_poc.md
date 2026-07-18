@@ -68,29 +68,32 @@ premium over the handcrafted eval (3.2ms vs 1.7µs batched). Consequences:
   or straight batched-leaf PUCT at ~10³–10⁴ visits — all gated on track B's
   encoder for correctness, none on more speed work.
 
-## Fallback anatomy (revised — the review falsified the first draft)
+## Fallback anatomy (third revision: 47% -> 0.8%)
 
-Current bench (all alignment fixes in): **47% of decisions fall back**
-(searched 198/376). Taxonomy after the fix wave:
+Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
+(235/237 decisions searched) after the dead-end hunt:
 
-- **Belief-sampler dead-ends: ~95% of remaining world failures.**
-  Deterministic per position: a revealed opponent (Regice, Blastoise,
-  Kyogre, Shedinja in current seeds) whose revealed moves match no catalog
-  set under current constraints burns every retry. Same family as W1's
-  `missing_sampled_world`; upstream of BOTH search stacks; now the single
-  isolated lever.
-- Fixed this revision: **Unown letter formes** (review finding — cosmetic
-  formes failed `species_unknown` and silently zeroed search for entire
-  games; now collapsed to base species), **force-switch boundaries** (the
-  constructor now sets the engine's `force_switch` flag; the whole decision
-  class searches), **substitute** (fresh-sub maxhp/4 approximation, opt-in
-  flag like sleep).
-- Remaining small classes: pending Wish (needs a payload field for the
-  wisher's identity), non-substitute volatiles (confusion durations), rare
-  `hidden_power_iv_mismatch` samples.
-- Caveat on the 47% headline: the denominator includes one-legal-action
-  and trivial decisions where fallback costs nothing; the rate is not yet
-  sliced by addressable harm.
+- **Stale-window slot pins**: rounds where the opponent produced no fresh
+  public move (asleep, full-para) pinned an older move at the newly-chosen
+  slot; Sleep-Talk-called moves pinned at the caller's slot. A move pinned
+  at two slots excludes every candidate variant — permanent dead-end.
+  Fixed: cross-slot contradiction sanitizer drops the unreliable move's
+  pins entirely (`_sanitized_move_slot_constraints`).
+- **Catalog-enumeration gaps** (e.g. Shedinja whose four publicly-witnessed
+  moves matched no enumerated variant): fixed by the witnessed-set
+  fallback — when catalog reconciliation fails, build the world from the
+  publicly witnessed moves and fill from the unfiltered movepool. Witnessed
+  facts are exact; only the fill is sampled; anti-leakage unchanged.
+- **Wish** now constructs exactly: the caster is the sampled world's unique
+  Wish carrier (amount = maxhp/2, turns from the public set turn);
+  ambiguous carriers fail closed.
+- Remaining (both principled fail-closes, ~1 decision each per 10 games):
+  **encore** (meaningless without `last_used_move` wiring) and **pending
+  Baton Pass** (needs deferred opponent-action semantics). Plus a rare
+  per-attempt guard catch (`hidden_power_iv_mismatch`, 4/976 attempts,
+  decisions still searched via other worlds) — an upstream spread
+  inconsistency the fail-closed guard correctly rejects; under
+  investigation.
 
 ## Tradeoffs and limitations
 

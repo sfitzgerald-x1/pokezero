@@ -170,7 +170,10 @@ class EngineMctsPolicy:
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
-                self.stats.world_failure_reasons[error.reason] += 1
+                key = error.reason
+                if key in ("volatile_unsupported", "hidden_power_iv_mismatch", "wish_carrier_ambiguous"):
+                    key = f"{error.reason}: {error.detail}"
+                self.stats.world_failure_reasons[key] += 1
                 continue
             worlds.append((world, state))
 

@@ -306,6 +306,7 @@ def battle_spec_from_payload(
             approximate_sleep_turns=approximate_sleep_turns,
             approximate_substitute_health=approximate_substitute_health,
             force_switch=is_self_slot and self_force_switch,
+            wish_set_turn=_wish_set_turn(payload, slot),
         )
         party_species[slot] = species_order
 
@@ -386,8 +387,14 @@ def _reject_unsupported_globals(payload: Mapping[str, Any]) -> None:
     future_sight = payload.get("futureSight")
     if isinstance(future_sight, Mapping) and any(int(v) for v in future_sight.values()):
         raise EngineWorldUnsupported("future_sight_pending", "a Future Sight strike is pending")
-    if payload.get("wishSetTurns"):
-        raise EngineWorldUnsupported("wish_pending", "a Wish is pending")
+
+
+def _wish_set_turn(payload: Mapping[str, Any], slot: str) -> int | None:
+    wish_turns = payload.get("wishSetTurns")
+    if not isinstance(wish_turns, Mapping):
+        return None
+    value = wish_turns.get(slot)
+    return value if isinstance(value, int) else None
 
 
 def _weather_fields(payload: Mapping[str, Any]) -> tuple[str, int]:
@@ -425,6 +432,7 @@ def _build_side_spec(
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
     force_switch: bool = False,
+    wish_set_turn: int | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -518,6 +526,28 @@ def _build_side_spec(
     if isinstance(toxic_stage, int) and toxic_stage > 0:
         side_conditions["toxic_count"] = toxic_stage
 
+    wish = (0, 0)
+    if wish_set_turn is not None:
+        remaining = 2 - (turn - wish_set_turn)
+        if remaining not in (1, 2):
+            raise EngineWorldUnsupported(
+                "wish_turns_inconsistent",
+                f"side {slot!r} wish set on turn {wish_set_turn} at turn {turn}",
+            )
+        # The wish caster's identity is public (it used Wish); in the sampled
+        # world it is the side's Wish-carrying mon. Amount = caster maxhp/2.
+        carriers = [
+            member
+            for member, mon in zip(party, team)
+            if any(normalize_id(move).startswith("wish") for move in mon.moves)
+        ]
+        if len(carriers) != 1:
+            raise EngineWorldUnsupported(
+                "wish_carrier_ambiguous",
+                f"side {slot!r} has {len(carriers)} Wish carriers in the sampled world",
+            )
+        wish = (remaining, carriers[0].maxhp // 2)
+
     return (
         SideSpec(
             pokemon=tuple(party),
@@ -527,6 +557,7 @@ def _build_side_spec(
             volatile_statuses=tuple(volatiles),
             substitute_health=substitute_health,
             force_switch=force_switch,
+            wish=wish,
         ),
         tuple(species_order),
     )

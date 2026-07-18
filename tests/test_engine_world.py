@@ -226,7 +226,9 @@ class BattleSpecConstructionTests(unittest.TestCase):
 
     def test_fail_closed_taxonomy(self) -> None:
         self._assert_reason(_payload(self.dex, pendingBatonPassSides=["p2"]), "pending_baton_pass")
-        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 6}), "wish_pending")
+        # No Wish carrier in the sampled world -> ambiguous caster fails closed.
+        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 6}), "wish_carrier_ambiguous")
+        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 3}), "wish_turns_inconsistent")
         self._assert_reason(_payload(self.dex, futureSight={"p1": 2, "p2": 0}), "future_sight_pending")
         self._assert_reason(_payload(self.dex, deferredOpponentActions={"p2": 3}), "deferred_opponent_action")
         self._assert_reason(_payload(self.dex, selfRequestKind="team-preview"), "boundary_not_move_request")
