@@ -113,10 +113,11 @@ Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
   From our info set the opponent's committed-but-hidden action is exactly
   what determinization samples over: the passer side constructs with the
   engine's `baton_passing` + `force_switch` (recipient choice only, boosts
-  pass), and the opponent side carries `slow_uturn_move` + a per-world
-  SAMPLED commitment via `switch_out_move_second_saved_move` (uniform over
-  their constructed legal moves — the Node path's deferred-action treatment
-  minus predictor priors, noted for later). Unsupported pending shapes
+  pass), and the opponent side carries a per-world sampled commitment via the
+  engine's saved-move field — which review probes show the gen3 build does
+  NOT actually resolve after the pass (fail-soft optimistic under-model;
+  field kept for forward compatibility). The fallback win is the boundary
+  itself searching: recipient choice with boosts passing. Unsupported pending shapes
   (opponent-side pending) still fail closed. 15-game bench: **0.0% fallback
   (329/329 searched)**; residue is per-attempt catalog two-HP-variant
   rejects that never cost a decision.

@@ -656,7 +656,9 @@ class BatonPassBoundaryTests(unittest.TestCase):
         payload["sides"]["p1"]["boosts"] = {"spa": 2}
         return payload
 
-    def test_self_pending_baton_pass_constructs_with_sampled_commitment(self) -> None:
+    def test_self_pending_baton_pass_constructs_and_populates_saved_move_field(self) -> None:
+        # NOTE: the gen3 engine does not resolve the saved move after the pass
+        # (probe-confirmed); this pins field population + determinism only.
         import random as _random
 
         world = battle_spec_from_payload(

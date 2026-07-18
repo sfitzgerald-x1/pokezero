@@ -280,11 +280,15 @@ def battle_spec_from_payload(
     self_baton_passing = False
     if pending_baton_pass:
         # Supported shape: OUR Baton Pass is pending and we are choosing the
-        # recipient; the opponent's committed-but-hidden action is sampled
-        # per world (uniform over their constructed legal moves — the exact
-        # determinization treatment the Node path applies via deferred
-        # actions, minus predictor priors for now). Any other pending shape
-        # stays fail-closed.
+        # recipient (boosts/whitelisted volatiles pass; the engine restricts
+        # us to switch choices). The opponent's committed-but-hidden action
+        # is sampled per world into switch_out_move_second_saved_move, but
+        # review probes show the gen3 engine build does NOT resolve it after
+        # the switch (root values are invariant to the sample) — the
+        # recipient enters without eating the committed move, a fail-soft
+        # optimistic under-model. The field is populated for forward
+        # compatibility; treat the commitment as UNMODELED today. Any other
+        # pending shape stays fail-closed.
         if set(pending_baton_pass) != {self_player} or not self_force_switch:
             raise EngineWorldUnsupported(
                 "pending_baton_pass",

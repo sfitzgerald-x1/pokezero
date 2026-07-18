@@ -142,5 +142,87 @@ class FallbackTests(unittest.TestCase):
         self.assertEqual(payload["fallback_rate"], 0.0)
 
 
+class RechargeSignalTests(unittest.TestCase):
+    """Unit tests for the risk-bearing recharge signal (review finding)."""
+
+    class _Action:
+        kind = "move"
+        move_id = "hyperbeam"
+
+    class _Round:
+        def __init__(self, actions):
+            self.actions = actions
+
+    def _context(self, *, events, prev_action="hyperbeam", active="Slaking"):
+        import unittest.mock as mock
+
+        action = None
+        if prev_action is not None:
+            action = self._Action()
+            action.move_id = prev_action
+        rounds = {4: self._Round({"p2": action} if action else {})}
+        context = type("Ctx", (), {
+            "player_id": "p1",
+            "decision_round_index": 5,
+            "trajectory": object(),
+            "observation": type("Obs", (), {
+                "metadata": {
+                    "belief_view": {"opponent_pokemon": [
+                        {"species": active, "active": True},
+                    ]},
+                    "recent_public_events": events,
+                },
+            })(),
+        })()
+        return context, rounds
+
+    def _slots(self, context, rounds):
+        import unittest.mock as mock
+
+        policy = _policy()
+        with mock.patch(
+            "pokezero.engine_search.public_action_rounds_from_trajectory_metadata",
+            return_value=rounds,
+        ):
+            return policy._recharging_slots(context)
+
+    def test_clean_hit_with_visible_anchor_locks(self) -> None:
+        context, rounds = self._context(events=[
+            "|move|p2a: Slaking|Hyper Beam|p1a: Blissey",
+            "|-damage|p1a: Blissey|100/300",
+        ])
+        self.assertEqual(self._slots(context, rounds), ("p2",))
+
+    def test_visible_miss_suppresses_lock(self) -> None:
+        context, rounds = self._context(events=[
+            "|move|p2a: Slaking|Hyper Beam|p1a: Blissey",
+            "|-miss|p2a: Slaking|p1a: Blissey",
+        ])
+        self.assertEqual(self._slots(context, rounds), ())
+
+    def test_scrolled_out_anchor_fails_open(self) -> None:
+        # Round record says hyperbeam, but the move line is gone from the
+        # window: cannot verify hit -> NO lock (the confirmed wrong-lock fix).
+        context, rounds = self._context(events=[
+            "|-weather|Sandstorm|[upkeep]",
+            "|-damage|p2a: Slaking|300/400",
+        ])
+        self.assertEqual(self._slots(context, rounds), ())
+
+    def test_species_continuity_guard(self) -> None:
+        # The HB user fainted; a replacement is active -> no lock.
+        context, rounds = self._context(active="Blissey", events=[
+            "|move|p2a: Slaking|Hyper Beam|p1a: Blissey",
+            "|-damage|p1a: Blissey|100/300",
+        ])
+        self.assertEqual(self._slots(context, rounds), ())
+
+    def test_non_recharge_previous_action_no_lock(self) -> None:
+        context, rounds = self._context(prev_action="bodyslam", events=[
+            "|move|p2a: Slaking|Body Slam|p1a: Blissey",
+        ])
+        self.assertEqual(self._slots(context, rounds), ())
+
+
 if __name__ == "__main__":
     unittest.main()

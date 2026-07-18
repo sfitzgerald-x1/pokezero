@@ -268,16 +268,48 @@ class EngineMctsPolicy:
             return ()
         if normalize_id(str(action.move_id or "")) not in self._RECHARGE_MOVES:
             return ()
+        # The round record proves the move happened but stores no hit/miss and
+        # no actor identity. Require the ANCHOR: the |move| line must still be
+        # visible in the rolling event window, its actor must match the
+        # CURRENT active opponent (species continuity — double-faint guard),
+        # and no adjacent |-miss| may follow. If the anchor scrolled out we
+        # cannot verify the hit, so the lock stays OFF (fail-open to the
+        # pre-fix behavior — never a wrong lock on a missed Hyper Beam).
         metadata = context.observation.metadata
-        events = metadata.get("recent_public_events") if isinstance(metadata, Mapping) else None
-        if isinstance(events, Sequence):
-            lines = [str(line) for line in events]
-            for index, line in enumerate(lines):
-                parts = line.split("|")
-                if len(parts) >= 4 and parts[1] == "move" and normalize_id(parts[3]) in self._RECHARGE_MOVES:
-                    if any(rest.startswith(f"|-miss|{parts[2]}") for rest in lines[index + 1 : index + 3]):
-                        return ()
-        return (opponent_slot,)
+        if not isinstance(metadata, Mapping):
+            return ()
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        active_species = next(
+            (
+                str(mon.get("species") or "")
+                for mon in opponents or ()
+                if isinstance(mon, Mapping) and mon.get("active")
+            ),
+            "",
+        )
+        if not active_species:
+            return ()
+        events = metadata.get("recent_public_events")
+        if not isinstance(events, Sequence):
+            return ()
+        lines = [str(line) for line in events]
+        for index in range(len(lines) - 1, -1, -1):
+            parts = lines[index].split("|")
+            if len(parts) < 4 or parts[1] != "move":
+                continue
+            if normalize_id(parts[3]) not in self._RECHARGE_MOVES:
+                continue
+            actor = parts[2]
+            actor_species = actor.split(":", 1)[-1].strip() if ":" in actor else actor
+            if normalize_id(actor_species) != normalize_id(active_species):
+                return ()
+            if not actor.strip().lower().startswith(opponent_slot):
+                return ()
+            if any(rest.startswith(f"|-miss|{actor}") for rest in lines[index + 1 : index + 3]):
+                return ()
+            return (opponent_slot,)
+        return ()
 
 
     def _truant_loaf_slots(self, context: PolicyContext) -> tuple[str, ...]:
@@ -354,8 +386,11 @@ class EngineMctsPolicy:
             if mon.get("item_mutated"):
                 # Trick/Knock Off mutated the held item: the sampled set's item
                 # no longer matches the current holder (rule-outs stay frozen
-                # to the ORIGINAL assignment upstream). Rare in gen3 randbats
-                # (2 Trick sets) — fail closed over constructing wrong items.
+                # to the ORIGINAL assignment upstream). Pool scope: 6 sets set
+                # this flag (4 Knock Off + 2 Trick). Knock Off removals ARE
+                # representable (item publicly None) — recovering them needs a
+                # belief_view field distinguishing removal from swap; until
+                # then fail closed over constructing wrong items.
                 blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
             if not mon.get("active"):
                 continue

@@ -16,8 +16,8 @@ construct · **NOTE** = residual risk documented.
 | Toxic counter −1 residual-boundary offset | HANDLED — the payload applies the offset (`_materialization_toxic_stage`); construct consumes it verbatim | `test_toxic_stage_maps_to_toxic_count` + `test_local_showdown` offset tests |
 | Transform (Ditto): copied identity, revert-on-switch, PP suppression | FIXED (prior change this branch): both seats fail closed; revert clears the block | live Ditto tests ×2 + revert assertion |
 | **Shedinja fixed HP = 1** | **FIXED-NOW** — construct computed maxhp 164 via the raw formula; a "1/1" condition fraction-scaled to an unkillable 164-HP Shedinja (silent wrongness). Base-HP-1 pin now mirrors the generator | `test_shedinja_maxhp_is_pinned_to_one` |
-| **Recharge (Hyper Beam)** | **FIXED-NOW** — self seat was already safely closed (request `trapped` flag; costless: forced turns have no decision). Opponent seat searched worlds gave the recharging mon a FREE MOVE (silent wrongness). Now: turn-exact signal from round-indexed public actions (+ miss check; fail-open if the record is unavailable) → engine `MUSTRECHARGE` volatile (verified: restricts to "No Move") | `test_recharging_slot_gets_mustrecharge_volatile` + signal units |
-| **Trick / Knock Off item mutation** | **FIXED-NOW** — belief exposes `item_mutated`; sampled items are frozen to the ORIGINAL assignment, so a mutated holder mismatches reality. Fail closed on any opponent `item_mutated` (2 Trick sets in the pool — rare) | signal unit |
+| **Recharge (Hyper Beam)** | **FIXED-NOW** — self seat was already safely closed (request `trapped` flag; costless: forced turns have no decision). Opponent seat searched worlds gave the recharging mon a FREE MOVE (silent wrongness). Now: turn-exact signal from round-indexed public actions (+ miss check; fail-open if the record is unavailable) → engine `MUSTRECHARGE` volatile (verified: restricts to "No Move") | `test_recharging_slot_gets_mustrecharge_volatile` + `RechargeSignalTests` (anchor-required miss check, species continuity, scrolled-window fail-open) |
+| **Trick / Knock Off item mutation** | **FIXED-NOW** — belief exposes `item_mutated`; sampled items are frozen to the ORIGINAL assignment, so a mutated holder mismatches reality. Fail closed on any opponent `item_mutated` (pool scope: 6 sets — 4 Knock Off + 2 Trick). Knock Off removals are representable (item publicly None); recovery needs a belief_view removal-vs-swap field — follow-up | signal unit |
 | Baton Pass volatile whitelist + fail-closed markers (sub HP, leech source) | HANDLED — payload `materializationBlockers` → `materialization_blocker` fail-close; pending BP boundary fails closed | `test_fail_closed_taxonomy` |
 | Encore: sole real move-locker, derivable lock, NO duration counter | HANDLED (prior change this branch) — lock derived (self: disabled pattern; opp: last public move), engine restriction pinned, no invented counter | encore tests + engine pin |
 | Taunt/Disable/Torment/Imprison | N/A in pool (inventory-certified: never gate a move); volatile allow-list fails closed anyway | allow-list default |
@@ -32,7 +32,7 @@ construct · **NOTE** = residual risk documented.
 | Pursuit mid-switch (no forceSwitch cycle) | N/A — turn-structure concern; construct reads request-boundary payload state only | — |
 | Roar/Whirlwind phazing (drag ≠ BP) | HANDLED — payload boosts/volatiles reflect the drag reset; force-switch boundaries construct | force-switch test |
 | Wish (interrupted/expired) | HANDLED — pending-only payload + carrier-independent engine semantics (amount ignored by engine; deviation documented) | wish tests |
-| Deferred simultaneous-turn opponent action (Baton Pass boundary) | FIXED-NOW — self-pending BP constructs: passer `baton_passing`+`force_switch`, opponent `slow_uturn_move` + per-world sampled commitment (uniform; priors later). Opponent-pending shapes stay closed. Bench: 0.0% fallback | BP boundary tests |
+| Deferred simultaneous-turn opponent action (Baton Pass boundary) | FIXED-NOW — self-pending BP constructs: passer `baton_passing`+`force_switch`, opponent commitment sampled into the engine's saved-move field, but review probes show the gen3 build does NOT resolve it (fail-soft under-model; field kept for forward compat). The boundary itself searches — recipient choice with boosts passing — which was the fallback cost. Opponent-pending shapes stay closed. Bench: 0.0% fallback | BP boundary tests |
 | Unown formes / Deoxys formes | HANDLED — Unown collapsed (with party-species consistency); Deoxys formes are real dex entries | forme test |
 | Screens presence vs turns-remaining | HANDLED — turns derived from set turns; expiry validated multi-turn | screens tests + S4 |
 | Leftovers/pinch residual ORDER | HANDLED — engine build patched (order-5/10 split), differential + pins | #686 gates |
@@ -40,8 +40,13 @@ construct · **NOTE** = residual risk documented.
 | **Truant (Slaking)** | **FIXED-NOW** — engine models the loaf alternation natively but the construct never seeded the phase: every sampled world had Slaking about to act (over-valued both seats). Phase is publicly derivable (acted last round → loafs now); signal from round-indexed public actions seeds the engine's TRUANT volatile. Fail-open without clear evidence | truant scenario sweep |
 
 ## Residual known gaps (accepted, documented)
-- Recharge signal fails OPEN when the round record is unavailable (rare;
-  pre-fix behavior). Missed Hyper Beam correctly produces no lock.
+- Recharge signal fails OPEN when the round record is unavailable OR the
+  move-line anchor has scrolled out of the 24-line event window (cannot
+  verify hit/miss -> no lock; review-hardened). Missed Hyper Beam and
+  replaced actives (species continuity) correctly produce no lock.
+- Baton Pass: the opponent's committed move is NOT resolved by the gen3
+  engine after the pass (probe-confirmed engine limitation) — recipient
+  enters unharmed; optimistic, fail-soft, documented.
 - Opponent PP exemption stands until PP modeling adopts the belief ledger.
 - Sleep/rest approximation per the POC tradeoffs doc.
 - A future NATIVE legal-mask implementation (the crate) must adopt the
