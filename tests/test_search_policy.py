@@ -1852,12 +1852,28 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             batch_histories.append(histories)
             return tuple(float(tuple(history[-1].legal_action_mask).index(True)) for history in histories)
 
+        def scenario_planner(
+            context: PolicyContext,
+            rng: random.Random,
+        ) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(
+                    actions={"p2": 2},
+                    sampled_action_priors={
+                        "p2": (0.2, 0.8, 0.9) + (0.0,) * (ACTION_COUNT - 3),
+                    },
+                    weight=1.0,
+                    label="hidden-move-2",
+                ),
+            )
+
         policy = RootPUCTSearchPolicy(
             env_factory=branch_env_factory,
             rollout_config=RolloutConfig(max_decision_rounds=3),
             value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("initial leaves must batch")),
             prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
-            opponent_action_planner=lambda context, rng: {"p2": 0},
+            opponent_action_scenario_planner=scenario_planner,
             cpuct=0.0,
             root_visit_budget=2,
             start_override_planner=start_override_planner,
@@ -1886,6 +1902,24 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_count"], 1)
         self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_world_count"], 2)
         self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 2)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_scenarios"],
+            [
+                {
+                    "label": "hidden-move-2/belief-sample-1/sampled-world-legal",
+                    "weight": 0.5,
+                    "actions": {"p2": 0},
+                },
+                {
+                    "label": "hidden-move-2/belief-sample-2/sampled-world-legal",
+                    "weight": 0.5,
+                    "actions": {"p2": 0},
+                },
+            ],
+        )
+        self.assertTrue(
+            all(actions["p2"] == 0 for actions in branch_envs[0].all_step_calls),
+        )
         timing = decision.metadata["root_puct_timing"]
         self.assertEqual(timing["value_evaluation_count"], 4)
         self.assertEqual(timing["puct_search_call_count"], 1)
