@@ -232,9 +232,7 @@ class GameParse:
                     else:
                         self.ev[seat]["forced_switch"] += 1
                     # the outgoing mon leaves: close any open Belly-Drum KO window it held
-                    if self.bd[seat] is not None:
-                        self.ev[seat]["bellydrum_ko_sum"] += self.bd[seat]
-                        self.bd[seat] = None
+                    self._close_bd(seat)
                     self._end_tox(seat)  # the outgoing mon's toxic counter resets on switch (gen3)
                     self.pending_faint[seat] = False
                     self.active[seat] = sp
@@ -386,9 +384,7 @@ class GameParse:
                     if self.bd[drummer] is not None:
                         self.bd[drummer] += 1
                     # the drummer itself fainting closes its own window
-                    if self.bd[seat] is not None:
-                        self.ev[seat]["bellydrum_ko_sum"] += self.bd[seat]
-                        self.bd[seat] = None
+                    self._close_bd(seat)
             elif tag == "turn":
                 self._pending_switch_immunity = None  # immunity window is the switch-in turn only
                 self._resolve_speed()                 # score the just-finished turn's move order
@@ -399,10 +395,19 @@ class GameParse:
         # game over: flush any Belly-Drum windows still open (drummer survived to the end) and any
         # toxic episode a still-active mon was in (its peak stage is whatever it reached at game end).
         for s in ("p1", "p2"):
-            if self.bd[s] is not None:
-                self.ev[s]["bellydrum_ko_sum"] += self.bd[s]
-                self.bd[s] = None
+            self._close_bd(s)
             self._end_tox(s)
+
+    def _close_bd(self, seat):
+        # close a Belly-Drum KO window: bank its KOs into the running sum, and — separately — count
+        # it as a *success* if it produced at least one KO. The average-KOs figure is skewed by how
+        # many opponents remain, so the fraction of uses that convert to any KO is the cleaner "was
+        # the setup worth it" read; both are reported.
+        if self.bd[seat] is not None:
+            self.ev[seat]["bellydrum_ko_sum"] += self.bd[seat]
+            if self.bd[seat] >= 1:
+                self.ev[seat]["bellydrum_success"] += 1
+            self.bd[seat] = None
 
     def _end_tox(self, seat):
         # record the peak toxic counter this episode reached, then close it. Low peaks across a run =
@@ -445,8 +450,7 @@ class GameParse:
                 E["reversal_bp_sum"] += reversal_bp(*hp)
         if move == BELLY_DRUM:
             E["cat_bellydrum"] += 1
-            if self.bd[seat] is not None:   # a prior open window (double Belly Drum): close it first
-                E["bellydrum_ko_sum"] += self.bd[seat]
+            self._close_bd(seat)            # a prior open window (double Belly Drum): close/score it
             self.bd[seat] = 0               # open a KO-attribution window for this drummer
         if move == CURSE:  # boost only for non-Ghost; type unknown from log -> record separately
             E["cat_curse"] += 1
@@ -632,6 +636,7 @@ def extract(files, lineage=None, milestone=None):
                           "cat_solarbeam_sun","cat_solarbeam_nosun","bp_switch","bp_stat_or_sub",
                           # ungated counters for average-over-use metrics (avoid the gated/ungated trap)
                           "cat_reversal","reversal_bp_sum","cat_bellydrum","bellydrum_ko_sum",
+                          "bellydrum_success",
                           # priority conditionals + Destiny Bond success, all rated over ungated uses
                           "cat_priority","cat_priority_vs_faster","cat_priority_ko",
                           "cat_destinybond","destinybond_success",
@@ -737,6 +742,10 @@ def extract(files, lineage=None, milestone=None):
         # Belly Drum: average opponent mons KO'd by the drummer after the move (payoff of the setup).
         "bellydrum_uses": cat_extra["cat_bellydrum"],
         "bellydrum_avg_kos": (round(cat_extra["bellydrum_ko_sum"] / cat_extra["cat_bellydrum"], 3)
+                              if cat_extra["cat_bellydrum"] else None),
+        # fraction of Belly Drum uses that converted to >=1 KO — "was the setup worth it", robust to
+        # how many opponents happened to remain (which skews the average-KOs figure).
+        "bellydrum_ko_rate": (round(cat_extra["bellydrum_success"] / cat_extra["cat_bellydrum"], 4)
                               if cat_extra["cat_bellydrum"] else None),
         # Priority moves (Quick Attack / Extreme Speed / Mach Punch): raw usage is in move_categories;
         # here the two conditionals rated over ungated uses — used when the opponent outspeeds us

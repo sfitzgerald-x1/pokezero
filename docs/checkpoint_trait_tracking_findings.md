@@ -97,8 +97,11 @@ usage rate with a *conditional* that measures whether the move is used **well**:
   Rises with training (Sunny Day 0.08–0.48 → ~1.2–1.3 uses/seat-game when in the pool) — later
   checkpoints actually press their weather rather than sitting on it.
 - **Setup payoff.** Reversal/Flail average BP (higher = fired at lower HP, the correct timing) and
-  Belly Drum average opponent-KOs-after (the payoff of the setup). Both are low-volume in randbats;
-  tracked for the trend, quoted with sample sizes in the report.
+  two Belly Drum measures: average opponent-KOs-after, and the fraction of uses that convert to
+  **≥1 KO**. The average is skewed by how many opponents happen to remain, so the KO-*rate* is the
+  cleaner "was the setup worth it" read — at the frontiers ~37–45% of Belly Drums land at least one
+  KO (avg ~0.8–1.06 KOs). Both are low-volume in randbats (~100–130 uses/checkpoint) and quoted with
+  sample sizes in the report.
 - **Intimidate activations / game**, among games where an intimidator is on the team. Settles at
   ~1.9–2.5 across lineages (re-pivoting the intimidator in to re-drop Attack). Computed over
   **decided games only** — see corrections below.

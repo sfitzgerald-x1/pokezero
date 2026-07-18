@@ -164,6 +164,24 @@ class MoveClassification(unittest.TestCase):
         e = gp.ev["p1"]
         self.assertEqual(e["cat_bellydrum"], 1)
         self.assertEqual(e["bellydrum_ko_sum"], 2)
+        self.assertEqual(e["bellydrum_success"], 1)   # this use converted to >=1 KO
+
+    def test_belly_drum_no_ko_is_not_a_success(self):
+        # a Belly Drum whose user is revenge-killed before it lands a KO: counts as a use, avg-KOs 0,
+        # and NOT a success (0 KOs).
+        gp = parse([
+            "|switch|p1a: Linoone|Linoone, M|300/300",
+            "|switch|p2a: Salamence|Salamence, M|330/330",
+            "|turn|1",
+            "|move|p1a: Linoone|Belly Drum|p1a: Linoone",
+            "|turn|2",
+            "|move|p2a: Salamence|Earthquake|p1a: Linoone",
+            "|faint|p1a: Linoone",                                 # drummer dies with 0 KOs
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_bellydrum"], 1)
+        self.assertEqual(e["bellydrum_ko_sum"], 0)
+        self.assertEqual(e["bellydrum_success"], 0)
 
     def test_belly_drum_window_closes_on_drummer_faint(self):
         # If the drummer itself faints, its window is flushed with whatever it had scored so far.
@@ -181,6 +199,7 @@ class MoveClassification(unittest.TestCase):
         ])
         self.assertEqual(gp.ev["p1"]["cat_bellydrum"], 1)
         self.assertEqual(gp.ev["p1"]["bellydrum_ko_sum"], 1)
+        self.assertEqual(gp.ev["p1"]["bellydrum_success"], 1)
 
     def test_priority_vs_faster_and_ko(self):
         # p2 outspeeds p1 (moves first in a neutral turn); next turn p1's priority move is therefore

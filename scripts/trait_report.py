@@ -255,6 +255,7 @@ TRAJECTORY_CHARTS = [
         # KOs measures whether the setup pays off (mons the drummer removes after using it).
         ("reversal/flail avg BP", lambda r: r.get("reversal_avg_bp")),
         ("belly drum: avg KOs after", lambda r: r.get("bellydrum_avg_kos")),
+        ("belly drum: % uses w/ a KO", lambda r: _pct(r.get("bellydrum_ko_rate"))),
     ]),
     ("priority moves (Quick Attack / Extreme Speed / Mach Punch)", [
         # column 1: how often priority is used; column 2: the skilled use — fired when the opponent
@@ -574,6 +575,7 @@ def phase2_panel(rows, opponent, checkpoints):
     out.append('<tr class="grp"><td colspan="%d">setup payoff (avg over uses)</td></tr>' % (len(lineages) + 1))
     out.append(row("reversal/flail avg BP", lambda r: f'{_fmt(r.get("reversal_avg_bp"), 1)} <span class="dim">(n={r.get("reversal_uses", 0)})</span>'))
     out.append(row("belly drum: avg KOs after", lambda r: f'{_fmt(r.get("bellydrum_avg_kos"), 2)} <span class="dim">(n={r.get("bellydrum_uses", 0)})</span>'))
+    out.append(row("belly drum: % uses w/ a KO", lambda r: f'{_pct(r.get("bellydrum_ko_rate"))} <span class="dim">(n={r.get("bellydrum_uses", 0)})</span>'))
     out.append('<tr class="grp"><td colspan="%d">priority moves &amp; destiny bond (rate over uses)</td></tr>' % (len(lineages) + 1))
     out.append(row("priority vs faster opp", lambda r: f'{_fmt(r.get("priority_vs_faster_rate"))} <span class="dim">(n={r.get("priority_uses", 0)})</span>'))
     out.append(row("priority KO rate", lambda r: _fmt(r.get("priority_ko_rate"))))
