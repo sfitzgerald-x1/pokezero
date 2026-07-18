@@ -667,6 +667,76 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["state_snapshot_count"], 0)
         self.assertEqual(timing["state_restore_count"], 5)
 
+    def test_puct_branch_search_batches_only_the_independent_initial_leaves(self) -> None:
+        trajectory = BattleTrajectory(battle_id="batch", format_id="gen3randombattle", seed=77)
+        baseline_scalar_histories = []
+        scalar_histories = []
+        batch_histories = []
+
+        def scalar_baseline_value(history):
+            baseline_scalar_histories.append(history)
+            return float(_only_legal_action(history[-1]))
+
+        def scalar_value(history):
+            scalar_histories.append(history)
+            return float(_only_legal_action(history[-1]))
+
+        def batch_values(histories):
+            batch_histories.append(histories)
+            return tuple(float(_only_legal_action(history[-1])) for history in histories)
+
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "opponent_actions": {"p2": 0},
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+        }
+        baseline = puct_branch_search(
+            env=TimedSnapshotValueBranchEnv(),
+            value_fn=scalar_baseline_value,
+            **common_kwargs,
+        )
+        result = puct_branch_search(
+            env=TimedSnapshotValueBranchEnv(),
+            value_fn=scalar_value,
+            value_batch_fn=batch_values,
+            **common_kwargs,
+        )
+
+        self.assertEqual(len(baseline_scalar_histories), 5)
+        self.assertEqual(
+            [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+            [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in baseline.candidates],
+        )
+        self.assertEqual(result.action_index, baseline.action_index)
+        self.assertEqual(result.most_visited_candidate.action_index, baseline.most_visited_candidate.action_index)
+        self.assertEqual(len(batch_histories), 1)
+        self.assertEqual(len(batch_histories[0]), 2)
+        # The three adaptive PUCT visits depend on preceding backups and must
+        # remain scalar so batching cannot change the search trajectory.
+        self.assertEqual(len(scalar_histories), 3)
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(result.timing.value_evaluation_count, 5)
+
+    def test_puct_branch_search_rejects_mismatched_batched_value_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "different number of values"):
+            puct_branch_search(
+                env=TimedSnapshotValueBranchEnv(),
+                trajectory=BattleTrajectory(battle_id="batch", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda _history: 0.0,
+                value_batch_fn=lambda _histories: (0.0,),
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                root_visit_budget=2,
+            )
+
     def test_puct_branch_search_prefers_bridge_resident_snapshot_handles(self) -> None:
         env = BridgeSnapshotValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)

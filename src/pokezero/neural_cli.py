@@ -81,6 +81,7 @@ from .neural_policy import (
     distributed_training_context,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
+    evaluate_transformer_observation_values,
     evaluate_transformer_opponent_action_priors,
     feature_masks_from_model_config,
     initialize_distributed_training,
@@ -913,6 +914,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Fixed visits added after the mandatory legal-action sweep. Mutually exclusive "
             "with adaptive root budgeting; use 0 for the sweep-only arm."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--batch-initial-root-values",
+        action="store_true",
+        help=(
+            "Evaluate only the independent mandatory root-action leaves in one value-model batch. "
+            "Adaptive PUCT revisit selection remains sequential."
         ),
     )
     root_puct_play.add_argument(
@@ -4047,6 +4056,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "minimum_value_improvement": args.min_value_improvement,
             "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
             "root_extra_visits": args.root_extra_visits,
+            "batch_initial_root_values": bool(getattr(args, "batch_initial_root_values", False)),
             "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
             "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
             "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
@@ -4125,6 +4135,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 timing=inference_timing,
             )
 
+        def value_batch_fn(histories):
+            return evaluate_transformer_observation_values(
+                model=value_model,
+                result=value_result,
+                observation_histories=histories,
+                device=args.device,
+                timing=inference_timing,
+            )
+
         def prior_fn(history):
             return evaluate_transformer_action_priors(
                 model=model,
@@ -4145,7 +4164,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                 timing=inference_timing,
             )
 
-        return value_fn, prior_fn, opponent_prior_fn
+        return value_fn, value_batch_fn, prior_fn, opponent_prior_fn
 
     def make_search_policy(
         *,
@@ -4156,7 +4175,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         dirichlet_enabled: bool,
     ) -> RootPUCTSearchPolicy:
         inference_timing = TransformerInferenceTimingAccumulator()
-        value_fn, prior_fn, opponent_prior_fn = make_evaluators(inference_timing)
+        value_fn, value_batch_fn, prior_fn, opponent_prior_fn = make_evaluators(inference_timing)
         root_opponent_player_id = "p2" if search_player_id == "p1" else "p1"
         opponent_action_scenario_planner = None
         if args.root_opponent_action_policy == "benchmark":
@@ -4196,6 +4215,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             env_factory=lambda: LocalShowdownEnv(env_config),
             rollout_config=rollout_config,
             value_fn=value_fn,
+            value_batch_fn=value_batch_fn if getattr(args, "batch_initial_root_values", False) else None,
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,

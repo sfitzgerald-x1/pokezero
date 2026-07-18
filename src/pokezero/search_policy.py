@@ -30,6 +30,7 @@ from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, le
 from .rollout import RolloutConfig, _reset_unique_policies
 from .search import (
     ActionPriorVector,
+    ObservationValueBatchFunction,
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
@@ -475,6 +476,10 @@ class RootPUCTSearchPolicy:
     # Its counters are cumulative across decisions; ``select_action_with_context``
     # records only the local delta in RootPUCTSearchTiming.
     neural_timing_snapshot: NeuralTimingSnapshot | None = None
+    # Optional exact batch evaluator for the mandatory independent root sweep.
+    # Keep this new field last so existing positional construction keeps its
+    # historical argument layout. Adaptive PUCT revisits remain scalar.
+    value_batch_fn: ObservationValueBatchFunction | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
@@ -495,6 +500,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.root_visit_budget_selector is not None and not callable(self.root_visit_budget_selector):
             raise ValueError("root_visit_budget_selector must be callable when set.")
+        if self.value_batch_fn is not None and not callable(self.value_batch_fn):
+            raise ValueError("value_batch_fn must be callable when set.")
         if self.neural_timing_snapshot is not None and not callable(self.neural_timing_snapshot):
             raise ValueError("neural_timing_snapshot must be callable when set.")
         if self.root_time_budget_seconds is not None and (
@@ -883,6 +890,7 @@ class RootPUCTSearchPolicy:
                                     legal_action_mask=context.observation.legal_action_mask,
                                     opponent_actions=scenario.actions,
                                     value_fn=self.value_fn,
+                                    value_batch_fn=self.value_batch_fn,
                                     action_priors=priors,
                                     cpuct=self.cpuct,
                                     leaf_rollout_policies=leaf_rollout_policies,
