@@ -122,3 +122,123 @@ Prerequisites before tier 2 can serve as a go/no-go read: per-instruction /
 per-damage-source comparison (or a band tied to the mechanic under test,
 not net active HP), branch-coverage assertions or a much larger seed count
 for probabilistic effects, and turn-count validation for timed conditions.
+
+## Multi-turn differential (tier-2 wave 1)
+
+Status: 2026-07-18. Six curated multi-turn cases (3-7 scripted decision
+boundaries, 4 seeds each) in `pokezero.engine_fidelity_multiturn`, run against
+the real Node sim and the gen3-PATCHED wheel (0.0.47 + residual-order split).
+Per step the observed Showdown turn must land in the engine's
+`generate_instructions` branch support and the engine then CONTINUES from the
+matched branch's applied state, so timed counters are validated by their
+downstream effects (a wrong screen counter changes damage and misses the
+support), plus per-step engine counter traces asserted on fully-matched seeds.
+
+Repro:
+
+```bash
+python -m pokezero.engine_fidelity_multiturn --showdown-root <showdown> --out report.json
+```
+
+### Result: 6/6 cases clean (24/24 seed trajectories, every scripted step matched)
+
+| Case | Steps x Seeds | Verdict | What it pinned down |
+| --- | --- | --- | --- |
+| `reflect_expiry` | 7 x 4 | clean | Engine reflect counter ticks 5->0 (trace `4,3,2,1,0,0,0` after steps 1-7); damage halved turns 2-5, un-halves turn 6+ in BOTH sims; a crit-through-Reflect branch (gen3 crits pierce screens) was hit and matched on seed 24. |
+| `toxic_escalation` | 3 x 4 | clean | Residuals escalate 1/16 -> 2/16 -> 3/16 (engine `toxic_count` trace `1,2,3`), with the patched heal-BEFORE-status-damage Leftovers ordering holding at every stage. Seeds screened for the 85%-accuracy hit on step 1. |
+| `resttalk_cycle` | 6 x 4 | clean | Rest = full heal + SLEEP + `rest_turns 0->3`; Sleep Talk branches (called Body Slam / called Curse / called Rest) all exercised across seeds; wake on the 3rd Sleep Talk turn in both sims. ALSO the PP-underflow canary — see below. |
+| `baton_pass_transfer` | 5 x 4 | clean | Calm Mind x2 survives the mid-turn Baton Pass switch on the engine side (boost telemetry `+2` after the switch) and on the Showdown side (step-5 Surf at +2 doubles damage — far outside the roll band, and it matched the +2 branch). |
+| `encore_lock` | 3 x 4 | clean | Engine auto-tracks `last_used_move` when Encore is in a moveset, redirects the target's already-chosen move to the encored one on the application turn (Showdown agrees), and holds the lock next turn. Duration NOT validated (below). |
+| `sand_chip_multi` | 3 x 4 | clean | Sand chips 1/16 per turn on the itemless holder while the sand-immune Leftovers holder nets 1/16 back per turn, including the clamp at full HP. |
+
+### PP-underflow canary: NOT reproduced on this wheel
+
+The historical Rest/Sleep Talk PP panic does not fire on the patched 0.0.47
+wheel via any path we can drive (`pp_underflow_canary`, attached to the
+`resttalk_cycle` report row):
+
+- `generate_instructions`/`apply_instructions` do not decrement PP at catalog
+  PP at all (the engine only emits `DecrementPP` near zero), so the
+  sleep-talk-called-Rest interplay never touches PP on realistic states;
+- forcing Rest at 0 PP is ACCEPTED (the engine happily selects a 0-PP move)
+  and `DecrementPP` wraps the stored PP to **-1** — a silent underflow, not a
+  panic (mild contract note: the caller owns not submitting 0-PP moves);
+- two forced Sleep Talk turns from that state and a 200 ms
+  `monte_carlo_tree_search` burst (134k+ visits) complete cleanly.
+
+Settled in passing: gen3 Showdown's sleep-talk-called Rest FAILS outright
+while asleep (protocol shows `|move|...|Rest|[from] Sleep Talk` with no
+effect), which is exactly the engine's 1/3 no-op branch — the two sims agree.
+
+### Engine caller-contract sharp edges (confirmed, fail-silent/fail-late)
+
+1. **Force-switch resolution drops the postponed move unless re-supplied.**
+   When the slower side's move is postponed across a Baton Pass switch-out
+   (`SideXMoveSecondSwitchOutMove` saved), the resolution call must pass the
+   switching side's BARE species id (`"starmie"` — `"switch starmie"` raises
+   `ValueError`) and must RE-SUPPLY the saved move for the waiting side:
+   passing `"none"` returns a valid 100% branch in which the opponent's move
+   silently never happens. Any search/world integration that resolves forced
+   switches with `"none"` will corrupt its rollouts without an error.
+   `engine_fidelity_multiturn.engine_step_choices` re-supplies from
+   `side.switch_out_move_second_saved_move`.
+2. **`Side(last_used_move=...)` takes a move INDEX, not a move id, and fails
+   late.** The constructor accepts `"move:growl"` but `generate_instructions`
+   later PANICS (`PanicException: Invalid PokemonMoveIndex: growl`,
+   `state.rs:100`); the valid format is `"move:1"` (slot index). Engine-built
+   trajectories are safe — `SetLastUsedMove` instructions are only emitted
+   (and only when Encore is present in a moveset), always in index form.
+3. **Encore duration is not modeled.** gen3 Showdown rolls 3-6 turns
+   (`random(3, 7)`, counting the application turn); the engine applies the
+   `ENCORE` volatile with `volatile_status_durations.encore` stuck at 0 and
+   never expires it. Trajectories longer than the guaranteed lock prefix will
+   diverge at Showdown's expiry roll. This, plus the index-form
+   `last_used_move` requirement on world construction, keeps Encore
+   **fail-close in `engine_search`**: a mid-game world would need the
+   opponent's last-move slot index and a duration model the engine lacks.
+
+### Harness additions over the one-turn matcher (and remaining limits)
+
+- **Boost-delta matching** (`observed_boost_deltas` from `|-boost|/|-unboost|`
+  lines vs per-branch engine stage deltas) — REQUIRED for correctness, not a
+  nicety: Sleep Talk calling Curse vs calling Rest (no-op) are observationally
+  identical in `TurnFeatures`, and without the filter the trajectory binds to
+  the wrong applied state and falsely "diverges" one step later (observed as
+  exactly that before the fix). Per-step deltas also sidestep absolute-stage
+  tracking across Baton Pass (stages transfer with no protocol echo).
+- **Drift correction with raw fallback**: the followed engine branch carries
+  average rolls, so observed HP is shifted by the accumulated
+  (engine - showdown) offset per side before matching (per-step delta
+  comparison); a heal-to-full clamps both sims and makes the offset stale for
+  one step, so the unadjusted observation is a fallback (fired exactly once in
+  the sweep, on the sand case's Recover step). Offsets reset when a side's
+  active changes.
+- Still support-membership over 4 seeds per case — probabilistic branch
+  COVERAGE remains the one-turn suite's (partially open) problem; sleep-talk
+  call distribution (1/3 each) and encore/para/crit sub-branches were hit by
+  luck of the scripted seeds, not asserted.
+- Timed conditions validated here: screens (counter + expiry), toxic stage,
+  rest/sleep-talk wake. NOT yet: Light Screen expiry (symmetric to Reflect but
+  unexercised), Safeguard/Mist durations, encore expiry (engine has no
+  counter), weather expiry for manual (non-ability) weather.
+- `"switch N"` script entries resolve against ORIGINAL team order; fine for
+  wave 1's single Baton Pass from the opening lineup, revisit before scripting
+  multi-switch cases.
+
+### Scope clarification (added after independent review)
+
+"Clean" in the multi-turn sweep certifies that EACH TURN's observed delta
+lands in the engine's branch support within the same ±16%-of-per-turn-damage
+band, plus timed-counter fidelity (reflect ticks, toxic_count, rest_turns).
+Because observed HP is re-anchored to the engine's trajectory every turn,
+absolute HP tracking across N turns is NOT certified: a systematic engine
+damage bias smaller than the per-turn band (e.g. ~10%/turn) would pass 6/6
+clean. This is the one-turn doc's sub-band masking caveat applied with more
+force, and it carries the same consequence for tier-2 reuse. Also: when two
+engine branches are feature-identical AND both fall inside the HP band, the
+matcher binds the FIRST in enumeration order (first-match, not best-fit) —
+no ties were observed in wave 1's curated cases, but this is a latent
+false-CLEAN vector for real-game turns. Encore wave-1 coverage: the
+application-turn redirect and volatile persistence are validated; the
+next-turn lock is only exercised trivially (the scripted choice coincides
+with the encored move) and duration remains unmodeled.
