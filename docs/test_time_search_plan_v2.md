@@ -138,7 +138,11 @@ classifying it.
    not the limiting cost. The earlier residual interpretation is therefore
    superseded. **Instrumentation status (2026-07-18):** Root-PUCT now splits
    forward time into value leaves, root priors, opponent priors, and policy
-   calls while retaining nested bridge timing. The CPU-thread probe selected
+   calls while retaining nested bridge timing. The next telemetry image also
+   reports non-overlapping setup, initial-sweep, adaptive-visit,
+   branch-validation, post-branch-history, direct-prefix, and
+   scenario-dispatch stages, so the residual becomes only uncategorized work.
+   The CPU-thread probe selected
    eight Torch threads for the next validation wave (8.22s to 3.31s per
    decision at extra-24, same direct materialization). Batched initial root
    value leaves are merged behind an explicit opt-in and retain scalar-equivalent

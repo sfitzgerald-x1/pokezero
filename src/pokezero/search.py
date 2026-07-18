@@ -118,6 +118,21 @@ class RootPUCTSearchTiming:
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
     state_restore_count: int = 0
+    # The following Root-PUCT stages are additive Python orchestration. They
+    # deliberately exclude replay, bridge steps, and leaf evaluation so the
+    # remaining residual names work we have not yet attributed.
+    root_initial_sweep_orchestration_seconds: float = 0.0
+    root_initial_sweep_orchestration_count: int = 0
+    root_search_setup_seconds: float = 0.0
+    root_search_setup_count: int = 0
+    root_adaptive_visit_orchestration_seconds: float = 0.0
+    root_adaptive_visit_orchestration_count: int = 0
+    root_search_finalization_seconds: float = 0.0
+    root_search_finalization_count: int = 0
+    branch_action_validation_seconds: float = 0.0
+    branch_action_validation_count: int = 0
+    post_branch_history_seconds: float = 0.0
+    post_branch_history_count: int = 0
     bridge_round_trip_seconds: float = 0.0
     bridge_round_trip_count: int = 0
     bridge_node_processing_seconds: float = 0.0
@@ -126,6 +141,12 @@ class RootPUCTSearchTiming:
     belief_world_materialization_count: int = 0
     opponent_scenario_planning_seconds: float = 0.0
     opponent_scenario_planning_count: int = 0
+    root_policy_setup_seconds: float = 0.0
+    root_policy_setup_count: int = 0
+    direct_prefix_construction_seconds: float = 0.0
+    direct_prefix_construction_count: int = 0
+    scenario_dispatch_orchestration_seconds: float = 0.0
+    scenario_dispatch_orchestration_count: int = 0
     policy_evaluation_seconds: float = 0.0
     policy_evaluation_count: int = 0
     observation_encoding_seconds: float = 0.0
@@ -161,8 +182,17 @@ class RootPUCTSearchTiming:
             + self.branch_simulator_step_seconds
             + self.state_snapshot_seconds
             + self.state_restore_seconds
+            + self.root_initial_sweep_orchestration_seconds
+            + self.root_search_setup_seconds
+            + self.root_adaptive_visit_orchestration_seconds
+            + self.root_search_finalization_seconds
+            + self.branch_action_validation_seconds
+            + self.post_branch_history_seconds
             + self.belief_world_materialization_seconds
             + self.opponent_scenario_planning_seconds
+            + self.root_policy_setup_seconds
+            + self.direct_prefix_construction_seconds
+            + self.scenario_dispatch_orchestration_seconds
             + self.policy_value_evaluation_seconds
             + self.rollout_tail_seconds
         )
@@ -221,6 +251,45 @@ class RootPUCTSearchTiming:
             self,
             policy_evaluation_seconds=self.policy_evaluation_seconds + elapsed_seconds,
             policy_evaluation_count=self.policy_evaluation_count + 1,
+        )
+
+    def with_root_policy_setup(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
+        return replace(
+            self,
+            root_policy_setup_seconds=self.root_policy_setup_seconds + elapsed_seconds,
+            root_policy_setup_count=self.root_policy_setup_count + 1,
+        )
+
+    def with_direct_prefix_construction(
+        self,
+        elapsed_seconds: float,
+        *,
+        attempt_count: int,
+    ) -> "RootPUCTSearchTiming":
+        return replace(
+            self,
+            direct_prefix_construction_seconds=(
+                self.direct_prefix_construction_seconds + elapsed_seconds
+            ),
+            direct_prefix_construction_count=(
+                self.direct_prefix_construction_count + attempt_count
+            ),
+        )
+
+    def with_scenario_dispatch_orchestration(
+        self,
+        elapsed_seconds: float,
+        *,
+        attempt_count: int,
+    ) -> "RootPUCTSearchTiming":
+        return replace(
+            self,
+            scenario_dispatch_orchestration_seconds=(
+                self.scenario_dispatch_orchestration_seconds + elapsed_seconds
+            ),
+            scenario_dispatch_orchestration_count=(
+                self.scenario_dispatch_orchestration_count + attempt_count
+            ),
         )
 
     def with_neural_subtiming(
@@ -319,6 +388,38 @@ class RootPUCTSearchTiming:
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
             state_restore_seconds=sum(timing.state_restore_seconds for timing in timings),
             state_restore_count=sum(timing.state_restore_count for timing in timings),
+            root_initial_sweep_orchestration_seconds=sum(
+                timing.root_initial_sweep_orchestration_seconds for timing in timings
+            ),
+            root_initial_sweep_orchestration_count=sum(
+                timing.root_initial_sweep_orchestration_count for timing in timings
+            ),
+            root_search_setup_seconds=sum(timing.root_search_setup_seconds for timing in timings),
+            root_search_setup_count=sum(timing.root_search_setup_count for timing in timings),
+            root_adaptive_visit_orchestration_seconds=sum(
+                timing.root_adaptive_visit_orchestration_seconds for timing in timings
+            ),
+            root_adaptive_visit_orchestration_count=sum(
+                timing.root_adaptive_visit_orchestration_count for timing in timings
+            ),
+            root_search_finalization_seconds=sum(
+                timing.root_search_finalization_seconds for timing in timings
+            ),
+            root_search_finalization_count=sum(
+                timing.root_search_finalization_count for timing in timings
+            ),
+            branch_action_validation_seconds=sum(
+                timing.branch_action_validation_seconds for timing in timings
+            ),
+            branch_action_validation_count=sum(
+                timing.branch_action_validation_count for timing in timings
+            ),
+            post_branch_history_seconds=sum(
+                timing.post_branch_history_seconds for timing in timings
+            ),
+            post_branch_history_count=sum(
+                timing.post_branch_history_count for timing in timings
+            ),
             bridge_round_trip_seconds=sum(timing.bridge_round_trip_seconds for timing in timings),
             bridge_round_trip_count=sum(timing.bridge_round_trip_count for timing in timings),
             bridge_node_processing_seconds=sum(
@@ -338,6 +439,20 @@ class RootPUCTSearchTiming:
             ),
             opponent_scenario_planning_count=sum(
                 timing.opponent_scenario_planning_count for timing in timings
+            ),
+            root_policy_setup_seconds=sum(timing.root_policy_setup_seconds for timing in timings),
+            root_policy_setup_count=sum(timing.root_policy_setup_count for timing in timings),
+            direct_prefix_construction_seconds=sum(
+                timing.direct_prefix_construction_seconds for timing in timings
+            ),
+            direct_prefix_construction_count=sum(
+                timing.direct_prefix_construction_count for timing in timings
+            ),
+            scenario_dispatch_orchestration_seconds=sum(
+                timing.scenario_dispatch_orchestration_seconds for timing in timings
+            ),
+            scenario_dispatch_orchestration_count=sum(
+                timing.scenario_dispatch_orchestration_count for timing in timings
             ),
             policy_evaluation_seconds=sum(timing.policy_evaluation_seconds for timing in timings),
             policy_evaluation_count=sum(timing.policy_evaluation_count for timing in timings),
@@ -390,6 +505,18 @@ class RootPUCTSearchTiming:
             "state_snapshot_count": self.state_snapshot_count,
             "state_restore_seconds": self.state_restore_seconds,
             "state_restore_count": self.state_restore_count,
+            "root_initial_sweep_orchestration_seconds": self.root_initial_sweep_orchestration_seconds,
+            "root_initial_sweep_orchestration_count": self.root_initial_sweep_orchestration_count,
+            "root_search_setup_seconds": self.root_search_setup_seconds,
+            "root_search_setup_count": self.root_search_setup_count,
+            "root_adaptive_visit_orchestration_seconds": self.root_adaptive_visit_orchestration_seconds,
+            "root_adaptive_visit_orchestration_count": self.root_adaptive_visit_orchestration_count,
+            "root_search_finalization_seconds": self.root_search_finalization_seconds,
+            "root_search_finalization_count": self.root_search_finalization_count,
+            "branch_action_validation_seconds": self.branch_action_validation_seconds,
+            "branch_action_validation_count": self.branch_action_validation_count,
+            "post_branch_history_seconds": self.post_branch_history_seconds,
+            "post_branch_history_count": self.post_branch_history_count,
             "bridge_round_trip_seconds": self.bridge_round_trip_seconds,
             "bridge_round_trip_count": self.bridge_round_trip_count,
             "bridge_node_processing_seconds": self.bridge_node_processing_seconds,
@@ -400,6 +527,12 @@ class RootPUCTSearchTiming:
             "belief_world_materialization_count": self.belief_world_materialization_count,
             "opponent_scenario_planning_seconds": self.opponent_scenario_planning_seconds,
             "opponent_scenario_planning_count": self.opponent_scenario_planning_count,
+            "root_policy_setup_seconds": self.root_policy_setup_seconds,
+            "root_policy_setup_count": self.root_policy_setup_count,
+            "direct_prefix_construction_seconds": self.direct_prefix_construction_seconds,
+            "direct_prefix_construction_count": self.direct_prefix_construction_count,
+            "scenario_dispatch_orchestration_seconds": self.scenario_dispatch_orchestration_seconds,
+            "scenario_dispatch_orchestration_count": self.scenario_dispatch_orchestration_count,
             "policy_evaluation_seconds": self.policy_evaluation_seconds,
             "policy_evaluation_count": self.policy_evaluation_count,
             "observation_encoding_seconds": self.observation_encoding_seconds,
@@ -440,6 +573,18 @@ class _RootPUCTSearchTimingAccumulator:
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
     state_restore_count: int = 0
+    root_initial_sweep_orchestration_seconds: float = 0.0
+    root_initial_sweep_orchestration_count: int = 0
+    root_search_setup_seconds: float = 0.0
+    root_search_setup_count: int = 0
+    root_adaptive_visit_orchestration_seconds: float = 0.0
+    root_adaptive_visit_orchestration_count: int = 0
+    root_search_finalization_seconds: float = 0.0
+    root_search_finalization_count: int = 0
+    branch_action_validation_seconds: float = 0.0
+    branch_action_validation_count: int = 0
+    post_branch_history_seconds: float = 0.0
+    post_branch_history_count: int = 0
     bridge_round_trip_seconds: float = 0.0
     bridge_round_trip_count: int = 0
     bridge_node_processing_seconds: float = 0.0
@@ -464,6 +609,45 @@ class _RootPUCTSearchTimingAccumulator:
     def add_state_restore(self, elapsed_seconds: float) -> None:
         self.state_restore_seconds += elapsed_seconds
         self.state_restore_count += 1
+
+    @property
+    def branch_evaluation_seconds(self) -> float:
+        """Return additive branch work used to isolate orchestration slices."""
+
+        return (
+            self.prefix_replay_seconds
+            + self.branch_simulator_step_seconds
+            + self.state_snapshot_seconds
+            + self.state_restore_seconds
+            + self.branch_action_validation_seconds
+            + self.post_branch_history_seconds
+            + self.value_evaluation_seconds
+            + self.rollout_tail_seconds
+        )
+
+    def add_root_initial_sweep_orchestration(self, elapsed_seconds: float) -> None:
+        self.root_initial_sweep_orchestration_seconds += elapsed_seconds
+        self.root_initial_sweep_orchestration_count += 1
+
+    def add_root_search_setup(self, elapsed_seconds: float) -> None:
+        self.root_search_setup_seconds += elapsed_seconds
+        self.root_search_setup_count += 1
+
+    def add_root_adaptive_visit_orchestration(self, elapsed_seconds: float) -> None:
+        self.root_adaptive_visit_orchestration_seconds += elapsed_seconds
+        self.root_adaptive_visit_orchestration_count += 1
+
+    def add_root_search_finalization(self, elapsed_seconds: float) -> None:
+        self.root_search_finalization_seconds += elapsed_seconds
+        self.root_search_finalization_count += 1
+
+    def add_branch_action_validation(self, elapsed_seconds: float) -> None:
+        self.branch_action_validation_seconds += elapsed_seconds
+        self.branch_action_validation_count += 1
+
+    def add_post_branch_history(self, elapsed_seconds: float) -> None:
+        self.post_branch_history_seconds += elapsed_seconds
+        self.post_branch_history_count += 1
 
     def add_bridge_subtiming(self, timing: Mapping[str, float | int]) -> None:
         self.bridge_round_trip_seconds += float(timing["bridge_round_trip_seconds"])
@@ -491,6 +675,20 @@ class _RootPUCTSearchTimingAccumulator:
             state_snapshot_count=self.state_snapshot_count,
             state_restore_seconds=self.state_restore_seconds,
             state_restore_count=self.state_restore_count,
+            root_initial_sweep_orchestration_seconds=self.root_initial_sweep_orchestration_seconds,
+            root_initial_sweep_orchestration_count=self.root_initial_sweep_orchestration_count,
+            root_search_setup_seconds=self.root_search_setup_seconds,
+            root_search_setup_count=self.root_search_setup_count,
+            root_adaptive_visit_orchestration_seconds=(
+                self.root_adaptive_visit_orchestration_seconds
+            ),
+            root_adaptive_visit_orchestration_count=self.root_adaptive_visit_orchestration_count,
+            root_search_finalization_seconds=self.root_search_finalization_seconds,
+            root_search_finalization_count=self.root_search_finalization_count,
+            branch_action_validation_seconds=self.branch_action_validation_seconds,
+            branch_action_validation_count=self.branch_action_validation_count,
+            post_branch_history_seconds=self.post_branch_history_seconds,
+            post_branch_history_count=self.post_branch_history_count,
             bridge_round_trip_seconds=self.bridge_round_trip_seconds,
             bridge_round_trip_count=self.bridge_round_trip_count,
             bridge_node_processing_seconds=self.bridge_node_processing_seconds,
@@ -933,6 +1131,7 @@ def _value_branch_search_with_prefix(
                     player_id=player_id,
                     prefix_history=prefix_history,
                     branch=branch,
+                    timing=timing,
                 )
             )
             batch_branches.append((action_index, branch))
@@ -1049,6 +1248,8 @@ def puct_branch_search(
     timing_started_at = _timing_perf_counter()
     timing = _RootPUCTSearchTimingAccumulator()
     bridge_timing_before = _bridge_timing_snapshot(env)
+    initial_sweep_started_at = _timing_perf_counter()
+    branch_evaluation_before = timing.branch_evaluation_seconds
     value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
         trajectory=trajectory,
@@ -1067,6 +1268,15 @@ def puct_branch_search(
         timing=timing,
         prepared_prefix=prepared_prefix,
     )
+    timing.add_root_initial_sweep_orchestration(
+        max(
+            0.0,
+            _timing_perf_counter()
+            - initial_sweep_started_at
+            - (timing.branch_evaluation_seconds - branch_evaluation_before),
+        )
+    )
+    root_setup_started_at = _timing_perf_counter()
     legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
     if (
         root_visit_budget_resolver is None
@@ -1116,6 +1326,7 @@ def puct_branch_search(
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
     )
+    timing.add_root_search_setup(_timing_perf_counter() - root_setup_started_at)
     time_budget_exhausted = False
     while True:
         current_visits = sum(accumulator.visits for accumulator in accumulators.values())
@@ -1126,6 +1337,8 @@ def puct_branch_search(
         if time_budget_start is not None and perf_counter() - time_budget_start >= root_time_budget_seconds:
             time_budget_exhausted = True
             break
+        adaptive_visit_started_at = _timing_perf_counter()
+        branch_evaluation_before = timing.branch_evaluation_seconds
         action_index = _select_root_accumulator(
             tuple(accumulators.values()),
             cpuct=cpuct,
@@ -1175,6 +1388,15 @@ def puct_branch_search(
             visits=accumulator.visits + 1,
             total_value=accumulator.total_value + value_candidate.value,
         )
+        timing.add_root_adaptive_visit_orchestration(
+            max(
+                0.0,
+                _timing_perf_counter()
+                - adaptive_visit_started_at
+                - (timing.branch_evaluation_seconds - branch_evaluation_before),
+            )
+        )
+    finalization_started_at = _timing_perf_counter()
     total_visits = sum(accumulator.visits for accumulator in accumulators.values())
     sqrt_total = math.sqrt(total_visits)
     candidates = tuple(
@@ -1194,6 +1416,7 @@ def puct_branch_search(
     )
     if bridge_timing is not None:
         timing.add_bridge_subtiming(bridge_timing)
+    timing.add_root_search_finalization(_timing_perf_counter() - finalization_started_at)
     return PUCTBranchSearchResult(
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
@@ -1335,6 +1558,7 @@ def _value_branch_candidate(
         player_id=player_id,
         prefix_history=prefix_history,
         branch=branch,
+        timing=timing,
     )
 
     if leaf_rollout_decision_rounds <= 0:
@@ -1750,14 +1974,11 @@ def _branch_from_replay_prefix(
             timing.add_prefix_replay(_timing_perf_counter() - prefix_replay_started_at)
         if prefix.terminal is not None:
             raise ValueError("cannot branch from a terminal replay prefix.")
-        branch_round = ReplayActionRound(
-            turn_index=prefix_decision_round_count,
-            actions=branch_actions,
-        )
-        _require_exact_requested_players(
-            branch_actions=branch_round.actions,
+        branch_round = _validated_branch_round(
+            branch_actions=branch_actions,
             requested_players=prefix.requested_players,
             turn_index=prefix_decision_round_count,
+            timing=timing,
         )
         branch_step_started_at = _timing_perf_counter() if timing is not None else None
         step_result = env.step(branch_round.actions)
@@ -1782,14 +2003,11 @@ def _branch_from_replay_prefix(
         if timing is not None:
             assert restore_started_at is not None
             timing.add_state_restore(_timing_perf_counter() - restore_started_at)
-        branch_round = ReplayActionRound(
-            turn_index=prefix_decision_round_count,
-            actions=branch_actions,
-        )
-        _require_exact_requested_players(
-            branch_actions=branch_round.actions,
+        branch_round = _validated_branch_round(
+            branch_actions=branch_actions,
             requested_players=restorable_prefix.prefix.requested_players,
             turn_index=prefix_decision_round_count,
+            timing=timing,
         )
         branch_step_started_at = _timing_perf_counter() if timing is not None else None
         step_result = env.step(branch_round.actions)
@@ -1802,14 +2020,11 @@ def _branch_from_replay_prefix(
             step_result=step_result,
         )
 
-    branch_round = ReplayActionRound(
-        turn_index=prefix_decision_round_count,
-        actions=branch_actions,
-    )
-    _require_exact_requested_players(
+    branch_round = _validated_branch_round(
         branch_actions=branch_actions,
         requested_players=restorable_prefix.prefix.requested_players,
         turn_index=prefix_decision_round_count,
+        timing=timing,
     )
     # This optional fast path is restricted to bridge-resident snapshots created from a
     # belief-sampled world. The fused bridge command includes both restore and branch
@@ -1824,6 +2039,28 @@ def _branch_from_replay_prefix(
         branch_round=branch_round,
         step_result=step_result,
     )
+
+
+def _validated_branch_round(
+    *,
+    branch_actions: Mapping[PlayerId, int],
+    requested_players: tuple[PlayerId, ...],
+    turn_index: int,
+    timing: _RootPUCTSearchTimingAccumulator | None,
+) -> ReplayActionRound:
+    """Build and validate one branch action map outside simulator timing."""
+
+    started_at = _timing_perf_counter() if timing is not None else None
+    branch_round = ReplayActionRound(turn_index=turn_index, actions=branch_actions)
+    _require_exact_requested_players(
+        branch_actions=branch_round.actions,
+        requested_players=requested_players,
+        turn_index=turn_index,
+    )
+    if timing is not None:
+        assert started_at is not None
+        timing.add_branch_action_validation(_timing_perf_counter() - started_at)
+    return branch_round
 
 
 def _snapshot_hooks(
@@ -1905,11 +2142,17 @@ def _post_branch_history(
     player_id: PlayerId,
     prefix_history: tuple[PokeZeroObservationV0, ...],
     branch: ReplayBranchResult,
+    timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> tuple[PokeZeroObservationV0, ...]:
+    started_at = _timing_perf_counter() if timing is not None else None
     post_branch_observation = branch.step_result.observations.get(player_id)
     if post_branch_observation is None:
         post_branch_observation = env.observe(player_id)
-    return (*prefix_history, post_branch_observation)
+    result = (*prefix_history, post_branch_observation)
+    if timing is not None:
+        assert started_at is not None
+        timing.add_post_branch_history(_timing_perf_counter() - started_at)
+    return result
 
 
 def _rollout_leaf_history(

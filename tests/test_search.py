@@ -819,6 +819,12 @@ class FlatBranchSearchTest(unittest.TestCase):
             timing["total_seconds"]
             - timing["branch_simulator_step_seconds"]
             - timing["state_restore_seconds"]
+            - timing["root_initial_sweep_orchestration_seconds"]
+            - timing["root_search_setup_seconds"]
+            - timing["root_adaptive_visit_orchestration_seconds"]
+            - timing["root_search_finalization_seconds"]
+            - timing["branch_action_validation_seconds"]
+            - timing["post_branch_history_seconds"]
             - timing["value_evaluation_seconds"],
         )
 
@@ -1122,6 +1128,12 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["state_restore_count"], 0)
         self.assertEqual(timing["opponent_scenario_planning_count"], 0)
         self.assertEqual(timing["policy_evaluation_count"], 0)
+        self.assertEqual(timing["root_initial_sweep_orchestration_count"], 1)
+        self.assertEqual(timing["root_search_setup_count"], 1)
+        self.assertEqual(timing["root_adaptive_visit_orchestration_count"], 0)
+        self.assertEqual(timing["root_search_finalization_count"], 1)
+        self.assertEqual(timing["branch_action_validation_count"], 2)
+        self.assertEqual(timing["post_branch_history_count"], 2)
         self.assertEqual(timing["value_evaluation_count"], 2)
         self.assertEqual(timing["policy_value_evaluation_count"], 2)
         self.assertEqual(timing["rollout_tail_count"], 0)
@@ -1134,6 +1146,12 @@ class FlatBranchSearchTest(unittest.TestCase):
             + timing["branch_simulator_step_seconds"]
             + timing["state_snapshot_seconds"]
             + timing["state_restore_seconds"]
+            + timing["root_initial_sweep_orchestration_seconds"]
+            + timing["root_search_setup_seconds"]
+            + timing["root_adaptive_visit_orchestration_seconds"]
+            + timing["root_search_finalization_seconds"]
+            + timing["branch_action_validation_seconds"]
+            + timing["post_branch_history_seconds"]
             + timing["belief_world_materialization_seconds"]
             + timing["opponent_scenario_planning_seconds"]
             + timing["policy_value_evaluation_seconds"]
@@ -1211,6 +1229,12 @@ class FlatBranchSearchTest(unittest.TestCase):
             + timing["branch_simulator_step_seconds"]
             + timing["state_snapshot_seconds"]
             + timing["state_restore_seconds"]
+            + timing["root_initial_sweep_orchestration_seconds"]
+            + timing["root_search_setup_seconds"]
+            + timing["root_adaptive_visit_orchestration_seconds"]
+            + timing["root_search_finalization_seconds"]
+            + timing["branch_action_validation_seconds"]
+            + timing["post_branch_history_seconds"]
             + timing["belief_world_materialization_seconds"]
             + timing["policy_value_evaluation_seconds"]
             + timing["rollout_tail_seconds"]

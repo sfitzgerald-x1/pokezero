@@ -171,8 +171,17 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_count",
             "state_snapshot_count",
             "state_restore_count",
+            "root_initial_sweep_orchestration_count",
+            "root_search_setup_count",
+            "root_adaptive_visit_orchestration_count",
+            "root_search_finalization_count",
+            "branch_action_validation_count",
+            "post_branch_history_count",
             "belief_world_materialization_count",
             "opponent_scenario_planning_count",
+            "root_policy_setup_count",
+            "direct_prefix_construction_count",
+            "scenario_dispatch_orchestration_count",
             "policy_evaluation_count",
             "observation_encoding_count",
             "neural_forward_count",
@@ -190,8 +199,17 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_seconds",
             "state_snapshot_seconds",
             "state_restore_seconds",
+            "root_initial_sweep_orchestration_seconds",
+            "root_search_setup_seconds",
+            "root_adaptive_visit_orchestration_seconds",
+            "root_search_finalization_seconds",
+            "branch_action_validation_seconds",
+            "post_branch_history_seconds",
             "belief_world_materialization_seconds",
             "opponent_scenario_planning_seconds",
+            "root_policy_setup_seconds",
+            "direct_prefix_construction_seconds",
+            "scenario_dispatch_orchestration_seconds",
             "policy_evaluation_seconds",
             "observation_encoding_seconds",
             "neural_forward_seconds",
@@ -214,8 +232,17 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
                 + timing_payload["branch_simulator_step_seconds"]
                 + timing_payload["state_snapshot_seconds"]
                 + timing_payload["state_restore_seconds"]
+                + timing_payload["root_initial_sweep_orchestration_seconds"]
+                + timing_payload["root_search_setup_seconds"]
+                + timing_payload["root_adaptive_visit_orchestration_seconds"]
+                + timing_payload["root_search_finalization_seconds"]
+                + timing_payload["branch_action_validation_seconds"]
+                + timing_payload["post_branch_history_seconds"]
                 + timing_payload["belief_world_materialization_seconds"]
                 + timing_payload["opponent_scenario_planning_seconds"]
+                + timing_payload["root_policy_setup_seconds"]
+                + timing_payload["direct_prefix_construction_seconds"]
+                + timing_payload["scenario_dispatch_orchestration_seconds"]
                 + timing_payload["policy_value_evaluation_seconds"]
                 + timing_payload["rollout_tail_seconds"]
                 + timing_payload["raw_residual_seconds"],
@@ -347,8 +374,17 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
             "branch_simulator_step_seconds",
             "state_snapshot_seconds",
             "state_restore_seconds",
+            "root_initial_sweep_orchestration_seconds",
+            "root_search_setup_seconds",
+            "root_adaptive_visit_orchestration_seconds",
+            "root_search_finalization_seconds",
+            "branch_action_validation_seconds",
+            "post_branch_history_seconds",
             "belief_world_materialization_seconds",
             "opponent_scenario_planning_seconds",
+            "root_policy_setup_seconds",
+            "direct_prefix_construction_seconds",
+            "scenario_dispatch_orchestration_seconds",
             "policy_evaluation_seconds",
             "value_evaluation_seconds",
             "policy_value_evaluation_seconds",
@@ -365,8 +401,17 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
                 + timing["branch_simulator_step_seconds"]
                 + timing["state_snapshot_seconds"]
                 + timing["state_restore_seconds"]
+                + timing["root_initial_sweep_orchestration_seconds"]
+                + timing["root_search_setup_seconds"]
+                + timing["root_adaptive_visit_orchestration_seconds"]
+                + timing["root_search_finalization_seconds"]
+                + timing["branch_action_validation_seconds"]
+                + timing["post_branch_history_seconds"]
                 + timing["belief_world_materialization_seconds"]
                 + timing["opponent_scenario_planning_seconds"]
+                + timing["root_policy_setup_seconds"]
+                + timing["direct_prefix_construction_seconds"]
+                + timing["scenario_dispatch_orchestration_seconds"]
                 + timing["policy_value_evaluation_seconds"]
                 + timing["rollout_tail_seconds"]
                 + timing["raw_residual_seconds"],
