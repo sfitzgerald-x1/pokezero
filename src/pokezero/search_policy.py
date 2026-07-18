@@ -437,9 +437,6 @@ class RootPUCTSearchPolicy:
     rollout_config: RolloutConfig
     value_fn: ObservationValueFunction
     prior_fn: ActionPriorFunction
-    # Optional exact batch evaluator for the mandatory independent root sweep.
-    # Adaptive post-sweep PUCT visits remain scalar and ordered.
-    value_batch_fn: ObservationValueBatchFunction | None = None
     policy_id: str = "root-puct-search"
     cpuct: float = 1.25
     opponent_action_planner: OpponentActionPlanner = no_opponent_action_planner
@@ -479,6 +476,10 @@ class RootPUCTSearchPolicy:
     # Its counters are cumulative across decisions; ``select_action_with_context``
     # records only the local delta in RootPUCTSearchTiming.
     neural_timing_snapshot: NeuralTimingSnapshot | None = None
+    # Optional exact batch evaluator for the mandatory independent root sweep.
+    # Keep this new field last so existing positional construction keeps its
+    # historical argument layout. Adaptive PUCT revisits remain scalar.
+    value_batch_fn: ObservationValueBatchFunction | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
