@@ -1,4 +1,5 @@
 import random
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -779,6 +780,15 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["root_policy_setup_count"], 1)
         self.assertEqual(timing["direct_prefix_construction_count"], 0)
         self.assertEqual(timing["scenario_dispatch_orchestration_count"], 1)
+        self.assertEqual(timing["puct_search_result_residual_count"], 1)
+        self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertGreaterEqual(timing["puct_search_unrecorded_call_seconds"], 0.0)
+        self.assertAlmostEqual(
+            timing["raw_residual_seconds"],
+            timing["puct_search_result_residual_seconds"]
+            + timing["puct_search_unrecorded_call_seconds"]
+            + timing["raw_outer_policy_residual_seconds"],
+        )
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertAlmostEqual(timing["observation_encoding_seconds"], 0.01)
         self.assertEqual(timing["observation_encoding_count"], 1)
@@ -3814,8 +3824,115 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["root_policy_setup_count"], 1)
         self.assertEqual(timing["direct_prefix_construction_count"], 0)
         self.assertEqual(timing["scenario_dispatch_orchestration_count"], 2)
+        self.assertEqual(timing["puct_search_result_residual_count"], 1)
+        self.assertEqual(timing["puct_search_call_count"], 2)
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertGreater(timing["total_seconds"], 0.0)
+
+    def test_root_puct_fallback_attributes_rejected_only_calls_as_unrecorded(self) -> None:
+        class DelayedCloseEnv(ImmediateOutcomeEnv):
+            def close(self) -> None:
+                super().close()
+                time.sleep(0.02)
+
+        branch_envs: list[DelayedCloseEnv] = []
+
+        def branch_env_factory() -> DelayedCloseEnv:
+            env = DelayedCloseEnv(label="branch")
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            allow_fallback=True,
+            cpuct=0.0,
+            root_visit_budget=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        with patch(
+            "pokezero.search_policy.puct_branch_search",
+            side_effect=ValueError(
+                "p2: action_index 0 is not legal for the current request (request_kind=move)."
+            ),
+        ):
+            decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertEqual(len(branch_envs), 1)
+        self.assertTrue(branch_envs[0].closed)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["puct_search_result_residual_count"], 0)
+        self.assertEqual(timing["puct_search_result_residual_seconds"], 0.0)
+        self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertGreater(timing["puct_search_unrecorded_call_seconds"], 0.0)
+        self.assertGreaterEqual(timing["total_seconds"], 0.01)
+        self.assertEqual(decision.metadata["root_puct_elapsed_seconds"], timing["total_seconds"])
+        self.assertAlmostEqual(
+            timing["raw_residual_seconds"],
+            timing["puct_search_result_residual_seconds"]
+            + timing["puct_search_unrecorded_call_seconds"]
+            + timing["raw_outer_policy_residual_seconds"],
+        )
+
+    def test_root_puct_timing_includes_branch_environment_cleanup(self) -> None:
+        class DelayedCloseEnv(ImmediateOutcomeEnv):
+            def close(self) -> None:
+                super().close()
+                time.sleep(0.02)
+
+        branch_envs: list[DelayedCloseEnv] = []
+
+        def branch_env_factory() -> DelayedCloseEnv:
+            env = DelayedCloseEnv(label="branch")
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(len(branch_envs), 1)
+        self.assertTrue(branch_envs[0].closed)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertGreaterEqual(
+            timing["total_seconds"] - decision.metadata["root_puct_elapsed_seconds"],
+            0.01,
+        )
 
     def test_root_puct_policy_falls_back_when_all_hidden_opponent_scenarios_are_replay_rejected(self) -> None:
         def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:

@@ -153,8 +153,15 @@ classifying it.
    materializations. It measured 15.61s mean / 17.99s p95 per decision, so it
    is a crash-free contract gate rather than a throughput conclusion. The
    companion one-game W1 diagnostic saw two force-switch fallbacks in 36
-   decisions; the bounded ten-game mechanics probe is the required coverage,
+   decisions; the bounded W5 telemetry probe is the required coverage,
    fallback-rate, and residual-timing read before Tier 2 is declared validated.
+   **Residual attribution (2026-07-18):** the first bounded read measured
+   120/120 direct materializations and zero prefix replays, but left 9.66s
+   (71%) of a 13.60s mean decision wall time in the raw residual.
+   The next image partitions that residual into recorded branch-search
+   internals, call time absent from recorded branch results, and outer policy
+   orchestration. Optimize only the largest measured partition; do not infer a
+   Tier 2 target from the blended residual.
    A one-round-trip retained-snapshot branch candidate is merged behind the
    belief-sampled bridge-handle guard; direct materialization remains the
    correct path but is no longer the primary throughput lever.
