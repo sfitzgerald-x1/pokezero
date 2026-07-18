@@ -321,9 +321,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             original_request_event = source._bridge_request_event
 
             def reject_live_snapshot(payload: Mapping[str, Any], event_type: str) -> Mapping[str, Any]:
-                self.assertNotEqual(
+                self.assertNotIn(
                     payload.get("type"),
-                    "snapshot",
+                    {"snapshot", "snapshot_search"},
                     "public materialization must not serialize the live battle",
                 )
                 return original_request_event(payload, event_type)
