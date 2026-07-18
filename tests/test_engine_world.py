@@ -610,5 +610,39 @@ class DittoTransformLiveTests(unittest.TestCase):
             env.close()
 
 
+class ShedinjaAndRechargeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+        self.dex.species["shedinja"] = SpeciesInfo(
+            id="shedinja", name="Shedinja", types=("bug", "ghost"),
+            base_stats={"hp": 1, "atk": 90, "def": 45, "spa": 30, "spd": 30, "spe": 40},
+            weight_kg=1.2,
+        )
+
+    def test_shedinja_maxhp_is_pinned_to_one(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"] = [
+            {"species": "Shedinja", "condition": "1/1", "active": True},
+        ]
+        override = BattleStartOverride(player_teams={
+            "p1": _override().player_teams["p1"],
+            "p2": pack_team(_team(
+                FixturePokemon(species="Shedinja", moves=("shadowball",), level=100,
+                               ability="Wonder Guard", item="Lum Berry",
+                               evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")}),
+            )),
+        })
+        world = battle_spec_from_payload(payload, override, dex=self.dex)
+        shedinja = world.spec.side_two.pokemon[0]
+        self.assertEqual((shedinja.hp, shedinja.maxhp), (1, 1))
+
+    def test_recharging_slot_gets_mustrecharge_volatile(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex), _override(), dex=self.dex, recharging_slots=("p2",)
+        )
+        self.assertIn("mustrecharge", world.spec.side_two.volatile_statuses)
+        self.assertNotIn("mustrecharge", world.spec.side_one.volatile_statuses)
+
+
 if __name__ == "__main__":
     unittest.main()

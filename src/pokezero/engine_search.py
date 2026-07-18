@@ -37,6 +37,7 @@ from .determinization import (
     _gen3_randbat_belief_start_override_result,
     _move_from_public_event_line,
 )
+from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
@@ -149,6 +150,7 @@ class EngineMctsPolicy:
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
         blocked_slots, encored_moves = self._public_effect_signals(context)
+        recharging_slots = self._recharging_slots(context)
 
         worlds: list[tuple[EngineWorld, Any]] = []
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
@@ -176,6 +178,7 @@ class EngineMctsPolicy:
                     approximate_substitute_health=self._config.approximate_substitute_health,
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
+                    recharging_slots=recharging_slots,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
@@ -226,6 +229,46 @@ class EngineMctsPolicy:
         )
 
 
+
+    # Gen 3 pool's only recharge move; the recharge turn itself is public.
+    _RECHARGE_MOVES = frozenset({"hyperbeam"})
+
+    def _recharging_slots(self, context: PolicyContext) -> tuple[str, ...]:
+        """Slots publicly forced to recharge THIS turn (Hyper Beam landed last round).
+
+        Turn-exact signal: the round-indexed public action record (not the
+        rolling event window) must show the opponent's action in the
+        immediately-preceding round was a recharge move, and the rolling
+        window must not carry a miss marker for it (a missed Hyper Beam does
+        not recharge in gen3). If the record is unavailable the signal stays
+        off — fail-open to the pre-fix behavior rather than inventing a lock.
+        """
+
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        trajectory = getattr(context, "trajectory", None)
+        round_index = getattr(context, "decision_round_index", None)
+        if trajectory is None or not isinstance(round_index, int):
+            return ()
+        rounds = public_action_rounds_from_trajectory_metadata(trajectory)
+        previous = rounds.get(round_index - 1)
+        if previous is None:
+            return ()
+        action = previous.actions.get(opponent_slot)
+        if action is None or action.kind != "move":
+            return ()
+        if normalize_id(str(action.move_id or "")) not in self._RECHARGE_MOVES:
+            return ()
+        metadata = context.observation.metadata
+        events = metadata.get("recent_public_events") if isinstance(metadata, Mapping) else None
+        if isinstance(events, Sequence):
+            lines = [str(line) for line in events]
+            for index, line in enumerate(lines):
+                parts = line.split("|")
+                if len(parts) >= 4 and parts[1] == "move" and normalize_id(parts[3]) in self._RECHARGE_MOVES:
+                    if any(rest.startswith(f"|-miss|{parts[2]}") for rest in lines[index + 1 : index + 3]):
+                        return ()
+        return (opponent_slot,)
+
     def _public_effect_signals(
         self, context: PolicyContext
     ) -> tuple[dict[str, str], dict[str, str]]:
@@ -249,7 +292,15 @@ class EngineMctsPolicy:
         opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
         active_species: str | None = None
         for mon in opponents or ():
-            if not isinstance(mon, Mapping) or not mon.get("active"):
+            if not isinstance(mon, Mapping):
+                continue
+            if mon.get("item_mutated"):
+                # Trick/Knock Off mutated the held item: the sampled set's item
+                # no longer matches the current holder (rule-outs stay frozen
+                # to the ORIGINAL assignment upstream). Rare in gen3 randbats
+                # (2 Trick sets) — fail closed over constructing wrong items.
+                blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
+            if not mon.get("active"):
                 continue
             active_species = str(mon.get("species") or "") or None
             if mon.get("transformed"):

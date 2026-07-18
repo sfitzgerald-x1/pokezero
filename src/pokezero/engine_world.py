@@ -247,6 +247,7 @@ def battle_spec_from_payload(
     approximate_substitute_health: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
+    recharging_slots: Sequence[str] = (),
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -315,6 +316,7 @@ def battle_spec_from_payload(
             force_switch=is_self_slot and self_force_switch,
             wish_set_turn=_wish_set_turn(payload, slot),
             encored_move=(encored_moves or {}).get(slot),
+            must_recharge=slot in (recharging_slots or ()),
         )
         party_species[slot] = species_order
 
@@ -350,6 +352,7 @@ def world_battle_spec(
     approximate_substitute_health: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
+    recharging_slots: Sequence[str] = (),
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -370,6 +373,7 @@ def world_battle_spec(
         approximate_substitute_health=approximate_substitute_health,
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
+        recharging_slots=recharging_slots,
     )
 
 
@@ -446,6 +450,7 @@ def _build_side_spec(
     force_switch: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
+    must_recharge: bool = False,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -493,6 +498,12 @@ def _build_side_spec(
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
     if "encore" in volatiles:
         supported = supported | {"encore"}
+    if must_recharge:
+        # Publicly-forced recharge turn (Hyper Beam landed last round): the
+        # engine's MUSTRECHARGE volatile restricts the side to "No Move" —
+        # without it, searched worlds hand the recharging mon a free action.
+        volatiles = volatiles + ["mustrecharge"]
+        supported = supported | {"mustrecharge"}
     unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
@@ -671,7 +682,12 @@ def _build_pokemon_spec(
 
     evs = mon.evs or {}
     ivs = mon.ivs or {}
-    maxhp = gen3_hp_stat(int(info.base_stats.get("hp", 0)), int(ivs.get("hp", _MAX_IV)), int(evs.get("hp", 0)), mon.level)
+    base_hp = int(info.base_stats.get("hp", 0))
+    # Shedinja: the generator (and gen3_damage.randbats_spread_details) pin
+    # max HP to 1 when base HP is 1; the raw formula would give ~164 and a
+    # "1/1" public condition would then fraction-scale into an unkillable
+    # Shedinja in searched worlds (audit finding, 2026-07-18).
+    maxhp = 1 if base_hp == 1 else gen3_hp_stat(base_hp, int(ivs.get("hp", _MAX_IV)), int(evs.get("hp", 0)), mon.level)
     stats = {
         stat: gen3_stat(
             int(info.base_stats.get(stat, 0)),
