@@ -57,6 +57,7 @@ class SpeciesInfo:
     name: str
     types: tuple[str, ...]
     base_stats: Mapping[str, int]
+    weight_kg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -180,7 +181,8 @@ for (const id of Object.keys(Pokedex)) {
     id,
     name: species.name,
     types: species.types || [],
-    baseStats: species.baseStats || {}
+    baseStats: species.baseStats || {},
+    weightkg: species.weightkg || 0
   };
 }
 for (const type of gen3.types.all()) {
@@ -414,6 +416,7 @@ def _species_info_from_payload(species_id: str, payload: Mapping[str, Any]) -> S
             for stat, value in _mapping(base_stats if base_stats is not None else {}).items()
             if isinstance(value, int)
         },
+        weight_kg=float(payload.get("weightkg") or 0.0),
     )
 
 
