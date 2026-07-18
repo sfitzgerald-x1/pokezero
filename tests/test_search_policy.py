@@ -702,6 +702,14 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             "observation_encoding_count": 0,
             "neural_forward_seconds": 0.0,
             "neural_forward_count": 0,
+            "action_prior_neural_forward_seconds": 0.0,
+            "action_prior_neural_forward_count": 0,
+            "opponent_action_prior_neural_forward_seconds": 0.0,
+            "opponent_action_prior_neural_forward_count": 0,
+            "policy_neural_forward_seconds": 0.0,
+            "policy_neural_forward_count": 0,
+            "value_neural_forward_seconds": 0.0,
+            "value_neural_forward_count": 0,
         }
 
         def branch_env_factory() -> ImmediateOutcomeEnv:
@@ -715,6 +723,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             neural_timing["observation_encoding_count"] += 1
             neural_timing["neural_forward_seconds"] += 0.02
             neural_timing["neural_forward_count"] += 1
+            neural_timing["action_prior_neural_forward_seconds"] += 0.02
+            neural_timing["action_prior_neural_forward_count"] += 1
             return (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         policy = RootPUCTSearchPolicy(
@@ -759,6 +769,11 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["observation_encoding_count"], 1)
         self.assertAlmostEqual(timing["neural_forward_seconds"], 0.02)
         self.assertEqual(timing["neural_forward_count"], 1)
+        self.assertAlmostEqual(timing["action_prior_neural_forward_seconds"], 0.02)
+        self.assertEqual(timing["action_prior_neural_forward_count"], 1)
+        self.assertEqual(timing["opponent_action_prior_neural_forward_count"], 0)
+        self.assertEqual(timing["policy_neural_forward_count"], 0)
+        self.assertEqual(timing["value_neural_forward_count"], 0)
         self.assertEqual(timing["value_evaluation_count"], 0)
         self.assertEqual(timing["rollout_tail_count"], 0)
         self.assertEqual(timing["policy_value_evaluation_count"], 1)

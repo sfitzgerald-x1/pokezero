@@ -129,6 +129,14 @@ class RootPUCTSearchTiming:
     observation_encoding_count: int = 0
     neural_forward_seconds: float = 0.0
     neural_forward_count: int = 0
+    action_prior_neural_forward_seconds: float = 0.0
+    action_prior_neural_forward_count: int = 0
+    opponent_action_prior_neural_forward_seconds: float = 0.0
+    opponent_action_prior_neural_forward_count: int = 0
+    policy_neural_forward_seconds: float = 0.0
+    policy_neural_forward_count: int = 0
+    value_neural_forward_seconds: float = 0.0
+    value_neural_forward_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
     rollout_tail_seconds: float = 0.0
@@ -219,6 +227,14 @@ class RootPUCTSearchTiming:
         observation_encoding_count: int,
         neural_forward_seconds: float,
         neural_forward_count: int,
+        action_prior_neural_forward_seconds: float = 0.0,
+        action_prior_neural_forward_count: int = 0,
+        opponent_action_prior_neural_forward_seconds: float = 0.0,
+        opponent_action_prior_neural_forward_count: int = 0,
+        policy_neural_forward_seconds: float = 0.0,
+        policy_neural_forward_count: int = 0,
+        value_neural_forward_seconds: float = 0.0,
+        value_neural_forward_count: int = 0,
     ) -> "RootPUCTSearchTiming":
         """Attach non-additive transformer sub-timings to this decision."""
 
@@ -232,6 +248,32 @@ class RootPUCTSearchTiming:
             ),
             neural_forward_seconds=self.neural_forward_seconds + neural_forward_seconds,
             neural_forward_count=self.neural_forward_count + neural_forward_count,
+            action_prior_neural_forward_seconds=(
+                self.action_prior_neural_forward_seconds + action_prior_neural_forward_seconds
+            ),
+            action_prior_neural_forward_count=(
+                self.action_prior_neural_forward_count + action_prior_neural_forward_count
+            ),
+            opponent_action_prior_neural_forward_seconds=(
+                self.opponent_action_prior_neural_forward_seconds
+                + opponent_action_prior_neural_forward_seconds
+            ),
+            opponent_action_prior_neural_forward_count=(
+                self.opponent_action_prior_neural_forward_count
+                + opponent_action_prior_neural_forward_count
+            ),
+            policy_neural_forward_seconds=(
+                self.policy_neural_forward_seconds + policy_neural_forward_seconds
+            ),
+            policy_neural_forward_count=(
+                self.policy_neural_forward_count + policy_neural_forward_count
+            ),
+            value_neural_forward_seconds=(
+                self.value_neural_forward_seconds + value_neural_forward_seconds
+            ),
+            value_neural_forward_count=(
+                self.value_neural_forward_count + value_neural_forward_count
+            ),
         )
 
     def with_bridge_subtiming(
@@ -304,6 +346,30 @@ class RootPUCTSearchTiming:
             ),
             neural_forward_seconds=sum(timing.neural_forward_seconds for timing in timings),
             neural_forward_count=sum(timing.neural_forward_count for timing in timings),
+            action_prior_neural_forward_seconds=sum(
+                timing.action_prior_neural_forward_seconds for timing in timings
+            ),
+            action_prior_neural_forward_count=sum(
+                timing.action_prior_neural_forward_count for timing in timings
+            ),
+            opponent_action_prior_neural_forward_seconds=sum(
+                timing.opponent_action_prior_neural_forward_seconds for timing in timings
+            ),
+            opponent_action_prior_neural_forward_count=sum(
+                timing.opponent_action_prior_neural_forward_count for timing in timings
+            ),
+            policy_neural_forward_seconds=sum(
+                timing.policy_neural_forward_seconds for timing in timings
+            ),
+            policy_neural_forward_count=sum(
+                timing.policy_neural_forward_count for timing in timings
+            ),
+            value_neural_forward_seconds=sum(
+                timing.value_neural_forward_seconds for timing in timings
+            ),
+            value_neural_forward_count=sum(
+                timing.value_neural_forward_count for timing in timings
+            ),
             value_evaluation_seconds=sum(timing.value_evaluation_seconds for timing in timings),
             value_evaluation_count=sum(timing.value_evaluation_count for timing in timings),
             rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
@@ -337,6 +403,18 @@ class RootPUCTSearchTiming:
             "observation_encoding_count": self.observation_encoding_count,
             "neural_forward_seconds": self.neural_forward_seconds,
             "neural_forward_count": self.neural_forward_count,
+            "action_prior_neural_forward_seconds": self.action_prior_neural_forward_seconds,
+            "action_prior_neural_forward_count": self.action_prior_neural_forward_count,
+            "opponent_action_prior_neural_forward_seconds": (
+                self.opponent_action_prior_neural_forward_seconds
+            ),
+            "opponent_action_prior_neural_forward_count": (
+                self.opponent_action_prior_neural_forward_count
+            ),
+            "policy_neural_forward_seconds": self.policy_neural_forward_seconds,
+            "policy_neural_forward_count": self.policy_neural_forward_count,
+            "value_neural_forward_seconds": self.value_neural_forward_seconds,
+            "value_neural_forward_count": self.value_neural_forward_count,
             "value_evaluation_seconds": self.value_evaluation_seconds,
             "value_evaluation_count": self.value_evaluation_count,
             "policy_value_evaluation_seconds": self.policy_value_evaluation_seconds,

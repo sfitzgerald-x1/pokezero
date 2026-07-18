@@ -141,6 +141,31 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         vocab_patch.start()
         self.addCleanup(vocab_patch.stop)
 
+    def test_transformer_inference_timing_splits_forward_roles(self) -> None:
+        timing = TransformerInferenceTimingAccumulator()
+        timing.add_neural_forward(0.10, role="action_prior")
+        timing.add_neural_forward(0.20, role="opponent_action_prior")
+        timing.add_neural_forward(0.30, role="policy")
+        timing.add_neural_forward(0.40, role="value")
+
+        snapshot = timing.snapshot()
+
+        self.assertEqual(snapshot.neural_forward_count, 4)
+        self.assertAlmostEqual(snapshot.neural_forward_seconds, 1.0)
+        self.assertEqual(snapshot.action_prior_neural_forward_count, 1)
+        self.assertEqual(snapshot.opponent_action_prior_neural_forward_count, 1)
+        self.assertEqual(snapshot.policy_neural_forward_count, 1)
+        self.assertEqual(snapshot.value_neural_forward_count, 1)
+        self.assertAlmostEqual(
+            snapshot.neural_forward_seconds,
+            snapshot.action_prior_neural_forward_seconds
+            + snapshot.opponent_action_prior_neural_forward_seconds
+            + snapshot.policy_neural_forward_seconds
+            + snapshot.value_neural_forward_seconds,
+        )
+        with self.assertRaisesRegex(ValueError, "unknown transformer inference timing role"):
+            timing.add_neural_forward(0.01, role="unknown")
+
     def test_transformer_policy_config_defaults_match_replay_observation_shape(self) -> None:
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
 
@@ -823,6 +848,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         snapshot = timing.snapshot()
         self.assertEqual(snapshot.observation_encoding_count, 3)
         self.assertEqual(snapshot.neural_forward_count, 3)
+        self.assertEqual(snapshot.action_prior_neural_forward_count, 1)
+        self.assertEqual(snapshot.opponent_action_prior_neural_forward_count, 1)
+        self.assertEqual(snapshot.value_neural_forward_count, 1)
+        self.assertEqual(snapshot.policy_neural_forward_count, 0)
         self.assertGreater(snapshot.observation_encoding_seconds, 0.0)
         self.assertGreater(snapshot.neural_forward_seconds, 0.0)
 
@@ -873,6 +902,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         snapshot = timing.snapshot()
         self.assertEqual(snapshot.observation_encoding_count, 1)
         self.assertEqual(snapshot.neural_forward_count, 1)
+        self.assertEqual(snapshot.policy_neural_forward_count, 1)
+        self.assertEqual(snapshot.value_neural_forward_count, 0)
         self.assertGreater(snapshot.observation_encoding_seconds, 0.0)
         self.assertGreater(snapshot.neural_forward_seconds, 0.0)
 

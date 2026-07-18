@@ -74,6 +74,12 @@ DEFAULT_CATEGORY_OOV_BUCKETS = 16
 TORCH_NUM_THREADS_ENV = "POKEZERO_TORCH_NUM_THREADS"
 TORCH_NUM_INTEROP_THREADS_ENV = "POKEZERO_TORCH_NUM_INTEROP_THREADS"
 _TORCH_THREAD_ENV_APPLIED = False
+_INFERENCE_FORWARD_ROLES = (
+    "action_prior",
+    "opponent_action_prior",
+    "policy",
+    "value",
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +95,14 @@ class TransformerInferenceTiming:
     observation_encoding_count: int = 0
     neural_forward_seconds: float = 0.0
     neural_forward_count: int = 0
+    action_prior_neural_forward_seconds: float = 0.0
+    action_prior_neural_forward_count: int = 0
+    opponent_action_prior_neural_forward_seconds: float = 0.0
+    opponent_action_prior_neural_forward_count: int = 0
+    policy_neural_forward_seconds: float = 0.0
+    policy_neural_forward_count: int = 0
+    value_neural_forward_seconds: float = 0.0
+    value_neural_forward_count: int = 0
 
     def to_dict(self) -> dict[str, float | int]:
         return {
@@ -96,6 +110,14 @@ class TransformerInferenceTiming:
             "observation_encoding_count": self.observation_encoding_count,
             "neural_forward_seconds": self.neural_forward_seconds,
             "neural_forward_count": self.neural_forward_count,
+            "action_prior_neural_forward_seconds": self.action_prior_neural_forward_seconds,
+            "action_prior_neural_forward_count": self.action_prior_neural_forward_count,
+            "opponent_action_prior_neural_forward_seconds": self.opponent_action_prior_neural_forward_seconds,
+            "opponent_action_prior_neural_forward_count": self.opponent_action_prior_neural_forward_count,
+            "policy_neural_forward_seconds": self.policy_neural_forward_seconds,
+            "policy_neural_forward_count": self.policy_neural_forward_count,
+            "value_neural_forward_seconds": self.value_neural_forward_seconds,
+            "value_neural_forward_count": self.value_neural_forward_count,
         }
 
 
@@ -107,14 +129,34 @@ class TransformerInferenceTimingAccumulator:
     observation_encoding_count: int = 0
     neural_forward_seconds: float = 0.0
     neural_forward_count: int = 0
+    action_prior_neural_forward_seconds: float = 0.0
+    action_prior_neural_forward_count: int = 0
+    opponent_action_prior_neural_forward_seconds: float = 0.0
+    opponent_action_prior_neural_forward_count: int = 0
+    policy_neural_forward_seconds: float = 0.0
+    policy_neural_forward_count: int = 0
+    value_neural_forward_seconds: float = 0.0
+    value_neural_forward_count: int = 0
 
     def add_observation_encoding(self, elapsed_seconds: float) -> None:
         self.observation_encoding_seconds += elapsed_seconds
         self.observation_encoding_count += 1
 
-    def add_neural_forward(self, elapsed_seconds: float) -> None:
+    def add_neural_forward(self, elapsed_seconds: float, *, role: str = "policy") -> None:
+        if role not in _INFERENCE_FORWARD_ROLES:
+            raise ValueError(f"unknown transformer inference timing role: {role!r}")
         self.neural_forward_seconds += elapsed_seconds
         self.neural_forward_count += 1
+        setattr(
+            self,
+            f"{role}_neural_forward_seconds",
+            float(getattr(self, f"{role}_neural_forward_seconds")) + elapsed_seconds,
+        )
+        setattr(
+            self,
+            f"{role}_neural_forward_count",
+            int(getattr(self, f"{role}_neural_forward_count")) + 1,
+        )
 
     def snapshot(self) -> TransformerInferenceTiming:
         return TransformerInferenceTiming(
@@ -122,6 +164,18 @@ class TransformerInferenceTimingAccumulator:
             observation_encoding_count=self.observation_encoding_count,
             neural_forward_seconds=self.neural_forward_seconds,
             neural_forward_count=self.neural_forward_count,
+            action_prior_neural_forward_seconds=self.action_prior_neural_forward_seconds,
+            action_prior_neural_forward_count=self.action_prior_neural_forward_count,
+            opponent_action_prior_neural_forward_seconds=(
+                self.opponent_action_prior_neural_forward_seconds
+            ),
+            opponent_action_prior_neural_forward_count=(
+                self.opponent_action_prior_neural_forward_count
+            ),
+            policy_neural_forward_seconds=self.policy_neural_forward_seconds,
+            policy_neural_forward_count=self.policy_neural_forward_count,
+            value_neural_forward_seconds=self.value_neural_forward_seconds,
+            value_neural_forward_count=self.value_neural_forward_count,
         )
 
 
@@ -1213,7 +1267,7 @@ def evaluate_transformer_observation_value(
     if timing is not None:
         # Reading the scalar synchronizes asynchronous accelerators, so this
         # interval is the wall-clock inference cost rather than kernel enqueue time.
-        timing.add_neural_forward(perf_counter() - forward_started_at)
+        timing.add_neural_forward(perf_counter() - forward_started_at, role="value")
     transform = getattr(result, "value_calibration_transform", None)
     if isinstance(transform, ValueCalibrationTransform):
         return transform.apply(value)
@@ -1264,7 +1318,7 @@ def evaluate_transformer_action_priors(
         )
         values = tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
     if timing is not None:
-        timing.add_neural_forward(perf_counter() - forward_started_at)
+        timing.add_neural_forward(perf_counter() - forward_started_at, role="action_prior")
     return values
 
 
@@ -1311,7 +1365,10 @@ def evaluate_transformer_opponent_action_priors(
         )
         values = tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
     if timing is not None:
-        timing.add_neural_forward(perf_counter() - forward_started_at)
+        timing.add_neural_forward(
+            perf_counter() - forward_started_at,
+            role="opponent_action_prior",
+        )
     return values
 
 
@@ -1405,7 +1462,10 @@ class TransformerSoftmaxPolicy:
             )
             raw_value_estimate = float(output.value[0].detach().cpu().item())
         if self.inference_timing is not None:
-            self.inference_timing.add_neural_forward(perf_counter() - forward_started_at)
+            self.inference_timing.add_neural_forward(
+                perf_counter() - forward_started_at,
+                role="policy",
+            )
         legal = legal_action_indices(observation.legal_action_mask)
         greedy_action = _greedy_action_index(
             probabilities=probability_values,
