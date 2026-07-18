@@ -575,6 +575,10 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertIsNotNone(prepared)
         assert prepared is not None
         self.assertEqual(prepared.materialization_mode, "direct")
+        self.assertEqual(
+            prepared.world_legal_action_masks,
+            {"p1": _observation(0).legal_action_mask, "p2": _observation(0).legal_action_mask},
+        )
         self.assertEqual(env.materialize_calls, [(public_state, _start_override(), 77)])
         self.assertEqual(env.reset_calls, [])
         self.assertEqual(env.snapshot_calls, 1)

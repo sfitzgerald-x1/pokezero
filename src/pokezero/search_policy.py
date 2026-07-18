@@ -221,6 +221,11 @@ class OpponentActionScenario:
     actions: Mapping[PlayerId, int]
     weight: float = 1.0
     label: str = "single"
+    # Hidden-mode requested actions begin as public-prior hypotheses. If a
+    # hypothesis is unavailable in a determinized world, search conditions the
+    # same priors on that sampled world's legal mask instead of consulting a
+    # live opponent request.
+    sampled_action_priors: Mapping[PlayerId, tuple[float, ...]] = field(default_factory=dict)
     # An opponent action that was committed before a player-only forced-switch request. It is
     # reconstructed into the direct world's queue, not submitted alongside the root action.
     deferred_actions: Mapping[PlayerId, int] = field(default_factory=dict)
@@ -231,6 +236,7 @@ class OpponentActionScenario:
     def normalized(self, *, total_weight: float) -> "OpponentActionScenario":
         return OpponentActionScenario(
             actions=dict(self.actions),
+            sampled_action_priors=dict(self.sampled_action_priors),
             deferred_actions=dict(self.deferred_actions),
             deferred_action_priors=dict(self.deferred_action_priors),
             weight=self.weight / total_weight,
@@ -344,6 +350,11 @@ def prior_top_k_opponent_action_scenario_planner(
             )
             for player in requested_opponents
         )
+        sampled_action_priors = {
+            player: priors
+            for player in requested_opponents
+            if not _requested_legal_action_indices_for_player(context, player)
+        }
         scenarios: list[OpponentActionScenario] = []
         combinations = product(*(choices for _player, choices in choices_by_player))
         deferred_action_priors = {
@@ -365,6 +376,7 @@ def prior_top_k_opponent_action_scenario_planner(
             scenarios.append(
                 OpponentActionScenario(
                     actions=actions,
+                    sampled_action_priors=dict(sampled_action_priors),
                     deferred_action_priors=dict(deferred_action_priors),
                     weight=weight,
                     label=",".join(label_parts),
@@ -658,6 +670,20 @@ class RootPUCTSearchPolicy:
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
                     root_policy_setup_seconds=current_root_policy_setup_seconds(),
                 )
+            sampled_world_error = _sampled_world_opponent_action_planner_error(
+                context=context,
+                sampled_action_priors=scenario.sampled_action_priors,
+            )
+            if sampled_world_error is not None:
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=sampled_world_error,
+                    timing_started_at=timing_started_at,
+                    neural_timing_before=neural_timing_before,
+                    opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    root_policy_setup_seconds=current_root_policy_setup_seconds(),
+                )
             legality_report = _opponent_action_legality_report(context, scenario.actions)
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
@@ -866,6 +892,13 @@ class RootPUCTSearchPolicy:
                             ) -> int | None:
                                 return self.root_visit_budget_selector(context, budget_context)
 
+                        resolved_samples = tuple(
+                            _scenario_with_sampled_world_legality(
+                                scenario,
+                                shared_start_override_samples.prepared_prefixes[sample_index],
+                            )
+                            for sample_index, scenario in enumerate(scenario_group.samples)
+                        )
                         batch_requests = tuple(
                             PUCTBranchSearchRequest(
                                 opponent_actions=scenario.actions,
@@ -873,7 +906,7 @@ class RootPUCTSearchPolicy:
                                 prepared_prefix=shared_start_override_samples.prepared_prefixes[sample_index],
                                 root_visit_budget_resolver=visit_budget_resolver,
                             )
-                            for sample_index, scenario in enumerate(scenario_group.samples)
+                            for sample_index, scenario in enumerate(resolved_samples)
                         )
                         flat_scenario_index += len(batch_requests)
                         puct_search_started_at = _timing_perf_counter()
@@ -917,7 +950,7 @@ class RootPUCTSearchPolicy:
                             cross_world_initial_value_batch_count += 1
                             cross_world_initial_value_batch_world_count += len(batch_searches)
                             for sample_index, (scenario, scenario_search) in enumerate(
-                                zip(scenario_group.samples, batch_searches, strict=True)
+                                zip(resolved_samples, batch_searches, strict=True)
                             ):
                                 completed_search_call_seconds_by_id[id(scenario_search)] = (
                                     puct_search_elapsed_seconds if sample_index == 0 else 0.0
@@ -1029,6 +1062,32 @@ class RootPUCTSearchPolicy:
                                         direct_prefix_construction_count += 1
                                     if prepared_prefix is not None:
                                         prepared_prefixes_to_release.append(prepared_prefix)
+                                # Direct materialization can fail closed to the replay path. When
+                                # hidden priors need sampled-world legality, prepare that replay
+                                # world once here so the repair still never consults a live request.
+                                if (
+                                    prepared_prefix is None
+                                    and start_override is not None
+                                    and scenario.sampled_action_priors
+                                    and not callable(start_override)
+                                ):
+                                    prepared_prefix = prepare_replay_prefix(
+                                        env=env,
+                                        trajectory=search_trajectory,
+                                        player_id=context.player_id,
+                                        prefix_decision_round_count=context.decision_round_index,
+                                        start_override=start_override,
+                                        expected_current_observation=context.observation,
+                                        replay_hp_fraction_tolerance=(
+                                            self.start_override_hp_fraction_tolerance
+                                        ),
+                                    )
+                                    if prepared_prefix is not None:
+                                        prepared_prefixes_to_release.append(prepared_prefix)
+                                resolved_scenario = _scenario_with_sampled_world_legality(
+                                    scenario,
+                                    prepared_prefix,
+                                )
                                 puct_search_call_count += 1
                                 puct_search_started_at = _timing_perf_counter()
                                 try:
@@ -1038,7 +1097,7 @@ class RootPUCTSearchPolicy:
                                         player_id=context.player_id,
                                         prefix_decision_round_count=context.decision_round_index,
                                         legal_action_mask=context.observation.legal_action_mask,
-                                        opponent_actions=scenario.actions,
+                                        opponent_actions=resolved_scenario.actions,
                                         value_fn=self.value_fn,
                                         value_batch_fn=self.value_batch_fn,
                                         action_priors=priors,
@@ -1096,6 +1155,7 @@ class RootPUCTSearchPolicy:
                                     ),
                                 )
                                 scenario_search = search
+                                scenario = resolved_scenario
                                 scenario_start_override = start_override
                                 completed_search_timings.append(search.timing)
                                 break
@@ -1843,6 +1903,73 @@ def _deferred_opponent_action_planner_error(
     return None
 
 
+def _scenario_with_sampled_world_legality(
+    scenario: OpponentActionScenario,
+    prepared_prefix: PreparedReplayPrefix | None,
+) -> OpponentActionScenario:
+    """Repair hidden hypotheses only from the already sampled world's masks.
+
+    The normal hidden planner deliberately cannot inspect an opponent request.
+    A prepared prefix, however, belongs to a separate belief-sampled world and
+    contains the request masks that world generated. Retain a valid prior
+    hypothesis; otherwise condition the same prior vector on that world. This
+    is a world-local legality repair, never a read from the live battle.
+    """
+
+    if prepared_prefix is None or not scenario.sampled_action_priors:
+        return scenario
+    actions = dict(scenario.actions)
+    changed = False
+    for player, priors in scenario.sampled_action_priors.items():
+        legal_mask = prepared_prefix.world_legal_action_masks.get(player)
+        if legal_mask is None or len(legal_mask) != ACTION_COUNT:
+            continue
+        planned_action = actions.get(player)
+        if (
+            isinstance(planned_action, int)
+            and not isinstance(planned_action, bool)
+            and 0 <= planned_action < ACTION_COUNT
+            and legal_mask[planned_action]
+        ):
+            continue
+        legal_actions = tuple(index for index, legal in enumerate(legal_mask) if legal)
+        if not legal_actions:
+            continue
+        actions[player] = max(legal_actions, key=lambda index: (priors[index], -index))
+        changed = True
+    if not changed:
+        return scenario
+    return replace(
+        scenario,
+        actions=actions,
+        label=f"{scenario.label}/sampled-world-legal",
+    )
+
+
+def _sampled_world_opponent_action_planner_error(
+    *,
+    context: PolicyContext,
+    sampled_action_priors: Mapping[PlayerId, tuple[float, ...]],
+) -> str | None:
+    """Validate prior vectors that may be conditioned only after world sampling."""
+
+    expected_players = set(context.requested_players) - {context.player_id}
+    if not set(sampled_action_priors) <= expected_players:
+        return "sampled-world opponent action planner returned an unexpected player"
+    for player, priors in sampled_action_priors.items():
+        if len(priors) != ACTION_COUNT:
+            return f"sampled-world opponent action planner returned invalid priors for {player}"
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (float, int))
+            or not math.isfinite(value)
+            or value < 0.0
+            for value in priors
+        ) or sum(priors) <= 0.0:
+            return f"sampled-world opponent action planner returned invalid priors for {player}"
+    return None
+
+
 def _best_prior_candidate(
     candidates: tuple[PUCTBranchSearchCandidate, ...],
 ) -> PUCTBranchSearchCandidate:
@@ -1935,6 +2062,7 @@ def _start_override_sampled_scenario_groups(
             samples.append(
                 OpponentActionScenario(
                     actions=dict(scenario.actions),
+                    sampled_action_priors=dict(scenario.sampled_action_priors),
                     deferred_actions=dict(scenario.deferred_actions),
                     deferred_action_priors=dict(scenario.deferred_action_priors),
                     weight=sample_weight,

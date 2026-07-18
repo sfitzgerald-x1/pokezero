@@ -22,6 +22,7 @@ from pokezero.search_policy import (
     _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
     _root_dirichlet_action_priors,
+    _scenario_with_sampled_world_legality,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
@@ -573,6 +574,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         scenarios = planner(context, random.Random(1))
 
         self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 8}, {"p2": 0}, {"p2": 1}])
+        self.assertEqual(
+            dict(scenarios[0].sampled_action_priors),
+            {"p2": (0.10, 0.05, 0.04, 0.03, 0.07, 0.08, 0.09, 0.10, 0.20)},
+        )
         self.assertAlmostEqual(scenarios[0].weight, 0.54 / 0.69)
         self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.69)
         self.assertAlmostEqual(scenarios[2].weight, 0.05 / 0.69)
@@ -628,6 +633,25 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": MOVE_ACTION_COUNT}])
         self.assertAlmostEqual(scenarios[0].weight, 1.0)
+
+    def test_hidden_scenario_repairs_invalid_action_from_sampled_world_only(self) -> None:
+        scenario = OpponentActionScenario(
+            actions={"p2": 2},
+            sampled_action_priors={"p2": (0.1, 0.8, 0.9) + (0.0,) * (ACTION_COUNT - 3)},
+            label="p2:2",
+        )
+        prepared_prefix = SimpleNamespace(
+            world_legal_action_masks={"p2": _mask(0, 1)},
+        )
+
+        resolved = _scenario_with_sampled_world_legality(scenario, prepared_prefix)
+
+        self.assertEqual(dict(resolved.actions), {"p2": 1})
+        self.assertEqual(resolved.label, "p2:2/sampled-world-legal")
+        self.assertEqual(
+            _scenario_with_sampled_world_legality(scenario, None),
+            scenario,
+        )
 
     def test_prior_top_k_opponent_action_scenario_planner_separates_deferred_action(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(
@@ -2681,6 +2705,84 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 0, "p2": 0},
             {"p1": 1, "p2": 0},
         ])
+
+    def test_root_puct_policy_repairs_hidden_hypothesis_from_sampled_world_mask(self) -> None:
+        branch_envs: list[DirectSnapshotStartOverrideOutcomeEnv] = []
+
+        def branch_env_factory() -> DirectSnapshotStartOverrideOutcomeEnv:
+            env = DirectSnapshotStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(
+                    actions={"p2": 2},
+                    sampled_action_priors={
+                        "p2": (0.2, 0.8, 0.9) + (0.0,) * (ACTION_COUNT - 3),
+                    },
+                    weight=1.0,
+                    label="hidden-move-2",
+                ),
+            )
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ) -> BattleStartOverride:
+            del context, scenario, scenario_index, rng
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": "Xatu||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            # The sampled world provides the opponent mask. The live context does not.
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 0)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_scenarios"],
+            [
+                {
+                    "label": "hidden-move-2/sampled-world-legal",
+                    "weight": 1.0,
+                    "actions": {"p2": 0},
+                }
+            ],
+        )
+        self.assertEqual(
+            branch_envs[0].all_step_calls,
+            [{"p1": 0, "p2": 0}, {"p1": 1, "p2": 0}],
+        )
 
     def test_root_puct_policy_uses_public_force_switch_signal_before_replay(self) -> None:
         branch_envs: list[StrictSwitchOpponentActionEnv] = []

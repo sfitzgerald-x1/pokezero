@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import math
 import re
@@ -1091,6 +1091,10 @@ class PreparedReplayPrefix:
     snapshot: Any
     materialization_mode: str = "replay"
     snapshot_restore_mode: str = "generic"
+    # These masks belong to the already sampled, validated search world. They
+    # let callers repair a hidden opponent hypothesis without reading a live
+    # battle request or replaying the prefix again.
+    world_legal_action_masks: Mapping[PlayerId, tuple[bool, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2265,6 +2269,7 @@ def prepare_replay_prefix(
         prefix=prefix,
         snapshot=snapshotter(),
         snapshot_restore_mode=snapshot_restore_mode,
+        world_legal_action_masks=_world_legal_action_masks(env, prefix.requested_players),
     )
 
 
@@ -2363,7 +2368,23 @@ def prepare_direct_materialization_prefix(
         snapshot=snapshotter(),
         materialization_mode="direct",
         snapshot_restore_mode=snapshot_restore_mode,
+        world_legal_action_masks=_world_legal_action_masks(env, prefix.requested_players),
     )
+
+
+def _world_legal_action_masks(
+    env: PokeZeroEnv,
+    requested_players: Sequence[PlayerId],
+) -> Mapping[PlayerId, tuple[bool, ...]]:
+    """Capture only the sampled world's request legality at its branch point."""
+
+    masks: dict[PlayerId, tuple[bool, ...]] = {}
+    for player in requested_players:
+        mask = tuple(env.legal_actions(player))
+        if len(mask) != ACTION_COUNT:
+            raise ValueError("sampled world returned a malformed legal action mask.")
+        masks[player] = mask
+    return masks
 
 
 def release_prepared_replay_prefix(env: PokeZeroEnv, prepared_prefix: PreparedReplayPrefix) -> bool:
