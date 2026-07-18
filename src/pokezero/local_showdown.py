@@ -838,6 +838,11 @@ class LocalShowdownEnv:
         cache = snapshot.search_choice_cache
         if not cache or any(player not in cache for player in requested):
             return self._choices_for_actions(actions)
+        # Python considers ``1`` and ``1.0`` equal dictionary keys, whereas the
+        # legacy translator rejects a float when it indexes the legal-action
+        # mask. Defer non-integers so cache hits never weaken that validation.
+        if any(not isinstance(actions.get(player), int) for player in requested):
+            return self._choices_for_actions(actions)
         try:
             return {player: cache[player][actions[player]] for player in requested}
         except (KeyError, TypeError):
