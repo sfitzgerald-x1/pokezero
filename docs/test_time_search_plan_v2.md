@@ -128,17 +128,20 @@ classifying it.
    merges through `35395d4`). Independently verified on a local probe at
    extra-120: `prefix_replay_count = 0` (replay-from-root fully gone), world
    materialization down to ~5% of search wall, ~8s per search decision on
-   CPU-only hardware vs the 19.2s GPU-cluster baseline. The dominant
-   remaining cost is untimed per-visit orchestration (`residual_seconds`
-   ~72% of wall — per-visit bridge round-trips and Python loop overhead);
-   that, not materialization, is the next profiling target. **Instrumentation
-   status (2026-07-17):** Root-PUCT now emits nested bridge round-trip,
-   Node-processing, and local bridge/Python-overhead timings without changing
-   additive wall accounting; the next ~10-game telemetry probe selects the
-   largest residual bucket before any further Tier 2 coverage expansion or
-   visit-batching change. A one-round-trip retained-snapshot branch candidate
-   is merged behind the belief-sampled bridge-handle guard; the fresh telemetry
-   probe is its first on-cluster read before it informs any broader evaluation.
+   CPU-only hardware vs the 19.2s GPU-cluster baseline. **Fresh strict
+   mechanics read (2026-07-18):** direct materialization completed with zero
+   prefix replays or fallbacks, but an extra-24 CPU-only probe still took
+   ~37s per searched decision. Transformer forwards consumed ~34s per
+   decision; bridge round trips (~0.1s) and world materialization (~0.4s) are
+   not the limiting cost. The earlier residual interpretation is therefore
+   superseded. **Instrumentation status (2026-07-18):** Root-PUCT now splits
+   forward time into value leaves, root priors, opponent priors, and policy
+   calls while retaining nested bridge timing. The next short probe must use
+   that breakdown to select either batching, served inference, or a CPU
+   threading fix; it must not assume the bridge is dominant. A one-round-trip
+   retained-snapshot branch candidate is merged behind the belief-sampled
+   bridge-handle guard; direct materialization remains the correct path but is
+   no longer the primary throughput lever.
 2. **Tier 2 — direct state construction (implemented; validation in
    progress):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh

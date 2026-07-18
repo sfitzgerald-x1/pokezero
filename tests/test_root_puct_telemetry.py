@@ -24,6 +24,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "root_puct_timing": {
                     "prefix_replay_seconds": 0.10,
                     "prefix_replay_count": 2,
+                    "value_neural_forward_seconds": 0.06,
+                    "value_neural_forward_count": 3,
                     "total_seconds": 0.25,
                     "private_debug_detail": "must not persist",
                 },
@@ -60,6 +62,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "timing": {
                     "prefix_replay_seconds": 0.10,
                     "prefix_replay_count": 2,
+                    "value_neural_forward_seconds": 0.06,
+                    "value_neural_forward_count": 3,
                     "total_seconds": 0.25,
                 },
                 "counters": {

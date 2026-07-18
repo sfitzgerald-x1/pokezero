@@ -57,8 +57,22 @@ LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
 RootVisitBudgetSelector = Callable[[PolicyContext, RootPUCTVisitBudgetContext], int | None]
 NeuralTimingSnapshot = Callable[[], Mapping[str, float | int]]
 
-_NEURAL_TIMING_SECONDS = ("observation_encoding_seconds", "neural_forward_seconds")
-_NEURAL_TIMING_COUNTS = ("observation_encoding_count", "neural_forward_count")
+_NEURAL_TIMING_SECONDS = (
+    "observation_encoding_seconds",
+    "neural_forward_seconds",
+    "action_prior_neural_forward_seconds",
+    "opponent_action_prior_neural_forward_seconds",
+    "policy_neural_forward_seconds",
+    "value_neural_forward_seconds",
+)
+_NEURAL_TIMING_COUNTS = (
+    "observation_encoding_count",
+    "neural_forward_count",
+    "action_prior_neural_forward_count",
+    "opponent_action_prior_neural_forward_count",
+    "policy_neural_forward_count",
+    "value_neural_forward_count",
+)
 
 
 def _neural_timing_snapshot(source: NeuralTimingSnapshot | None) -> dict[str, float | int] | None:
@@ -91,10 +105,8 @@ def _neural_timing_delta(
 
     if before is None or after is None:
         return {
-            "observation_encoding_seconds": 0.0,
-            "observation_encoding_count": 0,
-            "neural_forward_seconds": 0.0,
-            "neural_forward_count": 0,
+            **{field: 0.0 for field in _NEURAL_TIMING_SECONDS},
+            **{field: 0 for field in _NEURAL_TIMING_COUNTS},
         }
     result: dict[str, float | int] = {}
     for field in _NEURAL_TIMING_SECONDS:
@@ -1055,6 +1067,22 @@ class RootPUCTSearchPolicy:
                 observation_encoding_count=int(neural_timing["observation_encoding_count"]),
                 neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
                 neural_forward_count=int(neural_timing["neural_forward_count"]),
+                action_prior_neural_forward_seconds=float(
+                    neural_timing["action_prior_neural_forward_seconds"]
+                ),
+                action_prior_neural_forward_count=int(
+                    neural_timing["action_prior_neural_forward_count"]
+                ),
+                opponent_action_prior_neural_forward_seconds=float(
+                    neural_timing["opponent_action_prior_neural_forward_seconds"]
+                ),
+                opponent_action_prior_neural_forward_count=int(
+                    neural_timing["opponent_action_prior_neural_forward_count"]
+                ),
+                policy_neural_forward_seconds=float(neural_timing["policy_neural_forward_seconds"]),
+                policy_neural_forward_count=int(neural_timing["policy_neural_forward_count"]),
+                value_neural_forward_seconds=float(neural_timing["value_neural_forward_seconds"]),
+                value_neural_forward_count=int(neural_timing["value_neural_forward_count"]),
             )
         finally:
             try:
@@ -1324,6 +1352,22 @@ class RootPUCTSearchPolicy:
             observation_encoding_count=int(neural_timing["observation_encoding_count"]),
             neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
             neural_forward_count=int(neural_timing["neural_forward_count"]),
+            action_prior_neural_forward_seconds=float(
+                neural_timing["action_prior_neural_forward_seconds"]
+            ),
+            action_prior_neural_forward_count=int(
+                neural_timing["action_prior_neural_forward_count"]
+            ),
+            opponent_action_prior_neural_forward_seconds=float(
+                neural_timing["opponent_action_prior_neural_forward_seconds"]
+            ),
+            opponent_action_prior_neural_forward_count=int(
+                neural_timing["opponent_action_prior_neural_forward_count"]
+            ),
+            policy_neural_forward_seconds=float(neural_timing["policy_neural_forward_seconds"]),
+            policy_neural_forward_count=int(neural_timing["policy_neural_forward_count"]),
+            value_neural_forward_seconds=float(neural_timing["value_neural_forward_seconds"]),
+            value_neural_forward_count=int(neural_timing["value_neural_forward_count"]),
         ).with_total(_timing_perf_counter() - timing_started_at)
         return {
             "root_puct_elapsed_seconds": timing.total_seconds,
