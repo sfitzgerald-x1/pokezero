@@ -79,6 +79,14 @@ _SIDE_CONDITION_IDS = {
     "mist": "mist",
 }
 
+# Gen 3 timed side conditions (5 turns, no extension items in Gen 3). The
+# public payload stores these as presence flags plus a set turn; poke-engine's
+# SideConditions fields for them are TURNS-REMAINING counters, so the count
+# must be derived — copying the flag through would make every screen expire
+# after one search turn.
+_TIMED_SIDE_CONDITIONS = frozenset({"reflect", "lightscreen", "safeguard", "mist"})
+_TIMED_SIDE_CONDITION_TURNS = 5
+
 # Showdown status codes -> poke-engine status names. ``slp`` is deliberately
 # absent: public state does not carry sleep/rest turn counts yet, and guessing
 # them would bias wake-up odds (fail closed instead).
@@ -171,7 +179,13 @@ def _unpack_spread(packed: str, *, default: int) -> dict[str, int]:
 
 @dataclass(frozen=True)
 class EngineWorld:
-    """A constructed engine-side world plus the identity maps search needs."""
+    """A constructed engine-side world plus the identity maps search needs.
+
+    Party order is the SAMPLED OVERRIDE order, not the request's active-first
+    ``selfTeamOrder`` permutation. Consumers must map switch choices through
+    ``party_species`` — never through raw request indices. (The species sets
+    are checked for consistency at construction; only the ordering differs.)
+    """
 
     spec: BattleSpec
     # Which BattleSpec side ("side_one"/"side_two") each player slot landed on.
@@ -209,6 +223,18 @@ def battle_spec_from_payload(
             "boundary_not_move_request",
             f"self request kind {payload.get('selfRequestKind')!r} (force-switch boundaries unsupported)",
         )
+    request_state = payload.get("selfActiveRequestState")
+    if isinstance(request_state, Mapping):
+        raised = sorted(flag for flag, value in request_state.items() if value)
+        if raised:
+            raise EngineWorldUnsupported(
+                "self_request_state_unsupported",
+                f"self active request flags {raised} constrain legality beyond this construction",
+            )
+
+    turn = payload.get("turn")
+    if not isinstance(turn, int):
+        raise EngineWorldUnsupported("payload_malformed", "payload has no integer turn")
 
     built_sides: dict[str, SideSpec] = {}
     party_species: dict[str, tuple[str, ...]] = {}
@@ -226,8 +252,19 @@ def battle_spec_from_payload(
             team=team,
             dex=dex,
             is_self=slot == self_player,
+            turn=turn,
+            self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
         )
         party_species[slot] = species_order
+
+    self_order = payload.get("selfTeamOrder")
+    if isinstance(self_order, Sequence) and not isinstance(self_order, str):
+        order_ids = {normalize_id(str(species)) for species in self_order}
+        if order_ids and order_ids != set(party_species[self_player]):
+            raise EngineWorldUnsupported(
+                "self_world_mismatch",
+                f"request team {sorted(order_ids)} != sampled world {sorted(party_species[self_player])}",
+            )
 
     weather, weather_turns = _weather_fields(payload)
     spec = BattleSpec(
@@ -323,6 +360,8 @@ def _build_side_spec(
     team: Sequence[FixturePokemon],
     dex: ShowdownDex,
     is_self: bool,
+    turn: int,
+    self_benched_move_history: bool,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -343,7 +382,14 @@ def _build_side_spec(
     for mon in team:
         species_id = normalize_id(mon.species)
         row = rows_by_species.pop(species_id, None)
-        member = _build_pokemon_spec(mon, row, dex=dex, slot=slot, is_self=is_self)
+        member = _build_pokemon_spec(
+            mon,
+            row,
+            dex=dex,
+            slot=slot,
+            is_self=is_self,
+            self_benched_move_history=self_benched_move_history,
+        )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
                 raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has two active rows")
@@ -371,12 +417,32 @@ def _build_side_spec(
         if int(value):
             boosts[mapped] = int(value)
 
+    set_turns = side_payload.get("sideConditionSetTurns") or {}
     side_conditions: dict[str, int] = {}
     for key, value in (side_payload.get("sideConditions") or {}).items():
-        mapped = _SIDE_CONDITION_IDS.get(normalize_id(str(key)))
+        condition_id = normalize_id(str(key))
+        mapped = _SIDE_CONDITION_IDS.get(condition_id)
         if mapped is None:
             raise EngineWorldUnsupported("side_condition_unsupported", f"side {slot!r} condition {key!r}")
-        if int(value):
+        if not int(value):
+            continue
+        if condition_id in _TIMED_SIDE_CONDITIONS:
+            # The payload stores a presence flag; the engine field counts turns
+            # remaining. Derive it or refuse — never copy the flag through.
+            set_turn = set_turns.get(key, set_turns.get(condition_id))
+            if not isinstance(set_turn, int):
+                raise EngineWorldUnsupported(
+                    "side_condition_turns_unknown",
+                    f"side {slot!r} timed condition {key!r} has no set turn",
+                )
+            remaining = _TIMED_SIDE_CONDITION_TURNS - (turn - set_turn)
+            if remaining <= 0:
+                raise EngineWorldUnsupported(
+                    "side_condition_turns_inconsistent",
+                    f"side {slot!r} condition {key!r} set on turn {set_turn} would have expired by turn {turn}",
+                )
+            side_conditions[mapped] = remaining
+        else:
             side_conditions[mapped] = int(value)
     toxic_stage = side_payload.get("toxicStage")
     if isinstance(toxic_stage, int) and toxic_stage > 0:
@@ -401,6 +467,7 @@ def _build_pokemon_spec(
     dex: ShowdownDex,
     slot: str,
     is_self: bool,
+    self_benched_move_history: bool = False,
 ) -> PokemonSpec:
     species_id = normalize_id(mon.species)
     info = dex.species_info(species_id)
@@ -427,7 +494,14 @@ def _build_pokemon_spec(
     }
 
     hp, status = _hp_and_status(row, maxhp=maxhp, slot=slot, species=mon.species, is_self=is_self)
-    moves = _move_specs(mon, row, dex=dex, slot=slot, is_self=is_self)
+    moves = _move_specs(
+        mon,
+        row,
+        dex=dex,
+        slot=slot,
+        is_self=is_self,
+        self_benched_move_history=self_benched_move_history,
+    )
 
     return PokemonSpec(
         id=species_id,
@@ -506,6 +580,7 @@ def _move_specs(
     dex: ShowdownDex,
     slot: str,
     is_self: bool,
+    self_benched_move_history: bool = False,
 ) -> tuple[MoveSpec, ...]:
     if len(mon.moves) > _MOVE_SLOT_LIMIT:
         raise EngineWorldUnsupported(
@@ -526,6 +601,14 @@ def _move_specs(
         if move_id in known_pp:
             pp, disabled = known_pp[move_id]
         else:
+            if is_self and self_benched_move_history:
+                # A benched self mon has spent PP somewhere and this slot has no
+                # cached PP snapshot — catalog full PP would be wrong for our
+                # own side, where exactness is available. Fail closed.
+                raise EngineWorldUnsupported(
+                    "self_pp_unknown",
+                    f"{slot}: {mon.species!r} move {move!r} has no request-known PP",
+                )
             info = dex.move_info(move_id)
             max_pp = info.max_pp if info is not None else 0
             if max_pp <= 0:

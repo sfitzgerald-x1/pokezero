@@ -88,6 +88,9 @@ def _payload(dex: ShowdownDex, **overrides):
         "deferredOpponentActionPriors": {},
         "selfPlayer": "p1",
         "selfRequestKind": "move",
+        "selfTeamOrder": ["Swampert", "Starmie"],
+        "selfActiveRequestState": {"trapped": False, "maybeTrapped": False, "maybeDisabled": False, "maybeLocked": False},
+        "selfBenchedMoveHistory": False,
         "sides": {
             "p1": {
                 "pokemon": [
@@ -118,7 +121,7 @@ def _payload(dex: ShowdownDex, **overrides):
                 "materializationBlockers": [],
                 "toxicStage": 0,
                 "sideConditions": {"spikes": 2, "reflect": 1},
-                "sideConditionSetTurns": {},
+                "sideConditionSetTurns": {"reflect": 5},
             },
         },
     }
@@ -185,7 +188,10 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(snorlax.hp, round(73 * snorlax.maxhp / 100))  # fraction scaled
         self.assertEqual(snorlax.moves[0].pp, (15 * 8) // 5)  # catalog randbats PP
         self.assertEqual(p2.boosts, {"attack": 1, "speed": -1})
-        self.assertEqual(p2.side_conditions, {"spikes": 2, "reflect": 1})
+        # Spikes is a layer count; Reflect is turns-remaining (set turn 5, now
+        # turn 7, Gen 3 screens last 5 -> 3 left). Copying the presence flag
+        # through would make the engine expire the screen after one turn.
+        self.assertEqual(p2.side_conditions, {"spikes": 2, "reflect": 3})
         # Unrevealed sampled Starmie stays pristine.
         self.assertEqual(p2.pokemon[1].hp, p2.pokemon[1].maxhp)
 
@@ -242,6 +248,34 @@ class BattleSpecConstructionTests(unittest.TestCase):
 
         expired = _payload(self.dex, weather="raindance", weatherSetTurn=1, weatherFromAbility=False)
         self._assert_reason(expired, "weather_turns_inconsistent")
+
+        trapped = _payload(self.dex)
+        trapped["selfActiveRequestState"] = {"trapped": True}
+        self._assert_reason(trapped, "self_request_state_unsupported")
+
+        screen_no_set_turn = _payload(self.dex)
+        screen_no_set_turn["sides"]["p2"]["sideConditionSetTurns"] = {}
+        self._assert_reason(screen_no_set_turn, "side_condition_turns_unknown")
+
+        screen_expired = _payload(self.dex)
+        screen_expired["sides"]["p2"]["sideConditionSetTurns"] = {"reflect": 1}
+        self._assert_reason(screen_expired, "side_condition_turns_inconsistent")
+
+        order_mismatch = _payload(self.dex)
+        order_mismatch["selfTeamOrder"] = ["Swampert", "Blissey"]
+        self._assert_reason(order_mismatch, "self_world_mismatch")
+
+    def test_benched_move_history_without_pp_snapshot_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["selfBenchedMoveHistory"] = True
+        # Starmie is benched (fainted here, but the PP rule is order-independent)
+        # and its row carries no move states -> catalog PP would be a guess.
+        self._assert_reason(payload, "self_pp_unknown")
+
+    def test_benched_self_mon_without_history_uses_catalog_pp(self) -> None:
+        world = battle_spec_from_payload(_payload(self.dex), _override(), dex=self.dex)
+        starmie = world.spec.side_one.pokemon[1]
+        self.assertEqual(starmie.moves[0].pp, (15 * 8) // 5)
 
     def test_self_maxhp_mismatch_fails_closed_instead_of_scaling(self) -> None:
         payload = _payload(self.dex)
