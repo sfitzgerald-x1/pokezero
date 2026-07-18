@@ -357,7 +357,7 @@ def curated_cases() -> tuple[FidelityCase, ...]:
         FidelityCase("spikes_set", "side_condition", [skarmory], [swampert], "move spikes", "move icebeam",
                      notes="Spikes layer 1 sidestart parity"),
         FidelityCase("reflect_set", "side_condition", [jirachi], [snorlax], "move reflect", "move bodyslam",
-                     notes="Screen set + halved physical same turn (slower Jirachi case ordering)"),
+                     notes="Faster Jirachi sets the screen first, so same-turn physical halving is exercised"),
         FidelityCase("light_screen_set", "side_condition", [jirachi], [starmie], "move lightscreen", "move surf",
                      notes="Special screen halving"),
         FidelityCase("leech_seed_drain", "residual", [celebi], [swampert], "move leechseed", "move earthquake",
@@ -372,7 +372,8 @@ def curated_cases() -> tuple[FidelityCase, ...]:
         FidelityCase("hidden_power_type", "hidden_power", [hp_grass_swampert_check], [swampert], "move hiddenpower", "move icebeam",
                      notes="HP Grass IVs -> 4x on Swampert; engine move id mapping for hiddenpower"),
         FidelityCase("rest_full_heal", "sleep", [swampert], [snorlax], "move earthquake", "move rest",
-                     notes="Damaged Snorlax rests after being hit: full heal + SLEEP with rest turns"),
+                     notes="Damaged Snorlax rests after being hit: full heal + SLEEP status. Rest/sleep "
+                           "turn COUNTS are invisible to TurnFeatures and not asserted here"),
     )
 
 
@@ -414,7 +415,7 @@ def run_case(
     except Exception as error:  # engine-side hard failure IS a finding
         return {
             "case": case.name, "mechanic": case.mechanic, "status": "engine_error",
-            "error": f"{type(error).__name__}: {error}", "state": state.to_string(),
+            "error": f"{type(error).__name__}: {error}", "engine_state": state.to_string(),
         }
 
     seeds_report = []

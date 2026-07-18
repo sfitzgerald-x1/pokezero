@@ -57,12 +57,25 @@ fail-closed IV-consistency guard). This was a track-A bug found by track C —
 without the differential it would have shipped as a silent damage-zeroing of
 a very common move.
 
-## Harness notes
+## Harness notes and scope (what "clean" does and does not mean)
 
 - Damage matching uses a ±16% band around the engine's representative
-  (average) roll — wide enough for the 0.85–1.0 roll spread plus residual
-  rounding, narrow enough that wrong-mechanic deltas (wrong residual
-  fraction, wrong effectiveness) still diverge.
+  (average) roll. That band is tight ONLY because every curated case
+  isolates its mechanic on a mon taking no other damage — the band scales
+  with a branch's total damage, so a sub-16%-of-damage mechanic error
+  riding alongside a big hit would be masked. Independently reviewed and
+  confirmed: this is a latent false-CLEAN vector for any reuse of this
+  matcher on non-isolated turns.
+- Coverage is support-membership over 8 seeds: an engine that is MISSING a
+  low-probability branch passes unless Showdown happens to roll it
+  (a 10% branch goes unobserved across 8 seeds with p≈0.43). The current
+  run did exercise freeze (~10%) and full-para, but that was luck, not
+  design.
+- Side conditions are compared presence-only (screen turns-remaining is
+  never validated — needs a multi-turn case); boosts, volatiles, benched
+  effects, and rest/sleep turn counts are invisible to the feature fold.
+  "13/15 clean" means the tested observable effects match, not full effect
+  fidelity for every rider on those turns.
 - Entry abilities (Sand Stream) fire before the fixture turn; such cases seed
   the engine state (`spec_weather`), mirroring what the world constructor
   does from the public payload mid-game.
@@ -70,10 +83,16 @@ a very common move.
   Talk PP-underflow patch from `setup_foulplay_eval.sh` should be re-verified
   by a dedicated case when multi-turn fixtures land.
 
-## Next
+## Next (with prerequisites for tier 2)
 
 Multi-turn curated cases (Sleep Talk, Baton Pass volatile transfer, Encore,
-partial trapping), then the tier-2 real-game sweep: replay recorded
-decision points through `engine_world` and check each observed Showdown
-outcome lies in the engine's branch support — same matcher, production
-constructor path.
+partial trapping, screen duration/expiry), then the tier-2 real-game sweep:
+replay recorded decision points through `engine_world` and check each
+observed Showdown outcome lies in the engine's branch support.
+
+Tier 2 must NOT reuse this matcher as-is: real turns stack residuals and
+chip on top of attack damage, exactly where the net-HP band goes blind.
+Prerequisites before tier 2 can serve as a go/no-go read: per-instruction /
+per-damage-source comparison (or a band tied to the mechanic under test,
+not net active HP), branch-coverage assertions or a much larger seed count
+for probabilistic effects, and turn-count validation for timed conditions.
