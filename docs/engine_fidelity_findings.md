@@ -224,3 +224,21 @@ effect), which is exactly the engine's 1/3 no-op branch — the two sims agree.
 - `"switch N"` script entries resolve against ORIGINAL team order; fine for
   wave 1's single Baton Pass from the opening lineup, revisit before scripting
   multi-switch cases.
+
+### Scope clarification (added after independent review)
+
+"Clean" in the multi-turn sweep certifies that EACH TURN's observed delta
+lands in the engine's branch support within the same ±16%-of-per-turn-damage
+band, plus timed-counter fidelity (reflect ticks, toxic_count, rest_turns).
+Because observed HP is re-anchored to the engine's trajectory every turn,
+absolute HP tracking across N turns is NOT certified: a systematic engine
+damage bias smaller than the per-turn band (e.g. ~10%/turn) would pass 6/6
+clean. This is the one-turn doc's sub-band masking caveat applied with more
+force, and it carries the same consequence for tier-2 reuse. Also: when two
+engine branches are feature-identical AND both fall inside the HP band, the
+matcher binds the FIRST in enumeration order (first-match, not best-fit) —
+no ties were observed in wave 1's curated cases, but this is a latent
+false-CLEAN vector for real-game turns. Encore wave-1 coverage: the
+application-turn redirect and volatile persistence are validated; the
+next-turn lock is only exercised trivially (the scripted choice coincides
+with the encored move) and duration remains unmodeled.
