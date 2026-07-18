@@ -122,9 +122,17 @@ fn json_escape(s: &str) -> String {
 /// Returns iterations per second measured entirely inside Rust — no Python/FFI
 /// crossings inside the loop.
 ///
-/// `branch_on_damage=true` matches what poke-engine's own MCTS does at the
-/// root ply only; deeper plies run with it off, so pass `false` to price the
-/// deep-tree regime.
+/// `branch_on_damage=true` matches what poke-engine's own MCTS does for the
+/// top two plies (mcts.rs root||parent.root; threaded MCTS_DAMAGE_BRANCH_DEPTH=2);
+/// depth >= 2 runs with it off, so pass `false` to price the deep-tree regime.
+/// Parse a serialized engine state, converting poke-engine's internal panics
+/// on malformed input into a catchable `ValueError` instead of a
+/// `PanicException` (which `except Exception` does not catch).
+fn parse_state(state_str: &str) -> PyResult<State> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| State::deserialize(state_str)))
+        .map_err(|_| PyValueError::new_err("state_str is not a valid poke-engine state string"))
+}
+
 #[pyfunction]
 #[pyo3(signature = (state_str, s1_move, s2_move, iterations, branch_on_damage = true))]
 fn bench_apply_reverse(
@@ -137,7 +145,7 @@ fn bench_apply_reverse(
     if iterations == 0 {
         return Err(PyValueError::new_err("iterations must be > 0"));
     }
-    let mut state = State::deserialize(state_str);
+    let mut state = parse_state(state_str)?;
     let s1 = parse_move(s1_move, &state.side_one, "side one")?;
     let s2 = parse_move(s2_move, &state.side_two, "side two")?;
     let evaluator = HpFractionEval;
@@ -299,14 +307,14 @@ fn puct_search(state_str: &str, iterations: usize, c_puct: f32, seed: u64) -> Py
     if iterations == 0 {
         return Err(PyValueError::new_err("iterations must be > 0"));
     }
-    let mut state = State::deserialize(state_str);
+    let mut state = parse_state(state_str)?;
     let evaluator = HpFractionEval;
     let (s1_stats, s2_stats, elapsed) =
         puct_search_with_eval(&mut state, iterations, c_puct, seed, &evaluator)?;
     let iterations_per_s = if elapsed > 0.0 {
         iterations as f64 / elapsed
     } else {
-        f64::INFINITY
+        return Err(PyValueError::new_err("elapsed time was zero; raise iterations"))
     };
     Ok(format!(
         "{{\"iterations\":{},\"evaluator\":\"hp_fraction\",\"c_puct\":{},\"seed\":{},\

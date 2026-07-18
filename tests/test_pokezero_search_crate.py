@@ -95,6 +95,18 @@ class PokezeroSearchCrateSmokeTest(unittest.TestCase):
         self.assertEqual(first["side_one"], second["side_one"])
         self.assertEqual(first["side_two"], second["side_two"])
 
+class MalformedStateTests(unittest.TestCase):
+    def test_malformed_state_raises_value_error_not_panic(self) -> None:
+        try:
+            import pokezero_search as crate
+        except ImportError:
+            self.skipTest("pokezero_search crate not built")
+        for bad in ("", "garbage", "NONE,100"):
+            with self.assertRaises(ValueError):
+                crate.bench_apply_reverse(bad, "tackle", "tackle", 10)
+            with self.assertRaises(ValueError):
+                crate.puct_search(bad, 10)
+
 
 if __name__ == "__main__":
     unittest.main()
