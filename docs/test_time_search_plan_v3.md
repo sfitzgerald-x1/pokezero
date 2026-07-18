@@ -133,6 +133,18 @@ integration, a single 200-seed paired FoulPlay comparison (both arms,
 shared seeds, the standard harness). Success is more winrate at fixed
 wall-clock, not more visits.
 
+## POC checkpoint (2026-07-18)
+
+The speed target is demonstrated end to end:
+[`engine_search_poc.md`](engine_search_poc.md) — poke-engine MCTS over
+belief-sampled worlds as a standard rollout policy, ~475k simulations per
+searched decision at 0.44s (FoulPlay-class throughput, ~18× faster than
+Tier-1 root-PUCT), with tradeoffs enumerated. Two findings feed back into
+the plan: the belief sampler's deterministic dead-ends cap any determinized
+search at ~45% of decisions searched (highest-leverage strength lever,
+upstream of both search stacks), and speed remains decoupled from strength
+until track B puts the learned model on this path.
+
 ## Integration (serial, single owner)
 
 After A+B land and C passes: swap the branch simulator behind the existing
