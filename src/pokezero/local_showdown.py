@@ -201,6 +201,10 @@ class LocalShowdownSnapshot:
     belief_engine: PublicBattleBeliefEngine
     latest_turn: int
     terminal: TerminalState | None
+    # Snapshot-local action translations are computed from the same determinized
+    # world used for the branch. They avoid rebuilding public player state for
+    # every repeated Root-PUCT visit without exposing data outside that world.
+    search_choice_cache: Mapping[PlayerId, Mapping[int, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -264,6 +268,18 @@ class LocalShowdownEnv:
         self._bridge_round_trip_count = 0
         self._bridge_node_processing_seconds = 0.0
         self._bridge_node_processing_count = 0
+        # Nested slices of bridge-handle root branches. These stay cumulative
+        # across warm-pool resets so Root-PUCT can take a per-decision delta.
+        self._root_puct_branch_local_state_restore_seconds = 0.0
+        self._root_puct_branch_local_state_restore_count = 0
+        self._root_puct_branch_choice_encoding_seconds = 0.0
+        self._root_puct_branch_choice_encoding_count = 0
+        self._root_puct_branch_bridge_round_trip_seconds = 0.0
+        self._root_puct_branch_bridge_round_trip_count = 0
+        self._root_puct_branch_bridge_node_processing_seconds = 0.0
+        self._root_puct_branch_bridge_node_processing_count = 0
+        self._root_puct_branch_result_projection_seconds = 0.0
+        self._root_puct_branch_result_projection_count = 0
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
@@ -561,14 +577,22 @@ class LocalShowdownEnv:
         snapshot_id = event.get("snapshotId")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot event: {event!r}")
-        return self._local_snapshot(bridge_snapshot={"snapshot_id": snapshot_id})
+        return self._local_snapshot(
+            bridge_snapshot={"snapshot_id": snapshot_id},
+            include_search_choice_cache=True,
+        )
 
-    def _local_snapshot(self, *, bridge_snapshot: Mapping[str, Any]) -> LocalShowdownSnapshot:
+    def _local_snapshot(
+        self,
+        *,
+        bridge_snapshot: Mapping[str, Any],
+        include_search_choice_cache: bool = False,
+    ) -> LocalShowdownSnapshot:
         """Capture the Python state paired with either a generic or bridge snapshot."""
 
         if self._battle_token is None:
             raise LocalShowdownError("Cannot snapshot before reset.")
-        return LocalShowdownSnapshot(
+        snapshot = LocalShowdownSnapshot(
             battle_token=self._battle_token,
             battle_id=self._battle_id,
             format_id=self._format_id,
@@ -583,6 +607,15 @@ class LocalShowdownEnv:
             latest_turn=self._latest_turn,
             terminal=self._terminal,
         )
+        if not include_search_choice_cache:
+            return snapshot
+
+        # State normalization may initialize stateful annotation trackers. Return
+        # the shell to the exact paired snapshot so creating a search handle is
+        # observationally side-effect-free for any caller that keeps using it.
+        search_choice_cache = self._search_choice_cache()
+        self._restore_local_snapshot_state(snapshot)
+        return replace(snapshot, search_choice_cache=search_choice_cache)
 
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
         """Restore a snapshot into the current live bridge battle shell.
@@ -649,6 +682,37 @@ class LocalShowdownEnv:
         the bridge then clones the retained world and submits those choices atomically.
         """
 
+        return self._step_from_search_snapshot(snapshot, actions)
+
+    def step_from_search_snapshot_for_player(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        observation_player: PlayerId,
+    ) -> StepResult:
+        """Advance a zero-rollout leaf while retaining only its evaluated view.
+
+        Rollout tails still use ``step_from_search_snapshot`` and retain every
+        requested observation. This narrower form only removes redundant work
+        from immediate value-leaf evaluation.
+        """
+
+        if observation_player not in PLAYER_IDS:
+            raise ValueError(f"observation_player must be one of {', '.join(PLAYER_IDS)}.")
+        return self._step_from_search_snapshot(
+            snapshot,
+            actions,
+            observation_players=(observation_player,),
+        )
+
+    def _step_from_search_snapshot(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        observation_players: tuple[PlayerId, ...] | None = None,
+    ) -> StepResult:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
         if not self._search_snapshot_permitted:
@@ -666,8 +730,22 @@ class LocalShowdownEnv:
 
         # Choice conversion uses only the public snapshot paired with this sampled world. Do not
         # read the current search shell, which may hold a branch from a prior root visit.
-        self._restore_local_snapshot_state(snapshot)
-        choices = self._choices_for_actions(actions)
+        local_restore_started_at = time.perf_counter()
+        try:
+            self._restore_local_snapshot_state(snapshot)
+        finally:
+            self._root_puct_branch_local_state_restore_seconds += max(
+                0.0, time.perf_counter() - local_restore_started_at
+            )
+            self._root_puct_branch_local_state_restore_count += 1
+        choice_encoding_started_at = time.perf_counter()
+        try:
+            choices = self._cached_search_choices(snapshot, actions)
+        finally:
+            self._root_puct_branch_choice_encoding_seconds += max(
+                0.0, time.perf_counter() - choice_encoding_started_at
+            )
+            self._root_puct_branch_choice_encoding_count += 1
         return self._submit_step_choices(
             choices=choices,
             payload={
@@ -676,6 +754,8 @@ class LocalShowdownEnv:
                 "snapshotId": snapshot_id,
                 "choices": choices,
             },
+            root_puct_branch_step=True,
+            observation_players=observation_players,
         )
 
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
@@ -761,31 +841,107 @@ class LocalShowdownEnv:
                 raise ValueError(f"{player}: {exc}") from exc
         return choices
 
+    def _search_choice_cache(self) -> dict[PlayerId, dict[int, str]]:
+        """Precompute legal choices once for a retained sampled-world snapshot."""
+
+        cache: dict[PlayerId, dict[int, str]] = {}
+        for player in self.requested_players():
+            state = self._state_for_player(player)
+            cache[player] = {
+                action_index: showdown_choice_for_action(state, action_index)
+                for action_index in range(ACTION_COUNT)
+                if state.legal_action_mask[action_index]
+            }
+        return cache
+
+    def _cached_search_choices(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+    ) -> dict[PlayerId, str]:
+        """Use a snapshot's action translations, preserving legacy error paths as fallback."""
+
+        requested = self.requested_players()
+        cache = snapshot.search_choice_cache
+        if not cache or any(player not in cache for player in requested):
+            return self._choices_for_actions(actions)
+        # Python considers ``1`` and ``1.0`` equal dictionary keys, whereas the
+        # legacy translator rejects a float when it indexes the legal-action
+        # mask. Defer non-integers so cache hits never weaken that validation.
+        if any(not isinstance(actions.get(player), int) for player in requested):
+            return self._choices_for_actions(actions)
+        try:
+            return {player: cache[player][actions[player]] for player in requested}
+        except (KeyError, TypeError):
+            return self._choices_for_actions(actions)
+
     def _submit_step_choices(
         self,
         *,
         choices: Mapping[PlayerId, str],
         payload: Mapping[str, Any],
+        root_puct_branch_step: bool = False,
+        observation_players: tuple[PlayerId, ...] | None = None,
     ) -> StepResult:
         self._last_step_had_error = False
         self._latest_requests = {}
-        self._bridge_request_boundary(payload)
+        bridge_before = self.root_puct_bridge_timing_snapshot() if root_puct_branch_step else None
+        try:
+            self._bridge_request_boundary(payload)
+        finally:
+            if bridge_before is not None:
+                bridge_after = self.root_puct_bridge_timing_snapshot()
+                self._root_puct_branch_bridge_round_trip_seconds += max(
+                    0.0,
+                    float(bridge_after["bridge_round_trip_seconds"])
+                    - float(bridge_before["bridge_round_trip_seconds"]),
+                )
+                self._root_puct_branch_bridge_round_trip_count += max(
+                    0,
+                    int(bridge_after["bridge_round_trip_count"])
+                    - int(bridge_before["bridge_round_trip_count"]),
+                )
+                self._root_puct_branch_bridge_node_processing_seconds += max(
+                    0.0,
+                    float(bridge_after["bridge_node_processing_seconds"])
+                    - float(bridge_before["bridge_node_processing_seconds"]),
+                )
+                self._root_puct_branch_bridge_node_processing_count += max(
+                    0,
+                    int(bridge_after["bridge_node_processing_count"])
+                    - int(bridge_before["bridge_node_processing_count"]),
+                )
         if self._last_step_had_error:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
 
-        next_requested = self.requested_players()
-        observations = {player: self.observe(player) for player in next_requested}
-        rewards = self._rewards()
-        terminal = self.terminal()
-        # On terminal we leave the bridge process alive (warm pool): the finished battle is freed
-        # by the next reset()'s "end" command, or by close() on shutdown. This avoids a node
-        # respawn per game.
-        return StepResult(
-            observations=observations,
-            rewards=rewards,
-            terminal=terminal,
-            requested_players=next_requested,
-        )
+        projection_started_at = time.perf_counter() if root_puct_branch_step else None
+        try:
+            next_requested = self.requested_players()
+            terminal = self.terminal()
+            # A terminal branch has no leaf observation. This matches the generic
+            # path and avoids rebuilding an already-finalized player view.
+            players_to_observe = (
+                ()
+                if terminal is not None
+                else (next_requested if observation_players is None else observation_players)
+            )
+            observations = {player: self.observe(player) for player in players_to_observe}
+            rewards = self._rewards()
+            # On terminal we leave the bridge process alive (warm pool): the finished battle is freed
+            # by the next reset()'s "end" command, or by close() on shutdown. This avoids a node
+            # respawn per game.
+            return StepResult(
+                observations=observations,
+                rewards=rewards,
+                terminal=terminal,
+                requested_players=next_requested,
+            )
+        finally:
+            if projection_started_at is not None:
+                self._root_puct_branch_result_projection_seconds += max(
+                    0.0, time.perf_counter() - projection_started_at
+                )
+                self._root_puct_branch_result_projection_count += 1
 
     def terminal(self) -> Optional[TerminalState]:
         return self._terminal
@@ -895,6 +1051,27 @@ class LocalShowdownEnv:
             "bridge_round_trip_count": self._bridge_round_trip_count,
             "bridge_node_processing_seconds": self._bridge_node_processing_seconds,
             "bridge_node_processing_count": self._bridge_node_processing_count,
+        }
+
+    def root_puct_branch_step_timing_snapshot(self) -> dict[str, float | int]:
+        """Return cumulative nested timing for fused sampled-world branch steps.
+
+        These counters are populated only by ``step_from_search_snapshot``.
+        They identify local setup and post-step observation work inside the
+        additive branch-step wall time without exposing a simulator snapshot.
+        """
+
+        return {
+            "branch_local_state_restore_seconds": self._root_puct_branch_local_state_restore_seconds,
+            "branch_local_state_restore_count": self._root_puct_branch_local_state_restore_count,
+            "branch_choice_encoding_seconds": self._root_puct_branch_choice_encoding_seconds,
+            "branch_choice_encoding_count": self._root_puct_branch_choice_encoding_count,
+            "branch_bridge_round_trip_seconds": self._root_puct_branch_bridge_round_trip_seconds,
+            "branch_bridge_round_trip_count": self._root_puct_branch_bridge_round_trip_count,
+            "branch_bridge_node_processing_seconds": self._root_puct_branch_bridge_node_processing_seconds,
+            "branch_bridge_node_processing_count": self._root_puct_branch_bridge_node_processing_count,
+            "branch_result_projection_seconds": self._root_puct_branch_result_projection_seconds,
+            "branch_result_projection_count": self._root_puct_branch_result_projection_count,
         }
 
     def _bridge_request_event(
