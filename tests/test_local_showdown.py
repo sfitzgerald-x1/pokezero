@@ -305,7 +305,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
                 ),
                 "p2": pack_team(
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                    # Withdraw is never selected in the source battle, so it
+                    # must remain absent from p1's public materialization.
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Withdraw")),)
                 ),
             },
         )
@@ -316,34 +318,52 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             expected = source.observe("p1")
 
             # P-1: the live hidden-information battle must never send a Node
-            # snapshot across the bridge. Search receives only public state and
-            # materializes a separate belief-sampled world below.
-            original_request_event = source._bridge_request_event
+            # snapshot across the bridge. Audit the wire seam itself so this
+            # remains true even if a later refactor bypasses request-event
+            # helpers while extracting public state.
+            source_commands: list[Mapping[str, Any]] = []
+            original_send_command = source._send_command
 
-            def reject_live_snapshot(payload: Mapping[str, Any], event_type: str) -> Mapping[str, Any]:
-                self.assertNotIn(
-                    payload.get("type"),
-                    {"snapshot", "snapshot_search"},
-                    "public materialization must not serialize the live battle",
-                )
-                return original_request_event(payload, event_type)
+            def record_source_command(payload: Mapping[str, Any]) -> None:
+                source_commands.append(dict(payload))
+                original_send_command(payload)
 
-            with mock.patch.object(source, "_bridge_request_event", side_effect=reject_live_snapshot):
+            with mock.patch.object(source, "_send_command", side_effect=record_source_command):
                 materialization = source.public_materialization_state("p1")
 
             self.assertEqual(materialization.replay.requests, {})
             self.assertEqual(materialization.self_request["side"]["id"], "p1")
             self.assertFalse(hasattr(materialization, "bridge_snapshot"))
+            self.assertFalse(
+                any(command.get("type") in {"snapshot", "snapshot_search"} for command in source_commands),
+                "public materialization must not serialize the live battle",
+            )
             public_payload = json.dumps(_public_materialization_payload(materialization), sort_keys=True)
             self.assertNotIn("Withdraw", public_payload)
 
-            search_env.materialize_public_world(
-                state=materialization,
-                start_override=start_override,
-                seed=7,
-            )
-            actual = search_env.observe("p1")
-            branch = search_env.step({"p1": 1, "p2": 1})
+            # A separate belief-sampled search world may retain a bridge
+            # snapshot. This is permitted only after direct materialization;
+            # it must never be the source live battle's snapshot.
+            search_commands: list[Mapping[str, Any]] = []
+            original_search_send_command = search_env._send_command
+
+            def record_search_command(payload: Mapping[str, Any]) -> None:
+                search_commands.append(dict(payload))
+                original_search_send_command(payload)
+
+            with mock.patch.object(search_env, "_send_command", side_effect=record_search_command):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=7,
+                )
+                snapshot = search_env.snapshot_for_search()
+                search_env.restore_search_snapshot(snapshot)
+                self.assertTrue(search_env.release_search_snapshot(snapshot))
+                actual = search_env.observe("p1")
+                branch = search_env.step({"p1": 1, "p2": 1})
+
+            self.assertIn("snapshot_search", {command.get("type") for command in search_commands})
 
         self.assertEqual(actual.categorical_ids, expected.categorical_ids)
         self.assertEqual(actual.numeric_features, expected.numeric_features)
