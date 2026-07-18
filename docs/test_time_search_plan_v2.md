@@ -98,7 +98,7 @@ checkpoint-matched Step-0 capture/refit is in progress; no frontier paired
 search result has been claimed yet.
 
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
-   A 1M-fitted isotonic map on a 2.3M value head confounds the read — the one
+   A 1M-fitted isotonic map on a 3M value head confounds the read — the one
    prerequisite kept from the old program.
 2. Paired baseline at the W2 knee budget: raw vs search at the frontier after
    the checkpoint-matched leaf passes its gate.
