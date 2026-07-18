@@ -168,6 +168,25 @@ class StartOverrideOutcomeEnv(ImmediateOutcomeEnv):
         self.reset(seed=seed, format_id=format_id or start_override.format_id)
 
 
+class BeliefWorldOutcomeEnv(StartOverrideOutcomeEnv):
+    """Makes the sampled belief world determine which root action wins."""
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        current_override = self.start_overrides[-1]
+        opponent_team = current_override.player_teams["p2"]
+        favored_action = 0 if "world-0" in opponent_team else 1
+        winner = "p1" if int(actions["p1"]) == favored_action else "p2"
+        self.step_calls.append(dict(actions))
+        self.all_step_calls.append(dict(actions))
+        self._terminal = TerminalState(winner=winner, turn_count=1)
+        return StepResult(
+            observations={},
+            rewards={"p1": 1.0 if winner == "p1" else -1.0, "p2": -1.0 if winner == "p1" else 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
+
+
 class SnapshotStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
     def __init__(self, *, label: str) -> None:
         super().__init__(label=label)
@@ -2343,7 +2362,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             scenario_index: int,
             rng: random.Random,
         ):
-            del context, scenario, scenario_index, rng
+            del context, scenario, rng
 
             def missing_override() -> BattleStartOverride:
                 raise ValueError(
@@ -2435,7 +2454,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 return BattleStartOverride(
                     player_teams={
                         "p1": "Charizard||||Tackle|||||||",
-                        "p2": "Xatu||||Psychic|||||||",
+                        "p2": f"Xatu||||Psychic|||||||world-{scenario_index}",
                     }
                 )
 
@@ -2664,10 +2683,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 1, "p2": 0},
         ])
 
-    def test_root_puct_timing_keeps_capped_completed_searches_unrecorded(self) -> None:
+    def test_root_puct_cap_retains_all_belief_samples_in_selected_action_group(self) -> None:
         def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
             del context, rng
-            return (OpponentActionScenario(actions={"p2": 0}, weight=1.0, label="stay-in"),)
+            return (
+                OpponentActionScenario(actions={"p2": 0}, weight=0.75, label="stay-in"),
+                OpponentActionScenario(actions={"p2": 1}, weight=0.25, label="reserve"),
+            )
 
         def start_override_planner(
             context: PolicyContext,
@@ -2688,16 +2710,17 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             return sample_override
 
         policy = RootPUCTSearchPolicy(
-            env_factory=lambda: StartOverrideOutcomeEnv(label="branch"),
+            env_factory=lambda: BeliefWorldOutcomeEnv(label="branch"),
             rollout_config=RolloutConfig(max_decision_rounds=3),
             value_fn=lambda history: 0.0,
             prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
             opponent_action_scenario_planner=scenario_planner,
             max_opponent_action_scenarios=1,
             cpuct=0.0,
+            selection_mode="value",
             root_visit_budget=2,
             start_override_planner=start_override_planner,
-            start_override_samples_per_scenario=2,
+            start_override_samples_per_scenario=3,
         )
         context = PolicyContext(
             player_id="p1",
@@ -2714,15 +2737,30 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         decision = policy.select_action_with_context(context, rng=random.Random(1))
 
         self.assertFalse(decision.metadata["root_puct_fallback"])
-        self.assertEqual(decision.metadata["root_puct_opponent_action_scenario_count"], 1)
+        # One world favors action 0; the other two favor action 1. Retaining
+        # all worlds therefore changes the selected aggregate action to 1.
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenario_count"], 3)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_unsearched"], 3)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_groups_generated"], 2)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_groups_used"], 1)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_groups_unsearched"], 1)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_scenarios"],
+            [
+                {"label": "stay-in/belief-sample-1", "weight": 1 / 3, "actions": {"p2": 0}},
+                {"label": "stay-in/belief-sample-2", "weight": 1 / 3, "actions": {"p2": 0}},
+                {"label": "stay-in/belief-sample-3", "weight": 1 / 3, "actions": {"p2": 0}},
+            ],
+        )
         timing = decision.metadata["root_puct_timing"]
-        self.assertEqual(timing["puct_search_call_count"], 2)
-        self.assertEqual(timing["puct_search_completed_call_count"], 2)
-        self.assertEqual(timing["puct_search_retained_completed_call_count"], 1)
-        self.assertEqual(timing["puct_search_completed_result_count"], 1)
-        self.assertEqual(timing["puct_search_discarded_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_call_count"], 3)
+        self.assertEqual(timing["puct_search_completed_call_count"], 3)
+        self.assertEqual(timing["puct_search_retained_completed_call_count"], 3)
+        self.assertEqual(timing["puct_search_completed_result_count"], 3)
+        self.assertEqual(timing["puct_search_discarded_completed_call_count"], 0)
         self.assertEqual(timing["puct_search_rejected_call_count"], 0)
-        self.assertGreater(timing["puct_search_discarded_completed_call_seconds"], 0.0)
+        self.assertEqual(timing["puct_search_discarded_completed_call_seconds"], 0.0)
         self.assertAlmostEqual(
             timing["puct_search_unrecorded_call_seconds"],
             max(

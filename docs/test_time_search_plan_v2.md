@@ -173,6 +173,13 @@ classifying it.
    internals, call time absent from recorded branch results, and outer policy
    orchestration. Optimize only the largest measured partition; do not infer a
    Tier 2 target from the blended residual.
+   **Belief-group repair (2026-07-18):** that finer telemetry exposed a
+   root-action-cap bug: all sampled belief worlds in the selected opponent
+   action group were evaluated, but only the first was retained for root
+   aggregation. The cap now applies after retaining the entire group, as the
+   V2 PIMC contract requires. This is a correctness repair, not a claimed
+   speedup; batching or otherwise accelerating the required retained worlds is
+   the next throughput target.
    A one-round-trip retained-snapshot branch candidate is merged behind the
    belief-sampled bridge-handle guard; direct materialization remains the
    correct path but is no longer the primary throughput lever.
