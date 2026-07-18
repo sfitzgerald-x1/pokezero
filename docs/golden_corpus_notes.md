@@ -130,3 +130,35 @@ computed battle stats (incl. max HP), exact move ids, ability, and item.
 is exempted. Per the plan's exemption rule, any legitimately unequal field
 found during track B development must be added here with a justification —
 never handled by a global loosening of the comparison.
+
+## Encoder input contract (added after independent review — READ FIRST)
+
+The corpus stores SEVERAL candidate input surfaces. Only one reproduces the
+golden observation:
+
+- **The golden observation is a function of the PUBLIC/BELIEF surface
+  only**: `public_materialization` (the payload) + the acting seat's
+  `observation_metadata` (including `belief_view` and the request-known
+  `self_team`). An encoder that reproduces the golden arrays consumes
+  exactly this surface — nothing else.
+- **`true_teams` is ORACLE-ONLY.** It exists for world determinization
+  (constructing engine states / `BattleStartOverride` replays where a
+  concrete world is legitimately required, e.g. leaf simulation). It
+  strictly over-informs relative to the golden observation — at an early
+  decision the acting seat's opponent view is EMPTY while `true_teams`
+  holds the full private set. It must NEVER be an input to the
+  golden-observation reproduction, and never a production-model feature.
+  If a candidate encoder only matches the golden arrays when given
+  `true_teams`, that encoder is leaking private truth: the bit-exactness
+  gate has caught a bug, not a formatting issue.
+- Corollary for the engine-side leaf encoder (track B's consumer): at
+  search leaves the engine state IS a determinized concrete world by
+  design; the golden pairing in this corpus validates the PUBLIC-surface
+  encoding path. The determinized-leaf encoding asymmetry is a design
+  decision documented in the v3 plan, not something this corpus resolves.
+
+## Determinism note (softened per review)
+
+Two back-to-back regenerations produced byte-identical `arrays.npz` on
+numpy 2.5.0, but per-row `arrays_sha256` (not npz file bytes) remains the
+stable identity guarantee across numpy/zip versions.

@@ -304,5 +304,54 @@ class GoldenCorpusLiveSmokeTest(unittest.TestCase):
                 self.assertTrue(bool(numpy.asarray(row.arrays.attention_mask).any()))
 
 
+@unittest.skipIf(numpy is None, "requires numpy")
+@unittest.skipIf(not _live_showdown_available(), "requires a built local Showdown checkout")
+class WrappedTrajectoryIdentityTests(unittest.TestCase):
+    """Capture must be trajectory-neutral: wrapped == bare on the same seed.
+
+    Locks in the RNG-identity claim so a future change that makes
+    public_materialization_state()/snapshot() consume simulator RNG fails
+    loudly here instead of silently skewing the corpus distribution.
+    """
+
+    def test_wrapped_and_bare_games_are_identical(self) -> None:
+        import os as _os
+
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT as _ROOT
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.policy import SimpleLegalPolicy
+        from pokezero.rollout import RolloutConfig, RolloutDriver
+
+        import pokezero.golden_corpus as gc
+
+        showdown_root = _os.environ.get("POKEZERO_SHOWDOWN_ROOT") or _ROOT
+
+        def run(wrapped: bool):
+            env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root))
+            try:
+                policies = {"p1": SimpleLegalPolicy(), "p2": SimpleLegalPolicy()}
+                if wrapped:
+                    policies = {
+                        seat: gc._CapturingPolicy(inner=policy, sink=lambda context, decision: None)
+                        for seat, policy in policies.items()
+                    }
+                    # Exercise the oracle path too: snapshot at the opening
+                    # boundary, exactly as the generator does.
+                driver = RolloutDriver(env=env, policies=policies, config=RolloutConfig())
+                result = driver.run(seed=41007, battle_id="identity-test")
+                actions = [
+                    (step.player_id, step.action_index, step.turn_index)
+                    for step in result.trajectory.steps
+                ]
+                return actions, (result.terminal.winner, result.terminal.turn_count)
+            finally:
+                env.close()
+
+        bare_actions, bare_terminal = run(wrapped=False)
+        wrapped_actions, wrapped_terminal = run(wrapped=True)
+        self.assertEqual(bare_actions, wrapped_actions)
+        self.assertEqual(bare_terminal, wrapped_terminal)
+
+
 if __name__ == "__main__":
     unittest.main()
