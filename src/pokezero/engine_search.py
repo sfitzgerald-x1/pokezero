@@ -118,11 +118,15 @@ class EngineMctsPolicy:
         config: EngineMctsConfig | None = None,
         module: Any | None = None,
         policy_id: str = "engine-mcts",
+        fixed_override: Any | None = None,
     ) -> None:
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
 
         self.policy_id = policy_id
+        # Test/scenario hook: bypass belief sampling and use this override as
+        # every world (custom-game sweeps where the catalog cannot sample).
+        self._fixed_override = fixed_override
         self._dex = dex
         self._set_source = set_source
         self._config = config or EngineMctsConfig()
@@ -151,6 +155,7 @@ class EngineMctsPolicy:
             return self._fallback(context, rng, "no_public_state")
         blocked_slots, encored_moves = self._public_effect_signals(context)
         recharging_slots = self._recharging_slots(context)
+        truant_slots = self._truant_loaf_slots(context)
 
         worlds: list[tuple[EngineWorld, Any]] = []
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
@@ -158,12 +163,15 @@ class EngineMctsPolicy:
         while len(worlds) < self._config.worlds and attempts < attempts_budget:
             attempts += 1
             self.stats.worlds_attempted += 1
-            override, sample_failure = _gen3_randbat_belief_start_override_result(
-                context=context,
-                set_source=self._set_source,
-                rng=rng,
-                witnessed_fallback=True,
-            )
+            if self._fixed_override is not None:
+                override, sample_failure = self._fixed_override, None
+            else:
+                override, sample_failure = _gen3_randbat_belief_start_override_result(
+                    context=context,
+                    set_source=self._set_source,
+                    rng=rng,
+                    witnessed_fallback=True,
+                )
             if override is None:
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
@@ -179,6 +187,7 @@ class EngineMctsPolicy:
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
                     recharging_slots=recharging_slots,
+                    truant_slots=truant_slots,
                     rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
@@ -269,6 +278,53 @@ class EngineMctsPolicy:
                     if any(rest.startswith(f"|-miss|{parts[2]}") for rest in lines[index + 1 : index + 3]):
                         return ()
         return (opponent_slot,)
+
+
+    def _truant_loaf_slots(self, context: PolicyContext) -> tuple[str, ...]:
+        """Slots whose active is a Truant mon that ACTED last round (loafs now).
+
+        The alternation is public: a Truant mon that publicly moved in the
+        immediately-preceding round loafs this turn. Evidence of acting comes
+        from the round-indexed public action record (turn-exact). Without
+        clear acted-last-round evidence the volatile stays off (fail-open:
+        the mon is modeled as free to act — the pre-fix behavior).
+        """
+
+        trajectory = getattr(context, "trajectory", None)
+        round_index = getattr(context, "decision_round_index", None)
+        if trajectory is None or not isinstance(round_index, int):
+            return ()
+        rounds = public_action_rounds_from_trajectory_metadata(trajectory)
+        previous = rounds.get(round_index - 1)
+        if previous is None:
+            return ()
+        metadata = context.observation.metadata
+        if not isinstance(metadata, Mapping):
+            return ()
+        slots: list[str] = []
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        for mon in opponents or ():
+            if not isinstance(mon, Mapping) or not mon.get("active"):
+                continue
+            ability = normalize_id(str(mon.get("revealed_ability") or ""))
+            possible = [normalize_id(str(a)) for a in mon.get("possible_abilities") or ()]
+            if ability == "truant" or (not ability and possible == ["truant"]):
+                action = previous.actions.get(opponent_slot)
+                if action is not None and action.kind == "move":
+                    slots.append(opponent_slot)
+        # Self seat: our own Truant mon's phase from our own action record.
+        self_team = metadata.get("self_team")
+        if isinstance(self_team, Sequence):
+            for row in self_team:
+                if not isinstance(row, Mapping) or not row.get("active"):
+                    continue
+                if normalize_id(str(row.get("ability") or "")) == "truant":
+                    action = previous.actions.get(context.player_id)
+                    if action is not None and action.kind == "move":
+                        slots.append(context.player_id)
+        return tuple(slots)
 
     def _public_effect_signals(
         self, context: PolicyContext

@@ -248,6 +248,7 @@ def battle_spec_from_payload(
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     recharging_slots: Sequence[str] = (),
+    truant_slots: Sequence[str] = (),
     rng: Any | None = None,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
@@ -335,6 +336,7 @@ def battle_spec_from_payload(
             wish_set_turn=_wish_set_turn(payload, slot),
             encored_move=(encored_moves or {}).get(slot),
             must_recharge=slot in (recharging_slots or ()),
+            truant_loafs=slot in (truant_slots or ()),
             rng=rng,
         )
         party_species[slot] = species_order
@@ -372,6 +374,7 @@ def world_battle_spec(
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     recharging_slots: Sequence[str] = (),
+    truant_slots: Sequence[str] = (),
     rng: Any | None = None,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
@@ -394,6 +397,7 @@ def world_battle_spec(
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
         recharging_slots=recharging_slots,
+        truant_slots=truant_slots,
         rng=rng,
     )
 
@@ -470,6 +474,7 @@ def _build_side_spec(
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
     must_recharge: bool = False,
+    truant_loafs: bool = False,
     baton_passing: bool = False,
     opponent_committed_pending: bool = False,
     rng: Any | None = None,
@@ -526,6 +531,12 @@ def _build_side_spec(
         # without it, searched worlds hand the recharging mon a free action.
         volatiles = volatiles + ["mustrecharge"]
         supported = supported | {"mustrecharge"}
+    if truant_loafs:
+        # Truant phase is publicly derivable (acted last round -> loafs now).
+        # The engine models the alternation once seeded with the volatile;
+        # without it every sampled world has Slaking about to act.
+        volatiles = volatiles + ["truant"]
+        supported = supported | {"truant"}
     unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")

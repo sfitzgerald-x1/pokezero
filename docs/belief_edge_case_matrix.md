@@ -37,6 +37,7 @@ construct · **NOTE** = residual risk documented.
 | Screens presence vs turns-remaining | HANDLED — turns derived from set turns; expiry validated multi-turn | screens tests + S4 |
 | Leftovers/pinch residual ORDER | HANDLED — engine build patched (order-5/10 split), differential + pins | #686 gates |
 | Future Sight / Doom Desire | SAFE-CLOSED — pending strike fails closed | taxonomy test |
+| **Truant (Slaking)** | **FIXED-NOW** — engine models the loaf alternation natively but the construct never seeded the phase: every sampled world had Slaking about to act (over-valued both seats). Phase is publicly derivable (acted last round → loafs now); signal from round-indexed public actions seeds the engine's TRUANT volatile. Fail-open without clear evidence | truant scenario sweep |
 
 ## Residual known gaps (accepted, documented)
 - Recharge signal fails OPEN when the round record is unavailable (rare;
@@ -46,3 +47,17 @@ construct · **NOTE** = residual risk documented.
 - A future NATIVE legal-mask implementation (the crate) must adopt the
   observation mask's fail-closed `maybeTrapped` convention — the
   engine-equivalence spike's permissive convention is the wrong reference.
+
+## Scenario suite (owner-directed, 2026-07-18)
+
+Random-seed games exercise edge cases by luck; `pokezero.golden_corpus_scenarios`
+scripts 10+ deterministic `gen3customgame` scenarios (Truant, Transform, Encore,
+Hyper Beam recharge, Baton Pass boundary, Wish, sand+Shedinja, RestTalk,
+screens, toxic stall) through the SAME corpus capture machinery, plus a
+fallback-detection sweep driving the engine-search policy over every scenario
+(true-override injected worlds — the sampler's catalog cannot cover custom
+games). Sweep result: every decision searched or failed closed with a known
+taxonomy reason; zero unmapped choices. Bonus finding: screen moves are
+outside the closed randbats vocabulary (they don't exist in the pool), so
+scenario rows exercise the encoder's OOV safety-net path — a validation case
+the random corpus can never produce.
