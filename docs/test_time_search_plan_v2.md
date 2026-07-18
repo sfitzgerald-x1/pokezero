@@ -128,7 +128,10 @@ classifying it.
    status (2026-07-17):** Root-PUCT now emits nested bridge round-trip,
    Node-processing, and local bridge/Python-overhead timings without changing
    additive wall accounting; the next ~10-game telemetry probe selects the
-   largest residual bucket before any Tier 2 or visit-batching change.
+   largest residual bucket before any Tier 2 or visit-batching change. A
+   one-round-trip retained-snapshot branch candidate is merged behind the
+   belief-sampled bridge-handle guard, but is deliberately unlaunched until
+   that probe establishes its expected payoff.
 2. **Tier 2 — direct state construction:** build the determinized battle
    directly from public state + the belief-sampled opponent (teams, HP,
    statuses, boosts, side conditions, field) as a constructed
