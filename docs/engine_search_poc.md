@@ -83,7 +83,12 @@ Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
   moves matched no enumerated variant): fixed by the witnessed-set
   fallback — when catalog reconciliation fails, build the world from the
   publicly witnessed moves and fill from the unfiltered movepool. Witnessed
-  facts are exact; only the fill is sampled; anti-leakage unchanged.
+  facts are exact; only the fill is sampled; anti-leakage unchanged
+  (independently verified). **Gated:** the fallback is opt-in
+  (`witnessed_fallback=True`, engine search only) because the planner is
+  shared with the production Node/root-PUCT stack — fills can produce
+  role-inconsistent sets, so the production distribution stays unchanged
+  until a paired A/B validates enabling it there.
 - **Wish** now constructs exactly: the caster is the sampled world's unique
   Wish carrier (amount = maxhp/2, turns from the public set turn);
   ambiguous carriers fail closed.
@@ -91,9 +96,11 @@ Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
   **encore** (meaningless without `last_used_move` wiring) and **pending
   Baton Pass** (needs deferred opponent-action semantics). Plus a rare
   per-attempt guard catch (`hidden_power_iv_mismatch`, 4/976 attempts,
-  decisions still searched via other worlds) — an upstream spread
-  inconsistency the fail-closed guard correctly rejects; under
-  investigation.
+  decisions still searched via other worlds) — root-caused by review: the
+  randbats CATALOG itself enumerates 11 variants pairing two Hidden Power
+  types (Unown bug+fighting, Forretress bug+steel); the spread fixes IVs
+  for the first and the guard correctly rejects the second. Pre-existing
+  catalog inconsistency, engine-path-only, fail-closed.
 
 ## Tradeoffs and limitations
 

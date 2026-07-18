@@ -534,19 +534,12 @@ def _build_side_spec(
                 "wish_turns_inconsistent",
                 f"side {slot!r} wish set on turn {wish_set_turn} at turn {turn}",
             )
-        # The wish caster's identity is public (it used Wish); in the sampled
-        # world it is the side's Wish-carrying mon. Amount = caster maxhp/2.
-        carriers = [
-            member
-            for member, mon in zip(party, team)
-            if any(normalize_id(move).startswith("wish") for move in mon.moves)
-        ]
-        if len(carriers) != 1:
-            raise EngineWorldUnsupported(
-                "wish_carrier_ambiguous",
-                f"side {slot!r} has {len(carriers)} Wish carriers in the sampled world",
-            )
-        wish = (remaining, carriers[0].maxhp // 2)
+        # Timing verified against the engine (counter=1 heals end of this
+        # turn). The amount is IGNORED by poke-engine, which heals the
+        # resolving active's maxhp/2 — a known low-severity deviation from
+        # gen3 (true heal = the CASTER's maxhp/2); we pass the active's
+        # value for forward compatibility should the engine start using it.
+        wish = (remaining, party[active_index].maxhp // 2)
 
     return (
         SideSpec(

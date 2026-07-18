@@ -153,7 +153,10 @@ class EngineMctsPolicy:
             attempts += 1
             self.stats.worlds_attempted += 1
             override, sample_failure = _gen3_randbat_belief_start_override_result(
-                context=context, set_source=self._set_source, rng=rng
+                context=context,
+                set_source=self._set_source,
+                rng=rng,
+                witnessed_fallback=True,
             )
             if override is None:
                 self.stats.world_failure_reasons[

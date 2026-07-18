@@ -335,6 +335,7 @@ def _gen3_randbat_belief_start_override_result(
     set_source: Gen3RandbatSource,
     rng: random.Random,
     team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
+    witnessed_fallback: bool = False,
 ) -> tuple[BattleStartOverride | None, str | None]:
     """Return a sampled start override plus a public-data failure reason for diagnostics."""
 
@@ -370,6 +371,7 @@ def _gen3_randbat_belief_start_override_result(
         team_size=team_size,
         move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
         team_index_constraints=team_index_constraints,
+        witnessed_fallback=witnessed_fallback,
     )
     if opponent_team is None:
         return None, opponent_team_failure or "opponent belief could not be materialized"
@@ -940,6 +942,7 @@ def _opponent_team_from_belief_result(
     team_size: int,
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
     team_index_constraints: Mapping[str, int] | None = None,
+    witnessed_fallback: bool = False,
 ) -> tuple[tuple[FixturePokemon, ...] | None, str | None]:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
@@ -950,6 +953,7 @@ def _opponent_team_from_belief_result(
             format_id=format_id,
             rng=rng,
             move_slot_constraints=move_slot_constraints,
+            witnessed_fallback=witnessed_fallback,
         )
         if fixture is None:
             return None, f"opponent {belief.species} could not be sampled from public belief"
@@ -1033,6 +1037,7 @@ def _sample_revealed_opponent_fixture(
     format_id: str,
     rng: random.Random,
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
+    witnessed_fallback: bool = False,
 ) -> FixturePokemon | None:
     variants = pokemon.candidate_variants
     if not variants:
@@ -1047,12 +1052,16 @@ def _sample_revealed_opponent_fixture(
         variants = tuple(summary.candidate_variants) if summary is not None else ()
     species_constraints = (move_slot_constraints or {}).get(_normalize_species_id(pokemon.species), {})
     if not variants:
-        return _witnessed_opponent_fixture(
-            pokemon,
-            set_source=set_source,
-            format_id=format_id,
-            rng=rng,
-            move_slot_constraints=species_constraints,
+        return (
+            _witnessed_opponent_fixture(
+                pokemon,
+                set_source=set_source,
+                format_id=format_id,
+                rng=rng,
+                move_slot_constraints=species_constraints,
+            )
+            if witnessed_fallback
+            else None
         )
     public_max_hp = _condition_max_hp(pokemon.condition)
     if public_max_hp is not None:
@@ -1067,12 +1076,16 @@ def _sample_revealed_opponent_fixture(
             == public_max_hp
         )
         if not hp_matched:
-            return _witnessed_opponent_fixture(
-                pokemon,
-                set_source=set_source,
-                format_id=format_id,
-                rng=rng,
-                move_slot_constraints=species_constraints,
+            return (
+                _witnessed_opponent_fixture(
+                    pokemon,
+                    set_source=set_source,
+                    format_id=format_id,
+                    rng=rng,
+                    move_slot_constraints=species_constraints,
+                )
+                if witnessed_fallback
+                else None
             )
         variants = hp_matched
     if species_constraints:
@@ -1088,12 +1101,16 @@ def _sample_revealed_opponent_fixture(
             is not None
         )
         if not slot_matched:
-            return _witnessed_opponent_fixture(
-                pokemon,
-                set_source=set_source,
-                format_id=format_id,
-                rng=rng,
-                move_slot_constraints=species_constraints,
+            return (
+                _witnessed_opponent_fixture(
+                    pokemon,
+                    set_source=set_source,
+                    format_id=format_id,
+                    rng=rng,
+                    move_slot_constraints=species_constraints,
+                )
+                if witnessed_fallback
+                else None
             )
         variants = slot_matched
     variant = variants[rng.randrange(len(variants))]
@@ -1105,12 +1122,16 @@ def _sample_revealed_opponent_fixture(
     )
     if fixture is not None:
         return fixture
-    return _witnessed_opponent_fixture(
-        pokemon,
-        set_source=set_source,
-        format_id=format_id,
-        rng=rng,
-        move_slot_constraints=species_constraints,
+    return (
+        _witnessed_opponent_fixture(
+            pokemon,
+            set_source=set_source,
+            format_id=format_id,
+            rng=rng,
+            move_slot_constraints=species_constraints,
+        )
+        if witnessed_fallback
+        else None
     )
 
 
@@ -1172,10 +1193,15 @@ def _witnessed_opponent_fixture(
     for revealed in pokemon.revealed_moves or ():
         revealed_id = _normalize_id(revealed)
         resolved = revealed
-        if revealed_id == "hiddenpower":
-            typed = [move for move in movepool if _normalize_id(move).startswith("hiddenpower")]
-            if typed:
-                resolved = typed[rng.randrange(len(typed))]
+        if revealed_id.startswith("hiddenpower"):
+            # A set carries at most one Hidden Power: dedup the whole family
+            # here too, and resolve a generic reveal to a typed pool entry.
+            if any(key.startswith("hiddenpower") for key in used):
+                continue
+            if revealed_id == "hiddenpower":
+                typed = [move for move in movepool if _normalize_id(move).startswith("hiddenpower")]
+                if typed:
+                    resolved = typed[rng.randrange(len(typed))]
         key = _normalize_id(resolved)
         if key in used or len(moves) >= 4:
             continue
