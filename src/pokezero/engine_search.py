@@ -51,6 +51,9 @@ class EngineMctsConfig:
     # Belief sampling is stochastic; failed draws are retried up to
     # worlds * sample_retry_factor total attempts (mirrors the W1 retry fix).
     sample_retry_factor: int = 4
+    # Documented approximation: a public Substitute is modeled at fresh
+    # (maxhp/4) health, since remaining sub HP is not tracked publicly.
+    approximate_substitute_health: bool = True
 
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
@@ -163,6 +166,7 @@ class EngineMctsPolicy:
                     override,
                     dex=self._dex,
                     approximate_sleep_turns=self._config.approximate_sleep_turns,
+                    approximate_substitute_health=self._config.approximate_substitute_health,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:

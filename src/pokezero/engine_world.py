@@ -139,6 +139,14 @@ def hidden_power_engine_id(move_id: str, ivs: Mapping[str, int] | None) -> str:
     return f"hiddenpower{iv_type}{base_power}"
 
 
+def _engine_species_id(species_id: str) -> str:
+    """Collapse cosmetic formes to the id the dex/engine know (Unown letters)."""
+
+    if species_id.startswith("unown"):
+        return "unown"
+    return species_id
+
+
 class EngineWorldUnsupported(ValueError):
     """A public effect the engine-world construction cannot express exactly.
 
@@ -236,6 +244,7 @@ def battle_spec_from_payload(
     *,
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -255,11 +264,13 @@ def battle_spec_from_payload(
     self_player = str(payload.get("selfPlayer") or "")
     if self_player not in _PLAYER_SLOTS:
         raise EngineWorldUnsupported("payload_malformed", f"selfPlayer {self_player!r} is not a player slot")
-    if str(payload.get("selfRequestKind") or "") != "move":
+    request_kind = str(payload.get("selfRequestKind") or "")
+    if request_kind not in ("move", "force-switch"):
         raise EngineWorldUnsupported(
             "boundary_not_move_request",
-            f"self request kind {payload.get('selfRequestKind')!r} (force-switch boundaries unsupported)",
+            f"self request kind {request_kind!r} is not supported",
         )
+    self_force_switch = request_kind == "force-switch"
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
@@ -283,15 +294,18 @@ def battle_spec_from_payload(
         if not packed:
             raise EngineWorldUnsupported("override_side_missing", f"override has no packed team for {slot!r}")
         team = unpack_team(packed)
+        is_self_slot = slot == self_player
         built_sides[slot], species_order = _build_side_spec(
             slot=slot,
             side_payload=side_payload,
             team=team,
             dex=dex,
-            is_self=slot == self_player,
+            is_self=is_self_slot,
             turn=turn,
             self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
             approximate_sleep_turns=approximate_sleep_turns,
+            approximate_substitute_health=approximate_substitute_health,
+            force_switch=is_self_slot and self_force_switch,
         )
         party_species[slot] = species_order
 
@@ -324,6 +338,7 @@ def world_battle_spec(
     *,
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -337,7 +352,11 @@ def world_battle_spec(
 
     payload = _public_materialization_payload(state)
     return battle_spec_from_payload(
-        payload, override, dex=dex, approximate_sleep_turns=approximate_sleep_turns
+        payload,
+        override,
+        dex=dex,
+        approximate_sleep_turns=approximate_sleep_turns,
+        approximate_substitute_health=approximate_substitute_health,
     )
 
 
@@ -404,6 +423,8 @@ def _build_side_spec(
     turn: int,
     self_benched_move_history: bool,
     approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
+    force_switch: bool = False,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -438,7 +459,7 @@ def _build_side_spec(
                 raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has two active rows")
             active_index = len(party)
         party.append(member)
-        species_order.append(species_id)
+        species_order.append(_engine_species_id(species_id))
     if rows_by_species:
         raise EngineWorldUnsupported(
             "public_species_not_in_world",
@@ -448,9 +469,15 @@ def _build_side_spec(
         raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has no active row")
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
-    unsupported = sorted(set(volatiles) - _SUPPORTED_VOLATILES)
+    supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
+    substitute_health = 0
+    if "substitute" in volatiles:
+        # Public info does not carry the sub's remaining HP; a fresh sub costs
+        # maxhp/4, so that is the documented upper-bound approximation.
+        substitute_health = party[active_index].maxhp // 4
 
     boosts: dict[str, int] = {}
     for key, value in (side_payload.get("boosts") or {}).items():
@@ -498,6 +525,8 @@ def _build_side_spec(
             side_conditions=side_conditions,
             boosts=boosts,
             volatile_statuses=tuple(volatiles),
+            substitute_health=substitute_health,
+            force_switch=force_switch,
         ),
         tuple(species_order),
     )
@@ -513,7 +542,7 @@ def _build_pokemon_spec(
     self_benched_move_history: bool = False,
     approximate_sleep_turns: bool = False,
 ) -> PokemonSpec:
-    species_id = normalize_id(mon.species)
+    species_id = _engine_species_id(normalize_id(mon.species))
     info = dex.species_info(species_id)
     if info is None:
         raise EngineWorldUnsupported("species_unknown", f"{slot}: {mon.species!r} is not in the Gen 3 dex")

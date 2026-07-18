@@ -91,6 +91,10 @@ class SideSpec:
     boosts: Mapping[str, int] = field(default_factory=dict)
     # Active Pokemon volatile statuses, engine ids (e.g. ``"leechseed"``).
     volatile_statuses: Sequence[str] = ()
+    # Substitute HP behind a ``"substitute"`` volatile (0 = no substitute).
+    substitute_health: int = 0
+    # This side must choose a replacement (its active fainted mid/end of turn).
+    force_switch: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,6 +229,12 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
         if any(not name for name in volatiles):
             raise ValueError(f"{path}.volatile_statuses entries must be non-empty")
         kwargs["volatile_statuses"] = set(volatiles)
+    if _require_non_negative_int(side.substitute_health, f"{path}.substitute_health"):
+        kwargs["substitute_health"] = side.substitute_health
+    if not isinstance(side.force_switch, bool):
+        raise TypeError(f"{path}.force_switch must be a bool, got {type(side.force_switch).__name__}")
+    if side.force_switch:
+        kwargs["force_switch"] = True
     return engine.Side(**kwargs)
 
 

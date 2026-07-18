@@ -72,6 +72,58 @@ class ChoiceMappingTests(unittest.TestCase):
         self.assertIsNone(self.policy._map_choices(self.context, {"surf": 1.0}))
 
 
+class OwnSideSelectionTests(unittest.TestCase):
+    """The policy must read ITS OWN seat's visit distribution (p2 included)."""
+
+    class _Entry:
+        def __init__(self, move_choice, visits):
+            self.move_choice = move_choice
+            self.visits = visits
+
+    class _Result:
+        def __init__(self):
+            self.total_visits = 100
+            # side_one (p1) prefers earthquake; side_two (p2) prefers surf.
+            self.side_one = [OwnSideSelectionTests._Entry("earthquake", 90)]
+            self.side_two = [OwnSideSelectionTests._Entry("surf", 90)]
+
+    def _run_seat(self, player_id):
+        import unittest.mock as mock
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+        from pokezero.engine_world import EngineWorld
+        from pokezero.poke_engine_adapter import BattleSpec, SideSpec, PokemonSpec, MoveSpec
+
+        module = mock.Mock()
+        module.monte_carlo_tree_search.return_value = self._Result()
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=module,
+            config=EngineMctsConfig(worlds=1, sample_retry_factor=1),
+        )
+        candidates = [
+            {"action_index": 0, "kind": "move", "legal": True, "move_id": "earthquake"},
+            {"action_index": 1, "kind": "move", "legal": True, "move_id": "surf"},
+        ]
+        mask = (True, True, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, candidates), player_id=player_id)
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": (), "p2": ()},
+        )
+        with mock.patch("pokezero.engine_search._gen3_randbat_belief_start_override_result",
+                        return_value=(object(), None)), \
+             mock.patch("pokezero.engine_search.world_battle_spec", return_value=world), \
+             mock.patch("pokezero.engine_search.build_poke_engine_state", return_value=object()):
+            decision = policy.select_action_with_context(context, rng=random.Random(0))
+        return decision.action_index
+
+    def test_p1_reads_side_one(self) -> None:
+        self.assertEqual(self._run_seat("p1"), 0)  # earthquake
+
+    def test_p2_reads_side_two(self) -> None:
+        self.assertEqual(self._run_seat("p2"), 1)  # surf, NOT p1's earthquake
+
+
 class FallbackTests(unittest.TestCase):
     def test_missing_public_state_falls_back_uniform_legal(self) -> None:
         policy = _policy()
