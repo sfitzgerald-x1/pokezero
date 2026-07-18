@@ -40,11 +40,28 @@ mechanism, fully explained.
 **Impact:** systematic optimism about statused Leftovers holders in engine
 rollouts (residual pressure halved or erased). Nearly every gen3 randbats set
 holds Leftovers, and Toxic appears in 152 sets — this is on-distribution.
-**Disposition options:** patch the residual order in our poke-engine build
-(we already carry a local patch mechanism from `setup_foulplay_eval.sh`), or
-accept as a documented exemption with a value-impact estimate. Patch is
-recommended: the fix is an ordering swap, and stall/residual accuracy is
-exactly what a value leaf reads.
+
+**Disposition: PATCHED (2026-07-18, revised after independent review).**
+`third_party/poke-engine-gen3-residual-order.patch`, applied by
+`scripts/setup_poke_engine.sh`. The first patch revision moved the whole
+item/ability loop ahead of status damage; review caught that this dragged
+the order-10 threshold berries (Sitrus/pinch) and Rain Dish along with
+Leftovers, breaking berry timing on the crossover turn (reproduced). The
+shipped patch therefore **splits the phases**: Leftovers (order 5) + Shed
+Skin (5.3) resolve before Leech Seed (8) and status damage (9/10);
+threshold berries, Rain Dish, and Speed Boost (order 10+) resolve after —
+matching Showdown's gen3 residual table for every effect the gen3 engine
+implements. Known residual gap: psn(9)-before-brn(10) cross-side
+interleaving is not modeled (no cross-side coupling in the status block;
+observable only in simultaneous last-mon faint tiebreaks — pre-existing,
+negligible).
+
+Regression gates: the differential stays **15/15 clean** (it only exercises
+Leftovers among items — a scope limit, not full-ordering proof), and
+`tests/test_engine_residual_order.py` pins the berry/Leftovers/Shed-Skin
+orderings directly against the engine at mid-battle HP states the one-turn
+differential cannot reach. Worth reporting upstream: the original
+all-items-after-status ordering is a real gen3 bug in poke-engine 0.0.47.
 
 ## Confirmed engine contract 2: Hidden Power ids must be typed + base power
 
