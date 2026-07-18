@@ -69,6 +69,7 @@ from pokezero.neural_policy import (
     resolve_torch_device,
     save_transformer_checkpoint,
     observation_window_to_torch,
+    observation_windows_to_torch,
     torch_available,
     train_transformer_policy,
     training_batch_to_torch,
@@ -656,6 +657,27 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         snapshot = timing.snapshot()
         self.assertEqual(snapshot.observation_encoding_count, 1)
         self.assertEqual(snapshot.value_neural_forward_count, 1)
+
+    def test_batched_value_tensor_rows_match_scalar_tensorization(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        histories = ((observation(1),), (observation(2), observation(3)))
+        batched = observation_windows_to_torch(histories, window_size=2, device="cpu")
+
+        for row_index, history in enumerate(histories):
+            scalar = observation_window_to_torch(history, window_size=2, device="cpu")
+            for name in (
+                "categorical_ids",
+                "numeric_features",
+                "token_type_ids",
+                "attention_mask",
+                "history_mask",
+            ):
+                self.assertTrue(
+                    torch.equal(batched[name][row_index], scalar[name][0]),
+                    msg=name,
+                )
 
     def test_transformer_value_output_is_bounded_to_terminal_return_range(self) -> None:
         if not torch_available():
