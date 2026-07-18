@@ -124,7 +124,11 @@ classifying it.
    CPU-only hardware vs the 19.2s GPU-cluster baseline. The dominant
    remaining cost is untimed per-visit orchestration (`residual_seconds`
    ~72% of wall — per-visit bridge round-trips and Python loop overhead);
-   that, not materialization, is the next profiling target.
+   that, not materialization, is the next profiling target. **Instrumentation
+   status (2026-07-17):** Root-PUCT now emits nested bridge round-trip,
+   Node-processing, and local bridge/Python-overhead timings without changing
+   additive wall accounting; the next ~10-game telemetry probe selects the
+   largest residual bucket before any Tier 2 or visit-batching change.
 2. **Tier 2 — direct state construction:** build the determinized battle
    directly from public state + the belief-sampled opponent (teams, HP,
    statuses, boosts, side conditions, field) as a constructed

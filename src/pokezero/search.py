@@ -36,6 +36,14 @@ ActionPriorVector = tuple[float, ...]
 RootVisitBudgetResolver = Callable[["RootPUCTVisitBudgetContext"], int | None]
 StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
 START_OVERRIDE_MISSING_WORLD_MESSAGE = "start override source did not produce a sampled world."
+_BRIDGE_TIMING_SECONDS = (
+    "bridge_round_trip_seconds",
+    "bridge_node_processing_seconds",
+)
+_BRIDGE_TIMING_COUNTS = (
+    "bridge_round_trip_count",
+    "bridge_node_processing_count",
+)
 _ILLEGAL_ACTION_FOR_REQUEST_RE = re.compile(
     r"^(?:(?P<player_id>[^:]+): )?action_index (?P<action_index>\d+) "
     r"is not legal for the current request(?: \(request_kind=[^)]+\))?\.$"
@@ -92,10 +100,11 @@ class RootPUCTSearchTiming:
     an opponent-action scenario planner; recorded-prefix benchmarks have no
     such planner and report this bucket as zero.
 
-    ``observation_encoding`` and ``neural_forward`` are intentionally
-    overlapping diagnostic sub-slices of policy/value/scenario work. They are
-    emitted for W2's stage profile, but excluded from residual accounting so
-    they do not double-count the end-to-end decision wall time.
+    ``observation_encoding``, ``neural_forward``, and the ``bridge_*`` fields
+    are intentionally overlapping diagnostic sub-slices. Bridge time is
+    already contained in snapshot/restore/step stages, while the neural
+    timings are contained in policy/value/scenario work. They are excluded
+    from residual accounting so they do not double-count decision wall time.
     """
 
     prefix_replay_seconds: float = 0.0
@@ -106,6 +115,10 @@ class RootPUCTSearchTiming:
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
     state_restore_count: int = 0
+    bridge_round_trip_seconds: float = 0.0
+    bridge_round_trip_count: int = 0
+    bridge_node_processing_seconds: float = 0.0
+    bridge_node_processing_count: int = 0
     belief_world_materialization_seconds: float = 0.0
     belief_world_materialization_count: int = 0
     opponent_scenario_planning_seconds: float = 0.0
@@ -147,6 +160,21 @@ class RootPUCTSearchTiming:
     @property
     def residual_seconds(self) -> float:
         return max(0.0, self.raw_residual_seconds)
+
+    @property
+    def bridge_python_orchestration_seconds(self) -> float:
+        """Bridge wall not spent in Node simulator work.
+
+        This is a diagnostic subdivision of the already-accounted bridge
+        round-trip time: IPC, JSON work, queue routing, and Python-side bridge
+        processing. It must not be added to ``total_seconds`` again.
+        """
+
+        return max(0.0, self.bridge_round_trip_seconds - self.bridge_node_processing_seconds)
+
+    @property
+    def bridge_python_orchestration_count(self) -> int:
+        return self.bridge_round_trip_count
 
     def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -206,6 +234,30 @@ class RootPUCTSearchTiming:
             neural_forward_count=self.neural_forward_count + neural_forward_count,
         )
 
+    def with_bridge_subtiming(
+        self,
+        *,
+        bridge_round_trip_seconds: float,
+        bridge_round_trip_count: int,
+        bridge_node_processing_seconds: float,
+        bridge_node_processing_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Attach non-additive bridge transport and simulator timing deltas."""
+
+        return replace(
+            self,
+            bridge_round_trip_seconds=(
+                self.bridge_round_trip_seconds + bridge_round_trip_seconds
+            ),
+            bridge_round_trip_count=self.bridge_round_trip_count + bridge_round_trip_count,
+            bridge_node_processing_seconds=(
+                self.bridge_node_processing_seconds + bridge_node_processing_seconds
+            ),
+            bridge_node_processing_count=(
+                self.bridge_node_processing_count + bridge_node_processing_count
+            ),
+        )
+
     def with_total(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(self, total_seconds=elapsed_seconds)
 
@@ -222,6 +274,14 @@ class RootPUCTSearchTiming:
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
             state_restore_seconds=sum(timing.state_restore_seconds for timing in timings),
             state_restore_count=sum(timing.state_restore_count for timing in timings),
+            bridge_round_trip_seconds=sum(timing.bridge_round_trip_seconds for timing in timings),
+            bridge_round_trip_count=sum(timing.bridge_round_trip_count for timing in timings),
+            bridge_node_processing_seconds=sum(
+                timing.bridge_node_processing_seconds for timing in timings
+            ),
+            bridge_node_processing_count=sum(
+                timing.bridge_node_processing_count for timing in timings
+            ),
             belief_world_materialization_seconds=sum(
                 timing.belief_world_materialization_seconds for timing in timings
             ),
@@ -261,6 +321,12 @@ class RootPUCTSearchTiming:
             "state_snapshot_count": self.state_snapshot_count,
             "state_restore_seconds": self.state_restore_seconds,
             "state_restore_count": self.state_restore_count,
+            "bridge_round_trip_seconds": self.bridge_round_trip_seconds,
+            "bridge_round_trip_count": self.bridge_round_trip_count,
+            "bridge_node_processing_seconds": self.bridge_node_processing_seconds,
+            "bridge_node_processing_count": self.bridge_node_processing_count,
+            "bridge_python_orchestration_seconds": self.bridge_python_orchestration_seconds,
+            "bridge_python_orchestration_count": self.bridge_python_orchestration_count,
             "belief_world_materialization_seconds": self.belief_world_materialization_seconds,
             "belief_world_materialization_count": self.belief_world_materialization_count,
             "opponent_scenario_planning_seconds": self.opponent_scenario_planning_seconds,
@@ -293,6 +359,10 @@ class _RootPUCTSearchTimingAccumulator:
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
     state_restore_count: int = 0
+    bridge_round_trip_seconds: float = 0.0
+    bridge_round_trip_count: int = 0
+    bridge_node_processing_seconds: float = 0.0
+    bridge_node_processing_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
     rollout_tail_seconds: float = 0.0
@@ -314,6 +384,12 @@ class _RootPUCTSearchTimingAccumulator:
         self.state_restore_seconds += elapsed_seconds
         self.state_restore_count += 1
 
+    def add_bridge_subtiming(self, timing: Mapping[str, float | int]) -> None:
+        self.bridge_round_trip_seconds += float(timing["bridge_round_trip_seconds"])
+        self.bridge_round_trip_count += int(timing["bridge_round_trip_count"])
+        self.bridge_node_processing_seconds += float(timing["bridge_node_processing_seconds"])
+        self.bridge_node_processing_count += int(timing["bridge_node_processing_count"])
+
     def add_value_evaluation(self, elapsed_seconds: float) -> None:
         self.value_evaluation_seconds += elapsed_seconds
         self.value_evaluation_count += 1
@@ -332,12 +408,72 @@ class _RootPUCTSearchTimingAccumulator:
             state_snapshot_count=self.state_snapshot_count,
             state_restore_seconds=self.state_restore_seconds,
             state_restore_count=self.state_restore_count,
+            bridge_round_trip_seconds=self.bridge_round_trip_seconds,
+            bridge_round_trip_count=self.bridge_round_trip_count,
+            bridge_node_processing_seconds=self.bridge_node_processing_seconds,
+            bridge_node_processing_count=self.bridge_node_processing_count,
             value_evaluation_seconds=self.value_evaluation_seconds,
             value_evaluation_count=self.value_evaluation_count,
             rollout_tail_seconds=self.rollout_tail_seconds,
             rollout_tail_count=self.rollout_tail_count,
             total_seconds=total_seconds,
         )
+
+
+def _bridge_timing_snapshot(env: PokeZeroEnv) -> dict[str, float | int] | None:
+    """Read optional cumulative bridge counters without changing search behavior.
+
+    Only the local Showdown environment exposes these counters. Other search
+    environments retain their existing timing behavior, and a malformed
+    diagnostic source is ignored rather than becoming a policy failure.
+    """
+
+    source = getattr(env, "root_puct_bridge_timing_snapshot", None)
+    if not callable(source):
+        return None
+    try:
+        payload = source()
+    except Exception:
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    result: dict[str, float | int] = {}
+    for field in _BRIDGE_TIMING_SECONDS:
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, (float, int)):
+            return None
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0:
+            return None
+        result[field] = parsed
+    for field in _BRIDGE_TIMING_COUNTS:
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        result[field] = value
+    return result
+
+
+def _bridge_timing_delta(
+    before: Mapping[str, float | int] | None,
+    after: Mapping[str, float | int] | None,
+) -> dict[str, float | int] | None:
+    """Return one PUCT call's monotonic bridge-counter delta, if available."""
+
+    if before is None or after is None:
+        return None
+    result: dict[str, float | int] = {}
+    for field in _BRIDGE_TIMING_SECONDS:
+        delta = float(after[field]) - float(before[field])
+        if delta < 0.0:
+            return None
+        result[field] = delta
+    for field in _BRIDGE_TIMING_COUNTS:
+        delta = int(after[field]) - int(before[field])
+        if delta < 0:
+            return None
+        result[field] = delta
+    return result
 
 
 @dataclass(frozen=True)
@@ -784,6 +920,7 @@ def puct_branch_search(
     time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
     timing_started_at = _timing_perf_counter()
     timing = _RootPUCTSearchTimingAccumulator()
+    bridge_timing_before = _bridge_timing_snapshot(env)
     value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
         trajectory=trajectory,
@@ -922,6 +1059,12 @@ def puct_branch_search(
         )
         for accumulator in accumulators.values()
     )
+    bridge_timing = _bridge_timing_delta(
+        bridge_timing_before,
+        _bridge_timing_snapshot(env),
+    )
+    if bridge_timing is not None:
+        timing.add_bridge_subtiming(bridge_timing)
     return PUCTBranchSearchResult(
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,

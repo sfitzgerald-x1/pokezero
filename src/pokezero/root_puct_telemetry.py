@@ -64,6 +64,15 @@ _TIMING_KEYS = (
     "state_snapshot_count",
     "state_restore_seconds",
     "state_restore_count",
+    # These are nested within snapshot/restore/step stages. They split bridge
+    # wall into Node simulator work and local IPC/Python orchestration without
+    # changing residual accounting.
+    "bridge_round_trip_seconds",
+    "bridge_round_trip_count",
+    "bridge_node_processing_seconds",
+    "bridge_node_processing_count",
+    "bridge_python_orchestration_seconds",
+    "bridge_python_orchestration_count",
     "belief_world_materialization_seconds",
     "belief_world_materialization_count",
     "opponent_scenario_planning_seconds",
