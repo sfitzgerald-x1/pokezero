@@ -558,6 +558,7 @@ class _RestorablePrefix:
     prefix: ReplayPrefixResult
     snapshot: Any
     restore_snapshot: Callable[[Any], None]
+    snapshot_restore_mode: str = "generic"
 
 
 @dataclass(frozen=True)
@@ -1533,6 +1534,7 @@ def _restorable_prefix_from_prepared(
         prefix=prepared_prefix.prefix,
         snapshot=prepared_prefix.snapshot,
         restore_snapshot=restorer,
+        snapshot_restore_mode=prepared_prefix.snapshot_restore_mode,
     )
 
 
@@ -1553,7 +1555,7 @@ def _restorable_prefix_snapshot(
     )
     if snapshot_hooks is None:
         return None
-    snapshotter, restorer, _snapshot_restore_mode = snapshot_hooks
+    snapshotter, restorer, snapshot_restore_mode = snapshot_hooks
     if callable(start_override):
         return None
     prefix_replay_started_at = _timing_perf_counter() if timing is not None else None
@@ -1579,7 +1581,12 @@ def _restorable_prefix_snapshot(
     if timing is not None:
         assert snapshot_started_at is not None
         timing.add_state_snapshot(_timing_perf_counter() - snapshot_started_at)
-    return _RestorablePrefix(prefix=prefix, snapshot=snapshot, restore_snapshot=restorer)
+    return _RestorablePrefix(
+        prefix=prefix,
+        snapshot=snapshot,
+        restore_snapshot=restorer,
+        snapshot_restore_mode=snapshot_restore_mode,
+    )
 
 
 def _branch_from_replay_prefix(
@@ -1634,11 +1641,39 @@ def _branch_from_replay_prefix(
             branch_round=branch_round,
             step_result=step_result,
         )
-    restore_started_at = _timing_perf_counter() if timing is not None else None
-    restorable_prefix.restore_snapshot(restorable_prefix.snapshot)
-    if timing is not None:
-        assert restore_started_at is not None
-        timing.add_state_restore(_timing_perf_counter() - restore_started_at)
+    step_from_search_snapshot = (
+        getattr(env, "step_from_search_snapshot", None)
+        if restorable_prefix.snapshot_restore_mode == "bridge-handle"
+        else None
+    )
+    if not callable(step_from_search_snapshot):
+        # Preserve the generic/oracle path's original restore-before-validation ordering. It is
+        # deliberately separate from the bridge-handle fusion below.
+        restore_started_at = _timing_perf_counter() if timing is not None else None
+        restorable_prefix.restore_snapshot(restorable_prefix.snapshot)
+        if timing is not None:
+            assert restore_started_at is not None
+            timing.add_state_restore(_timing_perf_counter() - restore_started_at)
+        branch_round = ReplayActionRound(
+            turn_index=prefix_decision_round_count,
+            actions=branch_actions,
+        )
+        _require_exact_requested_players(
+            branch_actions=branch_round.actions,
+            requested_players=restorable_prefix.prefix.requested_players,
+            turn_index=prefix_decision_round_count,
+        )
+        branch_step_started_at = _timing_perf_counter() if timing is not None else None
+        step_result = env.step(branch_round.actions)
+        if timing is not None:
+            assert branch_step_started_at is not None
+            timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
+        return ReplayBranchResult(
+            prefix=restorable_prefix.prefix,
+            branch_round=branch_round,
+            step_result=step_result,
+        )
+
     branch_round = ReplayActionRound(
         turn_index=prefix_decision_round_count,
         actions=branch_actions,
@@ -1648,8 +1683,11 @@ def _branch_from_replay_prefix(
         requested_players=restorable_prefix.prefix.requested_players,
         turn_index=prefix_decision_round_count,
     )
+    # This optional fast path is restricted to bridge-resident snapshots created from a
+    # belief-sampled world. The fused bridge command includes both restore and branch
+    # execution, so it is intentionally recorded as one non-overlapping branch stage.
     branch_step_started_at = _timing_perf_counter() if timing is not None else None
-    step_result = env.step(branch_round.actions)
+    step_result = step_from_search_snapshot(restorable_prefix.snapshot, branch_round.actions)
     if timing is not None:
         assert branch_step_started_at is not None
         timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
