@@ -517,8 +517,6 @@ class DittoTransformLiveTests(unittest.TestCase):
             policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
                                       config=EngineMctsConfig())
 
-            class _Ctx:
-                metadata = None
             context = type("Ctx", (), {
                 "observation": observation_p2,
                 "player_id": "p2",
@@ -531,6 +529,83 @@ class DittoTransformLiveTests(unittest.TestCase):
             with self.assertRaises(EngineWorldUnsupported) as caught2:
                 world_battle_spec(state_p2, override, dex=dex, blocked_slots=blocked)
             self.assertEqual(caught2.exception.reason, "public_effect_blocked")
+
+            # F2 (review): the block must CLEAR after the transformed Ditto
+            # switches out (gen3 transform reverts on switch) and back in.
+            for _ in range(4):
+                actions = {}
+                requested = env.requested_players()
+                for player in requested:
+                    observation = env.observe(player)
+                    legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                    switch = next((c for c in legal if c.get("kind") == "switch"), None)
+                    pick = switch if (player == "p1" and switch is not None) else legal[0]
+                    actions[player] = pick["action_index"]
+                step_result = env.step(actions)
+                if step_result.terminal is not None:
+                    break
+                observation_p2 = env.observe("p2")
+                context_now = type("Ctx", (), {
+                    "observation": observation_p2,
+                    "player_id": "p2",
+                    "public_materialization_state": env.public_materialization_state("p2"),
+                })()
+                blocked_now, _ = policy._public_effect_signals(context_now)
+                belief_now = observation_p2.metadata.get("belief_view") or {}
+                actives = [m for m in belief_now.get("opponent_pokemon") or [] if m.get("active")]
+                if actives and "ditto" not in str(actives[0].get("species", "")).lower():
+                    # Untransformed replacement active: block must be gone.
+                    self.assertEqual(blocked_now, {})
+                    break
+        finally:
+            env.close()
+
+    def test_mirror_seat_p1_facing_transformed_p2_ditto(self) -> None:
+        # F4 (review): the symmetric seat — p2 owns the Ditto, p1 must block p2.
+        from pokezero.dex import load_showdown_dex
+        from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
+                               item="Quick Claw", level=100)
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse", "Rest", "Shadow Ball"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((lax, _SWAMPERT)),
+            "p2": pack_team((ditto, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99002, start_override=override)
+            actions = {}
+            for player in env.requested_players():
+                observation = env.observe(player)
+                legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                want = "transform" if player == "p2" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move" and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            result = env.step(actions)
+            self.assertIsNone(result.terminal)
+
+            observation_p1 = env.observe("p1")
+            policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
+                                      config=EngineMctsConfig())
+            context = type("Ctx", (), {
+                "observation": observation_p1,
+                "player_id": "p1",
+                "public_materialization_state": env.public_materialization_state("p1"),
+            })()
+            blocked, _ = policy._public_effect_signals(context)
+            self.assertIn("p2", blocked)
+            self.assertIn("transformed", blocked["p2"])
+            with self.assertRaises(EngineWorldUnsupported) as caught:
+                world_battle_spec(
+                    env.public_materialization_state("p1"), override, dex=dex, blocked_slots=blocked
+                )
+            self.assertEqual(caught.exception.reason, "public_effect_blocked")
         finally:
             env.close()
 

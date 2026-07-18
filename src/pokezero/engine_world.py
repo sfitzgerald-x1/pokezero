@@ -574,8 +574,9 @@ def _build_side_spec(
             )
         # The engine restricts the side to last_used_move while ENCORE is set
         # (verified empirically); it does not decrement the duration, so the
-        # mon is modeled as locked for the search horizon — conservative for
-        # gen3's 3-8 turn encores over short horizons.
+        # mon is modeled as locked for the search horizon. Conservative for an
+        # OPPONENT's encore; pessimistic for our own near expiry (real gen3
+        # encores run 3-8 turns) — acceptable over short MCTS horizons.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
 
