@@ -41,15 +41,27 @@ mechanism, fully explained.
 rollouts (residual pressure halved or erased). Nearly every gen3 randbats set
 holds Leftovers, and Toxic appears in 152 sets — this is on-distribution.
 
-**Disposition: PATCHED (2026-07-18).**
+**Disposition: PATCHED (2026-07-18, revised after independent review).**
 `third_party/poke-engine-gen3-residual-order.patch`, applied by
-`scripts/setup_poke_engine.sh`, moves the status-damage block after the
-item/ability and Leech Seed blocks in `src/gen3/generate_instructions.rs`,
-matching Showdown's gen3 residual orders (Leftovers 5, Leech Seed 8,
-poison/toxic 9, burn 10 — the patch also corrects the latent
-leech-seed-after-status ordering the differential had not yet exercised).
-With the patched wheel the differential is **15/15 clean**; it is the
-patch's regression gate.
+`scripts/setup_poke_engine.sh`. The first patch revision moved the whole
+item/ability loop ahead of status damage; review caught that this dragged
+the order-10 threshold berries (Sitrus/pinch) and Rain Dish along with
+Leftovers, breaking berry timing on the crossover turn (reproduced). The
+shipped patch therefore **splits the phases**: Leftovers (order 5) + Shed
+Skin (5.3) resolve before Leech Seed (8) and status damage (9/10);
+threshold berries, Rain Dish, and Speed Boost (order 10+) resolve after —
+matching Showdown's gen3 residual table for every effect the gen3 engine
+implements. Known residual gap: psn(9)-before-brn(10) cross-side
+interleaving is not modeled (no cross-side coupling in the status block;
+observable only in simultaneous last-mon faint tiebreaks — pre-existing,
+negligible).
+
+Regression gates: the differential stays **15/15 clean** (it only exercises
+Leftovers among items — a scope limit, not full-ordering proof), and
+`tests/test_engine_residual_order.py` pins the berry/Leftovers/Shed-Skin
+orderings directly against the engine at mid-battle HP states the one-turn
+differential cannot reach. Worth reporting upstream: the original
+all-items-after-status ordering is a real gen3 bug in poke-engine 0.0.47.
 
 ## Confirmed engine contract 2: Hidden Power ids must be typed + base power
 

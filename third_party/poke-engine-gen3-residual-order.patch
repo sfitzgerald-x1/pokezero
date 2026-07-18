@@ -1,22 +1,105 @@
---- a/src/gen3/generate_instructions.rs
-+++ b/src/gen3/generate_instructions.rs
-@@ -2093,10 +2093,61 @@
-             incoming_instructions
-                 .instruction_list
-                 .push(decrement_wish_instruction);
-+        }
-+    }
+diff --color -ruN a/src/gen3/abilities.rs b/src/gen3/abilities.rs
+--- a/src/gen3/abilities.rs	2026-06-13 13:32:23
++++ b/src/gen3/abilities.rs	2026-07-18 03:26:12
+@@ -184,6 +184,37 @@
+     }
+ }
+ 
++// pokezero gen3 residual-order split: Shed Skin is Showdown gen3 residual
++// order 5.3 (before status damage); Speed Boost (27) and the rain heals
++// (10.3) stay in ability_end_of_turn after status damage.
++pub fn ability_end_of_turn_order5(
++    state: &mut State,
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++) {
++    let (attacking_side, _defending_side) = state.get_both_sides(side_ref);
++    let active_pkmn = attacking_side.get_active();
++    match active_pkmn.ability {
++        // Shed skin only has a 1/3 chance of activating at the end of the turn
++        // but I'm not going to branch on that here
++        Abilities::SHEDSKIN => {
++            if active_pkmn.status != PokemonStatus::NONE {
++                let attacking_side = state.get_side(side_ref);
++                let active_index = attacking_side.active_index;
++                let active_pkmn = attacking_side.get_active();
 +
-+    // ability/item end-of-turn effects
++                add_remove_status_instructions(
++                    instructions,
++                    active_index,
++                    *side_ref,
++                    attacking_side,
++                );
++            }
++        }
++        _ => {}
++    }
++}
++
+ pub fn ability_end_of_turn(
+     state: &mut State,
+     side_ref: &SideReference,
+@@ -232,22 +263,6 @@
+                     active_pkmn.hp += heal_amount;
+                     instructions.instruction_list.push(ins);
+                 }
+-            }
+-        }
+-        // Shed skin only has a 1/3 chance of activating at the end of the turn
+-        // but I'm not going to branch on that here
+-        Abilities::SHEDSKIN => {
+-            if active_pkmn.status != PokemonStatus::NONE {
+-                let attacking_side = state.get_side(side_ref);
+-                let active_index = attacking_side.active_index;
+-                let active_pkmn = attacking_side.get_active();
+-
+-                add_remove_status_instructions(
+-                    instructions,
+-                    active_index,
+-                    *side_ref,
+-                    attacking_side,
+-                );
+             }
+         }
+         _ => {}
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-06-13 13:32:23
++++ b/src/gen3/generate_instructions.rs	2026-07-18 03:26:41
+@@ -1,5 +1,6 @@
+ use super::abilities::{
+-    ability_after_damage_hit, ability_end_of_turn, ability_modify_attack_against,
++    ability_after_damage_hit, ability_end_of_turn, ability_end_of_turn_order5,
++    ability_modify_attack_against,
+     ability_modify_attack_being_used, ability_on_switch_in, ability_on_switch_out, Abilities,
+ };
+ use super::choice_effects::{
+@@ -25,7 +26,8 @@
+ use super::damage_calc::calculate_futuresight_damage;
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+-    item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
++    item_before_move, item_end_of_turn, item_end_of_turn_order5, item_modify_attack_against,
++    item_modify_attack_being_used,
+     Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+@@ -2096,6 +2098,56 @@
+         }
+     }
+ 
++    // Residual order 5 item/ability effects (Leftovers, Shed Skin): resolve
++    // BEFORE Leech Seed (8) and status damage (9/10), per Showdown gen3
++    // residual orders. Upstream ran ALL items/abilities after status damage,
++    // netting Toxic/burn residuals against the Leftovers heal.
 +    for side_ref in sides {
 +        let side = state.get_side(side_ref);
 +        let active_pkmn = side.get_active();
 +        if active_pkmn.hp == 0 {
 +            continue;
-         }
-+        item_end_of_turn(state, side_ref, &mut incoming_instructions);
-+        ability_end_of_turn(state, side_ref, &mut incoming_instructions);
-     }
++        }
++        item_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
++        ability_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
++    }
 +
 +    // leechseed sap
 +    for side_ref in sides {
@@ -30,7 +113,7 @@
 +            if active_pkmn.hp == 0 || other_active_pkmn.hp == 0 {
 +                continue;
 +            }
- 
++
 +            let health_sapped = cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
 +            let damage_ins = Instruction::Damage(DamageInstruction {
 +                side_ref: *side_ref,
@@ -55,29 +138,22 @@
 +    }
 +
      // status damage
-+    // Gen 3 residual order fix (pokezero): items (Leftovers, order 5) and Leech Seed
-+    // (order 8) resolve BEFORE poison/toxic (9) and burn (10) damage, so this block
-+    // was moved below them. Upstream applied status damage first, which nets
-+    // residuals against the Leftovers heal (e.g. full-HP Toxic: -14 then +14 = 0).
      for side_ref in sides {
          let side = state.get_side(side_ref);
-         let toxic_count = side.side_conditions.toxic_count as f32;
-@@ -2171,53 +2222,6 @@
-                     .push(toxic_counter_increment_instruction);
-             }
-             _ => {}
--        }
--    }
--
+@@ -2174,7 +2226,8 @@
+         }
+     }
+ 
 -    // ability/item end-of-turn effects
--    for side_ref in sides {
--        let side = state.get_side(side_ref);
--        let active_pkmn = side.get_active();
--        if active_pkmn.hp == 0 {
--            continue;
--        }
--        item_end_of_turn(state, side_ref, &mut incoming_instructions);
--        ability_end_of_turn(state, side_ref, &mut incoming_instructions);
++    // Residual order 10 item/ability effects (threshold berries, Rain Dish,
++    // Speed Boost): resolve AFTER status damage, per Showdown gen3 orders.
+     for side_ref in sides {
+         let side = state.get_side(side_ref);
+         let active_pkmn = side.get_active();
+@@ -2183,42 +2236,6 @@
+         }
+         item_end_of_turn(state, side_ref, &mut incoming_instructions);
+         ability_end_of_turn(state, side_ref, &mut incoming_instructions);
 -    }
 -
 -    // leechseed sap
@@ -113,6 +189,63 @@
 -                other_active_pkmn.hp += health_recovered;
 -                incoming_instructions.instruction_list.push(heal_ins);
 -            }
-         }
+-        }
      }
  
+     // volatile statuses
+diff --color -ruN a/src/gen3/items.rs b/src/gen3/items.rs
+--- a/src/gen3/items.rs	2026-06-13 13:32:23
++++ b/src/gen3/items.rs	2026-07-18 03:26:12
+@@ -315,6 +315,33 @@
+     }
+ }
+ 
++// pokezero gen3 residual-order split: Leftovers is Showdown residual order 5
++// (before status damage at 9/10); the HP/status-threshold berries above are
++// order 10.4 (after status damage) and stay in item_end_of_turn.
++pub fn item_end_of_turn_order5(
++    state: &mut State,
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++) {
++    let attacking_side = state.get_side(side_ref);
++    let active_pkmn = attacking_side.get_active();
++    match active_pkmn.item {
++        Items::LEFTOVERS => {
++            let attacker = state.get_side(side_ref).get_active();
++            if attacker.hp < attacker.maxhp {
++                let heal_amount = cmp::min(attacker.maxhp / 16, attacker.maxhp - attacker.hp);
++                let ins = Instruction::Heal(HealInstruction {
++                    side_ref: side_ref.clone(),
++                    heal_amount: heal_amount,
++                });
++                attacker.hp += heal_amount;
++                instructions.instruction_list.push(ins);
++            }
++        }
++        _ => {}
++    }
++}
++
+ pub fn item_end_of_turn(
+     state: &mut State,
+     side_ref: &SideReference,
+@@ -343,18 +370,6 @@
+         }
+         Items::CHESTOBERRY if active_pkmn.status == PokemonStatus::SLEEP => {
+             chesto_berry(side_ref, attacking_side, instructions)
+-        }
+-        Items::LEFTOVERS => {
+-            let attacker = state.get_side(side_ref).get_active();
+-            if attacker.hp < attacker.maxhp {
+-                let heal_amount = cmp::min(attacker.maxhp / 16, attacker.maxhp - attacker.hp);
+-                let ins = Instruction::Heal(HealInstruction {
+-                    side_ref: side_ref.clone(),
+-                    heal_amount: heal_amount,
+-                });
+-                attacker.hp += heal_amount;
+-                instructions.instruction_list.push(ins);
+-            }
+         }
+         _ => {}
+     }

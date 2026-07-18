@@ -4,10 +4,13 @@
 # the fidelity differential (pokezero.engine_fidelity) is the patch's regression gate.
 #
 # Patches applied (third_party/):
-#   poke-engine-gen3-residual-order.patch — end-of-turn residual order: items
-#   (Leftovers, order 5) and Leech Seed (8) before poison/toxic (9) and burn (10)
-#   damage, matching Gen 3 / Showdown. Upstream nets residuals against the
-#   Leftovers heal (confirmed deviation, docs/engine_fidelity_findings.md).
+#   poke-engine-gen3-residual-order.patch — end-of-turn residual order split to
+#   match Showdown gen3: Leftovers (5) + Shed Skin (5.3), then Leech Seed (8),
+#   then poison/toxic/burn damage (9/10), then threshold berries + Rain Dish +
+#   Speed Boost (10+). Upstream ran ALL items/abilities after status damage,
+#   netting residuals against the Leftovers heal (confirmed deviation,
+#   docs/engine_fidelity_findings.md). --fuzz=0 so a future version bump fails
+#   loudly instead of applying hunks at shifted locations.
 #
 # Requires: rustup/cargo, uv. Usage: scripts/setup_poke_engine.sh [venv-python]
 set -euo pipefail
@@ -24,7 +27,7 @@ SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
 for patch in poke-engine-gen3-residual-order.patch; do
-  (cd "$SRC" && patch -p1 --forward < "$REPO/third_party/$patch") && echo "      $patch: applied"
+  (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 
 echo "[3/3] build + install (gen3 features) into $PYTHON"
