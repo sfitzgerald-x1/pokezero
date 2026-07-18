@@ -17,6 +17,7 @@ from pokezero.search_policy import (
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
+    _finalize_root_puct_timing,
     _opponent_action_scenarios,
     _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
@@ -350,6 +351,38 @@ class DelayedOutcomeEnv:
 
 
 class RootPUCTSearchPolicyTest(unittest.TestCase):
+    def test_root_puct_timing_keeps_legacy_coarse_partition_for_older_callers(self) -> None:
+        timing = _finalize_root_puct_timing(
+            completed_search_timing=RootPUCTSearchTiming(total_seconds=2.0),
+            puct_search_call_seconds=5.0,
+            puct_search_call_count=1,
+            puct_search_result_count=1,
+            puct_search_completed_call_seconds=None,
+            puct_search_completed_call_count=None,
+            puct_search_retained_completed_call_seconds=None,
+            puct_search_retained_completed_call_count=None,
+            puct_search_completed_result_seconds=None,
+            puct_search_completed_result_count=None,
+            puct_search_rejected_call_seconds=None,
+            puct_search_rejected_call_count=None,
+            belief_world_materialization_seconds=None,
+            belief_world_materialization_count=None,
+            opponent_scenario_planning_seconds=None,
+            root_policy_setup_seconds=None,
+            direct_prefix_construction_seconds=None,
+            direct_prefix_construction_count=None,
+            scenario_dispatch_orchestration_seconds=None,
+            scenario_dispatch_orchestration_count=None,
+            policy_evaluation_seconds=None,
+            timing_started_at=time.perf_counter(),
+            neural_timing_before=None,
+            neural_timing_snapshot=None,
+        ).to_dict()
+
+        self.assertEqual(timing["puct_search_unrecorded_call_seconds"], 3.0)
+        self.assertEqual(timing["puct_search_completed_call_count"], 0)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 0)
+
     def test_root_puct_policy_preserves_positional_policy_id_argument(self) -> None:
         policy = RootPUCTSearchPolicy(
             lambda: ImmediateOutcomeEnv(label="branch"),
@@ -782,6 +815,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["scenario_dispatch_orchestration_count"], 1)
         self.assertEqual(timing["puct_search_result_residual_count"], 1)
         self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_result_count"], 1)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 0)
         self.assertGreaterEqual(timing["puct_search_unrecorded_call_seconds"], 0.0)
         self.assertAlmostEqual(
             timing["raw_residual_seconds"],
@@ -2628,6 +2664,74 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 1, "p2": 0},
         ])
 
+    def test_root_puct_timing_keeps_capped_completed_searches_unrecorded(self) -> None:
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (OpponentActionScenario(actions={"p2": 0}, weight=1.0, label="stay-in"),)
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            del context, scenario, scenario_index, rng
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": "Xatu||||Psychic|||||||",
+                    }
+                )
+
+            return sample_override
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: StartOverrideOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            max_opponent_action_scenarios=1,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenario_count"], 1)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["puct_search_call_count"], 2)
+        self.assertEqual(timing["puct_search_completed_call_count"], 2)
+        self.assertEqual(timing["puct_search_retained_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_result_count"], 1)
+        self.assertEqual(timing["puct_search_discarded_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 0)
+        self.assertGreater(timing["puct_search_discarded_completed_call_seconds"], 0.0)
+        self.assertAlmostEqual(
+            timing["puct_search_unrecorded_call_seconds"],
+            max(
+                0.0,
+                timing["puct_search_completed_call_seconds"]
+                - timing["puct_search_completed_result_seconds"],
+            ),
+        )
+
     def test_root_puct_policy_does_not_pre_split_time_budget_across_rejected_reserve_scenarios(self) -> None:
         def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
             del context, rng
@@ -3826,6 +3930,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["scenario_dispatch_orchestration_count"], 2)
         self.assertEqual(timing["puct_search_result_residual_count"], 1)
         self.assertEqual(timing["puct_search_call_count"], 2)
+        self.assertEqual(timing["puct_search_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_result_count"], 1)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 1)
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertGreater(timing["total_seconds"], 0.0)
 
@@ -3880,6 +3987,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["puct_search_result_residual_count"], 0)
         self.assertEqual(timing["puct_search_result_residual_seconds"], 0.0)
         self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_call_count"], 0)
+        self.assertEqual(timing["puct_search_completed_result_count"], 0)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 1)
         self.assertGreater(timing["puct_search_unrecorded_call_seconds"], 0.0)
         self.assertGreaterEqual(timing["total_seconds"], 0.01)
         self.assertEqual(decision.metadata["root_puct_elapsed_seconds"], timing["total_seconds"])

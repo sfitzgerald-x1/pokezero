@@ -1185,6 +1185,42 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["raw_outer_policy_residual_seconds"], 2.0)
         self.assertEqual(timing["outer_policy_residual_seconds"], 2.0)
 
+    def test_root_puct_timing_splits_completed_and_rejected_call_wall(self) -> None:
+        timing = (
+            RootPUCTSearchTiming(branch_simulator_step_seconds=2.0, total_seconds=11.0)
+            .with_puct_search_residual_partition(
+                result_residual_seconds=4.0,
+                result_count=2,
+                unrecorded_call_seconds=5.0,
+                call_count=3,
+            )
+            .with_puct_search_call_outcomes(
+                completed_call_seconds=7.0,
+                completed_call_count=2,
+                retained_completed_call_seconds=7.0,
+                retained_completed_call_count=2,
+                completed_result_seconds=5.0,
+                completed_result_count=2,
+                rejected_call_seconds=3.0,
+                rejected_call_count=1,
+            )
+            .to_dict()
+        )
+
+        self.assertEqual(timing["puct_search_completed_call_seconds"], 7.0)
+        self.assertEqual(timing["puct_search_completed_call_count"], 2)
+        self.assertEqual(timing["puct_search_retained_completed_call_seconds"], 7.0)
+        self.assertEqual(timing["puct_search_retained_completed_call_count"], 2)
+        self.assertEqual(timing["puct_search_completed_result_seconds"], 5.0)
+        self.assertEqual(timing["puct_search_completed_result_count"], 2)
+        self.assertEqual(timing["puct_search_completed_call_overhead_seconds"], 2.0)
+        self.assertEqual(timing["puct_search_discarded_completed_call_seconds"], 0.0)
+        self.assertEqual(timing["puct_search_discarded_completed_call_count"], 0)
+        self.assertEqual(timing["puct_search_rejected_call_seconds"], 3.0)
+        self.assertEqual(timing["puct_search_rejected_call_count"], 1)
+        self.assertEqual(timing["puct_search_unrecorded_call_seconds"], 5.0)
+        self.assertEqual(timing["raw_outer_policy_residual_seconds"], 0.0)
+
     def test_puct_branch_search_accumulates_root_visit_budget(self) -> None:
         env = ValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
