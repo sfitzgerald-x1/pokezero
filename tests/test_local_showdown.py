@@ -1676,6 +1676,11 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     {"p1": 8, "p2": 1},
                     observation_player="p1",
                 )
+            # Integral floats compare equal to integer dictionary keys, but the
+            # uncached translator rejects them while indexing the legal mask.
+            # Keep the fast path on that exact validation behavior.
+            with self.assertRaises(TypeError):
+                env._cached_search_choices(snapshot, {"p1": 1.0, "p2": 1})
 
         self.assertEqual(set(result.observations), {"p1"})
         self.assertEqual(result.requested_players, ("p1", "p2"))
