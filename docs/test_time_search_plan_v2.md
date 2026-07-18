@@ -89,23 +89,24 @@ strength. In order:
    Deliverable: **winrate vs seconds-per-turn curve** and its knee — "how far
    can we reasonably search" answered in points, not visits.
 
-### W3 — Frontier small checkpoint (v2.2 @ ~2.3M+, then the 3M final)
+### W3 — Frontier small checkpoint (v2.2 @ 3M)
 
-**Current readiness (2026-07-18):** no qualifying 2.3M+ frontier checkpoint
-is available yet. The current `emeta-v2-2-lr3m-3m-belief` directory contains
-a completed 1M-game run; its `3m` label denotes the learning-rate schedule,
-not completed training games. Its existing Step-0 artifact targets an earlier
-iteration and must not be reused as a frontier leaf. Refit only after a
-checkpoint at the stated game count is available.
+**Current readiness (2026-07-18):** `emeta-v2-2-lr3m-3m-belief` completed its
+3,000,000-game run at iteration 625. Its previous Step-0 artifact targets an
+earlier iteration and is not reusable for the frontier read. A fresh,
+checkpoint-matched Step-0 capture/refit is in progress; no frontier paired
+search result has been claimed yet.
 
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
    A 1M-fitted isotonic map on a 2.3M value head confounds the read — the one
    prerequisite kept from the old program.
-2. Paired baseline at the W2 knee budget: raw vs search at the frontier.
+2. Paired baseline at the W2 knee budget: raw vs search at the frontier after
+   the checkpoint-matched leaf passes its gate.
    Deliverable: does a stronger prior shrink search's edge (1M vs frontier
    delta comparison)?
-3. When the 3M final lands, the same two commands re-run there. Those numbers
-   feed the final-checkpoint designation.
+3. If a later final checkpoint is designated, re-point the same capture,
+   refit, and paired-read commands at that checkpoint rather than reusing this
+   leaf. Those numbers feed final-checkpoint designation.
 
 ### W4 — Search cost at M (50M) and L (200M) scale
 
