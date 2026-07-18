@@ -68,7 +68,7 @@ premium over the handcrafted eval (3.2ms vs 1.7µs batched). Consequences:
   or straight batched-leaf PUCT at ~10³–10⁴ visits — all gated on track B's
   encoder for correctness, none on more speed work.
 
-## Fallback anatomy (third revision: 47% -> 0.8%)
+## Fallback anatomy (fifth revision: 47% -> 0.8% -> 0.45% -> 0.0%)
 
 Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
 (235/237 decisions searched) after the dead-end hunt:
@@ -92,6 +92,35 @@ Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
 - **Wish** now constructs exactly: the caster is the sampled world's unique
   Wish carrier (amount = maxhp/2, turns from the public set turn);
   ambiguous carriers fail closed.
+- **Edge-case wave (2026-07-18, owner-directed): Transform detection +
+  Encore support.** A transformed Ditto previously constructed as a
+  SILENTLY WRONG world (base Ditto stats + [transform] moveset vs the real
+  copied set) — no fallback fired; confirmed by live probe. Now: the
+  belief engine's public transform tracking feeds `blocked_slots`
+  (opponent side, `public_effect_blocked`), and a general self-moveset
+  consistency guard (`self_moveset_mismatch`: every request-known move
+  must exist in the sampled set) catches the self side plus any
+  Mimic-class desync. Covered by a live end-to-end Ditto test. **Encore**
+  (endgame-critical) now constructs instead of failing closed: the engine
+  restricts the side to `last_used_move` under the ENCORE volatile
+  (empirically pinned); the lock is modeled as horizon-long (the engine
+  does not decrement encore duration — conservative vs gen3's 3-8 turns).
+  Self side derives the locked move from request disabled flags; opponent
+  side from the publicly-observed last move; ambiguity fails closed
+  (`encore_move_unknown`). Bench: fallback 0.8% -> **0.45%** (223/224),
+  the remaining decision being pending Baton Pass.
+- **Baton Pass boundary (2026-07-18): the last recurring class, now modeled.**
+  From our info set the opponent's committed-but-hidden action is exactly
+  what determinization samples over: the passer side constructs with the
+  engine's `baton_passing` + `force_switch` (recipient choice only, boosts
+  pass), and the opponent side carries a per-world sampled commitment via the
+  engine's saved-move field — which review probes show the gen3 build does
+  NOT actually resolve after the pass (fail-soft optimistic under-model;
+  field kept for forward compatibility). The fallback win is the boundary
+  itself searching: recipient choice with boosts passing. Unsupported pending shapes
+  (opponent-side pending) still fail closed. 15-game bench: **0.0% fallback
+  (329/329 searched)**; residue is per-attempt catalog two-HP-variant
+  rejects that never cost a decision.
 - Remaining (both principled fail-closes, ~1 decision each per 10 games):
   **encore** (meaningless without `last_used_move` wiring) and **pending
   Baton Pass** (needs deferred opponent-action semantics). Plus a rare

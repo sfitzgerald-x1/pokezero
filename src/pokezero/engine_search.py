@@ -26,17 +26,42 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import random
 import time
+import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from .dex import ShowdownDex, normalize_id
-from .determinization import _gen3_randbat_belief_start_override_result
+from .determinization import (
+    _gen3_randbat_belief_start_override_result,
+    _move_from_public_event_line,
+)
+from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
+
+_fallback_logger = logging.getLogger("pokezero.engine_search.fallback")
+
+
+class EngineSearchFallbackWarning(UserWarning):
+    """A search decision fell back to uniform-legal instead of searching.
+
+    Loud by design: any process running engine search (benches, sweeps,
+    collection, integration tests) sees these in test output and default
+    logging, can escalate them to hard errors with
+    ``warnings.simplefilter("error", EngineSearchFallbackWarning)`` or
+    ``EngineMctsConfig(strict_fallbacks=True)``, and can grep the stable
+    logger name ``pokezero.engine_search.fallback``. At the current 0.0%
+    bench rate every occurrence is a potential regression worth a look.
+    """
+
+
+class EngineSearchFallbackError(RuntimeError):
+    """Raised instead of falling back when ``strict_fallbacks`` is set."""
 
 
 @dataclass(frozen=True)
@@ -54,6 +79,10 @@ class EngineMctsConfig:
     # Documented approximation: a public Substitute is modeled at fresh
     # (maxhp/4) health, since remaining sub HP is not tracked publicly.
     approximate_substitute_health: bool = True
+    # Escalate any decision-level fallback to EngineSearchFallbackError.
+    # For sweeps/CI that require zero fallbacks; production keeps the safe
+    # uniform-legal fallback (a crash mid-collection is worse than a miss).
+    strict_fallbacks: bool = False
 
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
@@ -114,16 +143,21 @@ class EngineMctsPolicy:
         config: EngineMctsConfig | None = None,
         module: Any | None = None,
         policy_id: str = "engine-mcts",
+        fixed_override: Any | None = None,
     ) -> None:
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
 
         self.policy_id = policy_id
+        # Test/scenario hook: bypass belief sampling and use this override as
+        # every world (custom-game sweeps where the catalog cannot sample).
+        self._fixed_override = fixed_override
         self._dex = dex
         self._set_source = set_source
         self._config = config or EngineMctsConfig()
         self._module = module
         self.stats = EngineMctsStats()
+        self._world_failures_before: dict[str, int] = {}
 
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
@@ -143,8 +177,12 @@ class EngineMctsPolicy:
     # -----------------------------------------------------------------------------------------
 
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
+        self._world_failures_before = dict(self.stats.world_failure_reasons)
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
+        blocked_slots, encored_moves = self._public_effect_signals(context)
+        recharging_slots = self._recharging_slots(context)
+        truant_slots = self._truant_loaf_slots(context)
 
         worlds: list[tuple[EngineWorld, Any]] = []
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
@@ -152,12 +190,15 @@ class EngineMctsPolicy:
         while len(worlds) < self._config.worlds and attempts < attempts_budget:
             attempts += 1
             self.stats.worlds_attempted += 1
-            override, sample_failure = _gen3_randbat_belief_start_override_result(
-                context=context,
-                set_source=self._set_source,
-                rng=rng,
-                witnessed_fallback=True,
-            )
+            if self._fixed_override is not None:
+                override, sample_failure = self._fixed_override, None
+            else:
+                override, sample_failure = _gen3_randbat_belief_start_override_result(
+                    context=context,
+                    set_source=self._set_source,
+                    rng=rng,
+                    witnessed_fallback=True,
+                )
             if override is None:
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
@@ -170,6 +211,11 @@ class EngineMctsPolicy:
                     dex=self._dex,
                     approximate_sleep_turns=self._config.approximate_sleep_turns,
                     approximate_substitute_health=self._config.approximate_substitute_health,
+                    blocked_slots=blocked_slots,
+                    encored_moves=encored_moves,
+                    recharging_slots=recharging_slots,
+                    truant_slots=truant_slots,
+                    rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
@@ -218,6 +264,180 @@ class EngineMctsPolicy:
                 }
             },
         )
+
+
+
+    # Gen 3 pool's only recharge move; the recharge turn itself is public.
+    _RECHARGE_MOVES = frozenset({"hyperbeam"})
+
+    def _recharging_slots(self, context: PolicyContext) -> tuple[str, ...]:
+        """Slots publicly forced to recharge THIS turn (Hyper Beam landed last round).
+
+        Turn-exact signal: the round-indexed public action record (not the
+        rolling event window) must show the opponent's action in the
+        immediately-preceding round was a recharge move, and the rolling
+        window must not carry a miss marker for it (a missed Hyper Beam does
+        not recharge in gen3). If the record is unavailable the signal stays
+        off — fail-open to the pre-fix behavior rather than inventing a lock.
+        """
+
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        trajectory = getattr(context, "trajectory", None)
+        round_index = getattr(context, "decision_round_index", None)
+        if trajectory is None or not isinstance(round_index, int):
+            return ()
+        rounds = public_action_rounds_from_trajectory_metadata(trajectory)
+        previous = rounds.get(round_index - 1)
+        if previous is None:
+            return ()
+        action = previous.actions.get(opponent_slot)
+        if action is None or action.kind != "move":
+            return ()
+        if normalize_id(str(action.move_id or "")) not in self._RECHARGE_MOVES:
+            return ()
+        # The round record proves the move happened but stores no hit/miss and
+        # no actor identity. Require the ANCHOR: the |move| line must still be
+        # visible in the rolling event window, its actor must match the
+        # CURRENT active opponent (species continuity — double-faint guard),
+        # and no adjacent |-miss| may follow. If the anchor scrolled out we
+        # cannot verify the hit, so the lock stays OFF (fail-open to the
+        # pre-fix behavior — never a wrong lock on a missed Hyper Beam).
+        metadata = context.observation.metadata
+        if not isinstance(metadata, Mapping):
+            return ()
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        active_species = next(
+            (
+                str(mon.get("species") or "")
+                for mon in opponents or ()
+                if isinstance(mon, Mapping) and mon.get("active")
+            ),
+            "",
+        )
+        if not active_species:
+            return ()
+        events = metadata.get("recent_public_events")
+        if not isinstance(events, Sequence):
+            return ()
+        lines = [str(line) for line in events]
+        for index in range(len(lines) - 1, -1, -1):
+            parts = lines[index].split("|")
+            if len(parts) < 4 or parts[1] != "move":
+                continue
+            if normalize_id(parts[3]) not in self._RECHARGE_MOVES:
+                continue
+            actor = parts[2]
+            actor_species = actor.split(":", 1)[-1].strip() if ":" in actor else actor
+            if normalize_id(actor_species) != normalize_id(active_species):
+                return ()
+            if not actor.strip().lower().startswith(opponent_slot):
+                return ()
+            if any(rest.startswith(f"|-miss|{actor}") for rest in lines[index + 1 : index + 3]):
+                return ()
+            return (opponent_slot,)
+        return ()
+
+
+    def _truant_loaf_slots(self, context: PolicyContext) -> tuple[str, ...]:
+        """Slots whose active is a Truant mon that ACTED last round (loafs now).
+
+        The alternation is public: a Truant mon that publicly moved in the
+        immediately-preceding round loafs this turn. Evidence of acting comes
+        from the round-indexed public action record (turn-exact). Without
+        clear acted-last-round evidence the volatile stays off (fail-open:
+        the mon is modeled as free to act — the pre-fix behavior).
+        """
+
+        trajectory = getattr(context, "trajectory", None)
+        round_index = getattr(context, "decision_round_index", None)
+        if trajectory is None or not isinstance(round_index, int):
+            return ()
+        rounds = public_action_rounds_from_trajectory_metadata(trajectory)
+        previous = rounds.get(round_index - 1)
+        if previous is None:
+            return ()
+        metadata = context.observation.metadata
+        if not isinstance(metadata, Mapping):
+            return ()
+        slots: list[str] = []
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        for mon in opponents or ():
+            if not isinstance(mon, Mapping) or not mon.get("active"):
+                continue
+            ability = normalize_id(str(mon.get("revealed_ability") or ""))
+            possible = [normalize_id(str(a)) for a in mon.get("possible_abilities") or ()]
+            if ability == "truant" or (not ability and possible == ["truant"]):
+                action = previous.actions.get(opponent_slot)
+                if action is not None and action.kind == "move":
+                    slots.append(opponent_slot)
+        # Self seat: our own Truant mon's phase from our own action record.
+        self_team = metadata.get("self_team")
+        if isinstance(self_team, Sequence):
+            for row in self_team:
+                if not isinstance(row, Mapping) or not row.get("active"):
+                    continue
+                if normalize_id(str(row.get("ability") or "")) == "truant":
+                    action = previous.actions.get(context.player_id)
+                    if action is not None and action.kind == "move":
+                        slots.append(context.player_id)
+        return tuple(slots)
+
+    def _public_effect_signals(
+        self, context: PolicyContext
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Public-information signals engine_world cannot see in the payload.
+
+        - blocked_slots: the opponent's active is publicly Transformed (the
+          belief engine tracks it; the payload does not) — the sampled world
+          cannot express the copied moveset/stats, so construction must fail
+          closed rather than search a silently wrong world.
+        - encored_moves: the opponent's publicly-observed last move, consumed
+          by engine_world only when that side carries the encore volatile.
+        """
+
+        blocked: dict[str, str] = {}
+        encored: dict[str, str] = {}
+        metadata = context.observation.metadata
+        if not isinstance(metadata, Mapping):
+            return blocked, encored
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        active_species: str | None = None
+        for mon in opponents or ():
+            if not isinstance(mon, Mapping):
+                continue
+            if mon.get("item_mutated"):
+                # Trick/Knock Off mutated the held item: the sampled set's item
+                # no longer matches the current holder (rule-outs stay frozen
+                # to the ORIGINAL assignment upstream). Pool scope: 6 sets set
+                # this flag (4 Knock Off + 2 Trick). Knock Off removals ARE
+                # representable (item publicly None) — recovering them needs a
+                # belief_view field distinguishing removal from swap; until
+                # then fail closed over constructing wrong items.
+                blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
+            if not mon.get("active"):
+                continue
+            active_species = str(mon.get("species") or "") or None
+            if mon.get("transformed"):
+                target = mon.get("transform_species") or "?"
+                blocked[opponent_slot] = f"active transformed into {target}"
+        if active_species:
+            events = metadata.get("recent_public_events")
+            for line in reversed(list(events) if isinstance(events, Sequence) else []):
+                move = _move_from_public_event_line(
+                    str(line),
+                    opponent_slot=opponent_slot,
+                    self_slot=context.player_id,
+                    species=active_species,
+                )
+                if move is not None:
+                    encored[opponent_slot] = move
+                    break
+        return blocked, encored
 
     def _map_choices(
         self, context: PolicyContext, aggregated: Mapping[str, float]
@@ -277,6 +497,24 @@ class EngineMctsPolicy:
     ) -> PolicyDecision:
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
+        battle_id = getattr(context, "battle_id", "?")
+        round_index = getattr(context, "decision_round_index", "?")
+        player = getattr(context, "player_id", "?")
+        # Per-decision world-failure context: the cumulative counters minus
+        # the snapshot taken at the top of _search.
+        delta = {
+            key: count - self._world_failures_before.get(key, 0)
+            for key, count in self.stats.world_failure_reasons.items()
+            if count - self._world_failures_before.get(key, 0) > 0
+        }
+        message = (
+            f"engine-search FALLBACK: battle={battle_id} round={round_index} seat={player} "
+            f"reason={reason} world_failures={delta or '{}'}"
+        )
+        if self._config.strict_fallbacks:
+            raise EngineSearchFallbackError(message)
+        warnings.warn(message, EngineSearchFallbackWarning, stacklevel=3)
+        _fallback_logger.warning(message)
         legal = legal_action_indices(context.observation.legal_action_mask)
         return PolicyDecision(
             action_index=rng.choice(legal),
@@ -301,6 +539,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument("--search-time-ms", type=int, default=100)
     parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--fail-on-fallback", action="store_true",
+                        help="exit nonzero if any decision fell back (CI gate)")
     parser.add_argument("--strict-sleep", action="store_true",
                         help="fail worlds closed on publicly-asleep mons instead of approximating")
     parser.add_argument("--out", default=None)
@@ -367,6 +607,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.out:
         with open(args.out, "w") as handle:
             json.dump(report, handle, indent=2)
+    fallback_count = policy.stats.fallback_decisions
+    if fallback_count:
+        import sys as _sys
+
+        print(
+            f"\n{'!' * 72}\n!! {fallback_count} FALLBACK DECISION(S) — reasons: "
+            f"{dict(policy.stats.fallback_reasons)}\n"
+            f"!! every fallback at the current 0.0% baseline is a potential regression\n{'!' * 72}",
+            file=_sys.stderr,
+        )
+        if args.fail_on_fallback:
+            return 1
     return 0
 
 

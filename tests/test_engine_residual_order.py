@@ -87,5 +87,38 @@ class ResidualOrderTests(unittest.TestCase):
         self.assertEqual(str(side.pokemon[0].status).upper(), "NONE")
 
 
+@unittest.skipIf(poke_engine is None, "poke-engine wheel not installed")
+class EncoreLockPinTests(unittest.TestCase):
+    """Pin the engine semantics the encore construction relies on."""
+
+    def test_encore_volatile_with_last_used_move_locks_the_side(self) -> None:
+        pe = poke_engine
+        dummy = pe.Pokemon(id="pikachu", level=1, hp=0)
+
+        def mk(species, moves, speed):
+            return pe.Pokemon(
+                id=species, level=80, types=("normal", "typeless"), hp=300, maxhp=300,
+                ability="innerfocus", item="leftovers", attack=180, defense=180,
+                special_attack=180, special_defense=180, speed=speed,
+                moves=[pe.Move(id=m, pp=16) for m in moves],
+            )
+
+        locked = pe.Side(
+            active_index="0",
+            pokemon=[mk("snorlax", ["bodyslam", "growl", "curse", "rest"], 90)] + [dummy] * 5,
+            volatile_statuses={"ENCORE"},
+            last_used_move="move:1",
+            volatile_status_durations=pe.VolatileStatusDurations(encore=1),
+        )
+        free = pe.Side(
+            active_index="0",
+            pokemon=[mk("wobbuffet", ["counter", "encore"], 100)] + [dummy] * 5,
+        )
+        state = pe.State(side_one=locked, side_two=free, weather="none", terrain="none", trick_room=False)
+        result = pe.monte_carlo_tree_search(state, 30, threads=1)
+        choices = {entry.move_choice for entry in result.side_one}
+        self.assertEqual(choices, {"growl"})
+
+
 if __name__ == "__main__":
     unittest.main()

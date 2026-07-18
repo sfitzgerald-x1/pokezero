@@ -245,6 +245,11 @@ def battle_spec_from_payload(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    blocked_slots: Mapping[str, str] | None = None,
+    encored_moves: Mapping[str, str] | None = None,
+    recharging_slots: Sequence[str] = (),
+    truant_slots: Sequence[str] = (),
+    rng: Any | None = None,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -271,6 +276,25 @@ def battle_spec_from_payload(
             f"self request kind {request_kind!r} is not supported",
         )
     self_force_switch = request_kind == "force-switch"
+    pending_baton_pass = tuple(str(s) for s in payload.get("pendingBatonPassSides") or ())
+    self_baton_passing = False
+    if pending_baton_pass:
+        # Supported shape: OUR Baton Pass is pending and we are choosing the
+        # recipient (boosts/whitelisted volatiles pass; the engine restricts
+        # us to switch choices). The opponent's committed-but-hidden action
+        # is sampled per world into switch_out_move_second_saved_move, but
+        # review probes show the gen3 engine build does NOT resolve it after
+        # the switch (root values are invariant to the sample) — the
+        # recipient enters without eating the committed move, a fail-soft
+        # optimistic under-model. The field is populated for forward
+        # compatibility; treat the commitment as UNMODELED today. Any other
+        # pending shape stays fail-closed.
+        if set(pending_baton_pass) != {self_player} or not self_force_switch:
+            raise EngineWorldUnsupported(
+                "pending_baton_pass",
+                f"unsupported pending Baton Pass shape: {pending_baton_pass!r} (kind {request_kind!r})",
+            )
+        self_baton_passing = True
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
@@ -283,6 +307,11 @@ def battle_spec_from_payload(
     turn = payload.get("turn")
     if not isinstance(turn, int):
         raise EngineWorldUnsupported("payload_malformed", "payload has no integer turn")
+    for blocked_slot, block_reason in (blocked_slots or {}).items():
+        raise EngineWorldUnsupported(
+            "public_effect_blocked",
+            f"slot {blocked_slot!r}: {block_reason} (caller-declared unexpressible public effect)",
+        )
 
     built_sides: dict[str, SideSpec] = {}
     party_species: dict[str, tuple[str, ...]] = {}
@@ -306,7 +335,13 @@ def battle_spec_from_payload(
             approximate_sleep_turns=approximate_sleep_turns,
             approximate_substitute_health=approximate_substitute_health,
             force_switch=is_self_slot and self_force_switch,
+            baton_passing=is_self_slot and self_baton_passing,
+            opponent_committed_pending=(not is_self_slot) and self_baton_passing,
             wish_set_turn=_wish_set_turn(payload, slot),
+            encored_move=(encored_moves or {}).get(slot),
+            must_recharge=slot in (recharging_slots or ()),
+            truant_loafs=slot in (truant_slots or ()),
+            rng=rng,
         )
         party_species[slot] = species_order
 
@@ -340,6 +375,11 @@ def world_battle_spec(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    blocked_slots: Mapping[str, str] | None = None,
+    encored_moves: Mapping[str, str] | None = None,
+    recharging_slots: Sequence[str] = (),
+    truant_slots: Sequence[str] = (),
+    rng: Any | None = None,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -358,6 +398,11 @@ def world_battle_spec(
         dex=dex,
         approximate_sleep_turns=approximate_sleep_turns,
         approximate_substitute_health=approximate_substitute_health,
+        blocked_slots=blocked_slots,
+        encored_moves=encored_moves,
+        recharging_slots=recharging_slots,
+        truant_slots=truant_slots,
+        rng=rng,
     )
 
 
@@ -382,8 +427,6 @@ def build_engine_world(
 def _reject_unsupported_globals(payload: Mapping[str, Any]) -> None:
     if payload.get("deferredOpponentActions") or payload.get("deferredOpponentActionPriors"):
         raise EngineWorldUnsupported("deferred_opponent_action", "deferred opponent actions are not supported")
-    if payload.get("pendingBatonPassSides"):
-        raise EngineWorldUnsupported("pending_baton_pass", "a Baton Pass forced switch is pending")
     future_sight = payload.get("futureSight")
     if isinstance(future_sight, Mapping) and any(int(v) for v in future_sight.values()):
         raise EngineWorldUnsupported("future_sight_pending", "a Future Sight strike is pending")
@@ -433,6 +476,12 @@ def _build_side_spec(
     approximate_substitute_health: bool = False,
     force_switch: bool = False,
     wish_set_turn: int | None = None,
+    encored_move: str | None = None,
+    must_recharge: bool = False,
+    truant_loafs: bool = False,
+    baton_passing: bool = False,
+    opponent_committed_pending: bool = False,
+    rng: Any | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -478,6 +527,20 @@ def _build_side_spec(
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    if "encore" in volatiles:
+        supported = supported | {"encore"}
+    if must_recharge:
+        # Publicly-forced recharge turn (Hyper Beam landed last round): the
+        # engine's MUSTRECHARGE volatile restricts the side to "No Move" —
+        # without it, searched worlds hand the recharging mon a free action.
+        volatiles = volatiles + ["mustrecharge"]
+        supported = supported | {"mustrecharge"}
+    if truant_loafs:
+        # Truant phase is publicly derivable (acted last round -> loafs now).
+        # The engine models the alternation once seeded with the volatile;
+        # without it every sampled world has Slaking about to act.
+        volatiles = volatiles + ["truant"]
+        supported = supported | {"truant"}
     unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
@@ -541,6 +604,45 @@ def _build_side_spec(
         # value for forward compatibility should the engine start using it.
         wish = (remaining, party[active_index].maxhp // 2)
 
+    last_used_move = ""
+    volatile_durations: dict[str, int] = {}
+    if "encore" in volatiles:
+        active_specs = party[active_index].moves
+        encored_index = _resolve_encored_move_index(
+            active_specs,
+            rows_for_active=(
+                _active_row_moves(side_payload) if is_self else None
+            ),
+            encored_move=encored_move,
+        )
+        if encored_index is None:
+            raise EngineWorldUnsupported(
+                "encore_move_unknown",
+                f"side {slot!r} is encored but the locked move cannot be determined",
+            )
+        # The engine restricts the side to last_used_move while ENCORE is set
+        # (verified empirically); it does not decrement the duration, so the
+        # mon is modeled as locked for the search horizon. Conservative for an
+        # OPPONENT's encore; pessimistic for our own near expiry (real gen3
+        # encores run 3-8 turns) — acceptable over short MCTS horizons.
+        last_used_move = f"move:{encored_index}"
+        volatile_durations["encore"] = 1
+
+    slow_uturn_move = False
+    saved_move = ""
+    if opponent_committed_pending:
+        active_specs = [spec for spec in party[active_index].moves if spec.id != "none" and not spec.disabled]
+        if not active_specs:
+            raise EngineWorldUnsupported(
+                "pending_baton_pass", f"side {slot!r} has no sampleable committed move"
+            )
+        if rng is None:
+            raise EngineWorldUnsupported(
+                "pending_baton_pass", "committed-move sampling requires an rng"
+            )
+        slow_uturn_move = True
+        saved_move = active_specs[rng.randrange(len(active_specs))].id
+
     return (
         SideSpec(
             pokemon=tuple(party),
@@ -550,10 +652,66 @@ def _build_side_spec(
             volatile_statuses=tuple(volatiles),
             substitute_health=substitute_health,
             force_switch=force_switch,
+            baton_passing=baton_passing,
+            slow_uturn_move=slow_uturn_move,
+            switch_out_move_second_saved_move=saved_move,
             wish=wish,
+            last_used_move=last_used_move,
+            volatile_status_durations=volatile_durations,
         ),
         tuple(species_order),
     )
+
+
+def _active_row_moves(side_payload: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    rows = side_payload.get("pokemon")
+    if not isinstance(rows, Sequence) or isinstance(rows, str):
+        return None
+    for row in rows:
+        if isinstance(row, Mapping) and bool(row.get("active")):
+            moves = row.get("moves")
+            if isinstance(moves, Sequence) and not isinstance(moves, str):
+                return [move for move in moves if isinstance(move, Mapping)]
+    return None
+
+
+def _resolve_encored_move_index(
+    move_specs: Sequence[Any],
+    *,
+    rows_for_active: Sequence[Mapping[str, Any]] | None,
+    encored_move: str | None,
+) -> int | None:
+    """Index of the encored move in the constructed move order, or None.
+
+    Self side: the request marks every non-encored move disabled, so exactly
+    one enabled move identifies the lock. Opponent side: the caller passes the
+    publicly-observed last move (``encored_move``).
+    """
+
+    if encored_move:
+        target = normalize_id(encored_move)
+        for index, spec in enumerate(move_specs):
+            spec_id = normalize_id(spec.id)
+            if spec_id == target:
+                return index
+            if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
+                return index
+        return None
+    if rows_for_active:
+        enabled = [
+            normalize_id(str(move.get("id")))
+            for move in rows_for_active
+            if isinstance(move.get("id"), str) and not bool(move.get("disabled"))
+        ]
+        if len(enabled) == 1:
+            target = enabled[0]
+            for index, spec in enumerate(move_specs):
+                spec_id = normalize_id(spec.id)
+                if spec_id == target:
+                    return index
+                if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
+                    return index
+    return None
 
 
 def _build_pokemon_spec(
@@ -579,7 +737,12 @@ def _build_pokemon_spec(
 
     evs = mon.evs or {}
     ivs = mon.ivs or {}
-    maxhp = gen3_hp_stat(int(info.base_stats.get("hp", 0)), int(ivs.get("hp", _MAX_IV)), int(evs.get("hp", 0)), mon.level)
+    base_hp = int(info.base_stats.get("hp", 0))
+    # Shedinja: the generator (and gen3_damage.randbats_spread_details) pin
+    # max HP to 1 when base HP is 1; the raw formula would give ~164 and a
+    # "1/1" public condition would then fraction-scale into an unkillable
+    # Shedinja in searched worlds (audit finding, 2026-07-18).
+    maxhp = 1 if base_hp == 1 else gen3_hp_stat(base_hp, int(ivs.get("hp", _MAX_IV)), int(evs.get("hp", 0)), mon.level)
     stats = {
         stat: gen3_stat(
             int(info.base_stats.get(stat, 0)),
@@ -704,6 +867,20 @@ def _move_specs(
             pp = entry.get("pp")
             if isinstance(pp, int):
                 known_pp[normalize_id(entry["id"])] = (pp, bool(entry.get("disabled")))
+
+    if is_self and known_pp:
+        sampled_ids = {normalize_id(move) for move in mon.moves}
+        sampled_has_hp = any(m.startswith("hiddenpower") for m in sampled_ids)
+        for request_move in known_pp:
+            if request_move in sampled_ids:
+                continue
+            if request_move.startswith("hiddenpower") and sampled_has_hp:
+                continue
+            raise EngineWorldUnsupported(
+                "self_moveset_mismatch",
+                f"{slot}: request-known move {request_move!r} is absent from the sampled "
+                f"moveset (Transform/Mimic-class desync)",
+            )
 
     specs: list[MoveSpec] = []
     for move in mon.moves:

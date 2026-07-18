@@ -15,6 +15,7 @@ from pokezero.engine_world import (  # noqa: E402
     battle_spec_from_payload,
     unpack_pokemon,
     unpack_team,
+    world_battle_spec,
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
@@ -401,6 +402,299 @@ class RealEngineSmokeTests(unittest.TestCase):
         self.assertGreater(result.total_visits, 0)
         choices = {entry.move_choice for entry in result.side_one}
         self.assertIn("earthquake", choices)
+
+
+class TransformAndEncoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _assert_reason(self, payload, reason, **kwargs) -> None:
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex, **kwargs)
+        self.assertEqual(caught.exception.reason, reason)
+
+    def test_blocked_slot_fails_closed(self) -> None:
+        self._assert_reason(
+            _payload(self.dex),
+            "public_effect_blocked",
+            blocked_slots={"p2": "active transformed into Snorlax"},
+        )
+
+    def test_self_moveset_mismatch_fails_closed(self) -> None:
+        # A transformed self mon's request reports COPIED moves that are not
+        # in the sampled (true) moveset -> must fail closed, never construct.
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["moves"] = [
+            {"id": "bodyslam", "pp": 15, "maxpp": 24, "disabled": False},
+            {"id": "shadowball", "pp": 15, "maxpp": 24, "disabled": False},
+        ]
+        self._assert_reason(payload, "self_moveset_mismatch")
+
+    def test_self_encore_derives_lock_from_disabled_pattern(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["volatiles"] = ["Encore"]
+        payload["sides"]["p1"]["pokemon"][0]["moves"] = [
+            {"id": "earthquake", "pp": 12, "maxpp": 16, "disabled": False},
+            {"id": "icebeam", "pp": 16, "maxpp": 16, "disabled": True},
+        ]
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        side = world.spec.side_one
+        self.assertIn("encore", side.volatile_statuses)
+        self.assertEqual(side.last_used_move, "move:0")  # earthquake slot
+        self.assertEqual(dict(side.volatile_status_durations), {"encore": 1})
+
+    def test_opponent_encore_uses_caller_supplied_move(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Encore"]
+        world = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, encored_moves={"p2": "Body Slam"}
+        )
+        side = world.spec.side_two
+        self.assertEqual(side.last_used_move, "move:0")  # bodyslam is snorlax slot 0
+        self.assertIn("encore", side.volatile_statuses)
+
+    def test_opponent_encore_without_move_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Encore"]
+        self._assert_reason(payload, "encore_move_unknown")
+
+    def test_encored_move_absent_from_sample_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Encore"]
+        self._assert_reason(
+            payload, "encore_move_unknown", encored_moves={"p2": "Hyper Beam"}
+        )
+
+
+@unittest.skipIf(
+    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    "requires a built local Showdown checkout",
+)
+class DittoTransformLiveTests(unittest.TestCase):
+    """End-to-end fallback-detection edge case: a transformed Ditto must never
+    construct as a silently wrong world (base stats + [transform] moveset)."""
+
+    def test_transform_fails_closed_for_both_seats(self) -> None:
+        from pokezero.dex import load_showdown_dex
+        from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
+                               item="Quick Claw", level=100)
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse", "Rest", "Shadow Ball"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((ditto, _SWAMPERT)),
+            "p2": pack_team((lax, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99001, start_override=override)
+            # Resolve one turn: Ditto transforms, Snorlax curses.
+            actions = {}
+            for player in env.requested_players():
+                observation = env.observe(player)
+                legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                want = "transform" if player == "p1" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move" and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            result = env.step(actions)
+            self.assertIsNone(result.terminal)
+
+            # Seat p1 (the transformed side itself): request now shows COPIED
+            # moves; construction from the true world must fail closed.
+            state_p1 = env.public_materialization_state("p1")
+            with self.assertRaises(EngineWorldUnsupported) as caught:
+                world_battle_spec(state_p1, override, dex=dex)
+            self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
+
+            # Seat p2 (facing the transformed Ditto): the belief engine sees the
+            # transform publicly; engine_search's signals must block the slot.
+            observation_p2 = env.observe("p2")
+            policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
+                                      config=EngineMctsConfig())
+
+            context = type("Ctx", (), {
+                "observation": observation_p2,
+                "player_id": "p2",
+                "public_materialization_state": env.public_materialization_state("p2"),
+            })()
+            blocked, _encored = policy._public_effect_signals(context)
+            self.assertIn("p1", blocked)
+            self.assertIn("transformed", blocked["p1"])
+            state_p2 = env.public_materialization_state("p2")
+            with self.assertRaises(EngineWorldUnsupported) as caught2:
+                world_battle_spec(state_p2, override, dex=dex, blocked_slots=blocked)
+            self.assertEqual(caught2.exception.reason, "public_effect_blocked")
+
+            # F2 (review): the block must CLEAR after the transformed Ditto
+            # switches out (gen3 transform reverts on switch) and back in.
+            for _ in range(4):
+                actions = {}
+                requested = env.requested_players()
+                for player in requested:
+                    observation = env.observe(player)
+                    legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                    switch = next((c for c in legal if c.get("kind") == "switch"), None)
+                    pick = switch if (player == "p1" and switch is not None) else legal[0]
+                    actions[player] = pick["action_index"]
+                step_result = env.step(actions)
+                if step_result.terminal is not None:
+                    break
+                observation_p2 = env.observe("p2")
+                context_now = type("Ctx", (), {
+                    "observation": observation_p2,
+                    "player_id": "p2",
+                    "public_materialization_state": env.public_materialization_state("p2"),
+                })()
+                blocked_now, _ = policy._public_effect_signals(context_now)
+                belief_now = observation_p2.metadata.get("belief_view") or {}
+                actives = [m for m in belief_now.get("opponent_pokemon") or [] if m.get("active")]
+                if actives and "ditto" not in str(actives[0].get("species", "")).lower():
+                    # Untransformed replacement active: block must be gone.
+                    self.assertEqual(blocked_now, {})
+                    break
+        finally:
+            env.close()
+
+    def test_mirror_seat_p1_facing_transformed_p2_ditto(self) -> None:
+        # F4 (review): the symmetric seat — p2 owns the Ditto, p1 must block p2.
+        from pokezero.dex import load_showdown_dex
+        from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
+                               item="Quick Claw", level=100)
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse", "Rest", "Shadow Ball"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((lax, _SWAMPERT)),
+            "p2": pack_team((ditto, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99002, start_override=override)
+            actions = {}
+            for player in env.requested_players():
+                observation = env.observe(player)
+                legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                want = "transform" if player == "p2" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move" and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            result = env.step(actions)
+            self.assertIsNone(result.terminal)
+
+            observation_p1 = env.observe("p1")
+            policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
+                                      config=EngineMctsConfig())
+            context = type("Ctx", (), {
+                "observation": observation_p1,
+                "player_id": "p1",
+                "public_materialization_state": env.public_materialization_state("p1"),
+            })()
+            blocked, _ = policy._public_effect_signals(context)
+            self.assertIn("p2", blocked)
+            self.assertIn("transformed", blocked["p2"])
+            with self.assertRaises(EngineWorldUnsupported) as caught:
+                world_battle_spec(
+                    env.public_materialization_state("p1"), override, dex=dex, blocked_slots=blocked
+                )
+            self.assertEqual(caught.exception.reason, "public_effect_blocked")
+        finally:
+            env.close()
+
+
+class ShedinjaAndRechargeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+        self.dex.species["shedinja"] = SpeciesInfo(
+            id="shedinja", name="Shedinja", types=("bug", "ghost"),
+            base_stats={"hp": 1, "atk": 90, "def": 45, "spa": 30, "spd": 30, "spe": 40},
+            weight_kg=1.2,
+        )
+
+    def test_shedinja_maxhp_is_pinned_to_one(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"] = [
+            {"species": "Shedinja", "condition": "1/1", "active": True},
+        ]
+        override = BattleStartOverride(player_teams={
+            "p1": _override().player_teams["p1"],
+            "p2": pack_team(_team(
+                FixturePokemon(species="Shedinja", moves=("shadowball",), level=100,
+                               ability="Wonder Guard", item="Lum Berry",
+                               evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")}),
+            )),
+        })
+        world = battle_spec_from_payload(payload, override, dex=self.dex)
+        shedinja = world.spec.side_two.pokemon[0]
+        self.assertEqual((shedinja.hp, shedinja.maxhp), (1, 1))
+
+    def test_recharging_slot_gets_mustrecharge_volatile(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex), _override(), dex=self.dex, recharging_slots=("p2",)
+        )
+        self.assertIn("mustrecharge", world.spec.side_two.volatile_statuses)
+        self.assertNotIn("mustrecharge", world.spec.side_one.volatile_statuses)
+
+
+class BatonPassBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _bp_payload(self):
+        payload = _payload(self.dex, selfRequestKind="force-switch", pendingBatonPassSides=["p1"])
+        starmie_max = _maxhp(_STARMIE, self.dex)
+        # Passer (Swampert) is leaving; Starmie is the live bench recipient.
+        payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        payload["sides"]["p1"]["boosts"] = {"spa": 2}
+        return payload
+
+    def test_self_pending_baton_pass_constructs_and_populates_saved_move_field(self) -> None:
+        # NOTE: the gen3 engine does not resolve the saved move after the pass
+        # (probe-confirmed); this pins field population + determinism only.
+        import random as _random
+
+        world = battle_spec_from_payload(
+            self._bp_payload(), _override(), dex=self.dex, rng=_random.Random(7)
+        )
+        p1 = world.spec.side_one
+        p2 = world.spec.side_two
+        self.assertTrue(p1.baton_passing)
+        self.assertTrue(p1.force_switch)
+        self.assertEqual(p1.boosts, {"special_attack": 2})
+        self.assertTrue(p2.slow_uturn_move)
+        self.assertIn(
+            p2.switch_out_move_second_saved_move,
+            {m.id for m in p2.pokemon[p2.active_index].moves if m.id != "none"},
+        )
+        # Seeded rng -> deterministic commitment sample.
+        again = battle_spec_from_payload(
+            self._bp_payload(), _override(), dex=self.dex, rng=_random.Random(7)
+        )
+        self.assertEqual(
+            again.spec.side_two.switch_out_move_second_saved_move,
+            p2.switch_out_move_second_saved_move,
+        )
+
+    def test_self_pending_without_rng_fails_closed(self) -> None:
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(self._bp_payload(), _override(), dex=self.dex)
+        self.assertEqual(caught.exception.reason, "pending_baton_pass")
+
+    def test_opponent_pending_still_fails_closed(self) -> None:
+        import random as _random
+
+        payload = _payload(self.dex, pendingBatonPassSides=["p2"])
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex, rng=_random.Random(1))
+        self.assertEqual(caught.exception.reason, "pending_baton_pass")
 
 
 if __name__ == "__main__":
