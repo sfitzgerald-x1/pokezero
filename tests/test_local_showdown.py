@@ -1163,6 +1163,45 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(restored_suffix, expected_suffix)
         self.assertEqual(repeated_restored_suffix, expected_suffix)
 
+    def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            before = env.root_puct_bridge_timing_snapshot()
+            snapshot = env.snapshot_for_search()
+            env.step({"p1": 0, "p2": 1})
+            env.restore_search_snapshot(snapshot)
+            after = env.root_puct_bridge_timing_snapshot()
+
+        # Snapshot, one branch choice, and restore each complete one bridge
+        # request/response exchange and include a Node processing measurement.
+        self.assertEqual(after["bridge_round_trip_count"] - before["bridge_round_trip_count"], 3)
+        self.assertEqual(
+            after["bridge_node_processing_count"] - before["bridge_node_processing_count"],
+            3,
+        )
+        self.assertGreater(after["bridge_round_trip_seconds"] - before["bridge_round_trip_seconds"], 0.0)
+        self.assertGreaterEqual(
+            after["bridge_node_processing_seconds"] - before["bridge_node_processing_seconds"],
+            0.0,
+        )
+        self.assertLessEqual(
+            after["bridge_node_processing_seconds"] - before["bridge_node_processing_seconds"],
+            after["bridge_round_trip_seconds"] - before["bridge_round_trip_seconds"],
+        )
+
     def test_search_snapshot_handle_restores_direct_materialized_public_state(self) -> None:
         config = integration_config()
         assert config is not None
