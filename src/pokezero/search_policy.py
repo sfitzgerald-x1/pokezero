@@ -750,6 +750,15 @@ class RootPUCTSearchPolicy:
                 direct_prefix_construction_count = 0
                 puct_search_call_seconds = 0.0
                 puct_search_call_count = 0
+                puct_search_completed_call_seconds = 0.0
+                puct_search_completed_call_count = 0
+                puct_search_retained_completed_call_seconds = 0.0
+                puct_search_retained_completed_call_count = 0
+                puct_search_completed_result_seconds = 0.0
+                puct_search_completed_result_count = 0
+                puct_search_rejected_call_seconds = 0.0
+                puct_search_rejected_call_count = 0
+                completed_search_call_seconds_by_id: dict[int, float] = {}
                 scenario_dispatch_started_at: float | None = None
 
                 def current_scenario_dispatch_orchestration_seconds() -> float:
@@ -955,9 +964,23 @@ class RootPUCTSearchPolicy:
                                         ),
                                         prepared_prefix=prepared_prefix,
                                     )
-                                finally:
-                                    puct_search_call_seconds += (
+                                except Exception:
+                                    puct_search_elapsed_seconds = (
                                         _timing_perf_counter() - puct_search_started_at
+                                    )
+                                    puct_search_call_seconds += puct_search_elapsed_seconds
+                                    puct_search_rejected_call_seconds += puct_search_elapsed_seconds
+                                    puct_search_rejected_call_count += 1
+                                    raise
+                                else:
+                                    puct_search_elapsed_seconds = (
+                                        _timing_perf_counter() - puct_search_started_at
+                                    )
+                                    puct_search_call_seconds += puct_search_elapsed_seconds
+                                    puct_search_completed_call_seconds += puct_search_elapsed_seconds
+                                    puct_search_completed_call_count += 1
+                                    completed_search_call_seconds_by_id[id(search)] = (
+                                        puct_search_elapsed_seconds
                                     )
                             except ValueError as exc:
                                 reason = _opponent_scenario_replay_legality_error(exc, scenario)
@@ -1004,6 +1027,12 @@ class RootPUCTSearchPolicy:
                                 scenario_search,
                             )
                         )
+                        puct_search_retained_completed_call_seconds += (
+                            completed_search_call_seconds_by_id[id(scenario_search)]
+                        )
+                        puct_search_retained_completed_call_count += 1
+                        puct_search_completed_result_seconds += scenario_search.timing.total_seconds
+                        puct_search_completed_result_count += 1
                         if (
                             self.max_opponent_action_scenarios is not None
                             and searched_action_group_count >= self.max_opponent_action_scenarios
@@ -1082,6 +1111,16 @@ class RootPUCTSearchPolicy:
                     puct_search_call_seconds=puct_search_call_seconds,
                     puct_search_call_count=puct_search_call_count,
                     puct_search_result_count=len(completed_search_timings),
+                    puct_search_completed_call_seconds=puct_search_completed_call_seconds,
+                    puct_search_completed_call_count=puct_search_completed_call_count,
+                    puct_search_retained_completed_call_seconds=puct_search_completed_call_seconds,
+                    puct_search_retained_completed_call_count=puct_search_completed_call_count,
+                    puct_search_completed_result_seconds=sum(
+                        timing.total_seconds for timing in completed_search_timings
+                    ),
+                    puct_search_completed_result_count=len(completed_search_timings),
+                    puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
+                    puct_search_rejected_call_count=puct_search_rejected_call_count,
                 )
                 return inner_fallback_decision
             except Exception as exc:
@@ -1123,6 +1162,16 @@ class RootPUCTSearchPolicy:
                     puct_search_call_seconds=puct_search_call_seconds,
                     puct_search_call_count=puct_search_call_count,
                     puct_search_result_count=len(completed_search_timings),
+                    puct_search_completed_call_seconds=puct_search_completed_call_seconds,
+                    puct_search_completed_call_count=puct_search_completed_call_count,
+                    puct_search_retained_completed_call_seconds=puct_search_completed_call_seconds,
+                    puct_search_retained_completed_call_count=puct_search_completed_call_count,
+                    puct_search_completed_result_seconds=sum(
+                        timing.total_seconds for timing in completed_search_timings
+                    ),
+                    puct_search_completed_result_count=len(completed_search_timings),
+                    puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
+                    puct_search_rejected_call_count=puct_search_rejected_call_count,
                 )
                 return inner_fallback_decision
             elapsed_seconds = perf_counter() - search_started_at
@@ -1274,6 +1323,16 @@ class RootPUCTSearchPolicy:
             puct_search_call_seconds=puct_search_call_seconds,
             puct_search_call_count=puct_search_call_count,
             puct_search_result_count=len(scenario_searches),
+            puct_search_completed_call_seconds=puct_search_completed_call_seconds,
+            puct_search_completed_call_count=puct_search_completed_call_count,
+            puct_search_retained_completed_call_seconds=(
+                puct_search_retained_completed_call_seconds
+            ),
+            puct_search_retained_completed_call_count=puct_search_retained_completed_call_count,
+            puct_search_completed_result_seconds=puct_search_completed_result_seconds,
+            puct_search_completed_result_count=puct_search_completed_result_count,
+            puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
+            puct_search_rejected_call_count=puct_search_rejected_call_count,
             belief_world_materialization_seconds=belief_world_materialization_seconds,
             belief_world_materialization_count=belief_world_materialization_count,
             opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
@@ -1365,6 +1424,14 @@ class RootPUCTSearchPolicy:
         puct_search_call_seconds: float | None = None,
         puct_search_call_count: int | None = None,
         puct_search_result_count: int | None = None,
+        puct_search_completed_call_seconds: float | None = None,
+        puct_search_completed_call_count: int | None = None,
+        puct_search_retained_completed_call_seconds: float | None = None,
+        puct_search_retained_completed_call_count: int | None = None,
+        puct_search_completed_result_seconds: float | None = None,
+        puct_search_completed_result_count: int | None = None,
+        puct_search_rejected_call_seconds: float | None = None,
+        puct_search_rejected_call_count: int | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
@@ -1402,6 +1469,18 @@ class RootPUCTSearchPolicy:
                     puct_search_call_seconds=puct_search_call_seconds,
                     puct_search_call_count=puct_search_call_count,
                     puct_search_result_count=puct_search_result_count,
+                    puct_search_completed_call_seconds=puct_search_completed_call_seconds,
+                    puct_search_completed_call_count=puct_search_completed_call_count,
+                    puct_search_retained_completed_call_seconds=(
+                        puct_search_retained_completed_call_seconds
+                    ),
+                    puct_search_retained_completed_call_count=(
+                        puct_search_retained_completed_call_count
+                    ),
+                    puct_search_completed_result_seconds=puct_search_completed_result_seconds,
+                    puct_search_completed_result_count=puct_search_completed_result_count,
+                    puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
+                    puct_search_rejected_call_count=puct_search_rejected_call_count,
                 ),
                 **dict(extra_metadata or {}),
             },
@@ -1425,6 +1504,14 @@ class RootPUCTSearchPolicy:
         puct_search_call_seconds: float | None = None,
         puct_search_call_count: int | None = None,
         puct_search_result_count: int | None = None,
+        puct_search_completed_call_seconds: float | None = None,
+        puct_search_completed_call_count: int | None = None,
+        puct_search_retained_completed_call_seconds: float | None = None,
+        puct_search_retained_completed_call_count: int | None = None,
+        puct_search_completed_result_seconds: float | None = None,
+        puct_search_completed_result_count: int | None = None,
+        puct_search_rejected_call_seconds: float | None = None,
+        puct_search_rejected_call_count: int | None = None,
     ) -> dict[str, object]:
         """Attach all work done before a graceful fallback to the decision artifact."""
 
@@ -1435,6 +1522,18 @@ class RootPUCTSearchPolicy:
             puct_search_call_seconds=puct_search_call_seconds,
             puct_search_call_count=puct_search_call_count,
             puct_search_result_count=puct_search_result_count,
+            puct_search_completed_call_seconds=puct_search_completed_call_seconds,
+            puct_search_completed_call_count=puct_search_completed_call_count,
+            puct_search_retained_completed_call_seconds=(
+                puct_search_retained_completed_call_seconds
+            ),
+            puct_search_retained_completed_call_count=(
+                puct_search_retained_completed_call_count
+            ),
+            puct_search_completed_result_seconds=puct_search_completed_result_seconds,
+            puct_search_completed_result_count=puct_search_completed_result_count,
+            puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
+            puct_search_rejected_call_count=puct_search_rejected_call_count,
             belief_world_materialization_seconds=belief_world_materialization_seconds,
             belief_world_materialization_count=belief_world_materialization_count,
             opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
@@ -1460,6 +1559,14 @@ def _finalize_root_puct_timing(
     puct_search_call_seconds: float | None,
     puct_search_call_count: int | None,
     puct_search_result_count: int | None,
+    puct_search_completed_call_seconds: float | None,
+    puct_search_completed_call_count: int | None,
+    puct_search_retained_completed_call_seconds: float | None,
+    puct_search_retained_completed_call_count: int | None,
+    puct_search_completed_result_seconds: float | None,
+    puct_search_completed_result_count: int | None,
+    puct_search_rejected_call_seconds: float | None,
+    puct_search_rejected_call_count: int | None,
     belief_world_materialization_seconds: float | None,
     belief_world_materialization_count: int | None,
     opponent_scenario_planning_seconds: float | None,
@@ -1480,11 +1587,28 @@ def _finalize_root_puct_timing(
         timing = timing.with_puct_search_residual_partition(
             result_residual_seconds=timing.residual_seconds,
             result_count=puct_search_result_count or 0,
+            # Keep this established total partition unchanged. The outcome
+            # fields below only explain where its wall time went.
             unrecorded_call_seconds=max(
                 0.0,
                 puct_search_call_seconds - timing.total_seconds,
             ),
             call_count=puct_search_call_count or 0,
+        )
+    if puct_search_completed_call_seconds is not None:
+        timing = timing.with_puct_search_call_outcomes(
+            completed_call_seconds=puct_search_completed_call_seconds,
+            completed_call_count=puct_search_completed_call_count or 0,
+            retained_completed_call_seconds=(
+                puct_search_retained_completed_call_seconds or 0.0
+            ),
+            retained_completed_call_count=(
+                puct_search_retained_completed_call_count or 0
+            ),
+            completed_result_seconds=puct_search_completed_result_seconds or 0.0,
+            completed_result_count=puct_search_completed_result_count or 0,
+            rejected_call_seconds=puct_search_rejected_call_seconds or 0.0,
+            rejected_call_count=puct_search_rejected_call_count or 0,
         )
     if opponent_scenario_planning_seconds is not None:
         timing = timing.with_opponent_scenario_planning(opponent_scenario_planning_seconds)

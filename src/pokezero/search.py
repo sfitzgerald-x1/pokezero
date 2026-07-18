@@ -173,6 +173,20 @@ class RootPUCTSearchTiming:
     # measured its puct_branch_search calls.
     puct_search_result_residual_seconds: float = 0.0
     puct_search_result_residual_count: int = 0
+    # The policy wrapper records every returned puct_branch_search call, then
+    # distinguishes results retained in the capped scenario aggregate from
+    # completed calls discarded by that cap. These remain diagnostic
+    # subdivisions of unrecorded call wall time.
+    puct_search_completed_call_seconds: float = 0.0
+    puct_search_completed_call_count: int = 0
+    puct_search_retained_completed_call_seconds: float = 0.0
+    puct_search_retained_completed_call_count: int = 0
+    puct_search_completed_result_seconds: float = 0.0
+    puct_search_completed_result_count: int = 0
+    puct_search_discarded_completed_call_seconds: float = 0.0
+    puct_search_discarded_completed_call_count: int = 0
+    puct_search_rejected_call_seconds: float = 0.0
+    puct_search_rejected_call_count: int = 0
     puct_search_unrecorded_call_seconds: float = 0.0
     puct_search_call_count: int = 0
     total_seconds: float = 0.0
@@ -231,6 +245,16 @@ class RootPUCTSearchTiming:
     @property
     def outer_policy_residual_seconds(self) -> float:
         return max(0.0, self.raw_outer_policy_residual_seconds)
+
+    @property
+    def puct_search_completed_call_overhead_seconds(self) -> float:
+        """Return retained-call wall absent from retained result timing."""
+
+        return max(
+            0.0,
+            self.puct_search_retained_completed_call_seconds
+            - self.puct_search_completed_result_seconds,
+        )
 
     @property
     def bridge_python_orchestration_seconds(self) -> float:
@@ -344,6 +368,65 @@ class RootPUCTSearchTiming:
                 self.puct_search_unrecorded_call_seconds + unrecorded_call_seconds
             ),
             puct_search_call_count=self.puct_search_call_count + call_count,
+        )
+
+    def with_puct_search_call_outcomes(
+        self,
+        *,
+        completed_call_seconds: float,
+        completed_call_count: int,
+        retained_completed_call_seconds: float,
+        retained_completed_call_count: int,
+        completed_result_seconds: float,
+        completed_result_count: int,
+        rejected_call_seconds: float,
+        rejected_call_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Split opaque Root-PUCT call wall by returned versus rejected calls.
+
+        A rejected call cannot return a ``RootPUCTSearchTiming``. A completed
+        call can also be discarded by the opponent-action cap, so retain that
+        full wall separately from a kept result's wrapper overhead. The
+        existing unrecorded-call value remains the legacy total partition.
+        """
+
+        discarded_completed_call_seconds = max(
+            0.0,
+            completed_call_seconds - retained_completed_call_seconds,
+        )
+        discarded_completed_call_count = max(0, completed_call_count - retained_completed_call_count)
+        return replace(
+            self,
+            puct_search_completed_call_seconds=(
+                self.puct_search_completed_call_seconds + completed_call_seconds
+            ),
+            puct_search_completed_call_count=(
+                self.puct_search_completed_call_count + completed_call_count
+            ),
+            puct_search_retained_completed_call_seconds=(
+                self.puct_search_retained_completed_call_seconds + retained_completed_call_seconds
+            ),
+            puct_search_retained_completed_call_count=(
+                self.puct_search_retained_completed_call_count + retained_completed_call_count
+            ),
+            puct_search_completed_result_seconds=(
+                self.puct_search_completed_result_seconds + completed_result_seconds
+            ),
+            puct_search_completed_result_count=(
+                self.puct_search_completed_result_count + completed_result_count
+            ),
+            puct_search_discarded_completed_call_seconds=(
+                self.puct_search_discarded_completed_call_seconds + discarded_completed_call_seconds
+            ),
+            puct_search_discarded_completed_call_count=(
+                self.puct_search_discarded_completed_call_count + discarded_completed_call_count
+            ),
+            puct_search_rejected_call_seconds=(
+                self.puct_search_rejected_call_seconds + rejected_call_seconds
+            ),
+            puct_search_rejected_call_count=(
+                self.puct_search_rejected_call_count + rejected_call_count
+            ),
         )
 
     def with_neural_subtiming(
@@ -552,6 +635,36 @@ class RootPUCTSearchTiming:
             puct_search_result_residual_count=sum(
                 timing.puct_search_result_residual_count for timing in timings
             ),
+            puct_search_completed_call_seconds=sum(
+                timing.puct_search_completed_call_seconds for timing in timings
+            ),
+            puct_search_completed_call_count=sum(
+                timing.puct_search_completed_call_count for timing in timings
+            ),
+            puct_search_retained_completed_call_seconds=sum(
+                timing.puct_search_retained_completed_call_seconds for timing in timings
+            ),
+            puct_search_retained_completed_call_count=sum(
+                timing.puct_search_retained_completed_call_count for timing in timings
+            ),
+            puct_search_completed_result_seconds=sum(
+                timing.puct_search_completed_result_seconds for timing in timings
+            ),
+            puct_search_completed_result_count=sum(
+                timing.puct_search_completed_result_count for timing in timings
+            ),
+            puct_search_discarded_completed_call_seconds=sum(
+                timing.puct_search_discarded_completed_call_seconds for timing in timings
+            ),
+            puct_search_discarded_completed_call_count=sum(
+                timing.puct_search_discarded_completed_call_count for timing in timings
+            ),
+            puct_search_rejected_call_seconds=sum(
+                timing.puct_search_rejected_call_seconds for timing in timings
+            ),
+            puct_search_rejected_call_count=sum(
+                timing.puct_search_rejected_call_count for timing in timings
+            ),
             puct_search_unrecorded_call_seconds=sum(
                 timing.puct_search_unrecorded_call_seconds for timing in timings
             ),
@@ -623,6 +736,27 @@ class RootPUCTSearchTiming:
             "rollout_tail_count": self.rollout_tail_count,
             "puct_search_result_residual_seconds": self.puct_search_result_residual_seconds,
             "puct_search_result_residual_count": self.puct_search_result_residual_count,
+            "puct_search_completed_call_seconds": self.puct_search_completed_call_seconds,
+            "puct_search_completed_call_count": self.puct_search_completed_call_count,
+            "puct_search_retained_completed_call_seconds": (
+                self.puct_search_retained_completed_call_seconds
+            ),
+            "puct_search_retained_completed_call_count": (
+                self.puct_search_retained_completed_call_count
+            ),
+            "puct_search_completed_result_seconds": self.puct_search_completed_result_seconds,
+            "puct_search_completed_result_count": self.puct_search_completed_result_count,
+            "puct_search_completed_call_overhead_seconds": (
+                self.puct_search_completed_call_overhead_seconds
+            ),
+            "puct_search_discarded_completed_call_seconds": (
+                self.puct_search_discarded_completed_call_seconds
+            ),
+            "puct_search_discarded_completed_call_count": (
+                self.puct_search_discarded_completed_call_count
+            ),
+            "puct_search_rejected_call_seconds": self.puct_search_rejected_call_seconds,
+            "puct_search_rejected_call_count": self.puct_search_rejected_call_count,
             "puct_search_unrecorded_call_seconds": self.puct_search_unrecorded_call_seconds,
             "puct_search_call_count": self.puct_search_call_count,
             "raw_residual_seconds": self.raw_residual_seconds,
