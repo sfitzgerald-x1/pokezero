@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pokezero-search"
+version = "0.1.0"
+description = "PokeZero native search crate: PUCT over poke-engine primitives with a pluggable leaf evaluator"
+requires-python = ">=3.10"
+
+[tool.maturin]
+module-name = "pokezero_search"
+features = ["pyo3/extension-module"]
