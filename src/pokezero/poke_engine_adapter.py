@@ -44,6 +44,7 @@ class MoveSpec:
 
     id: str
     pp: int = 32
+    disabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,9 @@ class PokemonSpec:
     ability: str | None = None
     item: str | None = None
     nature: str | None = None
+    rest_turns: int = 0
+    sleep_turns: int = 0
+    weight_kg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,12 @@ class SideSpec:
     # Optional Gen 3 side conditions, keyed by ``poke_engine.SideConditions``
     # field name (snake_case, e.g. ``"spikes"``, ``"reflect"``).
     side_conditions: Mapping[str, int] = field(default_factory=dict)
+    # Active Pokemon stat stages, keyed by ``poke_engine.Side`` boost field
+    # prefix (``"attack"``, ``"defense"``, ``"special_attack"``,
+    # ``"special_defense"``, ``"speed"``, ``"accuracy"``, ``"evasion"``).
+    boosts: Mapping[str, int] = field(default_factory=dict)
+    # Active Pokemon volatile statuses, engine ids (e.g. ``"leechseed"``).
+    volatile_statuses: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -92,6 +102,9 @@ class BattleSpec:
     weather: str = "none"
     terrain: str = "none"
     trick_room: bool = False
+    # Turns of weather left; -1 means indefinite (ability-set Gen 3 weather).
+    # Only forwarded to the engine when ``weather`` is not ``"none"``.
+    weather_turns_remaining: int = -1
 
 
 def minimal_gen3_fixture() -> BattleSpec:
@@ -162,13 +175,18 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
     if not isinstance(spec.trick_room, bool):
         raise TypeError(f"trick_room must be a bool, got {type(spec.trick_room).__name__}")
 
-    return engine.State(
-        side_one=side_one,
-        side_two=side_two,
-        weather=str(spec.weather),
-        terrain=str(spec.terrain),
-        trick_room=spec.trick_room,
-    )
+    kwargs: dict[str, Any] = {
+        "side_one": side_one,
+        "side_two": side_two,
+        "weather": str(spec.weather),
+        "terrain": str(spec.terrain),
+        "trick_room": spec.trick_room,
+    }
+    if str(spec.weather) != "none":
+        kwargs["weather_turns_remaining"] = _require_int(
+            spec.weather_turns_remaining, "weather_turns_remaining"
+        )
+    return engine.State(**kwargs)
 
 
 def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
@@ -194,6 +212,19 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
     kwargs: dict[str, Any] = {"pokemon": party, "active_index": str(active)}
     if side.side_conditions:
         kwargs["side_conditions"] = _build_side_conditions(engine, side.side_conditions, path)
+    for stat, stage in dict(side.boosts).items():
+        if stat not in SIDE_BOOST_FIELDS:
+            raise ValueError(f"{path}.boosts has unknown stat {stat!r}")
+        stage = _require_int(stage, f"{path}.boosts[{stat!r}]")
+        if not -6 <= stage <= 6:
+            raise ValueError(f"{path}.boosts[{stat!r}] must be within [-6, 6], got {stage}")
+        if stage:
+            kwargs[f"{stat}_boost"] = stage
+    if side.volatile_statuses:
+        volatiles = [str(name) for name in side.volatile_statuses]
+        if any(not name for name in volatiles):
+            raise ValueError(f"{path}.volatile_statuses entries must be non-empty")
+        kwargs["volatile_statuses"] = set(volatiles)
     return engine.Side(**kwargs)
 
 
@@ -235,6 +266,9 @@ def _require_non_negative_int(value: Any, label: str) -> int:
 # Battle stats that must each be a positive int.
 POKEMON_STAT_FIELDS = ("attack", "defense", "special_attack", "special_defense", "speed")
 
+# Boost fields accepted by ``poke_engine.Side`` (suffixed ``_boost`` on build).
+SIDE_BOOST_FIELDS = POKEMON_STAT_FIELDS + ("accuracy", "evasion")
+
 
 def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
     if not isinstance(member, PokemonSpec):
@@ -274,6 +308,15 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
         kwargs["item"] = member.item
     if member.nature is not None:
         kwargs["nature"] = member.nature
+    if _require_non_negative_int(member.rest_turns, f"{path}.rest_turns"):
+        kwargs["rest_turns"] = member.rest_turns
+    if _require_non_negative_int(member.sleep_turns, f"{path}.sleep_turns"):
+        kwargs["sleep_turns"] = member.sleep_turns
+    if member.weight_kg is not None:
+        weight = float(member.weight_kg)
+        if weight <= 0.0:
+            raise ValueError(f"{path}.weight_kg must be positive, got {weight}")
+        kwargs["weight_kg"] = weight
     return engine.Pokemon(**kwargs)
 
 
@@ -283,6 +326,10 @@ def _build_move(engine: Any, move: MoveSpec, path: str) -> Any:
     if not move.id:
         raise ValueError(f"{path}.id must be a non-empty move id")
     _require_non_negative_int(move.pp, f"{path}.pp")
+    if not isinstance(move.disabled, bool):
+        raise TypeError(f"{path}.disabled must be a bool, got {type(move.disabled).__name__}")
+    if move.disabled:
+        return engine.Move(id=move.id, pp=move.pp, disabled=True)
     return engine.Move(id=move.id, pp=move.pp)
 
 
