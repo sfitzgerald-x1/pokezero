@@ -1407,6 +1407,7 @@ def _prepare_value_branch_search(
                 expected_current_observation=expected_current_observation,
                 restorable_prefix=restorable_prefix,
                 replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+                observation_player_id=(player_id if leaf_rollout_decision_rounds == 0 else None),
                 timing=timing,
             )
         except ValueError as exc:
@@ -1893,6 +1894,7 @@ def _finish_puct_branch_search(
             expected_current_observation=expected_current_observation,
             restorable_prefix=restorable_prefix,
             replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            observation_player_id=(player_id if leaf_rollout_decision_rounds == 0 else None),
             timing=timing,
         )
         value_candidate = _value_branch_candidate(
@@ -2492,6 +2494,7 @@ def _branch_from_replay_prefix(
     expected_current_observation: PokeZeroObservationV0 | None,
     restorable_prefix: _RestorablePrefix | None,
     replay_hp_fraction_tolerance: float,
+    observation_player_id: PlayerId | None = None,
     timing: _RootPUCTSearchTimingAccumulator | None = None,
 ) -> ReplayBranchResult:
     if restorable_prefix is None:
@@ -2535,6 +2538,11 @@ def _branch_from_replay_prefix(
         if restorable_prefix.snapshot_restore_mode == "bridge-handle"
         else None
     )
+    step_from_search_snapshot_for_player = (
+        getattr(env, "step_from_search_snapshot_for_player", None)
+        if observation_player_id is not None and restorable_prefix.snapshot_restore_mode == "bridge-handle"
+        else None
+    )
     if not callable(step_from_search_snapshot):
         # Preserve the generic/oracle path's original restore-before-validation ordering. It is
         # deliberately separate from the bridge-handle fusion below.
@@ -2570,7 +2578,14 @@ def _branch_from_replay_prefix(
     # belief-sampled world. The fused bridge command includes both restore and branch
     # execution, so it is intentionally recorded as one non-overlapping branch stage.
     branch_step_started_at = _timing_perf_counter() if timing is not None else None
-    step_result = step_from_search_snapshot(restorable_prefix.snapshot, branch_round.actions)
+    if callable(step_from_search_snapshot_for_player):
+        step_result = step_from_search_snapshot_for_player(
+            restorable_prefix.snapshot,
+            branch_round.actions,
+            observation_player=observation_player_id,
+        )
+    else:
+        step_result = step_from_search_snapshot(restorable_prefix.snapshot, branch_round.actions)
     if timing is not None:
         assert branch_step_started_at is not None
         timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)

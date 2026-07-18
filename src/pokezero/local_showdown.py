@@ -201,6 +201,10 @@ class LocalShowdownSnapshot:
     belief_engine: PublicBattleBeliefEngine
     latest_turn: int
     terminal: TerminalState | None
+    # Snapshot-local action translations are computed from the same determinized
+    # world used for the branch. They avoid rebuilding public player state for
+    # every repeated Root-PUCT visit without exposing data outside that world.
+    search_choice_cache: Mapping[PlayerId, Mapping[int, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -561,14 +565,22 @@ class LocalShowdownEnv:
         snapshot_id = event.get("snapshotId")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot event: {event!r}")
-        return self._local_snapshot(bridge_snapshot={"snapshot_id": snapshot_id})
+        return self._local_snapshot(
+            bridge_snapshot={"snapshot_id": snapshot_id},
+            include_search_choice_cache=True,
+        )
 
-    def _local_snapshot(self, *, bridge_snapshot: Mapping[str, Any]) -> LocalShowdownSnapshot:
+    def _local_snapshot(
+        self,
+        *,
+        bridge_snapshot: Mapping[str, Any],
+        include_search_choice_cache: bool = False,
+    ) -> LocalShowdownSnapshot:
         """Capture the Python state paired with either a generic or bridge snapshot."""
 
         if self._battle_token is None:
             raise LocalShowdownError("Cannot snapshot before reset.")
-        return LocalShowdownSnapshot(
+        snapshot = LocalShowdownSnapshot(
             battle_token=self._battle_token,
             battle_id=self._battle_id,
             format_id=self._format_id,
@@ -583,6 +595,15 @@ class LocalShowdownEnv:
             latest_turn=self._latest_turn,
             terminal=self._terminal,
         )
+        if not include_search_choice_cache:
+            return snapshot
+
+        # State normalization may initialize stateful annotation trackers. Return
+        # the shell to the exact paired snapshot so creating a search handle is
+        # observationally side-effect-free for any caller that keeps using it.
+        search_choice_cache = self._search_choice_cache()
+        self._restore_local_snapshot_state(snapshot)
+        return replace(snapshot, search_choice_cache=search_choice_cache)
 
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
         """Restore a snapshot into the current live bridge battle shell.
@@ -649,6 +670,37 @@ class LocalShowdownEnv:
         the bridge then clones the retained world and submits those choices atomically.
         """
 
+        return self._step_from_search_snapshot(snapshot, actions)
+
+    def step_from_search_snapshot_for_player(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        observation_player: PlayerId,
+    ) -> StepResult:
+        """Advance a zero-rollout leaf while retaining only its evaluated view.
+
+        Rollout tails still use ``step_from_search_snapshot`` and retain every
+        requested observation. This narrower form only removes redundant work
+        from immediate value-leaf evaluation.
+        """
+
+        if observation_player not in PLAYER_IDS:
+            raise ValueError(f"observation_player must be one of {', '.join(PLAYER_IDS)}.")
+        return self._step_from_search_snapshot(
+            snapshot,
+            actions,
+            observation_players=(observation_player,),
+        )
+
+    def _step_from_search_snapshot(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        observation_players: tuple[PlayerId, ...] | None = None,
+    ) -> StepResult:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
         if not self._search_snapshot_permitted:
@@ -667,7 +719,7 @@ class LocalShowdownEnv:
         # Choice conversion uses only the public snapshot paired with this sampled world. Do not
         # read the current search shell, which may hold a branch from a prior root visit.
         self._restore_local_snapshot_state(snapshot)
-        choices = self._choices_for_actions(actions)
+        choices = self._cached_search_choices(snapshot, actions)
         return self._submit_step_choices(
             choices=choices,
             payload={
@@ -676,6 +728,7 @@ class LocalShowdownEnv:
                 "snapshotId": snapshot_id,
                 "choices": choices,
             },
+            observation_players=observation_players,
         )
 
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
@@ -761,11 +814,41 @@ class LocalShowdownEnv:
                 raise ValueError(f"{player}: {exc}") from exc
         return choices
 
+    def _search_choice_cache(self) -> dict[PlayerId, dict[int, str]]:
+        """Precompute legal choices once for a retained sampled-world snapshot."""
+
+        cache: dict[PlayerId, dict[int, str]] = {}
+        for player in self.requested_players():
+            state = self._state_for_player(player)
+            cache[player] = {
+                action_index: showdown_choice_for_action(state, action_index)
+                for action_index in range(ACTION_COUNT)
+                if state.legal_action_mask[action_index]
+            }
+        return cache
+
+    def _cached_search_choices(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+    ) -> dict[PlayerId, str]:
+        """Use a snapshot's action translations, preserving legacy error paths as fallback."""
+
+        requested = self.requested_players()
+        cache = snapshot.search_choice_cache
+        if not cache or any(player not in cache for player in requested):
+            return self._choices_for_actions(actions)
+        try:
+            return {player: cache[player][actions[player]] for player in requested}
+        except (KeyError, TypeError):
+            return self._choices_for_actions(actions)
+
     def _submit_step_choices(
         self,
         *,
         choices: Mapping[PlayerId, str],
         payload: Mapping[str, Any],
+        observation_players: tuple[PlayerId, ...] | None = None,
     ) -> StepResult:
         self._last_step_had_error = False
         self._latest_requests = {}
@@ -774,9 +857,16 @@ class LocalShowdownEnv:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
 
         next_requested = self.requested_players()
-        observations = {player: self.observe(player) for player in next_requested}
-        rewards = self._rewards()
         terminal = self.terminal()
+        # A terminal branch has no leaf observation. This matches the generic
+        # path and avoids rebuilding an already-finalized player view.
+        players_to_observe = (
+            ()
+            if terminal is not None
+            else (next_requested if observation_players is None else observation_players)
+        )
+        observations = {player: self.observe(player) for player in players_to_observe}
+        rewards = self._rewards()
         # On terminal we leave the bridge process alive (warm pool): the finished battle is freed
         # by the next reset()'s "end" command, or by close() on shutdown. This avoids a node
         # respawn per game.

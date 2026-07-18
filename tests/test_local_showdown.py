@@ -1624,6 +1624,44 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             1,
         )
 
+    def test_search_snapshot_fast_path_reuses_choices_and_limits_zero_rollout_view(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=23, start_override=start_override)
+            snapshot = env.snapshot_for_search()
+            self.assertEqual(set(snapshot.search_choice_cache), {"p1", "p2"})
+            self.assertIn(0, snapshot.search_choice_cache["p1"])
+            self.assertIn(1, snapshot.search_choice_cache["p2"])
+
+            with mock.patch.object(env, "_choices_for_actions", side_effect=AssertionError("cache miss")):
+                result = env.step_from_search_snapshot_for_player(
+                    snapshot,
+                    {"p1": 0, "p2": 1},
+                    observation_player="p1",
+                )
+
+            with self.assertRaisesRegex(ValueError, "p1: action_index 8 is not legal"):
+                env.step_from_search_snapshot_for_player(
+                    snapshot,
+                    {"p1": 8, "p2": 1},
+                    observation_player="p1",
+                )
+
+        self.assertEqual(set(result.observations), {"p1"})
+        self.assertEqual(result.requested_players, ("p1", "p2"))
+
     def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
         config = integration_config()
         assert config is not None
