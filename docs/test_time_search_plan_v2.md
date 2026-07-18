@@ -117,6 +117,14 @@ classifying it.
    (pokemon-showdown `sim/state.ts`; `Battle#toJSON` exists for this) and
    clone the snapshot per visit and per scenario. Per-visit cost O(1);
    expected ~10× at late-game decisions.
+   **Status (2026-07-17): landed and default-on** (bridge-resident snapshots,
+   merges through `35395d4`). Independently verified on a local probe at
+   extra-120: `prefix_replay_count = 0` (replay-from-root fully gone), world
+   materialization down to ~5% of search wall, ~8s per search decision on
+   CPU-only hardware vs the 19.2s GPU-cluster baseline. The dominant
+   remaining cost is untimed per-visit orchestration (`residual_seconds`
+   ~72% of wall — per-visit bridge round-trips and Python loop overhead);
+   that, not materialization, is the next profiling target.
 2. **Tier 2 — direct state construction:** build the determinized battle
    directly from public state + the belief-sampled opponent (teams, HP,
    statuses, boosts, side conditions, field) as a constructed
@@ -125,9 +133,16 @@ classifying it.
 3. **Correctness constraint:** never serialize the live battle — only
    determinized worlds built from public information. The P-1 anti-leakage
    checksum gate must pass unchanged on the new path.
-4. **Validation gates:** W2 mechanics stage-breakdown re-run on the new path
-   (visits/sec up ~an order of magnitude; fallback toward low single digits);
-   one 200-seed paired FoulPlay read confirming no strength regression.
+4. **Validation gates — right-sized (owner directive, 2026-07-17):** all
+   iteration-loop validation must run in minutes, not hours. Per image:
+   a 1–2 game mechanics smoke (crash-free, `prefix_replay_count = 0`,
+   anti-leakage checksum) is the merge/image gate. Per fix wave: a ~10-game
+   telemetry probe (a few hundred search decisions) re-measures fallback
+   rate and the stage-timing breakdown — that resolution distinguishes 15%
+   from low single digits and is sufficient. The 200-seed paired FoulPlay
+   no-regression read runs **once**, when the redesign is declared done —
+   not per iteration. No long-tailed validation batteries inside the
+   redesign loop.
 
 Deferred until this lands: batched leaf NN evaluation, tree reuse, early
 termination, vectorized stepping, and the multi-ply question — all get
