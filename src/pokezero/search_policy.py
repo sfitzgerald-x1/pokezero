@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 import hashlib
 from itertools import product
 from time import perf_counter
@@ -728,6 +728,7 @@ class RootPUCTSearchPolicy:
         root_policy_setup_seconds += _timing_perf_counter() - root_policy_setup_started_at
         prepared_prefixes_to_release: list[PreparedReplayPrefix] = []
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
+        inner_fallback_decision: PolicyDecision | None = None
         try:
             try:
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
@@ -748,6 +749,7 @@ class RootPUCTSearchPolicy:
                 direct_prefix_construction_seconds = 0.0
                 direct_prefix_construction_count = 0
                 puct_search_call_seconds = 0.0
+                puct_search_call_count = 0
                 scenario_dispatch_started_at: float | None = None
 
                 def current_scenario_dispatch_orchestration_seconds() -> float:
@@ -923,6 +925,7 @@ class RootPUCTSearchPolicy:
                                         direct_prefix_construction_count += 1
                                     if prepared_prefix is not None:
                                         prepared_prefixes_to_release.append(prepared_prefix)
+                                puct_search_call_count += 1
                                 puct_search_started_at = _timing_perf_counter()
                                 try:
                                     search = puct_branch_search(
@@ -1057,7 +1060,7 @@ class RootPUCTSearchPolicy:
                 used_scenarios = _normalize_scenarios(tuple(scenario for scenario, _search in scenario_search_pairs))
                 scenario_searches = tuple(search for _scenario, search in scenario_search_pairs)
             except _AllOpponentScenariosReplayIllegal as exc:
-                return self._fallback(
+                inner_fallback_decision = self._fallback(
                     context,
                     rng=rng,
                     reason=str(exc),
@@ -1076,7 +1079,11 @@ class RootPUCTSearchPolicy:
                     ),
                     scenario_dispatch_orchestration_count=flat_scenario_index,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
+                    puct_search_call_seconds=puct_search_call_seconds,
+                    puct_search_call_count=puct_search_call_count,
+                    puct_search_result_count=len(completed_search_timings),
                 )
+                return inner_fallback_decision
             except Exception as exc:
                 materialization_metadata = (
                     {
@@ -1094,7 +1101,7 @@ class RootPUCTSearchPolicy:
                     if self.start_override_planner is not None
                     else None
                 )
-                return self._fallback(
+                inner_fallback_decision = self._fallback(
                     context,
                     rng=rng,
                     reason=f"search failed: {exc}",
@@ -1113,55 +1120,15 @@ class RootPUCTSearchPolicy:
                     ),
                     scenario_dispatch_orchestration_count=flat_scenario_index,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
+                    puct_search_call_seconds=puct_search_call_seconds,
+                    puct_search_call_count=puct_search_call_count,
+                    puct_search_result_count=len(completed_search_timings),
                 )
+                return inner_fallback_decision
             elapsed_seconds = perf_counter() - search_started_at
             scenario_dispatch_orchestration_seconds = current_scenario_dispatch_orchestration_seconds()
-            timing = (
-                RootPUCTSearchTiming.aggregate(
-                    tuple(scenario_search.timing for scenario_search in scenario_searches)
-                )
-                .with_belief_world_materialization(
-                    belief_world_materialization_seconds,
-                    attempt_count=belief_world_materialization_count,
-                )
-                .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
-                .with_root_policy_setup(root_policy_setup_seconds)
-                .with_direct_prefix_construction(
-                    direct_prefix_construction_seconds,
-                    attempt_count=direct_prefix_construction_count,
-                )
-                .with_scenario_dispatch_orchestration(
-                    scenario_dispatch_orchestration_seconds,
-                    attempt_count=flat_scenario_index,
-                )
-                .with_policy_evaluation(policy_evaluation_seconds)
-                .with_total(_timing_perf_counter() - timing_started_at)
-            )
-            neural_timing = _neural_timing_delta(
-                neural_timing_before,
-                _neural_timing_snapshot(self.neural_timing_snapshot),
-            )
-            timing = timing.with_neural_subtiming(
-                observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
-                observation_encoding_count=int(neural_timing["observation_encoding_count"]),
-                neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
-                neural_forward_count=int(neural_timing["neural_forward_count"]),
-                action_prior_neural_forward_seconds=float(
-                    neural_timing["action_prior_neural_forward_seconds"]
-                ),
-                action_prior_neural_forward_count=int(
-                    neural_timing["action_prior_neural_forward_count"]
-                ),
-                opponent_action_prior_neural_forward_seconds=float(
-                    neural_timing["opponent_action_prior_neural_forward_seconds"]
-                ),
-                opponent_action_prior_neural_forward_count=int(
-                    neural_timing["opponent_action_prior_neural_forward_count"]
-                ),
-                policy_neural_forward_seconds=float(neural_timing["policy_neural_forward_seconds"]),
-                policy_neural_forward_count=int(neural_timing["policy_neural_forward_count"]),
-                value_neural_forward_seconds=float(neural_timing["value_neural_forward_seconds"]),
-                value_neural_forward_count=int(neural_timing["value_neural_forward_count"]),
+            completed_search_timing = RootPUCTSearchTiming.aggregate(
+                tuple(scenario_search.timing for scenario_search in scenario_searches)
             )
         finally:
             try:
@@ -1176,6 +1143,11 @@ class RootPUCTSearchPolicy:
                 close = getattr(env, "close", None)
                 if callable(close):
                     close()
+            if inner_fallback_decision is not None:
+                _refresh_root_puct_timing_total(
+                    inner_fallback_decision.metadata,
+                    total_seconds=_timing_perf_counter() - timing_started_at,
+                )
 
         search = _aggregate_scenario_searches(
             scenario_searches,
@@ -1297,6 +1269,24 @@ class RootPUCTSearchPolicy:
             if self.start_override_planner is not None
             else {}
         )
+        timing = _finalize_root_puct_timing(
+            completed_search_timing=completed_search_timing,
+            puct_search_call_seconds=puct_search_call_seconds,
+            puct_search_call_count=puct_search_call_count,
+            puct_search_result_count=len(scenario_searches),
+            belief_world_materialization_seconds=belief_world_materialization_seconds,
+            belief_world_materialization_count=belief_world_materialization_count,
+            opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+            root_policy_setup_seconds=root_policy_setup_seconds,
+            direct_prefix_construction_seconds=direct_prefix_construction_seconds,
+            direct_prefix_construction_count=direct_prefix_construction_count,
+            scenario_dispatch_orchestration_seconds=scenario_dispatch_orchestration_seconds,
+            scenario_dispatch_orchestration_count=flat_scenario_index,
+            policy_evaluation_seconds=policy_evaluation_seconds,
+            timing_started_at=timing_started_at,
+            neural_timing_before=neural_timing_before,
+            neural_timing_snapshot=self.neural_timing_snapshot,
+        )
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -1372,6 +1362,9 @@ class RootPUCTSearchPolicy:
         scenario_dispatch_orchestration_seconds: float | None = None,
         scenario_dispatch_orchestration_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
+        puct_search_call_seconds: float | None = None,
+        puct_search_call_count: int | None = None,
+        puct_search_result_count: int | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
@@ -1406,6 +1399,9 @@ class RootPUCTSearchPolicy:
                         scenario_dispatch_orchestration_count
                     ),
                     completed_search_timing=completed_search_timing,
+                    puct_search_call_seconds=puct_search_call_seconds,
+                    puct_search_call_count=puct_search_call_count,
+                    puct_search_result_count=puct_search_result_count,
                 ),
                 **dict(extra_metadata or {}),
             },
@@ -1426,63 +1422,134 @@ class RootPUCTSearchPolicy:
         scenario_dispatch_orchestration_seconds: float | None = None,
         scenario_dispatch_orchestration_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
+        puct_search_call_seconds: float | None = None,
+        puct_search_call_count: int | None = None,
+        puct_search_result_count: int | None = None,
     ) -> dict[str, object]:
         """Attach all work done before a graceful fallback to the decision artifact."""
 
         if timing_started_at is None:
             return {}
-        timing = completed_search_timing or RootPUCTSearchTiming()
-        if opponent_scenario_planning_seconds is not None:
-            timing = timing.with_opponent_scenario_planning(opponent_scenario_planning_seconds)
-        if policy_evaluation_seconds is not None:
-            timing = timing.with_policy_evaluation(policy_evaluation_seconds)
-        if belief_world_materialization_seconds is not None:
-            timing = timing.with_belief_world_materialization(
-                belief_world_materialization_seconds,
-                attempt_count=belief_world_materialization_count or 0,
-            )
-        if root_policy_setup_seconds is not None:
-            timing = timing.with_root_policy_setup(root_policy_setup_seconds)
-        if direct_prefix_construction_seconds is not None:
-            timing = timing.with_direct_prefix_construction(
-                direct_prefix_construction_seconds,
-                attempt_count=direct_prefix_construction_count or 0,
-            )
-        if scenario_dispatch_orchestration_seconds is not None:
-            timing = timing.with_scenario_dispatch_orchestration(
-                scenario_dispatch_orchestration_seconds,
-                attempt_count=scenario_dispatch_orchestration_count or 0,
-            )
-        neural_timing = _neural_timing_delta(
-            neural_timing_before,
-            _neural_timing_snapshot(self.neural_timing_snapshot),
+        timing = _finalize_root_puct_timing(
+            completed_search_timing=completed_search_timing,
+            puct_search_call_seconds=puct_search_call_seconds,
+            puct_search_call_count=puct_search_call_count,
+            puct_search_result_count=puct_search_result_count,
+            belief_world_materialization_seconds=belief_world_materialization_seconds,
+            belief_world_materialization_count=belief_world_materialization_count,
+            opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+            root_policy_setup_seconds=root_policy_setup_seconds,
+            direct_prefix_construction_seconds=direct_prefix_construction_seconds,
+            direct_prefix_construction_count=direct_prefix_construction_count,
+            scenario_dispatch_orchestration_seconds=scenario_dispatch_orchestration_seconds,
+            scenario_dispatch_orchestration_count=scenario_dispatch_orchestration_count,
+            policy_evaluation_seconds=policy_evaluation_seconds,
+            timing_started_at=timing_started_at,
+            neural_timing_before=neural_timing_before,
+            neural_timing_snapshot=self.neural_timing_snapshot,
         )
-        timing = timing.with_neural_subtiming(
-            observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
-            observation_encoding_count=int(neural_timing["observation_encoding_count"]),
-            neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
-            neural_forward_count=int(neural_timing["neural_forward_count"]),
-            action_prior_neural_forward_seconds=float(
-                neural_timing["action_prior_neural_forward_seconds"]
-            ),
-            action_prior_neural_forward_count=int(
-                neural_timing["action_prior_neural_forward_count"]
-            ),
-            opponent_action_prior_neural_forward_seconds=float(
-                neural_timing["opponent_action_prior_neural_forward_seconds"]
-            ),
-            opponent_action_prior_neural_forward_count=int(
-                neural_timing["opponent_action_prior_neural_forward_count"]
-            ),
-            policy_neural_forward_seconds=float(neural_timing["policy_neural_forward_seconds"]),
-            policy_neural_forward_count=int(neural_timing["policy_neural_forward_count"]),
-            value_neural_forward_seconds=float(neural_timing["value_neural_forward_seconds"]),
-            value_neural_forward_count=int(neural_timing["value_neural_forward_count"]),
-        ).with_total(_timing_perf_counter() - timing_started_at)
         return {
             "root_puct_elapsed_seconds": timing.total_seconds,
             "root_puct_timing": timing.to_dict(),
         }
+
+
+def _finalize_root_puct_timing(
+    *,
+    completed_search_timing: RootPUCTSearchTiming | None,
+    puct_search_call_seconds: float | None,
+    puct_search_call_count: int | None,
+    puct_search_result_count: int | None,
+    belief_world_materialization_seconds: float | None,
+    belief_world_materialization_count: int | None,
+    opponent_scenario_planning_seconds: float | None,
+    root_policy_setup_seconds: float | None,
+    direct_prefix_construction_seconds: float | None,
+    direct_prefix_construction_count: int | None,
+    scenario_dispatch_orchestration_seconds: float | None,
+    scenario_dispatch_orchestration_count: int | None,
+    policy_evaluation_seconds: float | None,
+    timing_started_at: float,
+    neural_timing_before: Mapping[str, float | int] | None,
+    neural_timing_snapshot: NeuralTimingSnapshot | None,
+) -> RootPUCTSearchTiming:
+    """Build a full-decision timing after cleanup and action selection work."""
+
+    timing = completed_search_timing or RootPUCTSearchTiming()
+    if puct_search_call_seconds is not None:
+        timing = timing.with_puct_search_residual_partition(
+            result_residual_seconds=timing.residual_seconds,
+            result_count=puct_search_result_count or 0,
+            unrecorded_call_seconds=max(
+                0.0,
+                puct_search_call_seconds - timing.total_seconds,
+            ),
+            call_count=puct_search_call_count or 0,
+        )
+    if opponent_scenario_planning_seconds is not None:
+        timing = timing.with_opponent_scenario_planning(opponent_scenario_planning_seconds)
+    if policy_evaluation_seconds is not None:
+        timing = timing.with_policy_evaluation(policy_evaluation_seconds)
+    if belief_world_materialization_seconds is not None:
+        timing = timing.with_belief_world_materialization(
+            belief_world_materialization_seconds,
+            attempt_count=belief_world_materialization_count or 0,
+        )
+    if root_policy_setup_seconds is not None:
+        timing = timing.with_root_policy_setup(root_policy_setup_seconds)
+    if direct_prefix_construction_seconds is not None:
+        timing = timing.with_direct_prefix_construction(
+            direct_prefix_construction_seconds,
+            attempt_count=direct_prefix_construction_count or 0,
+        )
+    if scenario_dispatch_orchestration_seconds is not None:
+        timing = timing.with_scenario_dispatch_orchestration(
+            scenario_dispatch_orchestration_seconds,
+            attempt_count=scenario_dispatch_orchestration_count or 0,
+        )
+    neural_timing = _neural_timing_delta(
+        neural_timing_before,
+        _neural_timing_snapshot(neural_timing_snapshot),
+    )
+    return timing.with_neural_subtiming(
+        observation_encoding_seconds=float(neural_timing["observation_encoding_seconds"]),
+        observation_encoding_count=int(neural_timing["observation_encoding_count"]),
+        neural_forward_seconds=float(neural_timing["neural_forward_seconds"]),
+        neural_forward_count=int(neural_timing["neural_forward_count"]),
+        action_prior_neural_forward_seconds=float(neural_timing["action_prior_neural_forward_seconds"]),
+        action_prior_neural_forward_count=int(neural_timing["action_prior_neural_forward_count"]),
+        opponent_action_prior_neural_forward_seconds=float(
+            neural_timing["opponent_action_prior_neural_forward_seconds"]
+        ),
+        opponent_action_prior_neural_forward_count=int(
+            neural_timing["opponent_action_prior_neural_forward_count"]
+        ),
+        policy_neural_forward_seconds=float(neural_timing["policy_neural_forward_seconds"]),
+        policy_neural_forward_count=int(neural_timing["policy_neural_forward_count"]),
+        value_neural_forward_seconds=float(neural_timing["value_neural_forward_seconds"]),
+        value_neural_forward_count=int(neural_timing["value_neural_forward_count"]),
+    ).with_total(_timing_perf_counter() - timing_started_at)
+
+
+def _refresh_root_puct_timing_total(
+    metadata: Mapping[str, object],
+    *,
+    total_seconds: float,
+) -> None:
+    """Refresh a fallback timing after its branch environment has closed."""
+
+    if not isinstance(metadata, dict):
+        return
+    payload = metadata.get("root_puct_timing")
+    if not isinstance(payload, Mapping):
+        return
+    values = {
+        timing_field.name: payload[timing_field.name]
+        for timing_field in fields(RootPUCTSearchTiming)
+        if timing_field.name in payload
+    }
+    metadata["root_puct_timing"] = RootPUCTSearchTiming(**values).with_total(total_seconds).to_dict()
+    metadata["root_puct_elapsed_seconds"] = total_seconds
 
 
 def _opponent_action_planner_error(

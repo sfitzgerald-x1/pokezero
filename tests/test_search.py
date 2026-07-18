@@ -1165,6 +1165,26 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["raw_residual_seconds"], -1.0)
         self.assertEqual(timing["residual_seconds"], 0.0)
 
+    def test_root_puct_timing_partitions_residual_outside_branch_search_results(self) -> None:
+        timing = (
+            RootPUCTSearchTiming(branch_simulator_step_seconds=2.0, total_seconds=11.0)
+            .with_puct_search_residual_partition(
+                result_residual_seconds=4.0,
+                result_count=2,
+                unrecorded_call_seconds=3.0,
+                call_count=3,
+            )
+            .to_dict()
+        )
+
+        self.assertEqual(timing["raw_residual_seconds"], 9.0)
+        self.assertEqual(timing["puct_search_result_residual_seconds"], 4.0)
+        self.assertEqual(timing["puct_search_result_residual_count"], 2)
+        self.assertEqual(timing["puct_search_unrecorded_call_seconds"], 3.0)
+        self.assertEqual(timing["puct_search_call_count"], 3)
+        self.assertEqual(timing["raw_outer_policy_residual_seconds"], 2.0)
+        self.assertEqual(timing["outer_policy_residual_seconds"], 2.0)
+
     def test_puct_branch_search_accumulates_root_visit_budget(self) -> None:
         env = ValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)

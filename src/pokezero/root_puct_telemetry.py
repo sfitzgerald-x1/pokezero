@@ -120,8 +120,16 @@ _TIMING_KEYS = (
     "rollout_tail_count",
     "policy_value_evaluation_seconds",
     "policy_value_evaluation_count",
+    # W5 residual partition. These are diagnostic sub-slices of residual
+    # time, not new additive wall-clock stages.
+    "puct_search_result_residual_seconds",
+    "puct_search_result_residual_count",
+    "puct_search_unrecorded_call_seconds",
+    "puct_search_call_count",
     "raw_residual_seconds",
     "residual_seconds",
+    "raw_outer_policy_residual_seconds",
+    "outer_policy_residual_seconds",
     "total_seconds",
 )
 

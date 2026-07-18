@@ -28,6 +28,12 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_initial_sweep_orchestration_count": 1,
                     "scenario_dispatch_orchestration_seconds": 0.03,
                     "scenario_dispatch_orchestration_count": 2,
+                    "puct_search_result_residual_seconds": 0.04,
+                    "puct_search_result_residual_count": 1,
+                    "puct_search_unrecorded_call_seconds": 0.01,
+                    "puct_search_call_count": 2,
+                    "raw_outer_policy_residual_seconds": 0.02,
+                    "outer_policy_residual_seconds": 0.02,
                     "value_neural_forward_seconds": 0.06,
                     "value_neural_forward_count": 3,
                     "total_seconds": 0.25,
@@ -70,6 +76,12 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_initial_sweep_orchestration_count": 1,
                     "scenario_dispatch_orchestration_seconds": 0.03,
                     "scenario_dispatch_orchestration_count": 2,
+                    "puct_search_result_residual_seconds": 0.04,
+                    "puct_search_result_residual_count": 1,
+                    "puct_search_unrecorded_call_seconds": 0.01,
+                    "puct_search_call_count": 2,
+                    "raw_outer_policy_residual_seconds": 0.02,
+                    "outer_policy_residual_seconds": 0.02,
                     "value_neural_forward_seconds": 0.06,
                     "value_neural_forward_count": 3,
                     "total_seconds": 0.25,
@@ -123,7 +135,15 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_elapsed_seconds": 0.20,
                     "policy_elapsed_seconds": 0.25,
                     "full_decision_elapsed_seconds": 0.25,
-                    "timing": {"total_seconds": 0.20, "prefix_replay_seconds": 0.10},
+                    "timing": {
+                        "total_seconds": 0.20,
+                        "prefix_replay_seconds": 0.10,
+                        "puct_search_result_residual_seconds": 0.08,
+                        "puct_search_result_residual_count": 1,
+                        "puct_search_unrecorded_call_seconds": 0.01,
+                        "puct_search_call_count": 1,
+                        "outer_policy_residual_seconds": 0.01,
+                    },
                 },
                 {
                     "outcome": "fallback",
@@ -139,7 +159,15 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_elapsed_seconds": 0.40,
                     "policy_elapsed_seconds": 0.45,
                     "full_decision_elapsed_seconds": 0.45,
-                    "timing": {"total_seconds": 0.40, "prefix_replay_seconds": 0.20},
+                    "timing": {
+                        "total_seconds": 0.40,
+                        "prefix_replay_seconds": 0.20,
+                        "puct_search_result_residual_seconds": 0.09,
+                        "puct_search_result_residual_count": 1,
+                        "puct_search_unrecorded_call_seconds": 0.02,
+                        "puct_search_call_count": 2,
+                        "outer_policy_residual_seconds": 0.03,
+                    },
                     "counters": {
                         "root_puct_direct_materialization_rejection_categories": {
                             "observation_mismatch": 1
@@ -191,6 +219,15 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["full_decision_wall_seconds"]["samples"], 2)
         self.assertAlmostEqual(report["full_decision_wall_seconds"]["mean"], 0.35)
         self.assertAlmostEqual(report["timing_totals"]["prefix_replay_seconds"], 0.30)
+        self.assertAlmostEqual(
+            report["timing_totals"]["puct_search_result_residual_seconds"], 0.17
+        )
+        self.assertEqual(report["timing_totals"]["puct_search_result_residual_count"], 2)
+        self.assertAlmostEqual(
+            report["timing_totals"]["puct_search_unrecorded_call_seconds"], 0.03
+        )
+        self.assertEqual(report["timing_totals"]["puct_search_call_count"], 3)
+        self.assertAlmostEqual(report["timing_totals"]["outer_policy_residual_seconds"], 0.04)
         self.assertAlmostEqual(report["timing_totals"]["total_seconds"], 0.60)
 
     def test_benchmark_report_groups_records_by_root_puct_policy(self) -> None:

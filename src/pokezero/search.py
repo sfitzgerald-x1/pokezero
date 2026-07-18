@@ -98,16 +98,19 @@ class RootPUCTVisitBudgetContext:
 class RootPUCTSearchTiming:
     """Non-overlapping wall-clock components for one root-PUCT decision.
 
-    ``total_seconds`` covers root-decision preparation through branch search.
+    ``total_seconds`` covers root-decision preparation through final action
+    selection and branch-environment cleanup.
     ``opponent_scenario_planning`` includes any neural policy work performed by
     an opponent-action scenario planner; recorded-prefix benchmarks have no
     such planner and report this bucket as zero.
 
-    ``observation_encoding``, ``neural_forward``, and the ``bridge_*`` fields
-    are intentionally overlapping diagnostic sub-slices. Bridge time is
-    already contained in snapshot/restore/step stages, while the neural
-    timings are contained in policy/value/scenario work. They are excluded
-    from residual accounting so they do not double-count decision wall time.
+    ``observation_encoding``, ``neural_forward``, the ``bridge_*`` fields,
+    and the ``puct_search_*`` fields are intentionally overlapping diagnostic
+    sub-slices. Bridge time is already contained in snapshot/restore/step
+    stages, while neural timings are contained in policy/value/scenario work.
+    The PUCT fields partition residual time after the additive stages have
+    been measured. They are excluded from residual accounting so they do not
+    double-count decision wall time.
     """
 
     prefix_replay_seconds: float = 0.0
@@ -165,6 +168,13 @@ class RootPUCTSearchTiming:
     value_evaluation_count: int = 0
     rollout_tail_seconds: float = 0.0
     rollout_tail_count: int = 0
+    # These diagnostic fields partition residual wall time without changing the
+    # additive accounting above. A policy wrapper attaches them after it has
+    # measured its puct_branch_search calls.
+    puct_search_result_residual_seconds: float = 0.0
+    puct_search_result_residual_count: int = 0
+    puct_search_unrecorded_call_seconds: float = 0.0
+    puct_search_call_count: int = 0
     total_seconds: float = 0.0
 
     @property
@@ -201,6 +211,26 @@ class RootPUCTSearchTiming:
     @property
     def residual_seconds(self) -> float:
         return max(0.0, self.raw_residual_seconds)
+
+    @property
+    def raw_outer_policy_residual_seconds(self) -> float:
+        """Return residual wall time outside recorded branch-search results.
+
+        ``puct_search_unrecorded_call_seconds`` includes the portion of a
+        puct_branch_search invocation that is absent from the result timing,
+        such as a rejected call or Python call-boundary work. The remainder is
+        policy-level orchestration not otherwise attributed by this object.
+        """
+
+        return (
+            self.raw_residual_seconds
+            - self.puct_search_result_residual_seconds
+            - self.puct_search_unrecorded_call_seconds
+        )
+
+    @property
+    def outer_policy_residual_seconds(self) -> float:
+        return max(0.0, self.raw_outer_policy_residual_seconds)
 
     @property
     def bridge_python_orchestration_seconds(self) -> float:
@@ -290,6 +320,30 @@ class RootPUCTSearchTiming:
             scenario_dispatch_orchestration_count=(
                 self.scenario_dispatch_orchestration_count + attempt_count
             ),
+        )
+
+    def with_puct_search_residual_partition(
+        self,
+        *,
+        result_residual_seconds: float,
+        result_count: int,
+        unrecorded_call_seconds: float,
+        call_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Attach a non-additive partition of residual branch-search wall time."""
+
+        return replace(
+            self,
+            puct_search_result_residual_seconds=(
+                self.puct_search_result_residual_seconds + result_residual_seconds
+            ),
+            puct_search_result_residual_count=(
+                self.puct_search_result_residual_count + result_count
+            ),
+            puct_search_unrecorded_call_seconds=(
+                self.puct_search_unrecorded_call_seconds + unrecorded_call_seconds
+            ),
+            puct_search_call_count=self.puct_search_call_count + call_count,
         )
 
     def with_neural_subtiming(
@@ -492,6 +546,16 @@ class RootPUCTSearchTiming:
             value_evaluation_count=sum(timing.value_evaluation_count for timing in timings),
             rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
             rollout_tail_count=sum(timing.rollout_tail_count for timing in timings),
+            puct_search_result_residual_seconds=sum(
+                timing.puct_search_result_residual_seconds for timing in timings
+            ),
+            puct_search_result_residual_count=sum(
+                timing.puct_search_result_residual_count for timing in timings
+            ),
+            puct_search_unrecorded_call_seconds=sum(
+                timing.puct_search_unrecorded_call_seconds for timing in timings
+            ),
+            puct_search_call_count=sum(timing.puct_search_call_count for timing in timings),
             total_seconds=sum(timing.total_seconds for timing in timings),
         )
 
@@ -557,8 +621,14 @@ class RootPUCTSearchTiming:
             "policy_value_evaluation_count": self.policy_value_evaluation_count,
             "rollout_tail_seconds": self.rollout_tail_seconds,
             "rollout_tail_count": self.rollout_tail_count,
+            "puct_search_result_residual_seconds": self.puct_search_result_residual_seconds,
+            "puct_search_result_residual_count": self.puct_search_result_residual_count,
+            "puct_search_unrecorded_call_seconds": self.puct_search_unrecorded_call_seconds,
+            "puct_search_call_count": self.puct_search_call_count,
             "raw_residual_seconds": self.raw_residual_seconds,
             "residual_seconds": self.residual_seconds,
+            "raw_outer_policy_residual_seconds": self.raw_outer_policy_residual_seconds,
+            "outer_policy_residual_seconds": self.outer_policy_residual_seconds,
             "total_seconds": self.total_seconds,
         }
 
