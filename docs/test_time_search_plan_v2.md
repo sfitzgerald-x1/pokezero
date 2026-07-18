@@ -135,15 +135,20 @@ classifying it.
    status (2026-07-17):** Root-PUCT now emits nested bridge round-trip,
    Node-processing, and local bridge/Python-overhead timings without changing
    additive wall accounting; the next ~10-game telemetry probe selects the
-   largest residual bucket before any Tier 2 or visit-batching change. A
-   one-round-trip retained-snapshot branch candidate is merged behind the
-   belief-sampled bridge-handle guard, but is deliberately unlaunched until
-   that probe establishes its expected payoff.
-2. **Tier 2 — direct state construction:** build the determinized battle
-   directly from public state + the belief-sampled opponent (teams, HP,
-   statuses, boosts, side conditions, field) as a constructed
-   `deserializeBattle` payload — no protocol replay anywhere. This eliminates
-   replay divergence, i.e. most of `missing_sampled_world`.
+   largest residual bucket before any further Tier 2 coverage expansion or
+   visit-batching change. A one-round-trip retained-snapshot branch candidate
+   is merged behind the belief-sampled bridge-handle guard; the fresh telemetry
+   probe is its first on-cluster read before it informs any broader evaluation.
+2. **Tier 2 — direct state construction (implemented; validation in
+   progress):** `prepare_direct_materialization_prefix` and
+   `LocalShowdownEnv.materialize_public_world` now start a fresh
+   belief-sampled world and construct the public branch point from teams, HP,
+   statuses, boosts, side conditions, and field state without replaying the
+   recorded protocol prefix. Unsupported public effects fail closed rather
+   than approximating simulator state. The strict W5 runner verifies that the
+   direct path is exercised and that prefix replay is zero, but the fresh
+   telemetry probe must still establish coverage, fallback behavior, and the
+   remaining wall-clock cost before Tier 2 is treated as validated.
 3. **Correctness constraint:** never serialize the live battle — only
    determinized worlds built from public information. The P-1 anti-leakage
    checksum gate must pass unchanged on the new path.
