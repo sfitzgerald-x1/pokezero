@@ -98,6 +98,13 @@ class SideSpec:
     # Pending Wish as (turns_counter, heal_amount); (0, 0) = none. The engine
     # decrements the counter each end-of-turn and heals when it reaches zero.
     wish: tuple[int, int] = (0, 0)
+    # Engine last-used-move token ("move:<slot>" / "switch:<idx>"); "" = unset.
+    # SHARP EDGE: the engine accepts only slot INDICES here — a move id is
+    # accepted at construction then panics inside generate_instructions.
+    last_used_move: str = ""
+    # Volatile duration counters by poke_engine.VolatileStatusDurations field
+    # name (e.g. {"encore": 1}); empty = engine defaults.
+    volatile_status_durations: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -243,6 +250,24 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
     _require_non_negative_int(wish_amount, f"{path}.wish[1]")
     if wish_counter:
         kwargs["wish"] = (wish_counter, wish_amount)
+    if side.last_used_move:
+        token = str(side.last_used_move)
+        prefix, _, index = token.partition(":")
+        if prefix not in ("move", "switch") or not index.isdigit():
+            raise ValueError(
+                f"{path}.last_used_move must be 'move:<slot>' or 'switch:<idx>' with a numeric "
+                f"index (engine panics on move ids), got {token!r}"
+            )
+        kwargs["last_used_move"] = token
+    if side.volatile_status_durations:
+        factory = getattr(engine, "VolatileStatusDurations", None)
+        if factory is None:
+            raise PokeEngineUnavailableError(
+                f"{path}.volatile_status_durations requested but engine lacks VolatileStatusDurations"
+            )
+        for name, turns in side.volatile_status_durations.items():
+            _require_non_negative_int(turns, f"{path}.volatile_status_durations[{name!r}]")
+        kwargs["volatile_status_durations"] = factory(**dict(side.volatile_status_durations))
     return engine.Side(**kwargs)
 
 

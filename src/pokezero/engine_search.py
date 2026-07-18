@@ -33,7 +33,10 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from .dex import ShowdownDex, normalize_id
-from .determinization import _gen3_randbat_belief_start_override_result
+from .determinization import (
+    _gen3_randbat_belief_start_override_result,
+    _move_from_public_event_line,
+)
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
@@ -145,6 +148,7 @@ class EngineMctsPolicy:
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
+        blocked_slots, encored_moves = self._public_effect_signals(context)
 
         worlds: list[tuple[EngineWorld, Any]] = []
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
@@ -170,6 +174,8 @@ class EngineMctsPolicy:
                     dex=self._dex,
                     approximate_sleep_turns=self._config.approximate_sleep_turns,
                     approximate_substitute_health=self._config.approximate_substitute_health,
+                    blocked_slots=blocked_slots,
+                    encored_moves=encored_moves,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
@@ -218,6 +224,50 @@ class EngineMctsPolicy:
                 }
             },
         )
+
+
+    def _public_effect_signals(
+        self, context: PolicyContext
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Public-information signals engine_world cannot see in the payload.
+
+        - blocked_slots: the opponent's active is publicly Transformed (the
+          belief engine tracks it; the payload does not) — the sampled world
+          cannot express the copied moveset/stats, so construction must fail
+          closed rather than search a silently wrong world.
+        - encored_moves: the opponent's publicly-observed last move, consumed
+          by engine_world only when that side carries the encore volatile.
+        """
+
+        blocked: dict[str, str] = {}
+        encored: dict[str, str] = {}
+        metadata = context.observation.metadata
+        if not isinstance(metadata, Mapping):
+            return blocked, encored
+        opponent_slot = "p2" if context.player_id == "p1" else "p1"
+        belief_view = metadata.get("belief_view")
+        opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        active_species: str | None = None
+        for mon in opponents or ():
+            if not isinstance(mon, Mapping) or not mon.get("active"):
+                continue
+            active_species = str(mon.get("species") or "") or None
+            if mon.get("transformed"):
+                target = mon.get("transform_species") or "?"
+                blocked[opponent_slot] = f"active transformed into {target}"
+        if active_species:
+            events = metadata.get("recent_public_events")
+            for line in reversed(list(events) if isinstance(events, Sequence) else []):
+                move = _move_from_public_event_line(
+                    str(line),
+                    opponent_slot=opponent_slot,
+                    self_slot=context.player_id,
+                    species=active_species,
+                )
+                if move is not None:
+                    encored[opponent_slot] = move
+                    break
+        return blocked, encored
 
     def _map_choices(
         self, context: PolicyContext, aggregated: Mapping[str, float]

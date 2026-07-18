@@ -245,6 +245,8 @@ def battle_spec_from_payload(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    blocked_slots: Mapping[str, str] | None = None,
+    encored_moves: Mapping[str, str] | None = None,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -283,6 +285,11 @@ def battle_spec_from_payload(
     turn = payload.get("turn")
     if not isinstance(turn, int):
         raise EngineWorldUnsupported("payload_malformed", "payload has no integer turn")
+    for blocked_slot, block_reason in (blocked_slots or {}).items():
+        raise EngineWorldUnsupported(
+            "public_effect_blocked",
+            f"slot {blocked_slot!r}: {block_reason} (caller-declared unexpressible public effect)",
+        )
 
     built_sides: dict[str, SideSpec] = {}
     party_species: dict[str, tuple[str, ...]] = {}
@@ -307,6 +314,7 @@ def battle_spec_from_payload(
             approximate_substitute_health=approximate_substitute_health,
             force_switch=is_self_slot and self_force_switch,
             wish_set_turn=_wish_set_turn(payload, slot),
+            encored_move=(encored_moves or {}).get(slot),
         )
         party_species[slot] = species_order
 
@@ -340,6 +348,8 @@ def world_battle_spec(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    blocked_slots: Mapping[str, str] | None = None,
+    encored_moves: Mapping[str, str] | None = None,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -358,6 +368,8 @@ def world_battle_spec(
         dex=dex,
         approximate_sleep_turns=approximate_sleep_turns,
         approximate_substitute_health=approximate_substitute_health,
+        blocked_slots=blocked_slots,
+        encored_moves=encored_moves,
     )
 
 
@@ -433,6 +445,7 @@ def _build_side_spec(
     approximate_substitute_health: bool = False,
     force_switch: bool = False,
     wish_set_turn: int | None = None,
+    encored_move: str | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -478,6 +491,8 @@ def _build_side_spec(
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    if "encore" in volatiles:
+        supported = supported | {"encore"}
     unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
@@ -541,6 +556,29 @@ def _build_side_spec(
         # value for forward compatibility should the engine start using it.
         wish = (remaining, party[active_index].maxhp // 2)
 
+    last_used_move = ""
+    volatile_durations: dict[str, int] = {}
+    if "encore" in volatiles:
+        active_specs = party[active_index].moves
+        encored_index = _resolve_encored_move_index(
+            active_specs,
+            rows_for_active=(
+                _active_row_moves(side_payload) if is_self else None
+            ),
+            encored_move=encored_move,
+        )
+        if encored_index is None:
+            raise EngineWorldUnsupported(
+                "encore_move_unknown",
+                f"side {slot!r} is encored but the locked move cannot be determined",
+            )
+        # The engine restricts the side to last_used_move while ENCORE is set
+        # (verified empirically); it does not decrement the duration, so the
+        # mon is modeled as locked for the search horizon — conservative for
+        # gen3's 3-8 turn encores over short horizons.
+        last_used_move = f"move:{encored_index}"
+        volatile_durations["encore"] = 1
+
     return (
         SideSpec(
             pokemon=tuple(party),
@@ -551,9 +589,62 @@ def _build_side_spec(
             substitute_health=substitute_health,
             force_switch=force_switch,
             wish=wish,
+            last_used_move=last_used_move,
+            volatile_status_durations=volatile_durations,
         ),
         tuple(species_order),
     )
+
+
+def _active_row_moves(side_payload: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    rows = side_payload.get("pokemon")
+    if not isinstance(rows, Sequence) or isinstance(rows, str):
+        return None
+    for row in rows:
+        if isinstance(row, Mapping) and bool(row.get("active")):
+            moves = row.get("moves")
+            if isinstance(moves, Sequence) and not isinstance(moves, str):
+                return [move for move in moves if isinstance(move, Mapping)]
+    return None
+
+
+def _resolve_encored_move_index(
+    move_specs: Sequence[Any],
+    *,
+    rows_for_active: Sequence[Mapping[str, Any]] | None,
+    encored_move: str | None,
+) -> int | None:
+    """Index of the encored move in the constructed move order, or None.
+
+    Self side: the request marks every non-encored move disabled, so exactly
+    one enabled move identifies the lock. Opponent side: the caller passes the
+    publicly-observed last move (``encored_move``).
+    """
+
+    if encored_move:
+        target = normalize_id(encored_move)
+        for index, spec in enumerate(move_specs):
+            spec_id = normalize_id(spec.id)
+            if spec_id == target:
+                return index
+            if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
+                return index
+        return None
+    if rows_for_active:
+        enabled = [
+            normalize_id(str(move.get("id")))
+            for move in rows_for_active
+            if isinstance(move.get("id"), str) and not bool(move.get("disabled"))
+        ]
+        if len(enabled) == 1:
+            target = enabled[0]
+            for index, spec in enumerate(move_specs):
+                spec_id = normalize_id(spec.id)
+                if spec_id == target:
+                    return index
+                if target.startswith("hiddenpower") and spec_id.startswith("hiddenpower"):
+                    return index
+    return None
 
 
 def _build_pokemon_spec(
@@ -704,6 +795,20 @@ def _move_specs(
             pp = entry.get("pp")
             if isinstance(pp, int):
                 known_pp[normalize_id(entry["id"])] = (pp, bool(entry.get("disabled")))
+
+    if is_self and known_pp:
+        sampled_ids = {normalize_id(move) for move in mon.moves}
+        sampled_has_hp = any(m.startswith("hiddenpower") for m in sampled_ids)
+        for request_move in known_pp:
+            if request_move in sampled_ids:
+                continue
+            if request_move.startswith("hiddenpower") and sampled_has_hp:
+                continue
+            raise EngineWorldUnsupported(
+                "self_moveset_mismatch",
+                f"{slot}: request-known move {request_move!r} is absent from the sampled "
+                f"moveset (Transform/Mimic-class desync)",
+            )
 
     specs: list[MoveSpec] = []
     for move in mon.moves:
