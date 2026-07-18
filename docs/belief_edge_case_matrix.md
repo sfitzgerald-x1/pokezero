@@ -66,3 +66,16 @@ taxonomy reason; zero unmapped choices. Bonus finding: screen moves are
 outside the closed randbats vocabulary (they don't exist in the pool), so
 scenario rows exercise the encoder's OOV safety-net path — a validation case
 the random corpus can never produce.
+
+## Fallback alerting (owner-directed, 2026-07-18)
+
+Every decision-level fallback is now LOUD, three tiers:
+1. `EngineSearchFallbackWarning` (Python warning — visible in test output;
+   escalate to hard errors with `warnings.simplefilter("error", ...)`),
+2. a structured WARNING on the stable logger
+   `pokezero.engine_search.fallback` carrying battle id, round, seat,
+   reason, and the per-decision world-failure delta,
+3. `EngineMctsConfig(strict_fallbacks=True)` → `EngineSearchFallbackError`
+   for sweeps/CI that require zero, and the bench CLI's
+   `--fail-on-fallback` flag exits nonzero with a stderr banner.
+At the 0.0% baseline, every alert is a potential regression worth a look.

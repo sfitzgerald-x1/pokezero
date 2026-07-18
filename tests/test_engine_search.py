@@ -224,5 +224,50 @@ class RechargeSignalTests(unittest.TestCase):
         self.assertEqual(self._slots(context, rounds), ())
 
 
+class FallbackAlertTests(unittest.TestCase):
+    """Every fallback must be LOUD: warning + logger; strict mode raises."""
+
+    def _fallback_context(self):
+        mask = (False, True, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, _candidates()), public_state=None)
+        context.battle_id = "alert-test"
+        context.decision_round_index = 7
+        return context
+
+    def test_fallback_emits_warning_with_context(self) -> None:
+        from pokezero.engine_search import EngineSearchFallbackWarning
+
+        policy = _policy()
+        with self.assertWarns(EngineSearchFallbackWarning) as caught:
+            policy.select_action_with_context(self._fallback_context(), rng=random.Random(1))
+        message = str(caught.warning)
+        self.assertIn("FALLBACK", message)
+        self.assertIn("battle=alert-test", message)
+        self.assertIn("round=7", message)
+        self.assertIn("reason=no_public_state", message)
+
+    def test_fallback_logs_on_stable_logger(self) -> None:
+        import logging
+
+        policy = _policy()
+        with self.assertLogs("pokezero.engine_search.fallback", level=logging.WARNING) as logs:
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                policy.select_action_with_context(self._fallback_context(), rng=random.Random(1))
+        self.assertTrue(any("FALLBACK" in line for line in logs.output))
+
+    def test_strict_mode_raises_instead_of_falling_back(self) -> None:
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy, EngineSearchFallbackError
+
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=object(),
+            config=EngineMctsConfig(strict_fallbacks=True),
+        )
+        with self.assertRaises(EngineSearchFallbackError) as caught:
+            policy.select_action_with_context(self._fallback_context(), rng=random.Random(1))
+        self.assertIn("reason=no_public_state", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

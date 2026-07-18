@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import random
 import time
+import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
@@ -41,6 +43,25 @@ from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
+
+_fallback_logger = logging.getLogger("pokezero.engine_search.fallback")
+
+
+class EngineSearchFallbackWarning(UserWarning):
+    """A search decision fell back to uniform-legal instead of searching.
+
+    Loud by design: any process running engine search (benches, sweeps,
+    collection, integration tests) sees these in test output and default
+    logging, can escalate them to hard errors with
+    ``warnings.simplefilter("error", EngineSearchFallbackWarning)`` or
+    ``EngineMctsConfig(strict_fallbacks=True)``, and can grep the stable
+    logger name ``pokezero.engine_search.fallback``. At the current 0.0%
+    bench rate every occurrence is a potential regression worth a look.
+    """
+
+
+class EngineSearchFallbackError(RuntimeError):
+    """Raised instead of falling back when ``strict_fallbacks`` is set."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,10 @@ class EngineMctsConfig:
     # Documented approximation: a public Substitute is modeled at fresh
     # (maxhp/4) health, since remaining sub HP is not tracked publicly.
     approximate_substitute_health: bool = True
+    # Escalate any decision-level fallback to EngineSearchFallbackError.
+    # For sweeps/CI that require zero fallbacks; production keeps the safe
+    # uniform-legal fallback (a crash mid-collection is worse than a miss).
+    strict_fallbacks: bool = False
 
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
@@ -132,6 +157,7 @@ class EngineMctsPolicy:
         self._config = config or EngineMctsConfig()
         self._module = module
         self.stats = EngineMctsStats()
+        self._world_failures_before: dict[str, int] = {}
 
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
@@ -151,6 +177,7 @@ class EngineMctsPolicy:
     # -----------------------------------------------------------------------------------------
 
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
+        self._world_failures_before = dict(self.stats.world_failure_reasons)
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
         blocked_slots, encored_moves = self._public_effect_signals(context)
@@ -470,6 +497,24 @@ class EngineMctsPolicy:
     ) -> PolicyDecision:
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
+        battle_id = getattr(context, "battle_id", "?")
+        round_index = getattr(context, "decision_round_index", "?")
+        player = getattr(context, "player_id", "?")
+        # Per-decision world-failure context: the cumulative counters minus
+        # the snapshot taken at the top of _search.
+        delta = {
+            key: count - self._world_failures_before.get(key, 0)
+            for key, count in self.stats.world_failure_reasons.items()
+            if count - self._world_failures_before.get(key, 0) > 0
+        }
+        message = (
+            f"engine-search FALLBACK: battle={battle_id} round={round_index} seat={player} "
+            f"reason={reason} world_failures={delta or '{}'}"
+        )
+        if self._config.strict_fallbacks:
+            raise EngineSearchFallbackError(message)
+        warnings.warn(message, EngineSearchFallbackWarning, stacklevel=3)
+        _fallback_logger.warning(message)
         legal = legal_action_indices(context.observation.legal_action_mask)
         return PolicyDecision(
             action_index=rng.choice(legal),
@@ -494,6 +539,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument("--search-time-ms", type=int, default=100)
     parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--fail-on-fallback", action="store_true",
+                        help="exit nonzero if any decision fell back (CI gate)")
     parser.add_argument("--strict-sleep", action="store_true",
                         help="fail worlds closed on publicly-asleep mons instead of approximating")
     parser.add_argument("--out", default=None)
@@ -560,6 +607,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.out:
         with open(args.out, "w") as handle:
             json.dump(report, handle, indent=2)
+    fallback_count = policy.stats.fallback_decisions
+    if fallback_count:
+        import sys as _sys
+
+        print(
+            f"\n{'!' * 72}\n!! {fallback_count} FALLBACK DECISION(S) — reasons: "
+            f"{dict(policy.stats.fallback_reasons)}\n"
+            f"!! every fallback at the current 0.0% baseline is a potential regression\n{'!' * 72}",
+            file=_sys.stderr,
+        )
+        if args.fail_on_fallback:
+            return 1
     return 0
 
 
