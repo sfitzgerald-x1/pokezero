@@ -211,8 +211,8 @@ class BridgeSnapshotValueBranchEnv(SnapshotValueBranchEnv):
 class BridgeTimedSnapshotValueBranchEnv(BridgeSnapshotValueBranchEnv):
     """Bridge-handle double exposing cumulative W5 transport counters."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, terminal_winners_by_action: dict[int, str | None] | None = None) -> None:
+        super().__init__(terminal_winners_by_action)
         self._bridge_round_trip_seconds = 0.0
         self._bridge_round_trip_count = 0
         self._bridge_node_processing_seconds = 0.0
@@ -244,8 +244,8 @@ class BridgeTimedSnapshotValueBranchEnv(BridgeSnapshotValueBranchEnv):
 class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
     """Bridge-handle double that restores and branches in one transport exchange."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, terminal_winners_by_action: dict[int, str | None] | None = None) -> None:
+        super().__init__(terminal_winners_by_action)
         self.fused_search_step_calls = 0
         self._branch_local_state_restore_seconds = 0.0
         self._branch_local_state_restore_count = 0
@@ -288,6 +288,24 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_result_projection_seconds += 0.004
         self._branch_result_projection_count += 1
         return result
+
+
+class PlayerObservationFusedBridgeEnv(FusedBridgeTimedSnapshotValueBranchEnv):
+    """Bridge-handle double exposing the zero-rollout single-view fast path."""
+
+    def __init__(self, terminal_winners_by_action: dict[int, str | None] | None = None) -> None:
+        super().__init__(terminal_winners_by_action)
+        self.player_observation_calls: list[str] = []
+
+    def step_from_search_snapshot_for_player(
+        self,
+        snapshot,
+        actions: dict[str, int],
+        *,
+        observation_player: str,
+    ) -> StepResult:
+        self.player_observation_calls.append(observation_player)
+        return self.step_from_search_snapshot(snapshot, actions)
 
 
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
@@ -1002,6 +1020,70 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(timing["branch_result_projection_count"], 5)
         self.assertAlmostEqual(timing["branch_result_projection_seconds"], 0.020)
         self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
+
+    def test_puct_branch_search_uses_single_view_fast_path_without_rollout_tails(self) -> None:
+        env = PlayerObservationFusedBridgeEnv(terminal_winners_by_action={0: "p1"})
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+
+        self.assertEqual(result.action_index, 0)
+        self.assertEqual(env.player_observation_calls, ["p1"] * 5)
+
+    def test_puct_branch_search_keeps_full_step_path_for_rollout_tails(self) -> None:
+        env = PlayerObservationFusedBridgeEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, False, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda _history: 0.0,
+            action_priors=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            leaf_rollout_policies={"p1": FirstLegalPolicy(), "p2": FixedPolicy(0)},
+            leaf_rollout_config=RolloutConfig(max_decision_rounds=3),
+            leaf_rollout_decision_rounds=1,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+        self.assertEqual(env.player_observation_calls, [])
+        self.assertEqual(env.fused_search_step_calls, 1)
 
     def test_prepared_bridge_snapshot_can_be_released_after_search(self) -> None:
         env = BridgeSnapshotValueBranchEnv()
