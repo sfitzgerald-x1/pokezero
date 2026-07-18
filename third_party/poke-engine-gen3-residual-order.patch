@@ -1,0 +1,118 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2093,10 +2093,61 @@
+             incoming_instructions
+                 .instruction_list
+                 .push(decrement_wish_instruction);
++        }
++    }
++
++    // ability/item end-of-turn effects
++    for side_ref in sides {
++        let side = state.get_side(side_ref);
++        let active_pkmn = side.get_active();
++        if active_pkmn.hp == 0 {
++            continue;
+         }
++        item_end_of_turn(state, side_ref, &mut incoming_instructions);
++        ability_end_of_turn(state, side_ref, &mut incoming_instructions);
+     }
++
++    // leechseed sap
++    for side_ref in sides {
++        let (leechseed_side, other_side) = state.get_both_sides(side_ref);
++        if leechseed_side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::LEECHSEED)
++        {
++            let active_pkmn = leechseed_side.get_active();
++            let other_active_pkmn = other_side.get_active();
++            if active_pkmn.hp == 0 || other_active_pkmn.hp == 0 {
++                continue;
++            }
+ 
++            let health_sapped = cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
++            let damage_ins = Instruction::Damage(DamageInstruction {
++                side_ref: *side_ref,
++                damage_amount: health_sapped,
++            });
++            active_pkmn.hp -= health_sapped;
++            incoming_instructions.instruction_list.push(damage_ins);
++
++            let health_recovered = cmp::min(
++                health_sapped,
++                other_active_pkmn.maxhp - other_active_pkmn.hp,
++            );
++            if health_recovered > 0 {
++                let heal_ins = Instruction::Heal(HealInstruction {
++                    side_ref: side_ref.get_other_side(),
++                    heal_amount: health_recovered,
++                });
++                other_active_pkmn.hp += health_recovered;
++                incoming_instructions.instruction_list.push(heal_ins);
++            }
++        }
++    }
++
+     // status damage
++    // Gen 3 residual order fix (pokezero): items (Leftovers, order 5) and Leech Seed
++    // (order 8) resolve BEFORE poison/toxic (9) and burn (10) damage, so this block
++    // was moved below them. Upstream applied status damage first, which nets
++    // residuals against the Leftovers heal (e.g. full-HP Toxic: -14 then +14 = 0).
+     for side_ref in sides {
+         let side = state.get_side(side_ref);
+         let toxic_count = side.side_conditions.toxic_count as f32;
+@@ -2171,53 +2222,6 @@
+                     .push(toxic_counter_increment_instruction);
+             }
+             _ => {}
+-        }
+-    }
+-
+-    // ability/item end-of-turn effects
+-    for side_ref in sides {
+-        let side = state.get_side(side_ref);
+-        let active_pkmn = side.get_active();
+-        if active_pkmn.hp == 0 {
+-            continue;
+-        }
+-        item_end_of_turn(state, side_ref, &mut incoming_instructions);
+-        ability_end_of_turn(state, side_ref, &mut incoming_instructions);
+-    }
+-
+-    // leechseed sap
+-    for side_ref in sides {
+-        let (leechseed_side, other_side) = state.get_both_sides(side_ref);
+-        if leechseed_side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::LEECHSEED)
+-        {
+-            let active_pkmn = leechseed_side.get_active();
+-            let other_active_pkmn = other_side.get_active();
+-            if active_pkmn.hp == 0 || other_active_pkmn.hp == 0 {
+-                continue;
+-            }
+-
+-            let health_sapped = cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
+-            let damage_ins = Instruction::Damage(DamageInstruction {
+-                side_ref: *side_ref,
+-                damage_amount: health_sapped,
+-            });
+-            active_pkmn.hp -= health_sapped;
+-            incoming_instructions.instruction_list.push(damage_ins);
+-
+-            let health_recovered = cmp::min(
+-                health_sapped,
+-                other_active_pkmn.maxhp - other_active_pkmn.hp,
+-            );
+-            if health_recovered > 0 {
+-                let heal_ins = Instruction::Heal(HealInstruction {
+-                    side_ref: side_ref.get_other_side(),
+-                    heal_amount: health_recovered,
+-                });
+-                other_active_pkmn.hp += health_recovered;
+-                incoming_instructions.instruction_list.push(heal_ins);
+-            }
+         }
+     }
+ 

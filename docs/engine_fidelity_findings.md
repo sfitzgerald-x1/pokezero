@@ -40,11 +40,16 @@ mechanism, fully explained.
 **Impact:** systematic optimism about statused Leftovers holders in engine
 rollouts (residual pressure halved or erased). Nearly every gen3 randbats set
 holds Leftovers, and Toxic appears in 152 sets — this is on-distribution.
-**Disposition options:** patch the residual order in our poke-engine build
-(we already carry a local patch mechanism from `setup_foulplay_eval.sh`), or
-accept as a documented exemption with a value-impact estimate. Patch is
-recommended: the fix is an ordering swap, and stall/residual accuracy is
-exactly what a value leaf reads.
+
+**Disposition: PATCHED (2026-07-18).**
+`third_party/poke-engine-gen3-residual-order.patch`, applied by
+`scripts/setup_poke_engine.sh`, moves the status-damage block after the
+item/ability and Leech Seed blocks in `src/gen3/generate_instructions.rs`,
+matching Showdown's gen3 residual orders (Leftovers 5, Leech Seed 8,
+poison/toxic 9, burn 10 — the patch also corrects the latent
+leech-seed-after-status ordering the differential had not yet exercised).
+With the patched wheel the differential is **15/15 clean**; it is the
+patch's regression gate.
 
 ## Confirmed engine contract 2: Hidden Power ids must be typed + base power
 
