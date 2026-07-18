@@ -143,7 +143,14 @@ classifying it.
    decision at extra-24, same direct materialization). Batched initial root
    value leaves are merged behind an explicit opt-in and retain scalar-equivalent
    inputs; only the independent mandatory sweep batches, while adaptive revisits
-   remain sequential. Its strict direct-materialization smoke is in flight.
+   remain sequential. **Strict batched smoke (2026-07-18):** one extra-120
+   mechanics game completed with `prefix_replay_count = 0`, no mechanics
+   fallbacks across 35 decisions, and 124/139 (89.2%) direct world
+   materializations. It measured 15.61s mean / 17.99s p95 per decision, so it
+   is a crash-free contract gate rather than a throughput conclusion. The
+   companion one-game W1 diagnostic saw two force-switch fallbacks in 36
+   decisions; the bounded ten-game mechanics probe is the required coverage,
+   fallback-rate, and residual-timing read before Tier 2 is declared validated.
    A one-round-trip retained-snapshot branch candidate is merged behind the
    belief-sampled bridge-handle guard; direct materialization remains the
    correct path but is no longer the primary throughput lever.
