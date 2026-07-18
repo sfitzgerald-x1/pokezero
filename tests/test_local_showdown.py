@@ -1603,9 +1603,11 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             after_explicit = env.root_puct_bridge_timing_snapshot()
 
             before_fused = env.root_puct_bridge_timing_snapshot()
+            before_fused_branch = env.root_puct_branch_step_timing_snapshot()
             fused_result = env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 1})
             fused_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
             after_fused = env.root_puct_bridge_timing_snapshot()
+            after_fused_branch = env.root_puct_branch_step_timing_snapshot()
 
             # The retained handle remains an immutable branch point after a fused visit.
             env.step_from_search_snapshot(snapshot, {"p1": 1, "p2": 0})
@@ -1623,6 +1625,22 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             after_fused["bridge_node_processing_count"] - before_fused["bridge_node_processing_count"],
             1,
         )
+        for key in (
+            "branch_local_state_restore_count",
+            "branch_choice_encoding_count",
+            "branch_bridge_round_trip_count",
+            "branch_bridge_node_processing_count",
+            "branch_result_projection_count",
+        ):
+            self.assertEqual(after_fused_branch[key] - before_fused_branch[key], 1)
+        for key in (
+            "branch_local_state_restore_seconds",
+            "branch_choice_encoding_seconds",
+            "branch_bridge_round_trip_seconds",
+            "branch_bridge_node_processing_seconds",
+            "branch_result_projection_seconds",
+        ):
+            self.assertGreaterEqual(after_fused_branch[key] - before_fused_branch[key], 0.0)
 
     def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
         config = integration_config()

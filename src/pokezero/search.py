@@ -47,6 +47,20 @@ _BRIDGE_TIMING_COUNTS = (
     "bridge_round_trip_count",
     "bridge_node_processing_count",
 )
+_BRANCH_STEP_TIMING_SECONDS = (
+    "branch_local_state_restore_seconds",
+    "branch_choice_encoding_seconds",
+    "branch_bridge_round_trip_seconds",
+    "branch_bridge_node_processing_seconds",
+    "branch_result_projection_seconds",
+)
+_BRANCH_STEP_TIMING_COUNTS = (
+    "branch_local_state_restore_count",
+    "branch_choice_encoding_count",
+    "branch_bridge_round_trip_count",
+    "branch_bridge_node_processing_count",
+    "branch_result_projection_count",
+)
 _ILLEGAL_ACTION_FOR_REQUEST_RE = re.compile(
     r"^(?:(?P<player_id>[^:]+): )?action_index (?P<action_index>\d+) "
     r"is not legal for the current request(?: \(request_kind=[^)]+\))?\.$"
@@ -117,6 +131,19 @@ class RootPUCTSearchTiming:
     prefix_replay_count: int = 0
     branch_simulator_step_seconds: float = 0.0
     branch_simulator_step_count: int = 0
+    # These are nested slices of ``branch_simulator_step`` for the bridge-handle
+    # fast path. They are diagnostic only and must not enter additive residual
+    # accounting a second time.
+    branch_local_state_restore_seconds: float = 0.0
+    branch_local_state_restore_count: int = 0
+    branch_choice_encoding_seconds: float = 0.0
+    branch_choice_encoding_count: int = 0
+    branch_bridge_round_trip_seconds: float = 0.0
+    branch_bridge_round_trip_count: int = 0
+    branch_bridge_node_processing_seconds: float = 0.0
+    branch_bridge_node_processing_count: int = 0
+    branch_result_projection_seconds: float = 0.0
+    branch_result_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -270,6 +297,35 @@ class RootPUCTSearchTiming:
     @property
     def bridge_python_orchestration_count(self) -> int:
         return self.bridge_round_trip_count
+
+    @property
+    def branch_bridge_python_orchestration_seconds(self) -> float:
+        """Return transport/Python work inside branch snapshot restore-and-step calls."""
+
+        return max(
+            0.0,
+            self.branch_bridge_round_trip_seconds - self.branch_bridge_node_processing_seconds,
+        )
+
+    @property
+    def branch_bridge_python_orchestration_count(self) -> int:
+        return self.branch_bridge_round_trip_count
+
+    @property
+    def branch_raw_unattributed_seconds(self) -> float:
+        """Return branch-step wall not covered by its measured nested slices."""
+
+        return (
+            self.branch_simulator_step_seconds
+            - self.branch_local_state_restore_seconds
+            - self.branch_choice_encoding_seconds
+            - self.branch_bridge_round_trip_seconds
+            - self.branch_result_projection_seconds
+        )
+
+    @property
+    def branch_unattributed_seconds(self) -> float:
+        return max(0.0, self.branch_raw_unattributed_seconds)
 
     def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -509,6 +565,56 @@ class RootPUCTSearchTiming:
             ),
         )
 
+    def with_branch_step_subtiming(
+        self,
+        *,
+        branch_local_state_restore_seconds: float,
+        branch_local_state_restore_count: int,
+        branch_choice_encoding_seconds: float,
+        branch_choice_encoding_count: int,
+        branch_bridge_round_trip_seconds: float,
+        branch_bridge_round_trip_count: int,
+        branch_bridge_node_processing_seconds: float,
+        branch_bridge_node_processing_count: int,
+        branch_result_projection_seconds: float,
+        branch_result_projection_count: int,
+    ) -> "RootPUCTSearchTiming":
+        """Attach nested local/bridge slices for fused branch execution."""
+
+        return replace(
+            self,
+            branch_local_state_restore_seconds=(
+                self.branch_local_state_restore_seconds + branch_local_state_restore_seconds
+            ),
+            branch_local_state_restore_count=(
+                self.branch_local_state_restore_count + branch_local_state_restore_count
+            ),
+            branch_choice_encoding_seconds=(
+                self.branch_choice_encoding_seconds + branch_choice_encoding_seconds
+            ),
+            branch_choice_encoding_count=(
+                self.branch_choice_encoding_count + branch_choice_encoding_count
+            ),
+            branch_bridge_round_trip_seconds=(
+                self.branch_bridge_round_trip_seconds + branch_bridge_round_trip_seconds
+            ),
+            branch_bridge_round_trip_count=(
+                self.branch_bridge_round_trip_count + branch_bridge_round_trip_count
+            ),
+            branch_bridge_node_processing_seconds=(
+                self.branch_bridge_node_processing_seconds + branch_bridge_node_processing_seconds
+            ),
+            branch_bridge_node_processing_count=(
+                self.branch_bridge_node_processing_count + branch_bridge_node_processing_count
+            ),
+            branch_result_projection_seconds=(
+                self.branch_result_projection_seconds + branch_result_projection_seconds
+            ),
+            branch_result_projection_count=(
+                self.branch_result_projection_count + branch_result_projection_count
+            ),
+        )
+
     def with_total(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(self, total_seconds=elapsed_seconds)
 
@@ -521,6 +627,36 @@ class RootPUCTSearchTiming:
                 timing.branch_simulator_step_seconds for timing in timings
             ),
             branch_simulator_step_count=sum(timing.branch_simulator_step_count for timing in timings),
+            branch_local_state_restore_seconds=sum(
+                timing.branch_local_state_restore_seconds for timing in timings
+            ),
+            branch_local_state_restore_count=sum(
+                timing.branch_local_state_restore_count for timing in timings
+            ),
+            branch_choice_encoding_seconds=sum(
+                timing.branch_choice_encoding_seconds for timing in timings
+            ),
+            branch_choice_encoding_count=sum(
+                timing.branch_choice_encoding_count for timing in timings
+            ),
+            branch_bridge_round_trip_seconds=sum(
+                timing.branch_bridge_round_trip_seconds for timing in timings
+            ),
+            branch_bridge_round_trip_count=sum(
+                timing.branch_bridge_round_trip_count for timing in timings
+            ),
+            branch_bridge_node_processing_seconds=sum(
+                timing.branch_bridge_node_processing_seconds for timing in timings
+            ),
+            branch_bridge_node_processing_count=sum(
+                timing.branch_bridge_node_processing_count for timing in timings
+            ),
+            branch_result_projection_seconds=sum(
+                timing.branch_result_projection_seconds for timing in timings
+            ),
+            branch_result_projection_count=sum(
+                timing.branch_result_projection_count for timing in timings
+            ),
             state_snapshot_seconds=sum(timing.state_snapshot_seconds for timing in timings),
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
             state_restore_seconds=sum(timing.state_restore_seconds for timing in timings),
@@ -678,6 +814,24 @@ class RootPUCTSearchTiming:
             "prefix_replay_count": self.prefix_replay_count,
             "branch_simulator_step_seconds": self.branch_simulator_step_seconds,
             "branch_simulator_step_count": self.branch_simulator_step_count,
+            "branch_local_state_restore_seconds": self.branch_local_state_restore_seconds,
+            "branch_local_state_restore_count": self.branch_local_state_restore_count,
+            "branch_choice_encoding_seconds": self.branch_choice_encoding_seconds,
+            "branch_choice_encoding_count": self.branch_choice_encoding_count,
+            "branch_bridge_round_trip_seconds": self.branch_bridge_round_trip_seconds,
+            "branch_bridge_round_trip_count": self.branch_bridge_round_trip_count,
+            "branch_bridge_node_processing_seconds": self.branch_bridge_node_processing_seconds,
+            "branch_bridge_node_processing_count": self.branch_bridge_node_processing_count,
+            "branch_bridge_python_orchestration_seconds": (
+                self.branch_bridge_python_orchestration_seconds
+            ),
+            "branch_bridge_python_orchestration_count": (
+                self.branch_bridge_python_orchestration_count
+            ),
+            "branch_result_projection_seconds": self.branch_result_projection_seconds,
+            "branch_result_projection_count": self.branch_result_projection_count,
+            "branch_raw_unattributed_seconds": self.branch_raw_unattributed_seconds,
+            "branch_unattributed_seconds": self.branch_unattributed_seconds,
             "state_snapshot_seconds": self.state_snapshot_seconds,
             "state_snapshot_count": self.state_snapshot_count,
             "state_restore_seconds": self.state_restore_seconds,
@@ -773,6 +927,16 @@ class _RootPUCTSearchTimingAccumulator:
     prefix_replay_count: int = 0
     branch_simulator_step_seconds: float = 0.0
     branch_simulator_step_count: int = 0
+    branch_local_state_restore_seconds: float = 0.0
+    branch_local_state_restore_count: int = 0
+    branch_choice_encoding_seconds: float = 0.0
+    branch_choice_encoding_count: int = 0
+    branch_bridge_round_trip_seconds: float = 0.0
+    branch_bridge_round_trip_count: int = 0
+    branch_bridge_node_processing_seconds: float = 0.0
+    branch_bridge_node_processing_count: int = 0
+    branch_result_projection_seconds: float = 0.0
+    branch_result_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -805,6 +969,22 @@ class _RootPUCTSearchTimingAccumulator:
     def add_branch_simulator_step(self, elapsed_seconds: float) -> None:
         self.branch_simulator_step_seconds += elapsed_seconds
         self.branch_simulator_step_count += 1
+
+    def add_branch_step_subtiming(self, timing: Mapping[str, float | int]) -> None:
+        self.branch_local_state_restore_seconds += float(timing["branch_local_state_restore_seconds"])
+        self.branch_local_state_restore_count += int(timing["branch_local_state_restore_count"])
+        self.branch_choice_encoding_seconds += float(timing["branch_choice_encoding_seconds"])
+        self.branch_choice_encoding_count += int(timing["branch_choice_encoding_count"])
+        self.branch_bridge_round_trip_seconds += float(timing["branch_bridge_round_trip_seconds"])
+        self.branch_bridge_round_trip_count += int(timing["branch_bridge_round_trip_count"])
+        self.branch_bridge_node_processing_seconds += float(
+            timing["branch_bridge_node_processing_seconds"]
+        )
+        self.branch_bridge_node_processing_count += int(
+            timing["branch_bridge_node_processing_count"]
+        )
+        self.branch_result_projection_seconds += float(timing["branch_result_projection_seconds"])
+        self.branch_result_projection_count += int(timing["branch_result_projection_count"])
 
     def add_state_snapshot(self, elapsed_seconds: float) -> None:
         self.state_snapshot_seconds += elapsed_seconds
@@ -875,6 +1055,16 @@ class _RootPUCTSearchTimingAccumulator:
             prefix_replay_count=self.prefix_replay_count,
             branch_simulator_step_seconds=self.branch_simulator_step_seconds,
             branch_simulator_step_count=self.branch_simulator_step_count,
+            branch_local_state_restore_seconds=self.branch_local_state_restore_seconds,
+            branch_local_state_restore_count=self.branch_local_state_restore_count,
+            branch_choice_encoding_seconds=self.branch_choice_encoding_seconds,
+            branch_choice_encoding_count=self.branch_choice_encoding_count,
+            branch_bridge_round_trip_seconds=self.branch_bridge_round_trip_seconds,
+            branch_bridge_round_trip_count=self.branch_bridge_round_trip_count,
+            branch_bridge_node_processing_seconds=self.branch_bridge_node_processing_seconds,
+            branch_bridge_node_processing_count=self.branch_bridge_node_processing_count,
+            branch_result_projection_seconds=self.branch_result_projection_seconds,
+            branch_result_projection_count=self.branch_result_projection_count,
             state_snapshot_seconds=self.state_snapshot_seconds,
             state_snapshot_count=self.state_snapshot_count,
             state_restore_seconds=self.state_restore_seconds,
@@ -954,6 +1144,57 @@ def _bridge_timing_delta(
             return None
         result[field] = delta
     for field in _BRIDGE_TIMING_COUNTS:
+        delta = int(after[field]) - int(before[field])
+        if delta < 0:
+            return None
+        result[field] = delta
+    return result
+
+
+def _branch_step_timing_snapshot(env: PokeZeroEnv) -> dict[str, float | int] | None:
+    """Read optional fused-branch counters without affecting search behavior."""
+
+    source = getattr(env, "root_puct_branch_step_timing_snapshot", None)
+    if not callable(source):
+        return None
+    try:
+        payload = source()
+    except Exception:
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    result: dict[str, float | int] = {}
+    for field in _BRANCH_STEP_TIMING_SECONDS:
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, (float, int)):
+            return None
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0:
+            return None
+        result[field] = parsed
+    for field in _BRANCH_STEP_TIMING_COUNTS:
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        result[field] = value
+    return result
+
+
+def _branch_step_timing_delta(
+    before: Mapping[str, float | int] | None,
+    after: Mapping[str, float | int] | None,
+) -> dict[str, float | int] | None:
+    """Return one branch call's monotonic local/bridge timing delta, if available."""
+
+    if before is None or after is None:
+        return None
+    result: dict[str, float | int] = {}
+    for field in _BRANCH_STEP_TIMING_SECONDS:
+        delta = float(after[field]) - float(before[field])
+        if delta < 0.0:
+            return None
+        result[field] = delta
+    for field in _BRANCH_STEP_TIMING_COUNTS:
         delta = int(after[field]) - int(before[field])
         if delta < 0:
             return None
@@ -2521,10 +2762,17 @@ def _branch_from_replay_prefix(
             timing=timing,
         )
         branch_step_started_at = _timing_perf_counter() if timing is not None else None
+        branch_step_timing_before = _branch_step_timing_snapshot(env) if timing is not None else None
         step_result = env.step(branch_round.actions)
         if timing is not None:
             assert branch_step_started_at is not None
             timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
+            branch_step_timing = _branch_step_timing_delta(
+                branch_step_timing_before,
+                _branch_step_timing_snapshot(env),
+            )
+            if branch_step_timing is not None:
+                timing.add_branch_step_subtiming(branch_step_timing)
         return ReplayBranchResult(
             prefix=prefix,
             branch_round=branch_round,
@@ -2550,10 +2798,17 @@ def _branch_from_replay_prefix(
             timing=timing,
         )
         branch_step_started_at = _timing_perf_counter() if timing is not None else None
+        branch_step_timing_before = _branch_step_timing_snapshot(env) if timing is not None else None
         step_result = env.step(branch_round.actions)
         if timing is not None:
             assert branch_step_started_at is not None
             timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
+            branch_step_timing = _branch_step_timing_delta(
+                branch_step_timing_before,
+                _branch_step_timing_snapshot(env),
+            )
+            if branch_step_timing is not None:
+                timing.add_branch_step_subtiming(branch_step_timing)
         return ReplayBranchResult(
             prefix=restorable_prefix.prefix,
             branch_round=branch_round,
@@ -2570,10 +2825,17 @@ def _branch_from_replay_prefix(
     # belief-sampled world. The fused bridge command includes both restore and branch
     # execution, so it is intentionally recorded as one non-overlapping branch stage.
     branch_step_started_at = _timing_perf_counter() if timing is not None else None
+    branch_step_timing_before = _branch_step_timing_snapshot(env) if timing is not None else None
     step_result = step_from_search_snapshot(restorable_prefix.snapshot, branch_round.actions)
     if timing is not None:
         assert branch_step_started_at is not None
         timing.add_branch_simulator_step(_timing_perf_counter() - branch_step_started_at)
+        branch_step_timing = _branch_step_timing_delta(
+            branch_step_timing_before,
+            _branch_step_timing_snapshot(env),
+        )
+        if branch_step_timing is not None:
+            timing.add_branch_step_subtiming(branch_step_timing)
     return ReplayBranchResult(
         prefix=restorable_prefix.prefix,
         branch_round=branch_round,

@@ -247,12 +247,47 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
     def __init__(self) -> None:
         super().__init__()
         self.fused_search_step_calls = 0
+        self._branch_local_state_restore_seconds = 0.0
+        self._branch_local_state_restore_count = 0
+        self._branch_choice_encoding_seconds = 0.0
+        self._branch_choice_encoding_count = 0
+        self._branch_bridge_round_trip_seconds = 0.0
+        self._branch_bridge_round_trip_count = 0
+        self._branch_bridge_node_processing_seconds = 0.0
+        self._branch_bridge_node_processing_count = 0
+        self._branch_result_projection_seconds = 0.0
+        self._branch_result_projection_count = 0
+
+    def root_puct_branch_step_timing_snapshot(self) -> dict[str, float | int]:
+        return {
+            "branch_local_state_restore_seconds": self._branch_local_state_restore_seconds,
+            "branch_local_state_restore_count": self._branch_local_state_restore_count,
+            "branch_choice_encoding_seconds": self._branch_choice_encoding_seconds,
+            "branch_choice_encoding_count": self._branch_choice_encoding_count,
+            "branch_bridge_round_trip_seconds": self._branch_bridge_round_trip_seconds,
+            "branch_bridge_round_trip_count": self._branch_bridge_round_trip_count,
+            "branch_bridge_node_processing_seconds": self._branch_bridge_node_processing_seconds,
+            "branch_bridge_node_processing_count": self._branch_bridge_node_processing_count,
+            "branch_result_projection_seconds": self._branch_result_projection_seconds,
+            "branch_result_projection_count": self._branch_result_projection_count,
+        }
 
     def step_from_search_snapshot(self, snapshot, actions: dict[str, int]) -> StepResult:
         self.fused_search_step_calls += 1
+        self._branch_local_state_restore_seconds += 0.003
+        self._branch_local_state_restore_count += 1
+        self._branch_choice_encoding_seconds += 0.002
+        self._branch_choice_encoding_count += 1
         self._record_bridge_round_trip(elapsed_seconds=0.020, node_seconds=0.012)
+        self._branch_bridge_round_trip_seconds += 0.020
+        self._branch_bridge_round_trip_count += 1
+        self._branch_bridge_node_processing_seconds += 0.012
+        self._branch_bridge_node_processing_count += 1
         self._requested, self._terminal = snapshot
-        return ValueBranchEnv.step(self, actions)
+        result = ValueBranchEnv.step(self, actions)
+        self._branch_result_projection_seconds += 0.004
+        self._branch_result_projection_count += 1
+        return result
 
 
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
@@ -955,6 +990,17 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(timing["bridge_round_trip_seconds"], 0.100)
         self.assertAlmostEqual(timing["bridge_node_processing_seconds"], 0.060)
         self.assertAlmostEqual(timing["bridge_python_orchestration_seconds"], 0.040)
+        self.assertEqual(timing["branch_local_state_restore_count"], 5)
+        self.assertAlmostEqual(timing["branch_local_state_restore_seconds"], 0.015)
+        self.assertEqual(timing["branch_choice_encoding_count"], 5)
+        self.assertAlmostEqual(timing["branch_choice_encoding_seconds"], 0.010)
+        self.assertEqual(timing["branch_bridge_round_trip_count"], 5)
+        self.assertAlmostEqual(timing["branch_bridge_round_trip_seconds"], 0.100)
+        self.assertEqual(timing["branch_bridge_node_processing_count"], 5)
+        self.assertAlmostEqual(timing["branch_bridge_node_processing_seconds"], 0.060)
+        self.assertAlmostEqual(timing["branch_bridge_python_orchestration_seconds"], 0.040)
+        self.assertEqual(timing["branch_result_projection_count"], 5)
+        self.assertAlmostEqual(timing["branch_result_projection_seconds"], 0.020)
         self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
 
     def test_prepared_bridge_snapshot_can_be_released_after_search(self) -> None:
