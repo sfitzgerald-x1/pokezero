@@ -616,6 +616,14 @@ class RootPUCTSearchPolicy:
                 ),
             )
         opponent_scenario_planning_seconds = _timing_perf_counter() - opponent_scenario_planning_started_at
+        root_policy_setup_seconds = 0.0
+        root_policy_setup_started_at = _timing_perf_counter()
+
+        def current_root_policy_setup_seconds() -> float:
+            return root_policy_setup_seconds + (
+                _timing_perf_counter() - root_policy_setup_started_at
+            )
+
         legality_checked = False
         for scenario in opponent_scenarios:
             planner_error = _opponent_action_planner_error(
@@ -631,6 +639,7 @@ class RootPUCTSearchPolicy:
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    root_policy_setup_seconds=current_root_policy_setup_seconds(),
                 )
             deferred_error = _deferred_opponent_action_planner_error(
                 context=context,
@@ -645,6 +654,7 @@ class RootPUCTSearchPolicy:
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    root_policy_setup_seconds=current_root_policy_setup_seconds(),
                 )
             legality_report = _opponent_action_legality_report(context, scenario.actions)
             legality_checked = legality_checked or legality_report.checked
@@ -656,6 +666,7 @@ class RootPUCTSearchPolicy:
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                    root_policy_setup_seconds=current_root_policy_setup_seconds(),
                 )
         try:
             start_override_samples_per_scenario = _start_override_samples_per_scenario(self, context)
@@ -668,6 +679,7 @@ class RootPUCTSearchPolicy:
                 timing_started_at=timing_started_at,
                 neural_timing_before=neural_timing_before,
                 opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
+                root_policy_setup_seconds=current_root_policy_setup_seconds(),
             )
         search_scenario_groups = _start_override_sampled_scenario_groups(
             opponent_scenarios,
@@ -685,12 +697,14 @@ class RootPUCTSearchPolicy:
             player_id=context.player_id,
             through_decision_round=context.decision_round_index,
         )
+        root_policy_setup_seconds += _timing_perf_counter() - root_policy_setup_started_at
         policy_evaluation_started_at = _timing_perf_counter()
         base_priors = _temperature_scale_action_priors(
             self.prior_fn(history),
             temperature=self.root_prior_temperature,
         )
         policy_evaluation_seconds = _timing_perf_counter() - policy_evaluation_started_at
+        root_policy_setup_started_at = _timing_perf_counter()
         # Successful scenario branches are available even if a later branch triggers
         # a graceful fallback. Preserve their measured stage timing in that result.
         completed_search_timings: list[RootPUCTSearchTiming] = []
@@ -711,6 +725,7 @@ class RootPUCTSearchPolicy:
         # planning and prior evaluation before replay work spends its remaining budget.
         search_started_at = perf_counter()
         env = self.env_factory()
+        root_policy_setup_seconds += _timing_perf_counter() - root_policy_setup_started_at
         prepared_prefixes_to_release: list[PreparedReplayPrefix] = []
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
@@ -730,6 +745,21 @@ class RootPUCTSearchPolicy:
                 replay_materialization_count = 0
                 direct_materialization_rejection_categories: Counter[str] = Counter()
                 direct_materialization_observation_mismatch_paths: Counter[str] = Counter()
+                direct_prefix_construction_seconds = 0.0
+                direct_prefix_construction_count = 0
+                puct_search_call_seconds = 0.0
+                scenario_dispatch_started_at: float | None = None
+
+                def current_scenario_dispatch_orchestration_seconds() -> float:
+                    if scenario_dispatch_started_at is None:
+                        return 0.0
+                    return max(
+                        0.0,
+                        _timing_perf_counter()
+                        - scenario_dispatch_started_at
+                        - puct_search_call_seconds
+                        - direct_prefix_construction_seconds,
+                    )
 
                 def record_direct_materialization_rejection(category: str) -> None:
                     direct_materialization_rejection_categories[category] += 1
@@ -795,6 +825,8 @@ class RootPUCTSearchPolicy:
                         )
                 if shared_start_override_samples is not None:
                     start_override_attempts_used += shared_start_override_samples.attempts_used
+                scenario_dispatch_started_at = _timing_perf_counter()
+
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                     for sample_index, scenario in enumerate(scenario_group.samples):
@@ -862,53 +894,68 @@ class RootPUCTSearchPolicy:
 
                             try:
                                 if start_override is not None and prepared_prefix is None:
-                                    prepared_prefix = prepare_direct_materialization_prefix(
+                                    direct_prefix_started_at = _timing_perf_counter()
+                                    try:
+                                        prepared_prefix = prepare_direct_materialization_prefix(
+                                            env=env,
+                                            trajectory=search_trajectory,
+                                            player_id=context.player_id,
+                                            prefix_decision_round_count=context.decision_round_index,
+                                            start_override=start_override,
+                                            public_materialization_state=context.public_materialization_state,
+                                            deferred_opponent_actions=scenario.deferred_actions,
+                                            deferred_opponent_action_priors=(
+                                                scenario.deferred_action_priors
+                                            ),
+                                            expected_current_observation=context.observation,
+                                            replay_hp_fraction_tolerance=(
+                                                self.start_override_hp_fraction_tolerance
+                                            ),
+                                            on_unavailable=record_direct_materialization_rejection,
+                                            on_observation_mismatch_path=(
+                                                record_direct_materialization_observation_mismatch_path
+                                            ),
+                                        )
+                                    finally:
+                                        direct_prefix_construction_seconds += (
+                                            _timing_perf_counter() - direct_prefix_started_at
+                                        )
+                                        direct_prefix_construction_count += 1
+                                    if prepared_prefix is not None:
+                                        prepared_prefixes_to_release.append(prepared_prefix)
+                                puct_search_started_at = _timing_perf_counter()
+                                try:
+                                    search = puct_branch_search(
                                         env=env,
                                         trajectory=search_trajectory,
                                         player_id=context.player_id,
                                         prefix_decision_round_count=context.decision_round_index,
+                                        legal_action_mask=context.observation.legal_action_mask,
+                                        opponent_actions=scenario.actions,
+                                        value_fn=self.value_fn,
+                                        value_batch_fn=self.value_batch_fn,
+                                        action_priors=priors,
+                                        cpuct=self.cpuct,
+                                        leaf_rollout_policies=leaf_rollout_policies,
+                                        leaf_rollout_config=self.rollout_config,
+                                        leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                        root_visit_budget=self.root_visit_budget,
+                                        root_visit_budget_resolver=visit_budget_resolver,
+                                        budget_action_priors=base_priors,
+                                        root_time_budget_seconds=scenario_root_time_budget_seconds,
                                         start_override=start_override,
-                                        public_materialization_state=context.public_materialization_state,
-                                        deferred_opponent_actions=scenario.deferred_actions,
-                                        deferred_opponent_action_priors=scenario.deferred_action_priors,
                                         expected_current_observation=context.observation,
                                         replay_hp_fraction_tolerance=(
                                             self.start_override_hp_fraction_tolerance
+                                            if start_override is not None
+                                            else 0.0
                                         ),
-                                        on_unavailable=record_direct_materialization_rejection,
-                                        on_observation_mismatch_path=(
-                                            record_direct_materialization_observation_mismatch_path
-                                        ),
+                                        prepared_prefix=prepared_prefix,
                                     )
-                                    if prepared_prefix is not None:
-                                        prepared_prefixes_to_release.append(prepared_prefix)
-                                search = puct_branch_search(
-                                    env=env,
-                                    trajectory=search_trajectory,
-                                    player_id=context.player_id,
-                                    prefix_decision_round_count=context.decision_round_index,
-                                    legal_action_mask=context.observation.legal_action_mask,
-                                    opponent_actions=scenario.actions,
-                                    value_fn=self.value_fn,
-                                    value_batch_fn=self.value_batch_fn,
-                                    action_priors=priors,
-                                    cpuct=self.cpuct,
-                                    leaf_rollout_policies=leaf_rollout_policies,
-                                    leaf_rollout_config=self.rollout_config,
-                                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
-                                    root_visit_budget=self.root_visit_budget,
-                                    root_visit_budget_resolver=visit_budget_resolver,
-                                    budget_action_priors=base_priors,
-                                    root_time_budget_seconds=scenario_root_time_budget_seconds,
-                                    start_override=start_override,
-                                    expected_current_observation=context.observation,
-                                    replay_hp_fraction_tolerance=(
-                                        self.start_override_hp_fraction_tolerance
-                                        if start_override is not None
-                                        else 0.0
-                                    ),
-                                    prepared_prefix=prepared_prefix,
-                                )
+                                finally:
+                                    puct_search_call_seconds += (
+                                        _timing_perf_counter() - puct_search_started_at
+                                    )
                             except ValueError as exc:
                                 reason = _opponent_scenario_replay_legality_error(exc, scenario)
                                 if reason is None:
@@ -1021,6 +1068,13 @@ class RootPUCTSearchPolicy:
                     policy_evaluation_seconds=policy_evaluation_seconds,
                     belief_world_materialization_seconds=belief_world_materialization_seconds,
                     belief_world_materialization_count=belief_world_materialization_count,
+                    root_policy_setup_seconds=root_policy_setup_seconds,
+                    direct_prefix_construction_seconds=direct_prefix_construction_seconds,
+                    direct_prefix_construction_count=direct_prefix_construction_count,
+                    scenario_dispatch_orchestration_seconds=(
+                        current_scenario_dispatch_orchestration_seconds()
+                    ),
+                    scenario_dispatch_orchestration_count=flat_scenario_index,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             except Exception as exc:
@@ -1051,9 +1105,17 @@ class RootPUCTSearchPolicy:
                     policy_evaluation_seconds=policy_evaluation_seconds,
                     belief_world_materialization_seconds=belief_world_materialization_seconds,
                     belief_world_materialization_count=belief_world_materialization_count,
+                    root_policy_setup_seconds=root_policy_setup_seconds,
+                    direct_prefix_construction_seconds=direct_prefix_construction_seconds,
+                    direct_prefix_construction_count=direct_prefix_construction_count,
+                    scenario_dispatch_orchestration_seconds=(
+                        current_scenario_dispatch_orchestration_seconds()
+                    ),
+                    scenario_dispatch_orchestration_count=flat_scenario_index,
                     completed_search_timing=RootPUCTSearchTiming.aggregate(completed_search_timings),
                 )
             elapsed_seconds = perf_counter() - search_started_at
+            scenario_dispatch_orchestration_seconds = current_scenario_dispatch_orchestration_seconds()
             timing = (
                 RootPUCTSearchTiming.aggregate(
                     tuple(scenario_search.timing for scenario_search in scenario_searches)
@@ -1063,6 +1125,15 @@ class RootPUCTSearchPolicy:
                     attempt_count=belief_world_materialization_count,
                 )
                 .with_opponent_scenario_planning(opponent_scenario_planning_seconds)
+                .with_root_policy_setup(root_policy_setup_seconds)
+                .with_direct_prefix_construction(
+                    direct_prefix_construction_seconds,
+                    attempt_count=direct_prefix_construction_count,
+                )
+                .with_scenario_dispatch_orchestration(
+                    scenario_dispatch_orchestration_seconds,
+                    attempt_count=flat_scenario_index,
+                )
                 .with_policy_evaluation(policy_evaluation_seconds)
                 .with_total(_timing_perf_counter() - timing_started_at)
             )
@@ -1295,6 +1366,11 @@ class RootPUCTSearchPolicy:
         policy_evaluation_seconds: float | None = None,
         belief_world_materialization_seconds: float | None = None,
         belief_world_materialization_count: int | None = None,
+        root_policy_setup_seconds: float | None = None,
+        direct_prefix_construction_seconds: float | None = None,
+        direct_prefix_construction_count: int | None = None,
+        scenario_dispatch_orchestration_seconds: float | None = None,
+        scenario_dispatch_orchestration_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
@@ -1320,6 +1396,15 @@ class RootPUCTSearchPolicy:
                     policy_evaluation_seconds=policy_evaluation_seconds,
                     belief_world_materialization_seconds=belief_world_materialization_seconds,
                     belief_world_materialization_count=belief_world_materialization_count,
+                    root_policy_setup_seconds=root_policy_setup_seconds,
+                    direct_prefix_construction_seconds=direct_prefix_construction_seconds,
+                    direct_prefix_construction_count=direct_prefix_construction_count,
+                    scenario_dispatch_orchestration_seconds=(
+                        scenario_dispatch_orchestration_seconds
+                    ),
+                    scenario_dispatch_orchestration_count=(
+                        scenario_dispatch_orchestration_count
+                    ),
                     completed_search_timing=completed_search_timing,
                 ),
                 **dict(extra_metadata or {}),
@@ -1335,6 +1420,11 @@ class RootPUCTSearchPolicy:
         policy_evaluation_seconds: float | None = None,
         belief_world_materialization_seconds: float | None = None,
         belief_world_materialization_count: int | None = None,
+        root_policy_setup_seconds: float | None = None,
+        direct_prefix_construction_seconds: float | None = None,
+        direct_prefix_construction_count: int | None = None,
+        scenario_dispatch_orchestration_seconds: float | None = None,
+        scenario_dispatch_orchestration_count: int | None = None,
         completed_search_timing: RootPUCTSearchTiming | None = None,
     ) -> dict[str, object]:
         """Attach all work done before a graceful fallback to the decision artifact."""
@@ -1350,6 +1440,18 @@ class RootPUCTSearchPolicy:
             timing = timing.with_belief_world_materialization(
                 belief_world_materialization_seconds,
                 attempt_count=belief_world_materialization_count or 0,
+            )
+        if root_policy_setup_seconds is not None:
+            timing = timing.with_root_policy_setup(root_policy_setup_seconds)
+        if direct_prefix_construction_seconds is not None:
+            timing = timing.with_direct_prefix_construction(
+                direct_prefix_construction_seconds,
+                attempt_count=direct_prefix_construction_count or 0,
+            )
+        if scenario_dispatch_orchestration_seconds is not None:
+            timing = timing.with_scenario_dispatch_orchestration(
+                scenario_dispatch_orchestration_seconds,
+                attempt_count=scenario_dispatch_orchestration_count or 0,
             )
         neural_timing = _neural_timing_delta(
             neural_timing_before,

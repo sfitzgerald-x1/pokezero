@@ -776,6 +776,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         timing = metadata["root_puct_timing"]
         self.assertEqual(timing["opponent_scenario_planning_count"], 1)
         self.assertEqual(timing["belief_world_materialization_count"], 0)
+        self.assertEqual(timing["root_policy_setup_count"], 1)
+        self.assertEqual(timing["direct_prefix_construction_count"], 0)
+        self.assertEqual(timing["scenario_dispatch_orchestration_count"], 1)
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertAlmostEqual(timing["observation_encoding_seconds"], 0.01)
         self.assertEqual(timing["observation_encoding_count"], 1)
@@ -791,6 +794,27 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["policy_value_evaluation_count"], 1)
         self.assertEqual(timing["value_evaluation_seconds"], 0.0)
         self.assertEqual(timing["rollout_tail_seconds"], 0.0)
+        self.assertAlmostEqual(
+            timing["total_seconds"],
+            timing["prefix_replay_seconds"]
+            + timing["branch_simulator_step_seconds"]
+            + timing["state_snapshot_seconds"]
+            + timing["state_restore_seconds"]
+            + timing["root_initial_sweep_orchestration_seconds"]
+            + timing["root_search_setup_seconds"]
+            + timing["root_adaptive_visit_orchestration_seconds"]
+            + timing["root_search_finalization_seconds"]
+            + timing["branch_action_validation_seconds"]
+            + timing["post_branch_history_seconds"]
+            + timing["belief_world_materialization_seconds"]
+            + timing["opponent_scenario_planning_seconds"]
+            + timing["root_policy_setup_seconds"]
+            + timing["direct_prefix_construction_seconds"]
+            + timing["scenario_dispatch_orchestration_seconds"]
+            + timing["policy_value_evaluation_seconds"]
+            + timing["rollout_tail_seconds"]
+            + timing["raw_residual_seconds"],
+        )
         self.assertEqual(live_env.step_calls, [{"p1": 1, "p2": 0}])
         self.assertEqual(len(branch_envs), 1)
         self.assertTrue(branch_envs[0].closed)
@@ -999,6 +1023,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.metadata["root_puct_start_override_sources_used"], 1)
         self.assertEqual(branch_envs[0].start_overrides, sampled_overrides)
         self.assertEqual(len(sampled_overrides), 3)
+        timing = step.metadata["root_puct_timing"]
+        self.assertEqual(timing["direct_prefix_construction_count"], 1)
+        self.assertGreaterEqual(timing["direct_prefix_construction_seconds"], 0.0)
 
     def test_root_puct_policy_expands_start_override_samples_as_weighted_scenarios(self) -> None:
         branch_envs: list[StartOverrideOutcomeEnv] = []
@@ -1952,6 +1979,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         timing = decision.metadata["root_puct_timing"]
         self.assertEqual(timing["belief_world_materialization_count"], 2)
         self.assertGreater(timing["belief_world_materialization_seconds"], 0.0)
+        self.assertEqual(timing["root_policy_setup_count"], 1)
+        self.assertEqual(timing["direct_prefix_construction_count"], 0)
+        self.assertEqual(timing["scenario_dispatch_orchestration_count"], 0)
 
     def test_root_puct_policy_caps_opponent_actions_not_belief_samples_after_skips(self) -> None:
         branch_envs: list[RejectingStartOverrideOutcomeEnv] = []
@@ -3781,6 +3811,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(timing["prefix_replay_count"], 1)
         self.assertEqual(timing["branch_simulator_step_seconds"], 0.03)
         self.assertEqual(timing["branch_simulator_step_count"], 2)
+        self.assertEqual(timing["root_policy_setup_count"], 1)
+        self.assertEqual(timing["direct_prefix_construction_count"], 0)
+        self.assertEqual(timing["scenario_dispatch_orchestration_count"], 2)
         self.assertEqual(timing["policy_evaluation_count"], 1)
         self.assertGreater(timing["total_seconds"], 0.0)
 

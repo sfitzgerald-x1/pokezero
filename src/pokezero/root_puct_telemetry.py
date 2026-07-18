@@ -65,6 +65,20 @@ _TIMING_KEYS = (
     "state_snapshot_count",
     "state_restore_seconds",
     "state_restore_count",
+    # Additive Python orchestration stages. Together with the simulator and
+    # evaluator buckets, these shrink residual_seconds to only uncategorized work.
+    "root_initial_sweep_orchestration_seconds",
+    "root_initial_sweep_orchestration_count",
+    "root_search_setup_seconds",
+    "root_search_setup_count",
+    "root_adaptive_visit_orchestration_seconds",
+    "root_adaptive_visit_orchestration_count",
+    "root_search_finalization_seconds",
+    "root_search_finalization_count",
+    "branch_action_validation_seconds",
+    "branch_action_validation_count",
+    "post_branch_history_seconds",
+    "post_branch_history_count",
     # These are nested within snapshot/restore/step stages. They split bridge
     # wall into Node simulator work and local IPC/Python orchestration without
     # changing residual accounting.
@@ -78,6 +92,12 @@ _TIMING_KEYS = (
     "belief_world_materialization_count",
     "opponent_scenario_planning_seconds",
     "opponent_scenario_planning_count",
+    "root_policy_setup_seconds",
+    "root_policy_setup_count",
+    "direct_prefix_construction_seconds",
+    "direct_prefix_construction_count",
+    "scenario_dispatch_orchestration_seconds",
+    "scenario_dispatch_orchestration_count",
     "policy_evaluation_seconds",
     "policy_evaluation_count",
     # These overlap policy/value/scenario timings and are diagnostic W2
