@@ -18,13 +18,16 @@ row-indexed training path is not needed at inference.
 |---|---|---|---|
 | TorchScript | `torch.jit.trace` (positional-args shim) | `model_ts.pt` (40.8 MB) | works, dynamic batch verified |
 | ONNX | `torch.onnx.export` dynamo (torch.export-based) | `model.onnx` + `model.onnx.data` (40.8 MB external weights) | works, dynamic batch axis verified |
-| ONNX | legacy TorchScript-based exporter (fallback) | single-file `model.onnx` | works, same parity |
+| ONNX | legacy TorchScript-based exporter | — | **does NOT work**: fails on `aten::_transformer_encoder_layer_fwd` (fused encoder kernel has no ONNX lowering) |
 
 `torch.onnx.export` did NOT choke: the model is a plain pre-norm
 transformer encoder (`norm_first=True` disables the nested-tensor fastpath)
 and both exporters handle the bool `src_key_padding_mask` and the embedding
 clamps. The dynamo exporter requires `onnxscript` (now in the venv); the
-script auto-falls back to the legacy exporter when it is missing.
+ONNX export HARD-REQUIRES the dynamo exporter (`onnxscript` installed); the
+legacy exporter fails on the fused `aten::_transformer_encoder_layer_fwd`
+op, so there is no fallback — `--onnx-exporter auto` errors with guidance
+when dynamo is unavailable.
 
 ## Parity (--validate: 64 random valid inputs + batch-1 re-check, vs eager)
 
@@ -97,13 +100,13 @@ What the table says:
   CUDA deployment via tch-rs: trace on CUDA in Python at export time.
 - **ORT CoreML EP cannot run this graph** (ort 1.27.0, both exporters, both
   MLProgram and NeuralNetwork formats): the dynamic batch axis hits
-  "unbounded dimension which is not supported" in CoreML's MIL compiler,
+  "unbounded dimension which is not supported [see correction below]" in CoreML's MIL compiler,
   and the value head's `squeeze(-1)` trips "Invalid tensor rank 0 inferred
   from: ios18.squeeze". A fixed-batch export might compile but forfeits the
   flexible batching the search loop needs; not pursued.
 - **Dynamo-exported ONNX is two files** (`model.onnx` + `model.onnx.data`
-  external weights). Ship both, or use `--onnx-exporter legacy` for a
-  single-file artifact.
+  external weights). Ship both files together; there is no single-file
+  fallback (the legacy exporter cannot lower the fused encoder op).
 - **CPU batch-256 is past saturation** (ort-cpu regresses to 280/s there);
   64 remains the CPU sweet spot, as in the ladder.
 - Throughput is forward-pass only — no v2.2 encoding, no tensor marshaling
@@ -119,3 +122,20 @@ python scripts/bench_inference.py --checkpoint <ckpt.pt> \
     --export-dir exports/ --batch-sizes 1,16,64,256 --out bench.md
 python -m unittest tests.test_export_model
 ```
+
+## Corrections after independent review (2026-07-18)
+
+- **Legacy ONNX exporter does not work** on this model (fails on
+  `aten::_transformer_encoder_layer_fwd`); ONNX requires the
+  dynamo/onnxscript path. The table above is corrected accordingly.
+- **CoreML failure mechanism**: with the shipped dynamo external-data
+  artifact, the CoreML EP fails at session init (external-weights load:
+  `model_path must not be empty`) BEFORE reaching the MIL compiler; the
+  rank-0 squeeze/unbounded-dim errors were observed on a different artifact
+  variant. Conclusion unchanged: CoreML EP unusable today.
+- **fp16 numbers are throughput probes only** — fp16 changes outputs and has
+  NO parity validation; do not wire fp16 into collection (it feeds the
+  training distribution) without a dedicated parity/quality story.
+- **Bench fairness**: ORT intra_op threads were tuned per batch; torch CPU
+  used default threading. The asymmetry favors ORT, which still does not win
+  at saturated batch, so the "CPU is compute-bound" conclusion is robust.

@@ -128,5 +128,46 @@ class TorchScriptRoundTripTest(unittest.TestCase):
         self.assertTrue(passed, f"self-parity must pass, worst diff {worst}")
 
 
+@unittest.skipUnless(torch_available(), "requires torch")
+class MaskDynamismTests(unittest.TestCase):
+    """Lock in that masking is DYNAMIC in the traced graph, not baked.
+
+    Trace with an all-ones attention mask, then require bit-exact parity on a
+    sparse mixed mask — the exact class of silent divergence a future encoder
+    change could introduce.
+    """
+
+    def test_trace_with_uniform_mask_matches_eager_on_mixed_mask(self) -> None:
+        import torch
+
+        from pokezero.neural_policy import EntityTokenTransformerPolicy
+
+        module = _load_module()
+        config = _tiny_config()
+        model = EntityTokenTransformerPolicy(config).eval()
+        shim = module.build_exportable_module(model)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            traced = module.export_torchscript(
+                shim, module.make_random_inputs(config, 2, seed=3), Path(tmp) / "tiny_ts.pt"
+            )
+
+        probes = []
+        ones_inputs = list(module.make_random_inputs(config, 3, seed=17))
+        ones_inputs[3] = torch.ones_like(ones_inputs[3])
+        probes.append(tuple(ones_inputs))
+        sparse_inputs = list(module.make_random_inputs(config, 3, seed=23))
+        sparse = torch.rand(sparse_inputs[3].shape) > 0.8
+        sparse[..., 0] = True  # token-0 invariant mirrors the real encoder
+        probes.append(tuple(sparse_inputs[:3]) + (sparse,) + tuple(sparse_inputs[4:]))
+        for probe in probes:
+            with torch.no_grad():
+                eager_out = shim(*probe)
+                traced_out = traced(*probe)
+            for eager_t, traced_t in zip(eager_out, traced_out):
+                self.assertEqual((eager_t - traced_t).abs().max().item(), 0.0)
+                self.assertFalse(torch.isnan(traced_t).any().item())
+
+
 if __name__ == "__main__":
     unittest.main()

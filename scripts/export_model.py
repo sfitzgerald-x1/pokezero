@@ -99,7 +99,17 @@ def make_random_inputs(config: Any, batch_size: int, *, seed: int, device: str =
     (batch, window) row is fully masked; history_mask is all-True (window=1
     checkpoints always observe the current state). Values are drawn inside
     each vocabulary so the embedding clamp path stays inactive.
+
+    window_size > 1 checkpoints would need padded-turn (history_mask False)
+    validation patterns this generator does not produce yet — refuse rather
+    than under-validate.
     """
+    window = getattr(config, "window_size", 1)
+    if window != 1:
+        raise ValueError(
+            f"make_random_inputs only validates window_size == 1 checkpoints (got {window}); "
+            "add padded-turn history_mask patterns before exporting window>1 models."
+        )
 
     torch, _ = _require_torch_nn()
     generator = torch.Generator().manual_seed(seed)
@@ -145,14 +155,16 @@ def export_onnx(
     """Export to ONNX with a dynamic batch axis. Returns the exporter used.
 
     ``auto`` prefers the torch.export-based (dynamo) exporter and falls back
-    to the legacy TorchScript-based exporter when the dynamo path is
+    to an explicit error when the dynamo path is
     unavailable (e.g. missing onnxscript). Both produce parity-passing
     graphs for this model (see docs/model_export_findings.md).
     """
 
     torch, _ = _require_torch_nn()
     last_error: Exception | None = None
-    attempts = ("dynamo", "legacy") if exporter == "auto" else (exporter,)
+    # The legacy exporter cannot lower aten::_transformer_encoder_layer_fwd,
+    # so "auto" means dynamo-or-error (with guidance), never a silent fallback.
+    attempts = ("dynamo",) if exporter == "auto" else (exporter,)
     for attempt in attempts:
         try:
             with torch.no_grad(), warnings.catch_warnings():
