@@ -88,8 +88,11 @@ _TIMED_SIDE_CONDITIONS = frozenset({"reflect", "lightscreen", "safeguard", "mist
 _TIMED_SIDE_CONDITION_TURNS = 5
 
 # Showdown status codes -> poke-engine status names. ``slp`` is deliberately
-# absent: public state does not carry sleep/rest turn counts yet, and guessing
-# them would bias wake-up odds (fail closed instead).
+# absent from the strict map: public state does not carry sleep/rest turn
+# counts yet, and guessing them biases wake-up odds (fail closed by default).
+# ``approximate_sleep_turns=True`` opts into mapping slp with sleep_turns=0
+# ("just fell asleep") — a documented approximation for search POCs; the real
+# fix is public sleep-counter tracking in the replay state.
 _STATUS_CODES = {
     "": "none",
     "brn": "burn",
@@ -98,6 +101,7 @@ _STATUS_CODES = {
     "tox": "toxic",
     "frz": "freeze",
 }
+_SLEEP_STATUS_CODE = "slp"
 
 _MOVE_SLOT_LIMIT = 4
 _MANUAL_WEATHER_TURNS = 5
@@ -133,6 +137,14 @@ def hidden_power_engine_id(move_id: str, ivs: Mapping[str, int] | None) -> str:
             f"move {move_id!r} disagrees with IV-derived type {iv_type!r}",
         )
     return f"hiddenpower{iv_type}{base_power}"
+
+
+def _engine_species_id(species_id: str) -> str:
+    """Collapse cosmetic formes to the id the dex/engine know (Unown letters)."""
+
+    if species_id.startswith("unown"):
+        return "unown"
+    return species_id
 
 
 class EngineWorldUnsupported(ValueError):
@@ -231,6 +243,8 @@ def battle_spec_from_payload(
     override: BattleStartOverride,
     *,
     dex: ShowdownDex,
+    approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -250,11 +264,13 @@ def battle_spec_from_payload(
     self_player = str(payload.get("selfPlayer") or "")
     if self_player not in _PLAYER_SLOTS:
         raise EngineWorldUnsupported("payload_malformed", f"selfPlayer {self_player!r} is not a player slot")
-    if str(payload.get("selfRequestKind") or "") != "move":
+    request_kind = str(payload.get("selfRequestKind") or "")
+    if request_kind not in ("move", "force-switch"):
         raise EngineWorldUnsupported(
             "boundary_not_move_request",
-            f"self request kind {payload.get('selfRequestKind')!r} (force-switch boundaries unsupported)",
+            f"self request kind {request_kind!r} is not supported",
         )
+    self_force_switch = request_kind == "force-switch"
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
@@ -278,14 +294,19 @@ def battle_spec_from_payload(
         if not packed:
             raise EngineWorldUnsupported("override_side_missing", f"override has no packed team for {slot!r}")
         team = unpack_team(packed)
+        is_self_slot = slot == self_player
         built_sides[slot], species_order = _build_side_spec(
             slot=slot,
             side_payload=side_payload,
             team=team,
             dex=dex,
-            is_self=slot == self_player,
+            is_self=is_self_slot,
             turn=turn,
             self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
+            approximate_sleep_turns=approximate_sleep_turns,
+            approximate_substitute_health=approximate_substitute_health,
+            force_switch=is_self_slot and self_force_switch,
+            wish_set_turn=_wish_set_turn(payload, slot),
         )
         party_species[slot] = species_order
 
@@ -317,6 +338,8 @@ def world_battle_spec(
     override: BattleStartOverride,
     *,
     dex: ShowdownDex,
+    approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -329,7 +352,13 @@ def world_battle_spec(
     from .local_showdown import _public_materialization_payload
 
     payload = _public_materialization_payload(state)
-    return battle_spec_from_payload(payload, override, dex=dex)
+    return battle_spec_from_payload(
+        payload,
+        override,
+        dex=dex,
+        approximate_sleep_turns=approximate_sleep_turns,
+        approximate_substitute_health=approximate_substitute_health,
+    )
 
 
 def build_engine_world(
@@ -358,8 +387,14 @@ def _reject_unsupported_globals(payload: Mapping[str, Any]) -> None:
     future_sight = payload.get("futureSight")
     if isinstance(future_sight, Mapping) and any(int(v) for v in future_sight.values()):
         raise EngineWorldUnsupported("future_sight_pending", "a Future Sight strike is pending")
-    if payload.get("wishSetTurns"):
-        raise EngineWorldUnsupported("wish_pending", "a Wish is pending")
+
+
+def _wish_set_turn(payload: Mapping[str, Any], slot: str) -> int | None:
+    wish_turns = payload.get("wishSetTurns")
+    if not isinstance(wish_turns, Mapping):
+        return None
+    value = wish_turns.get(slot)
+    return value if isinstance(value, int) else None
 
 
 def _weather_fields(payload: Mapping[str, Any]) -> tuple[str, int]:
@@ -394,6 +429,10 @@ def _build_side_spec(
     is_self: bool,
     turn: int,
     self_benched_move_history: bool,
+    approximate_sleep_turns: bool = False,
+    approximate_substitute_health: bool = False,
+    force_switch: bool = False,
+    wish_set_turn: int | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -421,13 +460,14 @@ def _build_side_spec(
             slot=slot,
             is_self=is_self,
             self_benched_move_history=self_benched_move_history,
+            approximate_sleep_turns=approximate_sleep_turns,
         )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
                 raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has two active rows")
             active_index = len(party)
         party.append(member)
-        species_order.append(species_id)
+        species_order.append(_engine_species_id(species_id))
     if rows_by_species:
         raise EngineWorldUnsupported(
             "public_species_not_in_world",
@@ -437,9 +477,15 @@ def _build_side_spec(
         raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has no active row")
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
-    unsupported = sorted(set(volatiles) - _SUPPORTED_VOLATILES)
+    supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    unsupported = sorted(set(volatiles) - supported)
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
+    substitute_health = 0
+    if "substitute" in volatiles:
+        # Public info does not carry the sub's remaining HP; a fresh sub costs
+        # maxhp/4, so that is the documented upper-bound approximation.
+        substitute_health = party[active_index].maxhp // 4
 
     boosts: dict[str, int] = {}
     for key, value in (side_payload.get("boosts") or {}).items():
@@ -480,6 +526,21 @@ def _build_side_spec(
     if isinstance(toxic_stage, int) and toxic_stage > 0:
         side_conditions["toxic_count"] = toxic_stage
 
+    wish = (0, 0)
+    if wish_set_turn is not None:
+        remaining = 2 - (turn - wish_set_turn)
+        if remaining not in (1, 2):
+            raise EngineWorldUnsupported(
+                "wish_turns_inconsistent",
+                f"side {slot!r} wish set on turn {wish_set_turn} at turn {turn}",
+            )
+        # Timing verified against the engine (counter=1 heals end of this
+        # turn). The amount is IGNORED by poke-engine, which heals the
+        # resolving active's maxhp/2 — a known low-severity deviation from
+        # gen3 (true heal = the CASTER's maxhp/2); we pass the active's
+        # value for forward compatibility should the engine start using it.
+        wish = (remaining, party[active_index].maxhp // 2)
+
     return (
         SideSpec(
             pokemon=tuple(party),
@@ -487,6 +548,9 @@ def _build_side_spec(
             side_conditions=side_conditions,
             boosts=boosts,
             volatile_statuses=tuple(volatiles),
+            substitute_health=substitute_health,
+            force_switch=force_switch,
+            wish=wish,
         ),
         tuple(species_order),
     )
@@ -500,8 +564,9 @@ def _build_pokemon_spec(
     slot: str,
     is_self: bool,
     self_benched_move_history: bool = False,
+    approximate_sleep_turns: bool = False,
 ) -> PokemonSpec:
-    species_id = normalize_id(mon.species)
+    species_id = _engine_species_id(normalize_id(mon.species))
     info = dex.species_info(species_id)
     if info is None:
         raise EngineWorldUnsupported("species_unknown", f"{slot}: {mon.species!r} is not in the Gen 3 dex")
@@ -525,7 +590,14 @@ def _build_pokemon_spec(
         for stat in ("atk", "def", "spa", "spd", "spe")
     }
 
-    hp, status = _hp_and_status(row, maxhp=maxhp, slot=slot, species=mon.species, is_self=is_self)
+    hp, status = _hp_and_status(
+        row,
+        maxhp=maxhp,
+        slot=slot,
+        species=mon.species,
+        is_self=is_self,
+        approximate_sleep_turns=approximate_sleep_turns,
+    )
     moves = _move_specs(
         mon,
         row,
@@ -561,6 +633,7 @@ def _hp_and_status(
     slot: str,
     species: str,
     is_self: bool,
+    approximate_sleep_turns: bool = False,
 ) -> tuple[int, str]:
     if row is None:
         return maxhp, "none"
@@ -598,6 +671,11 @@ def _hp_and_status(
         hp = max(1, round(current * maxhp / denominator)) if current else 0
     status = _STATUS_CODES.get(status_code)
     if status is None:
+        if status_code == _SLEEP_STATUS_CODE and approximate_sleep_turns:
+            # Documented approximation: model the mon as freshly asleep
+            # (sleep_turns=0). Biases wake-up odds late in a sleep; the exact
+            # fix is public sleep-counter tracking in the replay state.
+            return hp, "sleep"
         raise EngineWorldUnsupported(
             "status_unsupported",
             f"{slot}: {species!r} status {status_code!r} (sleep needs public turn counts)",

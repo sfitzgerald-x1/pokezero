@@ -40,6 +40,7 @@ def _dex() -> ShowdownDex:
             "surf": move("surf", 15),
             "bodyslam": move("bodyslam", 15),
             "shadowball": move("shadowball", 15),
+            "hiddenpower": move("hiddenpower", 15),
         },
         species={
             "swampert": species("swampert", "Swampert", ("water", "ground"), {"hp": 100, "atk": 110, "def": 90, "spa": 85, "spd": 90, "spe": 60}, 81.9),
@@ -225,10 +226,20 @@ class BattleSpecConstructionTests(unittest.TestCase):
 
     def test_fail_closed_taxonomy(self) -> None:
         self._assert_reason(_payload(self.dex, pendingBatonPassSides=["p2"]), "pending_baton_pass")
-        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 6}), "wish_pending")
+        self._assert_reason(_payload(self.dex, wishSetTurns={"p1": 3}), "wish_turns_inconsistent")
+
+    def test_pending_wish_constructs_with_engine_semantics(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex, wishSetTurns={"p1": 6}), _override(), dex=self.dex
+        )
+        side = world.spec.side_one
+        # Set turn 6, now turn 7 -> heals end of this turn (counter 1). The
+        # engine ignores the amount (heals resolving active's maxhp/2); we
+        # pass the active's value for forward compatibility.
+        self.assertEqual(side.wish, (1, side.pokemon[side.active_index].maxhp // 2))
         self._assert_reason(_payload(self.dex, futureSight={"p1": 2, "p2": 0}), "future_sight_pending")
         self._assert_reason(_payload(self.dex, deferredOpponentActions={"p2": 3}), "deferred_opponent_action")
-        self._assert_reason(_payload(self.dex, selfRequestKind="force-switch"), "boundary_not_move_request")
+        self._assert_reason(_payload(self.dex, selfRequestKind="team-preview"), "boundary_not_move_request")
 
         sleeping = _payload(self.dex)
         sleeping["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 slp"
@@ -281,6 +292,64 @@ class BattleSpecConstructionTests(unittest.TestCase):
         payload = _payload(self.dex)
         payload["sides"]["p1"]["pokemon"][0]["condition"] = "200/999"
         self._assert_reason(payload, "self_maxhp_mismatch")
+
+    def test_force_switch_boundary_constructs_with_flag(self) -> None:
+        payload = _payload(self.dex, selfRequestKind="force-switch")
+        starmie_max = _maxhp(_STARMIE, self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["condition"] = "0 fnt"
+        payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertTrue(world.spec.side_one.force_switch)
+        self.assertFalse(world.spec.side_two.force_switch)
+        self.assertEqual(world.spec.side_one.pokemon[0].hp, 0)
+
+    def test_unown_letter_formes_collapse_to_base_species(self) -> None:
+        unown_dex = _dex()
+        unown_dex.species["unown"] = SpeciesInfo(
+            id="unown", name="Unown", types=("psychic",),
+            base_stats={"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48},
+            weight_kg=5.0,
+        )
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"] = [
+            {"species": "Unown-C", "condition": "73/100", "active": True},
+        ]
+        override = BattleStartOverride(
+            player_teams={
+                "p1": _override().player_teams["p1"],
+                "p2": pack_team(_team(
+                    FixturePokemon(species="Unown-C", moves=("hiddenpower",), level=80,
+                                   ivs={"hp": 31, "atk": 30, "def": 31, "spa": 30, "spd": 31, "spe": 31},
+                                   evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")}),
+                )),
+            },
+        )
+        world = battle_spec_from_payload(payload, override, dex=unown_dex)
+        self.assertEqual(world.spec.side_two.pokemon[0].id, "unown")
+        self.assertEqual(world.party_species["p2"], ("unown",))
+
+    def test_substitute_supported_only_with_approximation_flag(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        self._assert_reason(payload, "volatile_unsupported")
+        world = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        )
+        side = world.spec.side_two
+        self.assertIn("substitute", side.volatile_statuses)
+        self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
+
+    def test_sleep_approximation_flag(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 slp"
+        self._assert_reason(payload, "status_unsupported")
+        world = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_sleep_turns=True
+        )
+        sleeper = world.spec.side_two.pokemon[0]
+        self.assertEqual(sleeper.status, "sleep")
+        self.assertEqual(sleeper.sleep_turns, 0)
+        self.assertEqual(sleeper.rest_turns, 0)
 
     def test_leechseed_volatile_is_supported(self) -> None:
         payload = _payload(self.dex)

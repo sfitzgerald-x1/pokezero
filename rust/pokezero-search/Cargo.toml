@@ -1,0 +1,28 @@
+# pokezero-search: native PUCT search skeleton over the gen3-patched poke-engine.
+#
+# The `poke-engine` path dependency points at third_party/poke-engine-src/, which
+# is fetched (never committed) by scripts/vendor_poke_engine_src.sh — run that
+# first or this crate will not build. The sdist's workspace root IS the engine
+# crate (src/gen3 lives there; poke-engine-py is a workspace member we ignore).
+[package]
+name = "pokezero-search"
+version = "0.1.0"
+edition = "2021"
+description = "PokeZero native search crate: PUCT over poke-engine primitives with a pluggable leaf evaluator"
+publish = false
+
+[lib]
+name = "pokezero_search"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.26.0" }
+rand = "0.9"
+poke-engine = { path = "../../third_party/poke-engine-src", default-features = false, features = ["gen3"] }
+
+# Standalone package: do not get absorbed into any enclosing workspace.
+[workspace]
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -220,6 +220,33 @@ def fixture_battle_spec(
     )
 
 
+def engine_state_features(state: Any) -> TurnFeatures:
+    """Fold an engine state (initial or branch-applied) into comparable features.
+
+    Shared with the multi-turn differential (:mod:`pokezero.engine_fidelity_multiturn`),
+    which folds every intermediate state of a followed trajectory, not just
+    one-turn branch outcomes.
+    """
+
+    p1_active = state.side_one.pokemon[int(str(state.side_one.active_index))]
+    p2_active = state.side_two.pokemon[int(str(state.side_two.active_index))]
+    fainted = frozenset(
+        side for side, mon in (("p1", p1_active), ("p2", p2_active)) if mon.hp <= 0
+    )
+    return TurnFeatures(
+        p1_hp=int(p1_active.hp),
+        p2_hp=int(p2_active.hp),
+        p1_status=str(p1_active.status).upper(),
+        p2_status=str(p2_active.status).upper(),
+        fainted=fainted,
+        weather=str(state.weather).upper(),
+        side_conditions={
+            "p1": _engine_side_conditions(state.side_one),
+            "p2": _engine_side_conditions(state.side_two),
+        },
+    )
+
+
 def engine_branch_features(state: Any, p1_move: str, p2_move: str, *, module: Any) -> list[dict[str, Any]]:
     """Enumerate (probability, TurnFeatures) for the joint action's branches."""
 
@@ -227,24 +254,11 @@ def engine_branch_features(state: Any, p1_move: str, p2_move: str, *, module: An
     rows: list[dict[str, Any]] = []
     for branch in branches:
         applied = state.apply_instructions(branch)
-        p1_active = applied.side_one.pokemon[int(str(applied.side_one.active_index))]
-        p2_active = applied.side_two.pokemon[int(str(applied.side_two.active_index))]
-        fainted = frozenset(
-            side for side, mon in (("p1", p1_active), ("p2", p2_active)) if mon.hp <= 0
-        )
-        features = TurnFeatures(
-            p1_hp=int(p1_active.hp),
-            p2_hp=int(p2_active.hp),
-            p1_status=str(p1_active.status).upper(),
-            p2_status=str(p2_active.status).upper(),
-            fainted=fainted,
-            weather=str(applied.weather).upper(),
-            side_conditions={
-                "p1": _engine_side_conditions(applied.side_one),
-                "p2": _engine_side_conditions(applied.side_two),
-            },
-        )
-        rows.append({"percentage": float(branch.percentage), "features": features, "raw": str(branch.instruction_list)})
+        rows.append({
+            "percentage": float(branch.percentage),
+            "features": engine_state_features(applied),
+            "raw": str(branch.instruction_list),
+        })
     return rows
 
 

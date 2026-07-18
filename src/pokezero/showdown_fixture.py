@@ -10,9 +10,10 @@ Scope: **Showdown ground truth only.** Nothing here imports or compares against
 ``poke-engine``; that equivalence work is still owned by the assessment doc's
 later steps. Imports are kept lazy/minimal and the runner reuses the existing
 :mod:`pokezero.local_showdown` config and bridge conventions rather than spinning
-up a parallel transport. The runner submits one pair of choices and returns at
-the next boundary; fixtures that intentionally create a faint followed by a
-forced-switch request will need a follow-up driver to resolve the replacement.
+up a parallel transport. :func:`run_one_turn_fixture` submits one pair of choices
+and returns at the next boundary; :func:`run_multi_turn_fixture` drives a scripted
+sequence of boundaries (including mid-turn force-switch boundaries where only one
+seat acts) and collects the protocol per step for the multi-turn differential.
 """
 
 from __future__ import annotations
@@ -215,6 +216,123 @@ def run_one_turn_fixture(
             protocol_lines=tuple(session.protocol_lines),
             p1_request=p1_request,
             p2_request=p2_request,
+            terminal=session.terminal,
+            error_lines=tuple(session.error_lines),
+        )
+    finally:
+        session.close()
+
+
+def request_requires_action(request: Mapping[str, Any] | None) -> bool:
+    """Whether a boundary request obliges the seat to submit a choice.
+
+    Mirrors the bridge's ``isActionableRequest``: ``wait`` requests (the other
+    seat is resolving a mid-turn force switch) and team-preview requests need no
+    choice; force-switch and active-move requests do.
+    """
+
+    if not isinstance(request, Mapping) or request.get("wait") or request.get("teamPreview"):
+        return False
+    force_switch = request.get("forceSwitch")
+    if isinstance(force_switch, Sequence) and any(bool(slot) for slot in force_switch):
+        return True
+    active = request.get("active")
+    return isinstance(active, Sequence) and not isinstance(active, str) and len(active) > 0
+
+
+@dataclass(frozen=True)
+class FixtureStep:
+    """One submitted boundary of a multi-turn fixture run."""
+
+    choices: Mapping[str, str]
+    protocol_lines: tuple[str, ...]
+    # Requests visible at the boundary AFTER this step (empty on terminal).
+    requests: Mapping[str, Mapping[str, Any]]
+    terminal: bool
+
+
+@dataclass(frozen=True)
+class MultiTurnFixtureResult:
+    """Structured outcome of a scripted multi-boundary fixture run."""
+
+    format_id: str
+    seed: int
+    # Protocol up to and including the opening boundary (lead switch-ins).
+    initial_protocol_lines: tuple[str, ...]
+    initial_requests: Mapping[str, Mapping[str, Any]]
+    steps: tuple[FixtureStep, ...]
+    terminal: bool
+    error_lines: tuple[str, ...] = field(default_factory=tuple)
+
+
+def run_multi_turn_fixture(
+    *,
+    p1_team: Sequence[FixturePokemon],
+    p2_team: Sequence[FixturePokemon],
+    turns: Sequence[tuple[str | None, str | None]],
+    seed: int,
+    format_id: str = DEFAULT_GEN3_CUSTOM_FORMAT,
+    config: "LocalShowdownConfig | None" = None,
+) -> MultiTurnFixtureResult:
+    """Run a scripted sequence of decision boundaries and collect per-step protocol.
+
+    Each ``turns`` entry is ``(p1_choice, p2_choice)`` for one boundary; a seat
+    whose request does not require action (``wait`` during the other seat's
+    mid-turn force switch) must be scripted as ``None``. The script is validated
+    against the live requests at every boundary — a seat that must act without a
+    scripted choice, or a scripted choice for a waiting seat, fails loudly
+    instead of desynchronizing the trajectory. Stops early on a terminal battle;
+    callers see fewer ``steps`` than ``turns`` in that case.
+    """
+
+    session = _BridgeFixtureSession(config)
+    try:
+        session.start(
+            format_id=format_id,
+            seed=seed,
+            p1_team=pack_team(p1_team),
+            p2_team=pack_team(p2_team),
+        )
+        session.read_until_boundary()
+        initial_lines = tuple(session.protocol_lines)
+        initial_requests = dict(session.requests)
+        requests: Mapping[str, Mapping[str, Any]] = initial_requests
+        steps: list[FixtureStep] = []
+        for index, (p1_choice, p2_choice) in enumerate(turns, start=1):
+            if session.terminal:
+                break
+            scripted = {"p1": p1_choice, "p2": p2_choice}
+            choices: dict[str, str] = {}
+            for player in PLAYER_IDS:
+                if request_requires_action(requests.get(player)):
+                    if not scripted[player]:
+                        raise _fixture_error(
+                            f"Step {index}: {player} must act but the script provides no choice."
+                        )
+                    choices[player] = scripted[player]
+                elif scripted[player] is not None:
+                    raise _fixture_error(
+                        f"Step {index}: {player} is waiting but the script provides "
+                        f"{scripted[player]!r}."
+                    )
+            mark = len(session.protocol_lines)
+            session.send_choices(choices)
+            session.read_until_boundary()
+            requests = dict(session.requests)
+            steps.append(
+                FixtureStep(
+                    choices=choices,
+                    protocol_lines=tuple(session.protocol_lines[mark:]),
+                    requests=requests,
+                    terminal=session.terminal,
+                )
+            )
+        return MultiTurnFixtureResult(
+            format_id=format_id,
+            seed=seed,
+            initial_protocol_lines=initial_lines,
+            initial_requests=initial_requests,
+            steps=tuple(steps),
             terminal=session.terminal,
             error_lines=tuple(session.error_lines),
         )

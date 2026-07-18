@@ -9,3 +9,10 @@ dist/
 runs/
 checkpoints/curated/
 .venv-analysis/
+
+
+# engine-swap (native search crate): vendored engine source is fetched by
+# scripts/vendor_poke_engine_src.sh, never committed
+third_party/poke-engine-src/
+rust/pokezero-search/target/
+corpus/
