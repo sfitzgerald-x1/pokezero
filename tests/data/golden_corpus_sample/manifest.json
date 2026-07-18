@@ -1,0 +1,44 @@
+{
+  "array_dtypes": {
+    "attention_mask": "|b1",
+    "categorical_ids": "<i4",
+    "legal_action_mask": "|b1",
+    "numeric_features": "<f8",
+    "token_type_ids": "<i2"
+  },
+  "array_shapes": {
+    "attention_mask": [
+      151
+    ],
+    "categorical_ids": [
+      151,
+      51
+    ],
+    "legal_action_mask": [
+      9
+    ],
+    "numeric_features": [
+      151,
+      155
+    ],
+    "token_type_ids": [
+      151
+    ]
+  },
+  "counts": {
+    "decisions": 5,
+    "games": 1
+  },
+  "files": {
+    "arrays.npz": {
+      "bytes": 6661,
+      "sha256": "5ec0a0aa8849c9d5fee6c9ac24545869d904d6d979e1c0d1bd90ffcda44e7823"
+    },
+    "rows.jsonl": {
+      "bytes": 101570,
+      "sha256": "12cf400addab1f790d515eaa7ddadc124e1d3d1b0426d69e64f9308aa8fc5645"
+    }
+  },
+  "schema_sha256": "42723ed94c8573ff146ad743195f0d349cfa047ec5c09904dd333d058eea8e9e",
+  "schema_version": "pokezero.golden-encoder-corpus.v1"
+}
