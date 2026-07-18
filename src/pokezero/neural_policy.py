@@ -1229,6 +1229,53 @@ def observation_window_to_torch(
     }
 
 
+def observation_windows_to_torch(
+    observation_histories: Sequence[Sequence[PokeZeroObservationV0]],
+    *,
+    window_size: int,
+    device: str | Any | None = None,
+) -> dict[str, Any]:
+    """Tensorize independent observation histories into one transformer batch.
+
+    Root-PUCT's mandatory action sweep creates independent post-branch
+    histories. Keeping their padding/tensorization in this shared helper
+    guarantees batched value leaves use the same input shape as scalar ones.
+    """
+
+    if window_size <= 0:
+        raise ValueError("window_size must be positive.")
+    if not observation_histories:
+        raise ValueError("observation_histories must contain at least one history.")
+    torch_module = require_torch()
+    categorical_ids = []
+    numeric_features = []
+    token_type_ids = []
+    attention_mask = []
+    history_mask = []
+    for observations in observation_histories:
+        if not observations:
+            raise ValueError("observation histories must not be empty.")
+        observation = observations[-1]
+        padding_count = max(0, window_size - len(observations))
+        window = tuple(observations[-window_size:])
+        categorical_padding = _zeros_like(observation.categorical_ids)
+        numeric_padding = _zeros_like(observation.numeric_features)
+        token_type_padding = _zeros_like(observation.token_type_ids)
+        attention_padding = _zeros_like(observation.attention_mask)
+        categorical_ids.append(tuple([categorical_padding] * padding_count) + tuple(item.categorical_ids for item in window))
+        numeric_features.append(tuple([numeric_padding] * padding_count) + tuple(item.numeric_features for item in window))
+        token_type_ids.append(tuple([token_type_padding] * padding_count) + tuple(item.token_type_ids for item in window))
+        attention_mask.append(tuple([attention_padding] * padding_count) + tuple(item.attention_mask for item in window))
+        history_mask.append(tuple(False for _ in range(padding_count)) + tuple(True for _ in window))
+    return {
+        "categorical_ids": torch_module.tensor(tuple(categorical_ids), dtype=torch_module.long, device=device),
+        "numeric_features": torch_module.tensor(tuple(numeric_features), dtype=torch_module.float32, device=device),
+        "token_type_ids": torch_module.tensor(tuple(token_type_ids), dtype=torch_module.long, device=device),
+        "attention_mask": torch_module.tensor(tuple(attention_mask), dtype=torch_module.bool, device=device),
+        "history_mask": torch_module.tensor(tuple(history_mask), dtype=torch_module.bool, device=device),
+    }
+
+
 def evaluate_transformer_observation_value(
     *,
     model: Any,
@@ -1239,16 +1286,35 @@ def evaluate_transformer_observation_value(
 ) -> float:
     """Evaluate the transformer's value head for a player-relative observation history."""
 
-    if not observations:
-        raise ValueError("observations must contain at least one item.")
+    return evaluate_transformer_observation_values(
+        model=model,
+        result=result,
+        observation_histories=(observations,),
+        device=device,
+        timing=timing,
+    )[0]
+
+
+def evaluate_transformer_observation_values(
+    *,
+    model: Any,
+    result: TransformerTrainingResult,
+    observation_histories: Sequence[Sequence[PokeZeroObservationV0]],
+    device: str | Any | None = None,
+    timing: TransformerInferenceTimingAccumulator | None = None,
+) -> tuple[float, ...]:
+    """Evaluate independent observation histories through one value-head forward pass."""
+
+    if not observation_histories:
+        raise ValueError("observation_histories must contain at least one history.")
     torch_module = require_torch()
     if hasattr(model, "eval"):
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
     encoding_started_at = perf_counter()
-    tensors = observation_window_to_torch(
-        observations[-result.model_config.window_size :],
+    tensors = observation_windows_to_torch(
+        observation_histories,
         window_size=result.model_config.window_size,
         device=device,
     )
@@ -1263,15 +1329,15 @@ def evaluate_transformer_observation_value(
             attention_mask=tensors["attention_mask"],
             history_mask=tensors["history_mask"],
         )
-        value = float(output.value[0].detach().cpu().item())
+        values = tuple(float(value.detach().cpu().item()) for value in output.value)
     if timing is not None:
         # Reading the scalar synchronizes asynchronous accelerators, so this
         # interval is the wall-clock inference cost rather than kernel enqueue time.
         timing.add_neural_forward(perf_counter() - forward_started_at, role="value")
     transform = getattr(result, "value_calibration_transform", None)
     if isinstance(transform, ValueCalibrationTransform):
-        return transform.apply(value)
-    return value
+        return tuple(transform.apply(value) for value in values)
+    return values
 
 
 def evaluate_transformer_action_priors(

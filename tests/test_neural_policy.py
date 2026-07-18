@@ -60,6 +60,7 @@ from pokezero.neural_policy import (
     ValueCalibrationTransform,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
+    evaluate_transformer_observation_values,
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     load_transformer_policy,
@@ -604,6 +605,57 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(value, 0.7, places=5)
+
+    def test_evaluate_transformer_observation_values_batches_and_calibrates(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=2,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class FakeValueModel:
+            def __init__(self) -> None:
+                self.shapes: dict[str, tuple[int, ...]] = {}
+
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                self.shapes = {name: tuple(value.shape) for name, value in kwargs.items()}
+                return SimpleNamespace(value=torch.tensor([0.2, 0.4]))
+
+        model = FakeValueModel()
+        timing = TransformerInferenceTimingAccumulator()
+        values = evaluate_transformer_observation_values(
+            model=model,
+            result=SimpleNamespace(
+                model_config=config,
+                value_calibration_transform=ValueCalibrationTransform(scale=2.0, bias=-0.1),
+            ),
+            observation_histories=((observation(1),), (observation(2), observation(3))),
+            device="cpu",
+            timing=timing,
+        )
+
+        self.assertAlmostEqual(values[0], 0.3, places=5)
+        self.assertAlmostEqual(values[1], 0.7, places=5)
+        self.assertEqual(model.shapes["categorical_ids"], (2, 2, spec.token_count, 1))
+        self.assertEqual(model.shapes["history_mask"], (2, 2))
+        snapshot = timing.snapshot()
+        self.assertEqual(snapshot.observation_encoding_count, 1)
+        self.assertEqual(snapshot.value_neural_forward_count, 1)
 
     def test_transformer_value_output_is_bounded_to_terminal_return_range(self) -> None:
         if not torch_available():
@@ -3647,6 +3699,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "minimum_value_improvement": 0.2,
             "root_visit_budget": 17,
             "root_extra_visits": None,
+            "batch_initial_root_values": False,
             "adaptive_root_contested_extra_visits": 120,
             "adaptive_root_uncontested_extra_visits": 0,
             "adaptive_root_policy_entropy_threshold": 0.7,
@@ -3706,8 +3759,21 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.adaptive_root_uncontested_extra_visits, 0)
         self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
         self.assertIsNone(args.adaptive_root_value_margin_threshold)
+        self.assertFalse(args.batch_initial_root_values)
         self.assertIsNone(args.progress_interval_games)
         self.assertIsNone(args.progress_interval_decisions)
+
+    def test_neural_cli_root_puct_play_benchmark_accepts_initial_value_batching(self) -> None:
+        args = build_neural_arg_parser().parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--batch-initial-root-values",
+            ]
+        )
+
+        self.assertTrue(args.batch_initial_root_values)
 
     def test_root_puct_decision_progress_wraps_contextual_policy_without_changing_decision(self) -> None:
         emitted: list[_RootPuctDecisionProgress] = []

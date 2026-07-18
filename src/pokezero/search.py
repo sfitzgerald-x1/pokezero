@@ -32,6 +32,9 @@ from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
+ObservationValueBatchFunction = Callable[
+    [tuple[tuple[PokeZeroObservationV0, ...], ...]], tuple[float, ...]
+]
 ActionPriorVector = tuple[float, ...]
 RootVisitBudgetResolver = Callable[["RootPUCTVisitBudgetContext"], int | None]
 StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
@@ -468,9 +471,11 @@ class _RootPUCTSearchTimingAccumulator:
         self.bridge_node_processing_seconds += float(timing["bridge_node_processing_seconds"])
         self.bridge_node_processing_count += int(timing["bridge_node_processing_count"])
 
-    def add_value_evaluation(self, elapsed_seconds: float) -> None:
+    def add_value_evaluation(self, elapsed_seconds: float, *, count: int = 1) -> None:
+        if count <= 0:
+            raise ValueError("value evaluation count must be positive.")
         self.value_evaluation_seconds += elapsed_seconds
-        self.value_evaluation_count += 1
+        self.value_evaluation_count += count
 
     def add_rollout_tail(self, elapsed_seconds: float) -> None:
         self.rollout_tail_seconds += elapsed_seconds
@@ -795,6 +800,7 @@ def value_branch_search(
     legal_action_mask: tuple[bool, ...],
     opponent_actions: Mapping[PlayerId, int],
     value_fn: ObservationValueFunction,
+    value_batch_fn: ObservationValueBatchFunction | None = None,
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
@@ -811,6 +817,7 @@ def value_branch_search(
         legal_action_mask=legal_action_mask,
         opponent_actions=opponent_actions,
         value_fn=value_fn,
+        value_batch_fn=value_batch_fn,
         leaf_rollout_policies=leaf_rollout_policies,
         leaf_rollout_config=leaf_rollout_config,
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
@@ -831,6 +838,7 @@ def _value_branch_search_with_prefix(
     legal_action_mask: tuple[bool, ...],
     opponent_actions: Mapping[PlayerId, int],
     value_fn: ObservationValueFunction,
+    value_batch_fn: ObservationValueBatchFunction | None = None,
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
@@ -893,7 +901,9 @@ def _value_branch_search_with_prefix(
             replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
             timing=timing,
         )
-    candidates: list[ValueBranchSearchCandidate] = []
+    candidates_by_action: dict[int, ValueBranchSearchCandidate] = {}
+    batch_histories: list[tuple[PokeZeroObservationV0, ...]] = []
+    batch_branches: list[tuple[int, ReplayBranchResult]] = []
     for action_index in candidate_indices:
         branch_actions = {
             **dict(opponent_actions),
@@ -916,30 +926,68 @@ def _value_branch_search_with_prefix(
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
                 continue
             raise
-        candidates.append(
-            _value_branch_candidate(
-                env=env,
-                trajectory=trajectory,
+        if value_batch_fn is not None and leaf_rollout_decision_rounds == 0 and branch.step_result.terminal is None:
+            batch_histories.append(
+                _post_branch_history(
+                    env=env,
+                    player_id=player_id,
+                    prefix_history=prefix_history,
+                    branch=branch,
+                )
+            )
+            batch_branches.append((action_index, branch))
+            continue
+        candidates_by_action[action_index] = _value_branch_candidate(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            prefix_history=prefix_history,
+            branch=branch,
+            action_index=action_index,
+            value_fn=value_fn,
+            leaf_rollout_policies=leaf_rollout_policies,
+            leaf_rollout_config=leaf_rollout_config,
+            leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+            leaf_rollout_seed=_branch_rollout_seed(
+                trajectory.seed,
                 player_id=player_id,
                 prefix_decision_round_count=prefix_decision_round_count,
-                prefix_history=prefix_history,
-                branch=branch,
+                opponent_actions=opponent_actions,
                 action_index=action_index,
-                value_fn=value_fn,
-                leaf_rollout_policies=leaf_rollout_policies,
-                leaf_rollout_config=leaf_rollout_config,
-                leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
-                leaf_rollout_seed=_branch_rollout_seed(
-                    trajectory.seed,
-                    player_id=player_id,
-                    prefix_decision_round_count=prefix_decision_round_count,
-                    opponent_actions=opponent_actions,
-                    action_index=action_index,
-                    visit_index=0,
-                ),
-                timing=timing,
-            )
+                visit_index=0,
+            ),
+            timing=timing,
         )
+
+    if batch_histories:
+        assert value_batch_fn is not None
+        batch_values = _timed_value_batch_evaluation(
+            value_batch_fn,
+            histories=tuple(batch_histories),
+            timing=timing,
+        )
+        for (action_index, branch), history, value in zip(
+            batch_branches,
+            batch_histories,
+            batch_values,
+            strict=True,
+        ):
+            candidates_by_action[action_index] = ValueBranchSearchCandidate(
+                action_index=action_index,
+                value=value,
+                terminal=None,
+                branch=branch,
+                evaluated_history_length=len(history),
+                leaf_evaluation="value_fn",
+                leaf_rollout_decision_round_count=0,
+            )
+
+    candidates = [
+        candidates_by_action[action_index]
+        for action_index in candidate_indices
+        if action_index in candidates_by_action
+    ]
 
     if not candidates:
         raise ValueError("value branch search found no replay-legal root actions.")
@@ -962,6 +1010,7 @@ def puct_branch_search(
     legal_action_mask: tuple[bool, ...],
     opponent_actions: Mapping[PlayerId, int],
     value_fn: ObservationValueFunction,
+    value_batch_fn: ObservationValueBatchFunction | None = None,
     action_priors: ActionPriorVector,
     cpuct: float = 1.25,
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
@@ -1008,6 +1057,7 @@ def puct_branch_search(
         legal_action_mask=legal_action_mask,
         opponent_actions=opponent_actions,
         value_fn=value_fn,
+        value_batch_fn=value_batch_fn,
         leaf_rollout_policies=leaf_rollout_policies,
         leaf_rollout_config=leaf_rollout_config,
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
@@ -1915,6 +1965,36 @@ def _timed_value_evaluation(
     value = _finite_value(value_fn(history))
     timing.add_value_evaluation(_timing_perf_counter() - started_at)
     return value
+
+
+def _timed_value_batch_evaluation(
+    value_batch_fn: ObservationValueBatchFunction,
+    *,
+    histories: tuple[tuple[PokeZeroObservationV0, ...], ...],
+    timing: _RootPUCTSearchTimingAccumulator | None,
+) -> tuple[float, ...]:
+    """Evaluate independent mandatory root leaves in one model call.
+
+    This applies only to the initial one-visit-per-action sweep. Later PUCT
+    visits remain sequential because each selection depends on the preceding
+    backup, so batching cannot silently change the search policy.
+    """
+
+    if not histories:
+        raise ValueError("value batch evaluation requires at least one history.")
+    started_at = _timing_perf_counter() if timing is not None else None
+    values = tuple(_finite_value(value) for value in value_batch_fn(histories))
+    if len(values) != len(histories):
+        raise ValueError(
+            "value batch evaluation returned a different number of values than input histories."
+        )
+    if timing is not None:
+        assert started_at is not None
+        timing.add_value_evaluation(
+            _timing_perf_counter() - started_at,
+            count=len(histories),
+        )
+    return values
 
 
 def _is_candidate_illegal_action_error(exc: ValueError, *, player_id: PlayerId, action_index: int) -> bool:

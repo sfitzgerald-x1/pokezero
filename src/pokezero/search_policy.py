@@ -30,6 +30,7 @@ from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, le
 from .rollout import RolloutConfig, _reset_unique_policies
 from .search import (
     ActionPriorVector,
+    ObservationValueBatchFunction,
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
@@ -436,6 +437,9 @@ class RootPUCTSearchPolicy:
     rollout_config: RolloutConfig
     value_fn: ObservationValueFunction
     prior_fn: ActionPriorFunction
+    # Optional exact batch evaluator for the mandatory independent root sweep.
+    # Adaptive post-sweep PUCT visits remain scalar and ordered.
+    value_batch_fn: ObservationValueBatchFunction | None = None
     policy_id: str = "root-puct-search"
     cpuct: float = 1.25
     opponent_action_planner: OpponentActionPlanner = no_opponent_action_planner
@@ -495,6 +499,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.root_visit_budget_selector is not None and not callable(self.root_visit_budget_selector):
             raise ValueError("root_visit_budget_selector must be callable when set.")
+        if self.value_batch_fn is not None and not callable(self.value_batch_fn):
+            raise ValueError("value_batch_fn must be callable when set.")
         if self.neural_timing_snapshot is not None and not callable(self.neural_timing_snapshot):
             raise ValueError("neural_timing_snapshot must be callable when set.")
         if self.root_time_budget_seconds is not None and (
@@ -883,6 +889,7 @@ class RootPUCTSearchPolicy:
                                     legal_action_mask=context.observation.legal_action_mask,
                                     opponent_actions=scenario.actions,
                                     value_fn=self.value_fn,
+                                    value_batch_fn=self.value_batch_fn,
                                     action_priors=priors,
                                     cpuct=self.cpuct,
                                     leaf_rollout_policies=leaf_rollout_policies,
