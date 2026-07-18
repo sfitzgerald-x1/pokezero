@@ -9,35 +9,30 @@ self-contained report is committed alongside this file at
 [`checkpoint_trait_tracking_report.html`](checkpoint_trait_tracking_report.html) (a static
 snapshot — open it directly in a browser; no server needed).
 
-**Scope.** Three active lineages are tracked: **m50-ep7, l200-ep7-wu75, v22-lr3m**, plus
-**v22-flat2m**, a *fork* of v22-lr3m (see below). The two `seq` lineages (m50-seq, l200-seq)
-stalled at 1000k and are no longer tracked — they are excluded from the report and this doc
-(`REPORT_EXCLUDE_LINEAGES` in `trait_report.py`; their metrics remain on disk, so it is reversible).
+**Scope.** Three active lineages are tracked: **m50-ep7, l200-ep7-wu75, v22-lr3m**. Three other
+lineages were dropped and are excluded from the report and this doc (`REPORT_EXCLUDE_LINEAGES` in
+`trait_report.py`; their metrics remain on disk, so it is reversible): the `seq` lineages (m50-seq,
+l200-seq) stalled at 1000k, and **v22-flat2m** — a flat-LR *fork* of v22-lr3m at 2M (see below) —
+collapsed.
 
 **Forked lineages.** A lineage's legs are *continuations* on one cumulative-games axis. A **fork**
 is not a continuation: it branches from a shared ancestor and is its own entity from the fork point
-on. `v22-flat2m` (run `emeta-v2-2-flat2m-belief`) forks from v22-lr3m at **2,000,000 games** — the
-flat-LR twin against the `lr3m` schedule — and is tracked separately; it does not match the
-`emeta-v2-2-lr3m-*` pattern, so the two never merge. A fork legitimately has no history below its
-fork point, which required two fixes: the milestone grid now **skips** milestones no leg trained
-through (it previously fell back to the nearest leg and clamped the iteration to 1, inventing ~20
-pre-fork checkpoints), and **G0** only demands a sha-pinned 500k from lineages that actually span
-500k. Both are covered by `tests/test_trait_inventory.py`.
-
-> **v22-flat2m now has its first grid points** at 2100k and 2200k (it crossed the fork's first
-> 100k boundary). Early read of the anneal-vs-flat A/B at the shared 2200k milestone: the flat-LR
-> twin runs slightly longer games (47.3 vs 43.4 turns) and uses more Substitute (3.51 vs 2.91/sg)
-> and stat-boost (3.59 vs 2.64/sg); Solar-Beam-in-sun and toxic are near-identical. Two points is
-> too few to conclude — noted to watch as it extends.
+on. `v22-flat2m` (run `emeta-v2-2-flat2m-belief`) forked from v22-lr3m at **2,000,000 games** — the
+flat-LR twin against the `lr3m` schedule — and was tracked separately (it does not match the
+`emeta-v2-2-lr3m-*` pattern, so the two never merged). **It has since collapsed and is dropped from
+the report.** The fork machinery it exercised stays in place: a fork legitimately has no history
+below its fork point, which required two fixes — the milestone grid **skips** milestones no leg
+trained through (it previously fell back to the nearest leg and clamped the iteration to 1,
+inventing ~20 pre-fork checkpoints), and **G0** only demands a sha-pinned 500k from lineages that
+actually span 500k. Both are covered by `tests/test_trait_inventory.py`.
 
 Lineages are resolved from run-directory names by pattern (`trait_inventory.py`), which absorbs
 continuation legs automatically; run names drift as new legs are added, so the inventory is re-run
 each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
-**Data.** 90 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — **84 checkpoints**, following the active lineages to their current frontiers:
-v22-lr3m 100k→3000k (30 pts), m50-ep7 →2800k (28), l200-ep7-wu75 →2300k (23), and v22-flat2m
-(2100k–2300k, the fork, 3 pts). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
+**Data.** 87 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — **81 checkpoints**, following the active lineages to their current frontiers:
+v22-lr3m 100k→3000k (30 pts), m50-ep7 →2800k (28), l200-ep7-wu75 →2300k (23). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
 per lineage — 6 checkpoints. **Foul-play was not re-run for the latest refreshes, so its
 checkpoints trail the self-play frontiers badly** (m50-ep7 foul-play is @1000k while self-play now
 reaches 2800k); the foul-play panel and the trait↔win-rate correlations describe those specific
