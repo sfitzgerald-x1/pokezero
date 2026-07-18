@@ -1780,7 +1780,44 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_count"], 1)
         self.assertEqual(decision.metadata["root_puct_cross_world_initial_value_batch_world_count"], 2)
         self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 2)
-        self.assertEqual(decision.metadata["root_puct_timing"]["value_evaluation_count"], 4)
+        timing = decision.metadata["root_puct_timing"]
+        self.assertEqual(timing["value_evaluation_count"], 4)
+        self.assertEqual(timing["puct_search_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_retained_completed_call_count"], 1)
+        self.assertEqual(timing["puct_search_completed_result_count"], 2)
+
+        batch_histories.clear()
+        time_budget_policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("no adaptive visit expected")),
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=2,
+            root_time_budget_seconds=1e-9,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=2,
+            value_batch_fn=batch_values,
+        )
+        with patch(
+            "pokezero.search_policy.puct_branch_search_group",
+            side_effect=AssertionError("time-budgeted search must not group worlds"),
+        ):
+            time_budget_decision = time_budget_policy.select_action_with_context(
+                context,
+                rng=random.Random(2),
+            )
+
+        self.assertFalse(time_budget_decision.metadata["root_puct_fallback"])
+        self.assertEqual(len(batch_histories), 2)
+        self.assertEqual([len(histories) for histories in batch_histories], [2, 2])
+        self.assertEqual(time_budget_decision.metadata["root_puct_cross_world_initial_value_batch_count"], 0)
+        self.assertEqual(
+            time_budget_decision.metadata["root_puct_cross_world_initial_value_batch_world_count"],
+            0,
+        )
 
     def test_root_puct_policy_skips_invalid_shared_start_override_sample_once_per_slot(self) -> None:
         branch_envs: list[RejectingStartOverrideOutcomeEnv] = []

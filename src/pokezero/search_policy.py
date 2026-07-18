@@ -761,6 +761,7 @@ class RootPUCTSearchPolicy:
                 puct_search_rejected_call_seconds = 0.0
                 puct_search_rejected_call_count = 0
                 completed_search_call_seconds_by_id: dict[int, float] = {}
+                completed_search_call_counts_by_id: dict[int, int] = {}
                 cross_world_initial_value_batch_count = 0
                 cross_world_initial_value_batch_world_count = 0
                 scenario_dispatch_started_at: float | None = None
@@ -875,7 +876,6 @@ class RootPUCTSearchPolicy:
                             for sample_index, scenario in enumerate(scenario_group.samples)
                         )
                         flat_scenario_index += len(batch_requests)
-                        puct_search_call_count += len(batch_requests)
                         puct_search_started_at = _timing_perf_counter()
                         try:
                             batch_searches = puct_branch_search_group(
@@ -900,6 +900,7 @@ class RootPUCTSearchPolicy:
                         except Exception:
                             puct_search_elapsed_seconds = _timing_perf_counter() - puct_search_started_at
                             puct_search_call_seconds += puct_search_elapsed_seconds
+                            puct_search_call_count += 1
                             puct_search_rejected_call_seconds += puct_search_elapsed_seconds
                             puct_search_rejected_call_count += 1
                             raise
@@ -908,20 +909,21 @@ class RootPUCTSearchPolicy:
                                 raise ValueError(
                                     "cross-world initial-value batch returned a different number of searches."
                                 )
-                            completed_batch_seconds = sum(
-                                scenario_search.timing.total_seconds
-                                for scenario_search in batch_searches
-                            )
-                            puct_search_call_seconds += completed_batch_seconds
-                            puct_search_completed_call_seconds += completed_batch_seconds
-                            puct_search_completed_call_count += len(batch_searches)
+                            puct_search_elapsed_seconds = _timing_perf_counter() - puct_search_started_at
+                            puct_search_call_seconds += puct_search_elapsed_seconds
+                            puct_search_call_count += 1
+                            puct_search_completed_call_seconds += puct_search_elapsed_seconds
+                            puct_search_completed_call_count += 1
                             cross_world_initial_value_batch_count += 1
                             cross_world_initial_value_batch_world_count += len(batch_searches)
                             for sample_index, (scenario, scenario_search) in enumerate(
                                 zip(scenario_group.samples, batch_searches, strict=True)
                             ):
                                 completed_search_call_seconds_by_id[id(scenario_search)] = (
-                                    scenario_search.timing.total_seconds
+                                    puct_search_elapsed_seconds if sample_index == 0 else 0.0
+                                )
+                                completed_search_call_counts_by_id[id(scenario_search)] = (
+                                    1 if sample_index == 0 else 0
                                 )
                                 record_materialization_usage(
                                     shared_start_override_samples.prepared_prefixes[sample_index],
@@ -1075,6 +1077,7 @@ class RootPUCTSearchPolicy:
                                     completed_search_call_seconds_by_id[id(search)] = (
                                         puct_search_elapsed_seconds
                                     )
+                                    completed_search_call_counts_by_id[id(search)] = 1
                             except ValueError as exc:
                                 reason = _opponent_scenario_replay_legality_error(exc, scenario)
                                 if reason is None:
@@ -1122,7 +1125,9 @@ class RootPUCTSearchPolicy:
                         puct_search_retained_completed_call_seconds += (
                             completed_search_call_seconds_by_id[id(scenario_search)]
                         )
-                        puct_search_retained_completed_call_count += 1
+                        puct_search_retained_completed_call_count += (
+                            completed_search_call_counts_by_id[id(scenario_search)]
+                        )
                         puct_search_completed_result_seconds += scenario_search.timing.total_seconds
                         puct_search_completed_result_count += 1
                     # The cap is over abstract opponent-action groups, not
