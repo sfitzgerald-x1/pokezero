@@ -88,8 +88,11 @@ _TIMED_SIDE_CONDITIONS = frozenset({"reflect", "lightscreen", "safeguard", "mist
 _TIMED_SIDE_CONDITION_TURNS = 5
 
 # Showdown status codes -> poke-engine status names. ``slp`` is deliberately
-# absent: public state does not carry sleep/rest turn counts yet, and guessing
-# them would bias wake-up odds (fail closed instead).
+# absent from the strict map: public state does not carry sleep/rest turn
+# counts yet, and guessing them biases wake-up odds (fail closed by default).
+# ``approximate_sleep_turns=True`` opts into mapping slp with sleep_turns=0
+# ("just fell asleep") — a documented approximation for search POCs; the real
+# fix is public sleep-counter tracking in the replay state.
 _STATUS_CODES = {
     "": "none",
     "brn": "burn",
@@ -98,6 +101,7 @@ _STATUS_CODES = {
     "tox": "toxic",
     "frz": "freeze",
 }
+_SLEEP_STATUS_CODE = "slp"
 
 _MOVE_SLOT_LIMIT = 4
 _MANUAL_WEATHER_TURNS = 5
@@ -231,6 +235,7 @@ def battle_spec_from_payload(
     override: BattleStartOverride,
     *,
     dex: ShowdownDex,
+    approximate_sleep_turns: bool = False,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -286,6 +291,7 @@ def battle_spec_from_payload(
             is_self=slot == self_player,
             turn=turn,
             self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
+            approximate_sleep_turns=approximate_sleep_turns,
         )
         party_species[slot] = species_order
 
@@ -317,6 +323,7 @@ def world_battle_spec(
     override: BattleStartOverride,
     *,
     dex: ShowdownDex,
+    approximate_sleep_turns: bool = False,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -329,7 +336,9 @@ def world_battle_spec(
     from .local_showdown import _public_materialization_payload
 
     payload = _public_materialization_payload(state)
-    return battle_spec_from_payload(payload, override, dex=dex)
+    return battle_spec_from_payload(
+        payload, override, dex=dex, approximate_sleep_turns=approximate_sleep_turns
+    )
 
 
 def build_engine_world(
@@ -394,6 +403,7 @@ def _build_side_spec(
     is_self: bool,
     turn: int,
     self_benched_move_history: bool,
+    approximate_sleep_turns: bool = False,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     blockers = side_payload.get("materializationBlockers")
     if blockers:
@@ -421,6 +431,7 @@ def _build_side_spec(
             slot=slot,
             is_self=is_self,
             self_benched_move_history=self_benched_move_history,
+            approximate_sleep_turns=approximate_sleep_turns,
         )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
@@ -500,6 +511,7 @@ def _build_pokemon_spec(
     slot: str,
     is_self: bool,
     self_benched_move_history: bool = False,
+    approximate_sleep_turns: bool = False,
 ) -> PokemonSpec:
     species_id = normalize_id(mon.species)
     info = dex.species_info(species_id)
@@ -525,7 +537,14 @@ def _build_pokemon_spec(
         for stat in ("atk", "def", "spa", "spd", "spe")
     }
 
-    hp, status = _hp_and_status(row, maxhp=maxhp, slot=slot, species=mon.species, is_self=is_self)
+    hp, status = _hp_and_status(
+        row,
+        maxhp=maxhp,
+        slot=slot,
+        species=mon.species,
+        is_self=is_self,
+        approximate_sleep_turns=approximate_sleep_turns,
+    )
     moves = _move_specs(
         mon,
         row,
@@ -561,6 +580,7 @@ def _hp_and_status(
     slot: str,
     species: str,
     is_self: bool,
+    approximate_sleep_turns: bool = False,
 ) -> tuple[int, str]:
     if row is None:
         return maxhp, "none"
@@ -598,6 +618,11 @@ def _hp_and_status(
         hp = max(1, round(current * maxhp / denominator)) if current else 0
     status = _STATUS_CODES.get(status_code)
     if status is None:
+        if status_code == _SLEEP_STATUS_CODE and approximate_sleep_turns:
+            # Documented approximation: model the mon as freshly asleep
+            # (sleep_turns=0). Biases wake-up odds late in a sleep; the exact
+            # fix is public sleep-counter tracking in the replay state.
+            return hp, "sleep"
         raise EngineWorldUnsupported(
             "status_unsupported",
             f"{slot}: {species!r} status {status_code!r} (sleep needs public turn counts)",
