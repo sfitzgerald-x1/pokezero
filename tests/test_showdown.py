@@ -30,6 +30,7 @@ from pokezero.showdown import (
     NUMERIC_SELF_HP_COST,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
+    _ReplayParser,
     _actual_stats_from_request_row,
     _encode_move_mechanics,
     _max_hp_from_condition,
@@ -769,6 +770,23 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"atk": 2})
 
+    def test_failed_baton_pass_does_not_leak_to_a_later_switch_or_turn(self) -> None:
+        failed = parse_showdown_replay(
+            [
+                "|move|p2a: Charizard|Baton Pass",
+                "|-fail|p2a: Charizard|move: Baton Pass",
+            ]
+        )
+        self.assertEqual(failed.pending_baton_pass, ())
+
+        stale_turn = parse_showdown_replay(
+            [
+                "|move|p2a: Charizard|Baton Pass",
+                "|turn|8",
+            ]
+        )
+        self.assertEqual(stale_turn.pending_baton_pass, ())
+
     def test_baton_pass_via_switch_from_tag_carries_boosts(self) -> None:
         # Some replays only tag the switch line ("[from] Baton Pass") without a flag-setting
         # move line in the recent window; that tag alone must still carry boosts.
@@ -978,6 +996,83 @@ class Phase2DynamicStateTest(unittest.TestCase):
         ]
         self.assertIn(stable_category_id("volatile:confusion"), volatile_cols)
         self.assertIn(stable_category_id("volatile:leechseed"), volatile_cols)
+
+    def test_leech_seed_tracks_public_source_side_and_fails_closed_without_one(self) -> None:
+        seeded = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+            ]
+        )
+        self.assertEqual(seeded.leech_seed_source_sides, {"p2": "p1"})
+        self.assertEqual(seeded.direct_materialization_blockers["p2"], ())
+
+        unknown_source = parse_showdown_replay(
+            ["|-start|p2a: Charizard|move: Leech Seed"]
+        )
+        self.assertEqual(unknown_source.leech_seed_source_sides, {})
+        self.assertEqual(
+            unknown_source.direct_materialization_blockers["p2"],
+            ("leechseed-source-unknown",),
+        )
+
+        cleared = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(cleared.leech_seed_source_sides, {})
+
+        baton_passed = parse_showdown_replay(
+            [
+                "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard",
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|move|p2a: Charizard|Baton Pass|p2a: Charizard",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(baton_passed.leech_seed_source_sides, {"p2": "p1"})
+        self.assertEqual(baton_passed.direct_materialization_blockers["p2"], ())
+
+        unknown_baton_passed = parse_showdown_replay(
+            [
+                "|-start|p2a: Charizard|move: Leech Seed",
+                "|move|p2a: Charizard|Baton Pass|p2a: Charizard",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(unknown_baton_passed.leech_seed_source_sides, {})
+        self.assertEqual(
+            unknown_baton_passed.direct_materialization_blockers["p2"],
+            ("leechseed-source-unknown",),
+        )
+
+    def test_replay_snapshot_restore_preserves_pending_public_conditions(self) -> None:
+        parser = _ReplayParser()
+        parser.feed(
+            [
+                "|turn|7",
+                "|move|p1a: Jirachi|Wish|p1a: Jirachi",
+                "|move|p2a: Bulbasaur|Leech Seed|p1a: Jirachi",
+                "|-start|p1a: Jirachi|move: Leech Seed",
+                "|-boost|p1a: Jirachi|atk|2",
+                "|move|p1a: Jirachi|Baton Pass",
+            ]
+        )
+        snapshot = parser.snapshot()
+
+        restored_parser = _ReplayParser.from_snapshot(snapshot)
+        self.assertEqual(restored_parser.snapshot(), snapshot)
+        self.assertEqual(snapshot.wish_set_turns, {"p1": 7})
+        self.assertEqual(snapshot.leech_seed_source_sides, {"p1": "p2"})
+        self.assertEqual(snapshot.pending_baton_pass, ("p1",))
+
+        restored_parser.feed(["|switch|p1a: Snorlax|Snorlax, L78|100/100"])
+        restored = restored_parser.snapshot()
+        self.assertEqual(restored.boosts["p1"], {"atk": 2})
+        self.assertEqual(restored.pending_baton_pass, ())
 
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),

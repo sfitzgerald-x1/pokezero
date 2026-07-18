@@ -358,6 +358,7 @@ function materializeBattle(command) {
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
+  restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.readyScheduled = false;
   battle.terminalScheduled = false;
@@ -386,6 +387,8 @@ function applyPublicState(snapshot, publicState) {
   }
   snapshot.turn = publicState.turn;
   const selfForceSwitch = publicState.selfRequestKind === "force-switch";
+  const deferredOpponentActions = publicState.deferredOpponentActions ?? {};
+  const deferredOpponentActionPriors = publicState.deferredOpponentActionPriors ?? {};
   snapshot.requestState = selfForceSwitch ? "switch" : "move";
   snapshot.lastMove = null;
   snapshot.lastMoveLine = 0;
@@ -399,6 +402,58 @@ function applyPublicState(snapshot, publicState) {
   snapshot.activeTarget = null;
   applyPublicWeather(snapshot.field, publicState);
   snapshot.field.pseudoWeather = {};
+  const wishSetTurns = publicState.wishSetTurns;
+  if (wishSetTurns != null && typeof wishSetTurns !== "object") {
+    throw new Error("Materialize received invalid Wish timing.");
+  }
+  const leechSeedSourceSides = publicState.leechSeedSourceSides;
+  if (leechSeedSourceSides != null && typeof leechSeedSourceSides !== "object") {
+    throw new Error("Materialize received invalid Leech Seed provenance.");
+  }
+  const pendingBatonPassSides = publicState.pendingBatonPassSides ?? [];
+  if (!Array.isArray(pendingBatonPassSides) ||
+      !pendingBatonPassSides.every(sideId => sideId === "p1" || sideId === "p2")) {
+    throw new Error("Materialize received invalid Baton Pass state.");
+  }
+  if (pendingBatonPassSides.length > 1 ||
+      (pendingBatonPassSides.length === 1 &&
+       (pendingBatonPassSides[0] !== publicState.selfPlayer || !selfForceSwitch))) {
+    throw new Error("Materialize received a Baton Pass state without its forced switch.");
+  }
+  if (!deferredOpponentActions || typeof deferredOpponentActions !== "object" ||
+      Array.isArray(deferredOpponentActions)) {
+    throw new Error("Materialize received invalid deferred opponent actions.");
+  }
+  const deferredEntries = Object.entries(deferredOpponentActions);
+  if (!deferredOpponentActionPriors || typeof deferredOpponentActionPriors !== "object" ||
+      Array.isArray(deferredOpponentActionPriors)) {
+    throw new Error("Materialize received invalid deferred opponent move priors.");
+  }
+  const deferredPriorEntries = Object.entries(deferredOpponentActionPriors);
+  if (deferredEntries.length > 1 ||
+      deferredEntries.some(([sideId, actionIndex]) =>
+        !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
+        !Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4)) {
+    throw new Error("Materialize received invalid deferred opponent actions.");
+  }
+  if (deferredPriorEntries.length > 1 ||
+      deferredPriorEntries.some(([sideId, priors]) =>
+        !["p1", "p2"].includes(sideId) || sideId === publicState.selfPlayer ||
+        !Array.isArray(priors) || priors.length !== 4 ||
+        priors.some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0) ||
+        priors.reduce((sum, value) => sum + value, 0) <= 0)) {
+    throw new Error("Materialize received invalid deferred opponent move priors.");
+  }
+  if (deferredEntries.length && deferredPriorEntries.length) {
+    throw new Error("Materialize received both a deferred action and deferred move priors.");
+  }
+  if ((deferredEntries.length || deferredPriorEntries.length) && !selfForceSwitch) {
+    throw new Error("Materialize received a deferred opponent action without a forced switch.");
+  }
+  // A direct world normally starts at a decision boundary. When a move was committed before a
+  // Baton Pass switch, preserve the interrupted turn so the actor's replacement resolves before
+  // the sampled hidden action and its residual phase.
+  if (deferredEntries.length || deferredPriorEntries.length) snapshot.midTurn = true;
 
   for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
     const publicSide = publicState.sides[sideId];
@@ -445,6 +500,7 @@ function applyPublicState(snapshot, publicState) {
         serializedSide.pokemon[index],
         row.active ? publicSide.volatiles : [],
         sideId,
+        leechSeedSourceSides,
       );
       serializedSide.pokemon[index].lastMove = null;
       serializedSide.pokemon[index].lastMoveUsed = null;
@@ -468,6 +524,11 @@ function applyPublicState(snapshot, publicState) {
     const active = moveActivePokemonToFront(serializedSide, activeIndex);
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
+    // The acting request is private, but a fainted public active with a surviving
+    // bench deterministically requires a replacement for either side.
+    if (active.fainted && serializedSide.pokemon.some(pokemon => !pokemon.fainted)) {
+      active.switchFlag = true;
+    }
     if (sideId === publicState.selfPlayer) {
       preserveActorTeamOrder(serializedSide, publicState.selfTeamOrder);
       if (selfForceSwitch) active.switchFlag = true;
@@ -478,12 +539,101 @@ function applyPublicState(snapshot, publicState) {
         if (matchingIndex >= 0) applyKnownMoveState(serializedSide.pokemon[matchingIndex], row.moves);
       }
     }
+    if (pendingBatonPassSides.includes(sideId)) {
+      // BattleQueue turns this exact flag into the Baton Pass source effect when it resolves the
+      // switch. The skip flag mirrors the already-completed BeforeSwitchOut phase.
+      active.switchFlag = "batonpass";
+      active.skipBeforeSwitchOutEventFlag = true;
+    }
     applyPublicSideConditions(serializedSide, publicSide, sideId, publicState.turn);
     serializedSide.slotConditions = [{}];
+    applyPublicWish(serializedSide, wishSetTurns?.[sideId], sideId, publicState.turn);
     serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+}
+
+function restoreDeferredOpponentActions(simulatorBattle, publicState) {
+  const actionEntries = Object.entries(publicState.deferredOpponentActions || {});
+  const priorEntries = Object.entries(publicState.deferredOpponentActionPriors || {});
+  if (!actionEntries.length && !priorEntries.length) return;
+  if (actionEntries.length && priorEntries.length) {
+    throw new Error("Materialize received both a deferred action and deferred move priors.");
+  }
+  const [sideId, deferredValue] = (actionEntries.length ? actionEntries : priorEntries)[0];
+  const side = simulatorBattle.sides[sideId === "p1" ? 0 : 1];
+  const pokemon = side?.active?.[0];
+  if (!pokemon || pokemon.fainted) {
+    throw new Error("Materialize cannot restore a deferred action without an active opponent.");
+  }
+  const availableSlots = [0, 1, 2, 3].filter(index => {
+    const candidate = pokemon.moveSlots?.[index];
+    return candidate && !candidate.disabled && candidate.pp > 0;
+  });
+  if (!availableSlots.length) {
+    throw new Error("Materialize sampled an unavailable deferred opponent move.");
+  }
+  let moveSlotIndex;
+  if (actionEntries.length) {
+    if (!Number.isInteger(deferredValue) || deferredValue < 0 || deferredValue >= 4) {
+      throw new Error("Materialize cannot restore a non-move deferred opponent action.");
+    }
+    if (!availableSlots.includes(deferredValue)) {
+      throw new Error("Materialize sampled an unavailable deferred opponent move.");
+    }
+    moveSlotIndex = deferredValue;
+  } else {
+    if (!Array.isArray(deferredValue) || deferredValue.length !== 4 || deferredValue.some(
+      value => typeof value !== "number" || !Number.isFinite(value) || value < 0,
+    ) || deferredValue.reduce((sum, value) => sum + value, 0) <= 0) {
+      throw new Error("Materialize received invalid deferred opponent move priors.");
+    }
+    // The priors are player-local. Conditioning them on the sampled world's legal slots avoids
+    // both a live opponent-request read and duplicate action scenarios for short move lists.
+    moveSlotIndex = availableSlots.reduce((best, index) => (
+      deferredValue[index] > deferredValue[best] ? index : best
+    ));
+  }
+  const moveSlot = pokemon.moveSlots[moveSlotIndex];
+  simulatorBattle.queue.addChoice({
+    choice: "move",
+    pokemon,
+    moveid: moveSlot.id,
+    moveSlot: moveSlotIndex,
+    targetLoc: -1,
+  });
+  simulatorBattle.queue.addChoice({ choice: "residual" });
+}
+
+function applyPublicWish(serializedSide, setTurn, sideId, currentTurn) {
+  if (setTurn == null) return;
+  const age = currentTurn - setTurn;
+  if (!Number.isInteger(setTurn) || (age !== 0 && age !== 1)) {
+    throw new Error(`Materialize received expired or invalid Wish timing for ${sideId}.`);
+  }
+  const source = serializedSide.pokemon[0];
+  if (!source || !Number.isFinite(source.maxhp) || source.maxhp < 1) {
+    throw new Error(`Materialize cannot restore Wish without a ${sideId} source.`);
+  }
+  const sourceSlot = `${sideId}a`;
+  serializedSide.slotConditions[0].wish = {
+    id: "wish",
+    target: `[Side:${sideId}]`,
+    source: `[Pokemon:${sourceSlot}]`,
+    sourceSlot,
+    isSlotCondition: true,
+    // A normal request is already on the turn after Wish. A forced-switch
+    // boundary can still be on the declaration turn, requiring one extra
+    // residual countdown before the heal lands.
+    duration: 2 - age,
+    effectOrder: 2,
+    // Gen 3 Wish heals half the user's maximum HP, captured before any later
+    // switch can occur. At this request boundary the user remains the active
+    // slot, possibly fainted while awaiting a forced switch.
+    hp: source.maxhp / 2,
+    startingTurn: setTurn,
+  };
 }
 
 const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "mist"]);
@@ -649,7 +799,7 @@ function normalizedBoosts(boosts) {
   return normalized;
 }
 
-function applyPublicVolatiles(pokemon, rawVolatiles, sideId) {
+function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSides) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
   }
@@ -660,6 +810,25 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId) {
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === "leechseed") {
+      const sourceSide = leechSeedSourceSides?.[sideId];
+      if (!["p1", "p2"].includes(sourceSide) || sourceSide === sideId) {
+        throw new Error(`Materialize cannot restore Leech Seed on ${sideId} without a public source side.`);
+      }
+      if (seen.has(volatile)) {
+        throw new Error(`Materialize received duplicate volatile effect ${rawVolatile}.`);
+      }
+      seen.add(volatile);
+      const sourceSlot = `${sourceSide}a`;
+      pokemon.volatiles[volatile] = {
+        id: volatile,
+        effectOrder: 0,
+        target: `[Pokemon:${sideId}a]`,
+        source: `[Pokemon:${sourceSlot}]`,
+        sourceSlot,
+      };
+      continue;
+    }
     if (!STATIC_PUBLIC_VOLATILES.has(volatile)) {
       throw new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
     }

@@ -16,6 +16,7 @@ from pokezero.search_policy import (
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
+    _opponent_action_scenarios,
     _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
     _root_dirichlet_action_priors,
@@ -402,6 +403,35 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
 
+    def test_greedy_planner_becomes_deferred_scenario_at_baton_pass_switch(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.0,) * ACTION_COUNT,
+            opponent_action_planner=greedy_opponent_action_planner(
+                lambda history: (0.1, 0.8, 0.1) + (0.0,) * (ACTION_COUNT - 3)
+            ),
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1",),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            public_materialization_state=SimpleNamespace(deferred_opponent_action_player="p2"),
+        )
+
+        scenarios = _opponent_action_scenarios(policy, context, random.Random(1))
+
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(dict(scenarios[0].actions), {})
+        self.assertEqual(dict(scenarios[0].deferred_actions), {})
+        self.assertEqual(dict(scenarios[0].deferred_action_priors), {"p2": (0.1, 0.8, 0.1, 0.0)})
+
     def test_greedy_opponent_action_planner_rejects_bad_prior_width(self) -> None:
         planner = greedy_opponent_action_planner(lambda history: (1.0,))
         context = PolicyContext(
@@ -518,6 +548,57 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": MOVE_ACTION_COUNT}])
         self.assertAlmostEqual(scenarios[0].weight, 1.0)
+
+    def test_prior_top_k_opponent_action_scenario_planner_separates_deferred_action(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.50, 0.20, 0.10) + (0.0,) * 5,
+            scenario_count=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(4, 5),
+            requested_players=("p1",),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            public_materialization_state=SimpleNamespace(deferred_opponent_action_player="p2"),
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{}])
+        self.assertEqual([dict(scenario.deferred_actions) for scenario in scenarios], [{}])
+        self.assertEqual(
+            [dict(scenario.deferred_action_priors) for scenario in scenarios],
+            [{"p2": (0.10, 0.50, 0.20, 0.10)}],
+        )
+        self.assertEqual(scenarios[0].weight, 1.0)
+
+    def test_prior_top_k_opponent_action_scenario_planner_conditions_deferred_move_in_world(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.20, 0.30, 0.40, 0.90, 0.80, 0.70, 0.60, 0.50),
+            scenario_count=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(4, 5),
+            requested_players=("p1",),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            public_materialization_state=SimpleNamespace(deferred_opponent_action_player="p2"),
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual(len(scenarios), 1)
+        self.assertEqual(dict(scenarios[0].deferred_actions), {})
+        self.assertEqual(dict(scenarios[0].deferred_action_priors), {"p2": (0.10, 0.20, 0.30, 0.40)})
+        self.assertEqual(scenarios[0].weight, 1.0)
 
     def test_hidden_switch_handle_does_not_consume_caller_rng(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(

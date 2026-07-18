@@ -15,6 +15,7 @@ from pokezero.local_showdown import (
     LocalShowdownSnapshot,
     _drain_stderr,
     _drain_stdout,
+    _public_materialization_payload,
     _start_players_payload,
     requested_players_from_requests,
     showdown_seed_from_int,
@@ -267,7 +268,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
                 ),
                 "p2": pack_team(
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                    # Withdraw stays private: p2 never selects it before p1 snapshots the public
+                    # branch point below.
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Withdraw")),)
                 ),
             },
         )
@@ -307,6 +310,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(materialization.replay.requests, {})
             self.assertEqual(materialization.self_request["side"]["id"], "p1")
             self.assertFalse(hasattr(materialization, "bridge_snapshot"))
+            public_payload = json.dumps(_public_materialization_payload(materialization), sort_keys=True)
+            self.assertNotIn("Withdraw", public_payload)
 
             search_env.materialize_public_world(
                 state=materialization,
@@ -359,6 +364,145 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
+
+    def test_public_materialization_preserves_pending_wish(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Tackle",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=29, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Jirachi uses Wish.
+            materialization = source.public_materialization_state("p1")
+            expected = source.step({"p1": 1, "p2": 0})
+
+            self.assertEqual(materialization.replay.wish_set_turns, {"p1": 1})
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=29,
+            )
+            actual = search_env.step({"p1": 1, "p2": 0})
+
+        self.assertEqual(
+            actual.observations["p1"].metadata["self_team"][0]["condition"],
+            expected.observations["p1"].metadata["self_team"][0]["condition"],
+        )
+
+    def test_public_materialization_preserves_leech_seed_residual(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Leech Seed", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Splash", "Tackle")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=39, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Bulbasaur seeds Squirtle.
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+            self.assertEqual(materialization.replay.leech_seed_source_sides, {"p2": "p1"})
+            self.assertEqual(payload["leechSeedSourceSides"], {"p2": "p1"})
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=39,
+            )
+            # Materialization starts a fresh simulator, so align post-boundary randomness before
+            # comparing the next damage-plus-residual transition.
+            source.reseed_simulator_rng(919)
+            search_env.reseed_simulator_rng(919)
+            source.step({"p1": 1, "p2": 0})
+            search_env.step({"p1": 1, "p2": 0})
+            source_hp = _active_hp_from_snapshot(source.snapshot(), "p2")
+            search_hp = _active_hp_from_snapshot(search_env.snapshot(), "p2")
+
+        self.assertEqual(search_hp, source_hp)
+
+    def test_public_materialization_omits_expired_full_hp_wish(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Splash",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source:
+            source.reset_with_start_override(seed=31, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Jirachi uses Wish while at full HP.
+            source.step({"p1": 1, "p2": 0})  # The landing does not emit a heal event.
+            materialization = source.public_materialization_state("p1")
+
+        # The protocol fold intentionally preserves the set turn for observation history, but
+        # direct construction must not recreate a Wish that has already expired.
+        self.assertEqual(materialization.replay.wish_set_turns, {"p1": 1})
+        self.assertEqual(_public_materialization_payload(materialization)["wishSetTurns"], {})
+
+    def test_public_materialization_preserves_wish_through_double_force_switch(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Jirachi", ability="Serene Grace", moves=("Wish", "Tackle")),
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Tackle",)),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Snorlax", ability="Immunity", moves=("Explosion",)),
+                        FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Splash",)),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=35, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Wish is set before Snorlax's Explosion.
+            materialization = source.public_materialization_state("p1")
+
+            self.assertTrue(materialization.self_request["forceSwitch"][0])
+            self.assertTrue(source._latest_requests["p2"]["forceSwitch"][0])
+            self.assertEqual(_public_materialization_payload(materialization)["wishSetTurns"], {"p1": 1})
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=35,
+            )
+            self.assertTrue(search_env.legal_actions("p2")[4])
+            expected = source.step({"p1": 4, "p2": 4})
+            actual = search_env.step({"p1": 4, "p2": 4})
+
+        self.assertEqual(
+            actual.observations["p1"].metadata["self_active"]["condition"],
+            expected.observations["p1"].metadata["self_active"]["condition"],
+        )
 
     def test_public_materialization_preserves_three_member_actor_request_order(self) -> None:
         config = integration_config()
@@ -995,6 +1139,147 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(search_hp, source_hp)
+
+    def test_public_materialization_preserves_pending_baton_pass_at_forced_switch(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Swords Dance", "Baton Pass", "Protect"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle", "Protect"),
+                        ),
+                    )
+                ),
+                "p2": pack_team((FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=73, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Swords Dance
+            source.step({"p1": 1, "p2": 0})  # Baton Pass, then p1 must select a switch.
+            self.assertEqual(source.requested_players(), ("p1",))
+            materialization = source.public_materialization_state("p1")
+            self.assertEqual(materialization.replay.pending_baton_pass, ("p1",))
+            self.assertEqual(
+                _public_materialization_payload(materialization)["pendingBatonPassSides"], ["p1"]
+            )
+            with self.assertRaisesRegex(ValueError, "invalid deferred opponent action"):
+                _public_materialization_payload(
+                    materialization,
+                    deferred_opponent_actions={"p2": 4},
+                )
+
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=73,
+                deferred_opponent_actions={"p2": 0},
+            )
+            self.assertEqual(search_env.requested_players(), ("p1",))
+
+            source.step({"p1": 4})
+            search_env.step({"p1": 4})
+            expected = source.observe("p1")
+            actual = search_env.observe("p1")
+            ordinary_boundary = source.public_materialization_state("p1")
+            stale_actor_boundary = replace(
+                ordinary_boundary,
+                replay=replace(ordinary_boundary.replay, pending_baton_pass=("p1",)),
+            )
+            stale_opponent_boundary = replace(
+                ordinary_boundary,
+                replay=replace(ordinary_boundary.replay, pending_baton_pass=("p2",)),
+            )
+
+        # The opposing action is hidden at the forced-switch boundary. The direct world samples
+        # it into the restored queue, so both the pass and the interrupted turn resolve normally.
+        self.assertEqual(actual.categorical_ids, expected.categorical_ids)
+        self.assertEqual(actual.numeric_features, expected.numeric_features)
+        self.assertEqual(source._parser.snapshot().boosts["p1"], {"atk": 2})
+        self.assertEqual(search_env._parser.snapshot().boosts["p1"], {"atk": 2})
+        self.assertEqual(_public_materialization_payload(stale_actor_boundary)["pendingBatonPassSides"], [])
+        self.assertEqual(_public_materialization_payload(stale_opponent_boundary)["pendingBatonPassSides"], [])
+
+    def test_public_materialization_samples_deferred_baton_pass_action_without_private_request(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Smeargle",
+                            ability="Own Tempo",
+                            moves=("Swords Dance", "Baton Pass", "Protect"),
+                        ),
+                        FixturePokemon(
+                            species="Bulbasaur",
+                            ability="Overgrow",
+                            moves=("Tackle", "Protect"),
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden", "Protect")),)
+                ),
+            }
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=79, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Swords Dance versus the private Harden request.
+            source.step({"p1": 1, "p2": 0})  # Baton Pass interrupts before Harden resolves.
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            # Neither the pending source move nor an alternative must be copied from p2's private
+            # request. The direct world receives only an action index sampled by the planner.
+            self.assertIn("harden", json.dumps(source._latest_requests["p2"]).casefold())
+            self.assertIn("protect", json.dumps(source._latest_requests["p2"]).casefold())
+            serialized_payload = json.dumps(payload, sort_keys=True).casefold()
+            self.assertNotIn("harden", serialized_payload)
+            self.assertNotIn("moves", payload["sides"]["p2"]["pokemon"][0])
+            self.assertEqual(payload["deferredOpponentActions"], {})
+
+            # Action one is Protect, not the live battle's previously chosen Harden. This proves
+            # the restored queue follows the predictor's sampled world rather than the live queue.
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=79,
+                deferred_opponent_actions={"p2": 1},
+            )
+            search_env.step({"p1": 4})
+            protocol = "\n".join(search_env.protocol_lines)
+
+            # A hidden-mode planner can rank slots that do not exist in the sampled world. Its
+            # public priors are conditioned on sampled legal slots without reading a source
+            # battle request, so the best available slot is selected without duplicate worlds.
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=79,
+                deferred_opponent_action_priors={"p2": (0.10, 0.90, 0.30, 0.40)},
+            )
+            search_env.step({"p1": 4})
+            conditioned_protocol = "\n".join(search_env.protocol_lines)
+
+        self.assertIn("|move|p2a: Ditto|Protect|", protocol)
+        self.assertNotIn("|move|p2a: Ditto|Harden|", protocol)
+        self.assertIn("|move|p2a: Ditto|Protect|", conditioned_protocol)
+        self.assertNotIn("|move|p2a: Ditto|Harden|", conditioned_protocol)
+        self.assertEqual(protocol.count("|upkeep"), 1)
+        self.assertEqual(conditioned_protocol.count("|upkeep"), 1)
 
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()

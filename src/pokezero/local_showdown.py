@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
 from .belief import PublicBattleBeliefEngine
+from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
@@ -221,6 +222,21 @@ class PublicBattleMaterializationState:
     self_request: Mapping[str, Any]
     self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     self_initial_request: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def deferred_opponent_action_player(self) -> PlayerId | None:
+        """Return the opponent whose committed move must resolve after this switch.
+
+        A Baton Pass forced switch interrupts a simultaneous turn after the opponent has already
+        committed an action. Its identity is hidden, but the pending action itself is public
+        timing information and must be sampled into a direct search world.
+        """
+
+        if _request_materialization_kind(self.self_request) != "force-switch":
+            return None
+        if self.player_id not in self.replay.pending_baton_pass:
+            return None
+        return "p2" if self.player_id == "p1" else "p1"
 
 
 class LocalShowdownEnv:
@@ -442,6 +458,8 @@ class LocalShowdownEnv:
         state: PublicBattleMaterializationState,
         start_override: BattleStartOverride,
         seed: int,
+        deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+        deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -456,7 +474,11 @@ class LocalShowdownEnv:
             {
                 "type": "materialize",
                 "battleId": self._battle_token,
-                "publicState": _public_materialization_payload(state),
+                "publicState": _public_materialization_payload(
+                    state,
+                    deferred_opponent_actions=deferred_opponent_actions,
+                    deferred_opponent_action_priors=deferred_opponent_action_priors,
+                ),
             },
             "materialized",
         )
@@ -1195,7 +1217,12 @@ def _json_clone_request_history(
     }
 
 
-def _public_materialization_payload(state: PublicBattleMaterializationState) -> dict[str, Any]:
+def _public_materialization_payload(
+    state: PublicBattleMaterializationState,
+    *,
+    deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
+    deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
+) -> dict[str, Any]:
     replay = state.replay
     sides: dict[PlayerId, dict[str, Any]] = {}
     for player in PLAYER_IDS:
@@ -1217,12 +1244,58 @@ def _public_materialization_payload(state: PublicBattleMaterializationState) -> 
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
+    deferred_actions = dict(deferred_opponent_actions or {})
+    deferred_priors = {
+        player: tuple(values)
+        for player, values in (deferred_opponent_action_priors or {}).items()
+    }
+    deferred_player = state.deferred_opponent_action_player
+    if deferred_actions and deferred_priors:
+        raise ValueError("Direct materialization received both a deferred action and deferred move priors.")
+    if deferred_actions and set(deferred_actions) != {deferred_player}:
+        raise ValueError("Direct materialization received an unexpected deferred opponent action.")
+    if deferred_priors and set(deferred_priors) != {deferred_player}:
+        raise ValueError("Direct materialization received unexpected deferred opponent move priors.")
+    if any(
+        isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < MOVE_ACTION_COUNT
+        for action in deferred_actions.values()
+    ):
+        raise ValueError("Direct materialization received an invalid deferred opponent action.")
+    if any(
+        len(priors) != MOVE_ACTION_COUNT
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (float, int))
+            or not math.isfinite(value)
+            or value < 0.0
+            for value in priors
+        )
+        or sum(priors) <= 0.0
+        for priors in deferred_priors.values()
+    ):
+        raise ValueError("Direct materialization received invalid deferred opponent move priors.")
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
         "weatherSetTurn": replay.weather_set_turn,
         "weatherFromAbility": replay.weather_from_ability,
         "futureSight": dict(replay.future_sight),
+        # A Wish is a public, one-turn slot condition.  The replay parser retains its
+        # set turn for observation features, including harmless expired entries when
+        # the landing Pokemon was already at full HP, so only expose a still-pending
+        # Wish to the direct constructor.
+        "wishSetTurns": _pending_wish_set_turns(replay),
+        "leechSeedSourceSides": _active_leech_seed_source_sides(replay),
+        # A Baton Pass declaration is public and its forced switch has not yet resolved. The
+        # bridge needs the source-effect id so Showdown preserves the carried battle state.
+        "pendingBatonPassSides": _pending_baton_pass_sides(replay, state),
+        # The action has already been committed in the interrupted simultaneous turn but is not
+        # yet protocol-visible. It is supplied by the opponent-action predictor, never the live
+        # battle, and the bridge restores it before the actor's forced switch resolves.
+        "deferredOpponentActions": deferred_actions,
+        "deferredOpponentActionPriors": {
+            player: list(priors) for player, priors in deferred_priors.items()
+        },
         "selfPlayer": state.player_id,
         # The actor's request exposes the active-first team permutation used for both future
         # observations and `switch N` choices. This is player-known state, unlike the opponent's
@@ -1243,6 +1316,48 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
 
     tracked_stage = int(replay.toxic_stage.get(player, 0))
     return max(0, tracked_stage - 1)
+
+
+def _pending_wish_set_turns(replay: ShowdownReplayState) -> dict[str, int]:
+    """Return only Wish declarations that must still resolve at this boundary."""
+
+    return {
+        player: int(set_turn)
+        for player, set_turn in replay.wish_set_turns.items()
+        if player in PLAYER_IDS
+        and isinstance(set_turn, int)
+        # Forced switches can interrupt the declaration turn before its residual
+        # phase; ordinary requests arrive on the next turn. Older entries can
+        # remain in the public fold if the full-HP landing emitted no heal line,
+        # but they are no longer a live simulator condition.
+        and replay.turn_number - set_turn in {0, 1}
+    }
+
+
+def _pending_baton_pass_sides(
+    replay: ShowdownReplayState,
+    state: PublicBattleMaterializationState,
+) -> list[PlayerId]:
+    """Return the actor's Baton Pass only at its corresponding forced-switch boundary."""
+
+    if _request_materialization_kind(state.self_request) != "force-switch":
+        return []
+    return [state.player_id] if state.player_id in replay.pending_baton_pass else []
+
+
+def _active_leech_seed_source_sides(replay: ShowdownReplayState) -> dict[str, str]:
+    """Return public Leech Seed provenance only for targets still carrying the effect."""
+
+    source_sides: dict[str, str] = {}
+    for target_side, source_side in replay.leech_seed_source_sides.items():
+        if (
+            target_side in PLAYER_IDS
+            and source_side in PLAYER_IDS
+            and target_side != source_side
+            and "leechseed" in replay.volatiles.get(target_side, ())
+        ):
+            source_sides[target_side] = source_side
+    return source_sides
 
 
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
