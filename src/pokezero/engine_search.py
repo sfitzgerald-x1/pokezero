@@ -179,6 +179,7 @@ class EngineMctsPolicy:
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
                     recharging_slots=recharging_slots,
+                    rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:

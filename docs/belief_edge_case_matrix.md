@@ -32,7 +32,7 @@ construct · **NOTE** = residual risk documented.
 | Pursuit mid-switch (no forceSwitch cycle) | N/A — turn-structure concern; construct reads request-boundary payload state only | — |
 | Roar/Whirlwind phazing (drag ≠ BP) | HANDLED — payload boosts/volatiles reflect the drag reset; force-switch boundaries construct | force-switch test |
 | Wish (interrupted/expired) | HANDLED — pending-only payload + carrier-independent engine semantics (amount ignored by engine; deviation documented) | wish tests |
-| Deferred simultaneous-turn opponent action | SAFE-CLOSED — payload validation rejects; boundary fails closed (the one remaining bench fallback) | taxonomy test |
+| Deferred simultaneous-turn opponent action (Baton Pass boundary) | FIXED-NOW — self-pending BP constructs: passer `baton_passing`+`force_switch`, opponent `slow_uturn_move` + per-world sampled commitment (uniform; priors later). Opponent-pending shapes stay closed. Bench: 0.0% fallback | BP boundary tests |
 | Unown formes / Deoxys formes | HANDLED — Unown collapsed (with party-species consistency); Deoxys formes are real dex entries | forme test |
 | Screens presence vs turns-remaining | HANDLED — turns derived from set turns; expiry validated multi-turn | screens tests + S4 |
 | Leftovers/pinch residual ORDER | HANDLED — engine build patched (order-5/10 split), differential + pins | #686 gates |

@@ -98,6 +98,13 @@ class SideSpec:
     # Pending Wish as (turns_counter, heal_amount); (0, 0) = none. The engine
     # decrements the counter each end-of-turn and heals when it reaches zero.
     wish: tuple[int, int] = (0, 0)
+    # Mid-turn Baton Pass boundary: this side chose Baton Pass and is now
+    # picking the recipient (engine restricts it to switch choices).
+    baton_passing: bool = False
+    # The OTHER side already committed its move this turn (engine resolves
+    # ``switch_out_move_second_saved_move`` after the replacement enters).
+    slow_uturn_move: bool = False
+    switch_out_move_second_saved_move: str = ""
     # Engine last-used-move token ("move:<slot>" / "switch:<idx>"); "" = unset.
     # SHARP EDGE: the engine accepts only slot INDICES here — a move id is
     # accepted at construction then panics inside generate_instructions.
@@ -245,6 +252,12 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
         raise TypeError(f"{path}.force_switch must be a bool, got {type(side.force_switch).__name__}")
     if side.force_switch:
         kwargs["force_switch"] = True
+    if side.baton_passing:
+        kwargs["baton_passing"] = True
+    if side.slow_uturn_move:
+        kwargs["slow_uturn_move"] = True
+        if side.switch_out_move_second_saved_move:
+            kwargs["switch_out_move_second_saved_move"] = str(side.switch_out_move_second_saved_move)
     wish_counter, wish_amount = side.wish
     _require_non_negative_int(wish_counter, f"{path}.wish[0]")
     _require_non_negative_int(wish_amount, f"{path}.wish[1]")
