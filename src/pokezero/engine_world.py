@@ -102,6 +102,38 @@ _STATUS_CODES = {
 _MOVE_SLOT_LIMIT = 4
 _MANUAL_WEATHER_TURNS = 5
 
+# Gen 3 Hidden Power derivation (type from IV low bits, BP from IV second bits).
+# poke-engine's gen3 move table only knows fully-qualified ids like
+# ``hiddenpowergrass70``; the randbats set pool stores ``hiddenpowergrass`` and
+# Showdown requests report plain ``hiddenpower``, so both must be translated.
+_HP_TYPE_ORDER = (
+    "fighting", "flying", "poison", "ground", "rock", "bug", "ghost", "steel",
+    "fire", "water", "grass", "electric", "psychic", "ice", "dragon", "dark",
+)
+_HP_STAT_BITS = ("hp", "atk", "def", "spe", "spa", "spd")
+
+
+def hidden_power_engine_id(move_id: str, ivs: Mapping[str, int] | None) -> str:
+    """Translate a hiddenpower id into poke-engine's typed+BP gen3 id.
+
+    Raises :class:`EngineWorldUnsupported` when the id carries a type that the
+    IVs do not produce (an inconsistent sampled set must not be silently
+    reinterpreted).
+    """
+
+    suffix = move_id[len("hiddenpower"):]
+    iv = lambda stat: int((ivs or {}).get(stat, _MAX_IV))
+    type_bits = sum(((iv(stat) & 1) << index) for index, stat in enumerate(_HP_STAT_BITS))
+    iv_type = _HP_TYPE_ORDER[type_bits * 15 // 63]
+    bp_bits = sum((((iv(stat) >> 1) & 1) << index) for index, stat in enumerate(_HP_STAT_BITS))
+    base_power = 30 + bp_bits * 40 // 63
+    if suffix and suffix != iv_type:
+        raise EngineWorldUnsupported(
+            "hidden_power_iv_mismatch",
+            f"move {move_id!r} disagrees with IV-derived type {iv_type!r}",
+        )
+    return f"hiddenpower{iv_type}{base_power}"
+
 
 class EngineWorldUnsupported(ValueError):
     """A public effect the engine-world construction cannot express exactly.
@@ -598,8 +630,12 @@ def _move_specs(
     specs: list[MoveSpec] = []
     for move in mon.moves:
         move_id = normalize_id(move)
-        if move_id in known_pp:
-            pp, disabled = known_pp[move_id]
+        # Request-known PP rows report Hidden Power as plain "hiddenpower";
+        # match on that base before translating to the engine's typed+BP id.
+        pp_keys = (move_id, "hiddenpower") if move_id.startswith("hiddenpower") else (move_id,)
+        pp_key = next((key for key in pp_keys if key in known_pp), None)
+        if pp_key is not None:
+            pp, disabled = known_pp[pp_key]
         else:
             if is_self and self_benched_move_history:
                 # A benched self mon has spent PP somewhere and this slot has no
@@ -618,6 +654,8 @@ def _move_specs(
             # Opponent PP decrements are not tracked publicly yet: full PP is a
             # documented exemption (see the v3 plan's exemption rule).
             pp, disabled = max_pp, False
+        if move_id.startswith("hiddenpower"):
+            move_id = hidden_power_engine_id(move_id, mon.ivs)
         specs.append(MoveSpec(id=move_id, pp=pp, disabled=disabled))
     while len(specs) < _MOVE_SLOT_LIMIT:
         specs.append(MoveSpec(id="none", pp=0, disabled=True))
