@@ -19,6 +19,13 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.26.0" }
 rand = "0.9"
 poke-engine = { path = "../../third_party/poke-engine-src", default-features = false, features = ["gen3"] }
+# encoder.rs (track B): tables/row-input JSON + the vocab OOV hash (blake2b-8).
+# float_roundtrip is REQUIRED for bit-exactness: serde_json's default fast
+# float path parses e.g. 0.09090909090909091 one ULP off the correctly-rounded
+# double that Python's json.loads produces (caught by the golden corpus,
+# NUMERIC_UNCERTAINTY column).
+serde_json = { version = "1", features = ["float_roundtrip"] }
+blake2 = "0.10"
 
 # Standalone package: do not get absorbed into any enclosing workspace.
 [workspace]
