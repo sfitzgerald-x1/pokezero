@@ -334,16 +334,18 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertEqual(materialization.replay.requests, {})
             self.assertEqual(materialization.self_request["side"]["id"], "p1")
             self.assertFalse(hasattr(materialization, "bridge_snapshot"))
-            self.assertFalse(
-                any(command.get("type") in {"snapshot", "snapshot_search"} for command in source_commands),
-                "public materialization must not serialize the live battle",
+            self.assertEqual(
+                source_commands,
+                [],
+                "public materialization must remain a bridge-free capture of the live battle",
             )
             public_payload = json.dumps(_public_materialization_payload(materialization), sort_keys=True)
-            self.assertNotIn("Withdraw", public_payload)
+            self.assertNotIn("withdraw", public_payload.lower())
 
             # A separate belief-sampled search world may retain a bridge
-            # snapshot. This is permitted only after direct materialization;
-            # it must never be the source live battle's snapshot.
+            # snapshot. This test invokes it only after direct materialization;
+            # the companion live-environment test covers the start-override
+            # permission gate that rejects snapshots for ordinary live games.
             search_commands: list[Mapping[str, Any]] = []
             original_search_send_command = search_env._send_command
 
