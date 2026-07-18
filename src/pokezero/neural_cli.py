@@ -1059,6 +1059,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "This is liveness reporting only and does not change the persisted benchmark artifact."
         ),
     )
+    root_puct_play.add_argument(
+        "--progress-interval-decisions",
+        type=int,
+        default=None,
+        help=(
+            "Optional policy-decision interval for stderr started/completed liveness lines. "
+            "This is liveness reporting only and does not change the persisted benchmark artifact."
+        ),
+    )
     root_puct_play.set_defaults(func=_root_puct_play_benchmark)
 
     root_puct_telemetry = subparsers.add_parser(
@@ -3578,6 +3587,102 @@ class _PolicyIdAlias:
         return replace(decision, policy_id=self.policy_id)
 
 
+@dataclass(frozen=True)
+class _RootPuctDecisionProgress:
+    """One opt-in policy-selection liveness event for a benchmark matchup."""
+
+    event: str
+    matchup_label: str
+    matchup_index: int
+    matchup_count: int
+    game_index: int
+    games_total: int
+    seed: int
+    decision_round_index: int
+    player_id: str
+    policy_id: str
+    policy_elapsed_seconds: float | None = None
+
+
+@dataclass
+class _RootPuctDecisionProgressPolicy:
+    """Emit out-of-band decision liveness around an otherwise unchanged policy."""
+
+    policy: Policy
+    progress_callback: Callable[[_RootPuctDecisionProgress], None]
+    matchup_label: str
+    matchup_index: int
+    matchup_count: int
+    games_total: int
+    seed_start: int
+
+    @property
+    def policy_id(self) -> str:
+        return str(self.policy.policy_id)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.policy, name)
+
+    def reset(self) -> None:
+        reset = getattr(self.policy, "reset", None)
+        if callable(reset):
+            reset()
+
+    def select_action(self, observation, *, rng) -> PolicyDecision:
+        return self.policy.select_action(observation, rng=rng)
+
+    def select_action_with_context(
+        self,
+        context: PolicyContext,
+        *,
+        rng,
+    ) -> PolicyDecision:
+        self._emit(context, event="started")
+        policy_started = time.perf_counter()
+        try:
+            contextual_selector = getattr(self.policy, "select_action_with_context", None)
+            if callable(contextual_selector):
+                decision = contextual_selector(context, rng=rng)
+            else:
+                decision = self.policy.select_action(context.observation, rng=rng)
+        except Exception:
+            self._emit(
+                context,
+                event="failed",
+                policy_elapsed_seconds=time.perf_counter() - policy_started,
+            )
+            raise
+        self._emit(
+            context,
+            event="completed",
+            policy_elapsed_seconds=time.perf_counter() - policy_started,
+        )
+        return decision
+
+    def _emit(
+        self,
+        context: PolicyContext,
+        *,
+        event: str,
+        policy_elapsed_seconds: float | None = None,
+    ) -> None:
+        self.progress_callback(
+            _RootPuctDecisionProgress(
+                event=event,
+                matchup_label=self.matchup_label,
+                matchup_index=self.matchup_index,
+                matchup_count=self.matchup_count,
+                game_index=context.seed - self.seed_start + 1,
+                games_total=self.games_total,
+                seed=context.seed,
+                decision_round_index=context.decision_round_index,
+                player_id=context.player_id,
+                policy_id=self.policy_id,
+                policy_elapsed_seconds=policy_elapsed_seconds,
+            )
+        )
+
+
 def _policy_id_alias(value: str, *, label: str) -> str:
     alias = str(value).strip()
     if not alias:
@@ -3768,6 +3873,55 @@ def _root_puct_benchmark_progress_callback(
     return emit
 
 
+def _root_puct_decision_progress_callback(
+    interval_decisions: int,
+) -> Callable[[_RootPuctDecisionProgress], None]:
+    """Return compact per-decision stderr liveness without touching result artifacts."""
+
+    if interval_decisions <= 0:
+        raise ValueError("root PUCT decision progress interval must be positive.")
+
+    decision_counts: dict[tuple[int, int], int] = {}
+    emitted_decisions: dict[tuple[int, int, int, str], int] = {}
+
+    def emit(progress: _RootPuctDecisionProgress) -> None:
+        game_key = (progress.matchup_index, progress.seed)
+        decision_key = (*game_key, progress.decision_round_index, progress.player_id)
+        if progress.event == "started":
+            decision_count = decision_counts.get(game_key, 0) + 1
+            decision_counts[game_key] = decision_count
+            if decision_count % interval_decisions != 0:
+                return
+            emitted_decisions[decision_key] = decision_count
+        else:
+            decision_count = emitted_decisions.pop(decision_key, None)
+            if decision_count is None:
+                return
+
+        payload: dict[str, Any] = {
+            "event": progress.event,
+            "matchup_label": progress.matchup_label,
+            "matchup_index": progress.matchup_index + 1,
+            "matchup_count": progress.matchup_count,
+            "game_index": progress.game_index,
+            "games_total": progress.games_total,
+            "seed": progress.seed,
+            "decision_sequence": decision_count,
+            "decision_round": progress.decision_round_index + 1,
+            "player_id": progress.player_id,
+            "policy_id": progress.policy_id,
+        }
+        if progress.policy_elapsed_seconds is not None:
+            payload["policy_elapsed_seconds"] = round(progress.policy_elapsed_seconds, 6)
+        print(
+            "root_puct_play_benchmark_decision_progress: " + json.dumps(payload, sort_keys=True),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return emit
+
+
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if not args.allow_legacy_checkpoints:
@@ -3779,6 +3933,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     root_opponent_action_candidate_scenarios = _validate_root_opponent_action_scenario_counts(args)
     if args.progress_interval_games is not None and args.progress_interval_games <= 0:
         raise ValueError("root PUCT progress interval must be positive when set.")
+    if args.progress_interval_decisions is not None and args.progress_interval_decisions <= 0:
+        raise ValueError("root PUCT decision progress interval must be positive when set.")
     if args.root_opponent_action_policy == "benchmark" and args.root_opponent_action_scenarios != 1:
         raise ValueError(
             "root opponent action scenarios above one require --root-opponent-action-policy checkpoint."
@@ -4128,6 +4284,42 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                         ),
                     )
                 )
+
+    if args.progress_interval_decisions is not None:
+        decision_progress_callback = _root_puct_decision_progress_callback(
+            args.progress_interval_decisions
+        )
+        matchup_count = len(matchups)
+
+        def instrument_search_policy(
+            policy: Policy,
+            *,
+            matchup: BenchmarkMatchup,
+            matchup_index: int,
+        ) -> Policy:
+            # Do not make ordinary policies context-aware just to report progress:
+            # that would request an unnecessary public materialization state. Root PUCT
+            # already requires that state, so instrument only its existing contextual calls.
+            if policy.policy_id not in search_policy_ids:
+                return policy
+            return _RootPuctDecisionProgressPolicy(
+                policy=policy,
+                progress_callback=decision_progress_callback,
+                matchup_label=matchup.label,
+                matchup_index=matchup_index,
+                matchup_count=matchup_count,
+                games_total=args.games,
+                seed_start=args.seed_start,
+            )
+
+        matchups = [
+            BenchmarkMatchup(
+                matchup.label,
+                instrument_search_policy(matchup.p1_policy, matchup=matchup, matchup_index=matchup_index),
+                instrument_search_policy(matchup.p2_policy, matchup=matchup, matchup_index=matchup_index),
+            )
+            for matchup_index, matchup in enumerate(matchups)
+        ]
 
     benchmark_kwargs: dict[str, object] = {
         "games": args.games,

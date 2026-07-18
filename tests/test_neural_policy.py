@@ -27,11 +27,14 @@ from pokezero.dataset import (
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
+    _RootPuctDecisionProgress,
+    _RootPuctDecisionProgressPolicy,
     _adaptive_root_visit_budget_selector,
     _belief_world_benchmark_coverage,
     _root_opponent_action_candidate_scenario_count,
     _validate_root_opponent_action_scenario_counts,
     _root_puct_benchmark_progress_callback,
+    _root_puct_decision_progress_callback,
     _root_visit_budget_selector,
     _require_belief_world_benchmark_coverage,
     _input_data_paths_byte_size,
@@ -3398,9 +3401,6 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertEqual(json.loads(stdout.getvalue()), saved)
 
     def test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups(self) -> None:
-        if not torch_available():
-            self.skipTest("PyTorch is not installed in this environment.")
-
         class FakeReport:
             def to_dict(self) -> dict:
                 return {"matchups": 6}
@@ -3432,6 +3432,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
             self.assertIsNotNone(search_policy.neural_timing_snapshot)
             self.assertEqual(search_policy.root_prior_temperature, 2.5)
+            self.assertEqual(
+                search_policy.leaf_rollout_policy_factory("p1").policy_id,
+                "neural-smoke+root-puct+adaptive-budget-leaf-p1",
+            )
+            self.assertEqual(
+                search_policy.leaf_rollout_policy_factory("p2").policy_id,
+                "neural-smoke+root-puct+adaptive-budget-leaf-p2",
+            )
             context = PolicyContext(
                 player_id="p1",
                 decision_round_index=0,
@@ -3455,6 +3463,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         stderr = io.StringIO()
 
         with (
+            patch("pokezero.neural_cli.require_torch"),
+            patch("pokezero.neural_policy.require_torch"),
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
             patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25) as value_eval,
             patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
@@ -3507,17 +3517,22 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "0.15",
                     "--progress-interval-games",
                     "2",
+                    "--progress-interval-decisions",
+                    "1",
                     "--json",
                 ]
             )
 
-        self.assertEqual(exit_code, 0)
+        self.assertEqual(exit_code, 0, stderr.getvalue())
         load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
         self.assertEqual(captured["games"], 3)
         self.assertTrue(callable(captured["progress_callback"]))
         self.assertEqual(captured["seed_start"], 99)
         self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
         matchups = tuple(captured["matchups"])
+        self.assertNotIsInstance(matchups[0].p1_policy, _RootPuctDecisionProgressPolicy)
+        self.assertIsInstance(matchups[2].p1_policy, _RootPuctDecisionProgressPolicy)
+        self.assertNotIsInstance(matchups[2].p2_policy, _RootPuctDecisionProgressPolicy)
         self.assertEqual([matchup.label for matchup in matchups], [
             "neural-smoke vs random-legal",
             "random-legal vs neural-smoke",
@@ -3550,8 +3565,6 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(matchups[4].p1_policy.minimum_value_improvement, 0.2)
         self.assertEqual(matchups[4].p1_policy.leaf_rollout_decision_rounds, 2)
         self.assertIsNotNone(matchups[4].p1_policy.leaf_rollout_policy_factory)
-        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct+adaptive-budget-leaf-p1")
-        self.assertEqual(matchups[4].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct+adaptive-budget-leaf-p2")
         self.assertEqual(matchups[4].p1_policy.fallback_policy.policy_id, "neural-smoke-fallback")
         self.assertEqual(
             matchups[4].p1_policy.leaf_rollout_metadata,
@@ -3663,6 +3676,109 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
         self.assertIsNone(args.adaptive_root_value_margin_threshold)
         self.assertIsNone(args.progress_interval_games)
+        self.assertIsNone(args.progress_interval_decisions)
+
+    def test_root_puct_decision_progress_wraps_contextual_policy_without_changing_decision(self) -> None:
+        emitted: list[_RootPuctDecisionProgress] = []
+
+        class FakePolicy:
+            policy_id = "fake-policy"
+
+            def select_action(self, value, *, rng):
+                return PolicyDecision(action_index=0, policy_id=self.policy_id)
+
+            def select_action_with_context(self, context, *, rng):
+                self.context = context
+                return PolicyDecision(action_index=1, policy_id=self.policy_id)
+
+        wrapped = _RootPuctDecisionProgressPolicy(
+            policy=FakePolicy(),
+            progress_callback=emitted.append,
+            matchup_label="fake-policy vs max-damage",
+            matchup_index=2,
+            matchup_count=4,
+            games_total=3,
+            seed_start=80,
+        )
+        context = PolicyContext(
+            player_id="p2",
+            decision_round_index=4,
+            battle_id="progress-test",
+            format_id="gen3randombattle",
+            seed=81,
+            observation=observation(1),
+            requested_players=("p2",),
+            trajectory=BattleTrajectory(battle_id="progress-test", format_id="gen3randombattle", seed=81),
+        )
+
+        decision = wrapped.select_action_with_context(context, rng=random.Random(3))
+
+        self.assertEqual(decision, PolicyDecision(action_index=1, policy_id="fake-policy"))
+        self.assertEqual(
+            [(event.event, event.game_index, event.decision_round_index, event.player_id) for event in emitted],
+            [("started", 2, 4, "p2"), ("completed", 2, 4, "p2")],
+        )
+        self.assertIsNone(emitted[0].policy_elapsed_seconds)
+        self.assertIsNotNone(emitted[1].policy_elapsed_seconds)
+
+    def test_root_puct_decision_progress_callback_emits_started_and_completion_for_sampled_decisions(self) -> None:
+        stderr = io.StringIO()
+        callback = _root_puct_decision_progress_callback(2)
+        base = {
+            "matchup_label": "root-puct vs max-damage",
+            "matchup_index": 1,
+            "matchup_count": 4,
+            "game_index": 1,
+            "games_total": 3,
+            "seed": 80,
+            "decision_round_index": 0,
+            "player_id": "p1",
+            "policy_id": "root-puct",
+        }
+        with contextlib.redirect_stderr(stderr):
+            callback(_RootPuctDecisionProgress(event="started", **base))
+            callback(_RootPuctDecisionProgress(event="completed", policy_elapsed_seconds=0.2, **base))
+            second = {**base, "decision_round_index": 1, "player_id": "p2"}
+            callback(_RootPuctDecisionProgress(event="started", **second))
+            callback(_RootPuctDecisionProgress(event="completed", policy_elapsed_seconds=0.1234567, **second))
+
+        lines = [
+            line
+            for line in stderr.getvalue().splitlines()
+            if line.startswith("root_puct_play_benchmark_decision_progress:")
+        ]
+        self.assertEqual(
+            [json.loads(line.split(": ", 1)[1]) for line in lines],
+            [
+                {
+                    "decision_round": 2,
+                    "decision_sequence": 2,
+                    "event": "started",
+                    "game_index": 1,
+                    "games_total": 3,
+                    "matchup_count": 4,
+                    "matchup_index": 2,
+                    "matchup_label": "root-puct vs max-damage",
+                    "player_id": "p2",
+                    "policy_id": "root-puct",
+                    "seed": 80,
+                },
+                {
+                    "decision_round": 2,
+                    "decision_sequence": 2,
+                    "event": "completed",
+                    "game_index": 1,
+                    "games_total": 3,
+                    "matchup_count": 4,
+                    "matchup_index": 2,
+                    "matchup_label": "root-puct vs max-damage",
+                    "player_id": "p2",
+                    "policy_elapsed_seconds": 0.123457,
+                    "policy_id": "root-puct",
+                    "seed": 80,
+                },
+            ],
+        )
 
     def test_root_puct_progress_callback_emits_only_configured_intervals_and_completion(self) -> None:
         stderr = io.StringIO()
