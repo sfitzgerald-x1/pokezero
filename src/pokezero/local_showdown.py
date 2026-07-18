@@ -257,6 +257,13 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal: TerminalState | None = None
         self._last_step_had_error = False
+        # Cumulative bridge counters are sampled by Root-PUCT before and after one
+        # decision. They intentionally live outside battle reset state so a warm
+        # bridge shell can report a precise per-decision delta.
+        self._bridge_round_trip_seconds = 0.0
+        self._bridge_round_trip_count = 0
+        self._bridge_node_processing_seconds = 0.0
+        self._bridge_node_processing_count = 0
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
@@ -368,7 +375,7 @@ class LocalShowdownEnv:
         elif previous_token is not None:
             self._send_command({"type": "end", "battleId": previous_token})
         try:
-            self._send_command(
+            self._bridge_request_boundary(
                 {
                     "type": "start",
                     "battleId": self._battle_token,
@@ -377,7 +384,6 @@ class LocalShowdownEnv:
                     "players": _start_players_payload(start_override),
                 }
             )
-            self._read_until_boundary()
         except Exception:
             self.close()
             raise
@@ -464,7 +470,7 @@ class LocalShowdownEnv:
         self.reset_with_start_override(seed=seed, start_override=start_override)
         if self._battle_token is None:
             raise LocalShowdownError("Cannot materialize before the sampled world starts.")
-        self._send_command(
+        event = self._bridge_request_event(
             {
                 "type": "materialize",
                 "battleId": self._battle_token,
@@ -473,9 +479,9 @@ class LocalShowdownEnv:
                     deferred_opponent_actions=deferred_opponent_actions,
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
                 ),
-            }
+            },
+            "materialized",
         )
-        event = self._read_until_event_type("materialized")
         requests = event.get("boundaryRequests")
         if not isinstance(requests, Mapping):
             raise LocalShowdownError(f"Bridge emitted malformed materialization event: {event!r}")
@@ -524,8 +530,10 @@ class LocalShowdownEnv:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot snapshot before reset.")
         self._sync_incremental_state()
-        self._send_command({"type": "snapshot", "battleId": self._battle_token})
-        event = self._read_until_event_type("snapshot")
+        event = self._bridge_request_event(
+            {"type": "snapshot", "battleId": self._battle_token},
+            "snapshot",
+        )
         snapshot = event.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise LocalShowdownError(f"Bridge emitted malformed snapshot event: {event!r}")
@@ -546,8 +554,10 @@ class LocalShowdownEnv:
                 "Bridge-resident search snapshots require a belief-sampled start override."
             )
         self._sync_incremental_state()
-        self._send_command({"type": "snapshot_search", "battleId": self._battle_token})
-        event = self._read_until_event_type("search_snapshot")
+        event = self._bridge_request_event(
+            {"type": "snapshot_search", "battleId": self._battle_token},
+            "search_snapshot",
+        )
         snapshot_id = event.get("snapshotId")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot event: {event!r}")
@@ -590,14 +600,14 @@ class LocalShowdownEnv:
             or self._observation_format_id != snapshot.observation_format_id
         ):
             raise ValueError("LocalShowdownSnapshot format does not match the current live battle shell.")
-        self._send_command(
+        self._bridge_request_event(
             {
                 "type": "restore",
                 "battleId": self._battle_token,
                 "snapshot": snapshot.bridge_snapshot,
-            }
+            },
+            "restored",
         )
-        self._read_until_event_type("restored")
         self._restore_local_snapshot_state(snapshot)
 
     def restore_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> None:
@@ -617,14 +627,14 @@ class LocalShowdownEnv:
         snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
-        self._send_command(
+        self._bridge_request_event(
             {
                 "type": "restore_search",
                 "battleId": self._battle_token,
                 "snapshotId": snapshot_id,
-            }
+            },
+            "search_restored",
         )
-        self._read_until_event_type("search_restored")
         self._restore_local_snapshot_state(snapshot)
 
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
@@ -635,14 +645,14 @@ class LocalShowdownEnv:
         snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
-        self._send_command(
+        event = self._bridge_request_event(
             {
                 "type": "release_search_snapshot",
                 "battleId": self._battle_token,
                 "snapshotId": snapshot_id,
-            }
+            },
+            "search_snapshot_released",
         )
-        event = self._read_until_event_type("search_snapshot_released")
         released = event.get("released")
         if not isinstance(released, bool):
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot release event: {event!r}")
@@ -675,14 +685,14 @@ class LocalShowdownEnv:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot reseed before reset.")
         showdown_seed = showdown_seed_from_int(seed)
-        self._send_command(
+        self._bridge_request_event(
             {
                 "type": "reseed",
                 "battleId": self._battle_token,
                 "seed": showdown_seed,
-            }
+            },
+            "reseeded",
         )
-        self._read_until_event_type("reseeded")
 
     def step(self, actions: Mapping[PlayerId, int]) -> StepResult:
         requested = self.requested_players()
@@ -703,8 +713,9 @@ class LocalShowdownEnv:
                 choices[player] = showdown_choice_for_action(states[player], actions[player])
             except ValueError as exc:
                 raise ValueError(f"{player}: {exc}") from exc
-        self._send_command({"type": "choices", "battleId": self._battle_token, "choices": choices})
-        self._read_until_boundary()
+        self._bridge_request_boundary(
+            {"type": "choices", "battleId": self._battle_token, "choices": choices}
+        )
         if self._last_step_had_error:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
 
@@ -816,13 +827,69 @@ class LocalShowdownEnv:
         )
         self._stderr_thread.start()
 
+    def root_puct_bridge_timing_snapshot(self) -> dict[str, float | int]:
+        """Return cumulative public-safe bridge timings for Root-PUCT diagnostics.
+
+        ``bridge_python_orchestration_seconds`` is derived by the search layer
+        as round-trip wall time less the bridge's own measured Node work.  It
+        therefore covers IPC, JSON handling, event routing, and Python-side
+        bridge orchestration, not another additive simulator stage.
+        """
+
+        return {
+            "bridge_round_trip_seconds": self._bridge_round_trip_seconds,
+            "bridge_round_trip_count": self._bridge_round_trip_count,
+            "bridge_node_processing_seconds": self._bridge_node_processing_seconds,
+            "bridge_node_processing_count": self._bridge_node_processing_count,
+        }
+
+    def _bridge_request_event(
+        self,
+        payload: Mapping[str, Any],
+        event_type: str,
+    ) -> Mapping[str, Any]:
+        started_at = time.perf_counter()
+        self._send_command(payload)
+        event = self._read_until_event_type(event_type)
+        self._record_bridge_round_trip(started_at, event)
+        return event
+
+    def _bridge_request_boundary(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        started_at = time.perf_counter()
+        self._send_command(payload)
+        event = self._read_until_boundary()
+        self._record_bridge_round_trip(started_at, event)
+        return event
+
+    def _record_bridge_round_trip(self, started_at: float, event: Mapping[str, Any]) -> None:
+        """Accumulate one completed command/response exchange without changing behavior."""
+
+        elapsed_seconds = max(0.0, time.perf_counter() - started_at)
+        self._bridge_round_trip_seconds += elapsed_seconds
+        self._bridge_round_trip_count += 1
+        node_proc_ms = event.get("nodeProcMs")
+        if (
+            not isinstance(node_proc_ms, bool)
+            and isinstance(node_proc_ms, (float, int))
+            and math.isfinite(float(node_proc_ms))
+            and node_proc_ms >= 0.0
+        ):
+            # The receipt timestamp originates on the bridge process. Clamp
+            # tiny clock/scheduling discrepancies to preserve a non-negative
+            # Python/IPC remainder in the exported diagnostic.
+            self._bridge_node_processing_seconds += min(
+                elapsed_seconds,
+                float(node_proc_ms) / 1000.0,
+            )
+            self._bridge_node_processing_count += 1
+
     def _send_command(self, payload: Mapping[str, Any]) -> None:
         if self._process is None or self._process.stdin is None or self._process.poll() is not None:
             raise LocalShowdownError(self._bridge_exit_message())
         self._process.stdin.write(f"{json.dumps(payload, separators=(',', ':'))}\n")
         self._process.stdin.flush()
 
-    def _read_until_boundary(self) -> None:
+    def _read_until_boundary(self) -> Mapping[str, Any]:
         deadline = time.monotonic() + self.config.read_timeout_seconds
         while True:
             remaining = deadline - time.monotonic()
@@ -832,7 +899,7 @@ class LocalShowdownEnv:
             if event is None:
                 continue
             if self._apply_event(event):
-                return
+                return event
 
     def _read_event(self, *, timeout: float) -> Mapping[str, Any] | None:
         if self._stdout_queue is None:

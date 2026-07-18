@@ -206,6 +206,39 @@ class BridgeSnapshotValueBranchEnv(SnapshotValueBranchEnv):
         return True
 
 
+class BridgeTimedSnapshotValueBranchEnv(BridgeSnapshotValueBranchEnv):
+    """Bridge-handle double exposing cumulative W5 transport counters."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._bridge_round_trip_seconds = 0.0
+        self._bridge_round_trip_count = 0
+        self._bridge_node_processing_seconds = 0.0
+        self._bridge_node_processing_count = 0
+
+    def root_puct_bridge_timing_snapshot(self) -> dict[str, float | int]:
+        return {
+            "bridge_round_trip_seconds": self._bridge_round_trip_seconds,
+            "bridge_round_trip_count": self._bridge_round_trip_count,
+            "bridge_node_processing_seconds": self._bridge_node_processing_seconds,
+            "bridge_node_processing_count": self._bridge_node_processing_count,
+        }
+
+    def _record_bridge_round_trip(self, *, elapsed_seconds: float, node_seconds: float) -> None:
+        self._bridge_round_trip_seconds += elapsed_seconds
+        self._bridge_round_trip_count += 1
+        self._bridge_node_processing_seconds += node_seconds
+        self._bridge_node_processing_count += 1
+
+    def restore_search_snapshot(self, snapshot) -> None:
+        self._record_bridge_round_trip(elapsed_seconds=0.010, node_seconds=0.006)
+        super().restore_search_snapshot(snapshot)
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self._record_bridge_round_trip(elapsed_seconds=0.020, node_seconds=0.012)
+        return super().step(actions)
+
+
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
     def snapshot(self):
         time.sleep(0.001)
@@ -656,6 +689,54 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(env.search_restore_calls, 5)
         self.assertEqual(env.snapshot_calls, 0)
         self.assertEqual(env.restore_calls, 0)
+
+    def test_puct_branch_search_reports_nested_bridge_timing_for_each_visit(self) -> None:
+        env = BridgeTimedSnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        prepared_prefix = prepare_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+        )
+        self.assertIsNotNone(prepared_prefix)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            start_override=_start_override(),
+            expected_current_observation=_observation(0),
+            prepared_prefix=prepared_prefix,
+        )
+
+        timing = result.timing.to_dict()
+        # Two mandatory legal-action visits plus three PUCT revisits. Each
+        # visit restores the Node-held sampled world, then submits one branch.
+        self.assertEqual(timing["bridge_round_trip_count"], 10)
+        self.assertEqual(timing["bridge_node_processing_count"], 10)
+        self.assertAlmostEqual(timing["bridge_round_trip_seconds"], 0.150)
+        self.assertAlmostEqual(timing["bridge_node_processing_seconds"], 0.090)
+        self.assertAlmostEqual(timing["bridge_python_orchestration_seconds"], 0.060)
+        self.assertEqual(timing["bridge_python_orchestration_count"], 10)
+        # Nested diagnostics are deliberately excluded from the additive wall
+        # decomposition; adding them again would double-count restore/step.
+        self.assertAlmostEqual(
+            timing["raw_residual_seconds"],
+            timing["total_seconds"]
+            - timing["branch_simulator_step_seconds"]
+            - timing["state_restore_seconds"]
+            - timing["value_evaluation_seconds"],
+        )
 
     def test_prepared_bridge_snapshot_can_be_released_after_search(self) -> None:
         env = BridgeSnapshotValueBranchEnv()

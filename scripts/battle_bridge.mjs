@@ -128,6 +128,10 @@ function nodeProcMs(battle) {
   return Number(process.hrtime.bigint() - battle.tRecv) / 1e6;
 }
 
+function elapsedNodeProcMs(startedAt) {
+  return Number(process.hrtime.bigint() - startedAt) / 1e6;
+}
+
 function scheduleReady(battle) {
   if (battle.readyScheduled || battle.terminalScheduled) return;
   battle.readyScheduled = true;
@@ -181,6 +185,7 @@ async function startBattle(command) {
   }
   const battle = newBattleState(battleId);
   battles.set(battleId, battle);
+  battle.tRecv = process.hrtime.bigint();
   const battleStream = new BattleStream({ keepAlive: true });
   battle.battleStream = battleStream;
   battle.streams = getPlayerStreams(battleStream);
@@ -208,6 +213,7 @@ async function startBattle(command) {
 }
 
 function snapshotBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
@@ -222,10 +228,12 @@ function snapshotBattle(command) {
       boundaryRequests: battle.boundaryRequests,
       terminalScheduled: battle.terminalScheduled,
     },
+    nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
 
 function snapshotSearchBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
@@ -242,7 +250,12 @@ function snapshotSearchBattle(command) {
     boundaryRequests: jsonSnapshotClone(battle.boundaryRequests),
     terminalScheduled: battle.terminalScheduled,
   });
-  emit({ type: "search_snapshot", battleId: battle.battleId, snapshotId });
+  emit({
+    type: "search_snapshot",
+    battleId: battle.battleId,
+    snapshotId,
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
 }
 
 function jsonSnapshotClone(value) {
@@ -270,6 +283,7 @@ function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {
 }
 
 function restoreBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   const snapshot = command.snapshot;
   if (!snapshot || typeof snapshot !== "object" || !snapshot.battle) {
@@ -283,10 +297,12 @@ function restoreBattle(command) {
     type: "restored",
     battleId: battle.battleId,
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
 
 function restoreSearchBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   const snapshotId = command.snapshotId;
   if (typeof snapshotId !== "string" || snapshotId.length === 0) {
@@ -304,10 +320,12 @@ function restoreSearchBattle(command) {
     type: "search_restored",
     battleId: battle.battleId,
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
 
 function releaseSearchSnapshot(command) {
+  const startedAt = process.hrtime.bigint();
   requireBattle(command);
   const snapshotId = command.snapshotId;
   if (typeof snapshotId !== "string" || snapshotId.length === 0) {
@@ -319,10 +337,12 @@ function releaseSearchSnapshot(command) {
     battleId: battleIdOf(command),
     snapshotId,
     released,
+    nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
 
 function materializeBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   const publicState = command.publicState;
   if (!publicState || typeof publicState !== "object") {
@@ -348,6 +368,7 @@ function materializeBattle(command) {
     battleId: battle.battleId,
     boundaryRequests: battle.boundaryRequests,
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
 
@@ -897,13 +918,19 @@ function boundaryRequestsFromBattle(simulatorBattle) {
 }
 
 async function reseedBattle(command) {
+  const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
   const seed = command.seed;
   if (typeof seed !== "string" || !seed.trim()) {
     throw new Error("Reseed requires a non-empty seed string.");
   }
   await battle.streams.omniscient.write(`>reseed ${seed}`);
-  emit({ type: "reseeded", battleId: battle.battleId, seed });
+  emit({
+    type: "reseeded",
+    battleId: battle.battleId,
+    seed,
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
 }
 
 // Player options accept either the legacy string form (just a name, used by random battles) or an
