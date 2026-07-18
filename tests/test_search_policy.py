@@ -1466,6 +1466,88 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
         self.assertNotIn("root_puct_direct_materialization_observation_mismatch_paths", decision.metadata)
 
+    def test_root_puct_policy_repairs_hidden_hypothesis_after_direct_replay_fallback(self) -> None:
+        """A replayed belief world, not the live request, repairs hidden actions."""
+
+        branch_envs: list[DirectFailureReplayFallbackEnv] = []
+
+        def branch_env_factory() -> DirectFailureReplayFallbackEnv:
+            env = DirectFailureReplayFallbackEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(
+                    actions={"p2": 2},
+                    sampled_action_priors={
+                        "p2": (0.2, 0.8, 0.9) + (0.0,) * (ACTION_COUNT - 3),
+                    },
+                    weight=1.0,
+                    label="hidden-move-2",
+                ),
+            )
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ) -> BattleStartOverride:
+            del context, scenario, scenario_index, rng
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": "Xatu||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            # The live context deliberately exposes no opponent legal-action mask.
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+            public_materialization_state=object(),
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(branch_envs[0].direct_materialization_attempts, 1)
+        self.assertEqual(decision.metadata["root_puct_start_override_direct_materializations"], 0)
+        self.assertEqual(decision.metadata["root_puct_start_override_replay_materializations"], 1)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_scenarios"],
+            [
+                {
+                    "label": "hidden-move-2/sampled-world-legal",
+                    "weight": 1.0,
+                    "actions": {"p2": 0},
+                }
+            ],
+        )
+        self.assertEqual(
+            branch_envs[0].all_step_calls,
+            [{"p1": 0, "p2": 0}, {"p1": 1, "p2": 0}],
+        )
+
     def test_root_puct_policy_falls_back_when_dynamic_world_count_is_invalid(self) -> None:
         def start_override_planner(context, scenario, scenario_index, rng):
             raise AssertionError("invalid dynamic world count should fail before planning")
