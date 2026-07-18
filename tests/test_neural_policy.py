@@ -4376,6 +4376,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "minimum_value_improvement": None,
             "root_visit_budget": 16,
             "root_extra_visits": 24,
+            "batch_initial_root_values": False,
             "adaptive_root_contested_extra_visits": None,
             "adaptive_root_uncontested_extra_visits": 0,
             "adaptive_root_policy_entropy_threshold": None,
