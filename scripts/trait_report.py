@@ -26,11 +26,12 @@ PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 # to bring them back.
 REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq"}
 
-# (lineage, milestone) points dropped from the Phase-1 basics charts only. v22-lr3m@100k stalls
-# ~50% of its games to the turn cap; its scale compresses every other lineage's line. The point is
-# real and stays in the by-checkpoint trajectories — it is excluded here for legibility, and the
-# exclusion is stated in the section rather than hidden.
-BASICS_EXCLUDE = {("v22-lr3m", 100000)}
+# (lineage, milestone) points dropped from ALL trajectory charts (Phase-1 basics and Phase-2
+# breakdowns) for legibility. v22-lr3m@100k stalls ~50% of its games to the turn cap; several of its
+# metrics are distorted by that (e.g. per-game counts inflated by ~1000-turn stalls), and its scale
+# compresses every other lineage's line. The point still exists in the underlying metrics — it is
+# excluded from the charts only, and the exclusion is stated in each section rather than hidden.
+TRAJECTORY_EXCLUDE = {("v22-lr3m", 100000)}
 
 # Lineages held out of the trait <-> foul-play correlation. m50-ep7 was held out while foul-play
 # existed only at 500k: it won ~0.20 against a 0.31-0.34 cluster, so at n=5 it was a single
@@ -119,7 +120,7 @@ def phase1_section(rows_self):
     for r in rows_self:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in BASICS_EXCLUDE:
+        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
             dropped.append(f'{r.get("lineage")}@{r.get("milestone") // 1000}k')
             continue
         by_lin[r.get("lineage")].append(r)
@@ -218,6 +219,7 @@ TRAJECTORY_CHARTS = [
         ("rest", lambda r: _catrate(r, "cat_rest")),
         ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
         ("knock off", lambda r: _catrate(r, "cat_knockoff")),
+        ("leech seed", lambda r: _catrate(r, "cat_leechseed")),
     ]),
     ("status-inducing moves / seat-game", [
         ("status move (any)", lambda r: _catrate(r, "cat_status_move")),
@@ -273,10 +275,11 @@ TRAJECTORY_CHARTS = [
         ("intimidate activations / game", lambda r: r.get("intimidate_activations_per_game")),
         ("absorb switch-in reads / game", lambda r: r.get("absorb_switchins_per_game")),
     ]),
-    ("toxic management", [
-        # avg peak toxic stage reached before a badly-poisoned mon leaves/cures/faints. Falling over
-        # training = the policy switches toxiced mons out earlier to preserve HP.
+    ("toxic / leech-seed management", [
+        # avg peak toxic stage / avg turns a leech-seeded mon stays in before it leaves. Falling over
+        # training = the policy pivots statused mons out earlier rather than eating the residual drain.
         ("avg toxic stage reached", lambda r: r.get("avg_toxic_stage")),
+        ("avg leech-seed turns in", lambda r: r.get("avg_leechseed_turns")),
     ]),
 ]
 
@@ -286,6 +289,8 @@ def _series(rows, fn):
     for r in rows:
         if r.get("milestone") is None:
             continue
+        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
+            continue   # drop distorted stall checkpoints from the trajectories (see TRAJECTORY_EXCLUDE)
         v = fn(r)
         if v is not None:
             by[r.get("lineage")].append((r["milestone"], v))
@@ -302,6 +307,11 @@ def phase2_trajectories(rows_self):
     multi = any(sum(1 for l2, m in checkpoints if l2 == l) > 1 for l in lineages)
     note = "" if multi else ('<p class="sub">Only 500k checkpoints present so far — each line is a single '
                              'point until the milestone sweep fills in the trajectory.</p>')
+    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if (l, m) in TRAJECTORY_EXCLUDE)
+    if excluded:
+        note += (f'<p class="sub">Excluded for legibility: {esc(", ".join(excluded))} '
+                 f'(stalls ~50% of games to the turn cap, distorting per-game counts and compressing '
+                 f'the scale — same exclusion as the Phase-1 basics).</p>')
     blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
@@ -364,7 +374,12 @@ def phase2_correlations(rows):
     winr = {c: foulm[c].get("bot_win_rate") for c in cks}
     vals = [w for w in winr.values() if w is not None]
     spread = (max(vals) - min(vals)) if vals else 0.0
-    traits = [(lbl, fn) for _, charts in TRAJECTORY_CHARTS for lbl, fn in charts] + _CORR_EXTRA
+    # a trait can appear in more than one trajectory group (e.g. "toxic" is under both category-use
+    # and status-inducing moves), so de-dupe by label — otherwise it shows twice in this table.
+    seen, traits = set(), []
+    for lbl, fn in ([lf for _, charts in TRAJECTORY_CHARTS for lf in charts] + _CORR_EXTRA):
+        if lbl not in seen:
+            seen.add(lbl); traits.append((lbl, fn))
     results = []
     for lbl, fn in traits:
         xs, ys = [], []
@@ -584,6 +599,7 @@ def phase2_panel(rows, opponent, checkpoints):
     out.append(row("intimidate activations / game", lambda r: f'{_fmt(r.get("intimidate_activations_per_game"), 2)} <span class="dim">(g={r.get("intimidate_present_seat_games", 0)})</span>'))
     out.append(row("absorb switch-in reads / game", lambda r: f'{_fmt(r.get("absorb_switchins_per_game"), 2)} <span class="dim">(g={r.get("absorb_present_seat_games", 0)})</span>'))
     out.append(row("avg toxic stage reached", lambda r: f'{_fmt(r.get("avg_toxic_stage"), 2)} <span class="dim">(n={r.get("toxic_episodes", 0)})</span>'))
+    out.append(row("avg leech-seed turns in", lambda r: f'{_fmt(r.get("avg_leechseed_turns"), 2)} <span class="dim">(n={r.get("leechseed_episodes", 0)})</span>'))
     out.append(row("enemy boom blocked", lambda r: f'{_fmt(r.get("boom_block_rate"))} <span class="dim">(n={r.get("boom_faced", 0)})</span>'))
     out.append("</table></div>")
     return "".join(out)

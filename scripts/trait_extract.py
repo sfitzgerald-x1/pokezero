@@ -198,6 +198,7 @@ class GameParse:
         self._pri_ko_seat = None  # a priority move by this seat is awaiting an immediate opponent KO
         self.protected = {"p1": False, "p2": False}  # used Protect/Detect this turn (reset each turn)
         self.tox = {"p1": None, "p2": None}   # active mon's badly-poison counter (None if not toxiced)
+        self.seed = {"p1": None, "p2": None}  # turns a leech-seeded mon has stayed active (None if unseeded)
         self._switchin_seats = set()          # seats that switched in this turn (absorb-read window)
         self._boom_target = None              # seat a resolving enemy boom targets, awaiting immunity
 
@@ -233,7 +234,8 @@ class GameParse:
                         self.ev[seat]["forced_switch"] += 1
                     # the outgoing mon leaves: close any open Belly-Drum KO window it held
                     self._close_bd(seat)
-                    self._end_tox(seat)  # the outgoing mon's toxic counter resets on switch (gen3)
+                    self._end_tox(seat)   # the outgoing mon's toxic counter resets on switch (gen3)
+                    self._end_seed(seat)  # leech seed is cleared on switch — the episode ends here
                     self.pending_faint[seat] = False
                     self.active[seat] = sp
                     self.boosts[seat] = defaultdict(int)
@@ -310,12 +312,16 @@ class GameParse:
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == SUBSTITUTE:
                     self.sub[seat] = True
+                if seat and len(a) > 1 and LEECH_SEED in mid(a[1]):
+                    self.seed[seat] = 0           # this mon is now leech-seeded; count its turns in
                 if seat:
                     self._check_absorb(seat, a)   # Flash Fire boost rides a -start line
             elif tag == "-end":
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == SUBSTITUTE:
                     self.sub[seat] = False
+                if seat and len(a) > 1 and LEECH_SEED in mid(a[1]):
+                    self._end_seed(seat)          # seed removed (e.g. Rapid Spin): episode ends
             elif tag in ("-damage", "-heal", "-sethp"):
                 seat = seat_of(a[0])
                 hp = parse_hp(a[1]) if len(a) > 1 else None
@@ -324,6 +330,11 @@ class GameParse:
                 # a badly-poisoned mon's end-of-turn psn tick escalates its counter (1/16, 2/16, ...).
                 if seat and self.tox.get(seat) is not None and any("psn" in str(x).lower() for x in a[2:]):
                     self.tox[seat] += 1
+                # each Leech Seed drain (a -damage on the seeded mon; the seeder's -heal is skipped)
+                # is one more turn the seeded mon stayed in.
+                if (tag == "-damage" and seat and self.seed.get(seat) is not None
+                        and any("leech seed" in str(x).lower() for x in a[2:])):
+                    self.seed[seat] += 1
                 if tag == "-heal" and seat:
                     self._check_absorb(seat, a)   # Volt/Water Absorb heal rides a -heal line
                 # residual damage (poison/burn/Leech Seed/sand — carries a [from]) is not the priority
@@ -374,6 +385,7 @@ class GameParse:
                 if seat:
                     self.pending_faint[seat] = True
                     self._end_tox(seat)   # a mon that fainted while toxiced reached its peak stage
+                    self._end_seed(seat)  # a mon that fainted while seeded closes its turns-in count
                     # a priority move that just landed (no other move since) took this KO
                     if self._pri_ko_seat is not None and seat == OTHER_SEAT[self._pri_ko_seat]:
                         self.ev[self._pri_ko_seat]["cat_priority_ko"] += 1
@@ -397,6 +409,7 @@ class GameParse:
         for s in ("p1", "p2"):
             self._close_bd(s)
             self._end_tox(s)
+            self._end_seed(s)
 
     def _close_bd(self, seat):
         # close a Belly-Drum KO window: bank its KOs into the running sum, and — separately — count
@@ -416,6 +429,15 @@ class GameParse:
             self.ev[seat]["tox_stage_sum"] += self.tox[seat]
             self.ev[seat]["tox_episodes"] += 1
             self.tox[seat] = None
+
+    def _end_seed(self, seat):
+        # record how many turns this leech-seeded mon stayed active, then close the episode. Low
+        # averages = the policy pivots seeded mons out (leech seed clears on switch); high = it eats
+        # the drain. Read the same way as avg toxic stage.
+        if self.seed[seat] is not None:
+            self.ev[seat]["seed_turns_sum"] += self.seed[seat]
+            self.ev[seat]["seed_episodes"] += 1
+            self.seed[seat] = None
 
     def _check_absorb(self, seat, a):
         # Volt/Water Absorb (heal) or Flash Fire (boost) negating an incoming move. Any activation
@@ -640,8 +662,9 @@ def extract(files, lineage=None, milestone=None):
                           # priority conditionals + Destiny Bond success, all rated over ungated uses
                           "cat_priority","cat_priority_vs_faster","cat_priority_ko",
                           "cat_destinybond","destinybond_success",
-                          # toxic-stage episodes and enemy-boom blocking
-                          "tox_stage_sum","tox_episodes","boom_faced","boom_block"):
+                          # toxic-stage / leech-seed episodes and enemy-boom blocking
+                          "tox_stage_sum","tox_episodes","seed_turns_sum","seed_episodes",
+                          "boom_faced","boom_block"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -773,6 +796,11 @@ def extract(files, lineage=None, milestone=None):
         "toxic_episodes": cat_extra["tox_episodes"],
         "avg_toxic_stage": (round(cat_extra["tox_stage_sum"] / cat_extra["tox_episodes"], 3)
                             if cat_extra["tox_episodes"] else None),
+        # Leech Seed: average turns a seeded mon stays active before it leaves (seed clears on switch),
+        # read like avg toxic stage — lower = pivots seeded mons out rather than eating the drain.
+        "leechseed_episodes": cat_extra["seed_episodes"],
+        "avg_leechseed_turns": (round(cat_extra["seed_turns_sum"] / cat_extra["seed_episodes"], 3)
+                                if cat_extra["seed_episodes"] else None),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],

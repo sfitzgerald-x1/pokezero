@@ -362,6 +362,51 @@ class MoveClassification(unittest.TestCase):
         self.assertEqual(e["tox_episodes"], 2)
         self.assertEqual(e["tox_stage_sum"], 4)                  # 3 + 1
 
+    def test_leechseed_turns_switch_reset_and_seeder_heal_excluded(self):
+        # p1's mon is seeded and drained 3 turns then switches (episode 3); a second mon is seeded,
+        # drained once, then switches (episode 1). The seeder's -heal (p2) must NOT count. Usage
+        # (Leech Seed casts) is credited to the seeder p2.
+        gp = parse([
+            "|switch|p1a: Venusaur|Venusaur, M|300/300",
+            "|switch|p2a: Snorlax|Snorlax, M|400/400",
+            "|turn|1",
+            "|move|p2a: Snorlax|Leech Seed|p1a: Venusaur",
+            "|-start|p1a: Venusaur|move: Leech Seed",
+            "|-damage|p1a: Venusaur|280/300|[from] Leech Seed|[of] p2a: Snorlax",   # tick 1
+            "|-heal|p2a: Snorlax|400/400|[from] Leech Seed|[of] p1a: Venusaur",     # seeder heal (ignored)
+            "|turn|2",
+            "|-damage|p1a: Venusaur|260/300|[from] Leech Seed|[of] p2a: Snorlax",   # tick 2
+            "|turn|3",
+            "|-damage|p1a: Venusaur|240/300|[from] Leech Seed|[of] p2a: Snorlax",   # tick 3
+            "|switch|p1a: Starmie|Starmie|260/260",                                 # seed clears -> episode 3
+            "|turn|4",
+            "|move|p2a: Snorlax|Leech Seed|p1a: Starmie",
+            "|-start|p1a: Starmie|move: Leech Seed",
+            "|-damage|p1a: Starmie|227/260|[from] Leech Seed|[of] p2a: Snorlax",    # tick 1
+            "|switch|p1a: Venusaur|Venusaur, M|240/300",                            # episode 1
+            "|turn|5",
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["seed_episodes"], 2)
+        self.assertEqual(e["seed_turns_sum"], 4)                 # 3 + 1
+        self.assertEqual(gp.ev["p2"]["seed_episodes"], 0)        # the seeder was never seeded
+        self.assertEqual(gp.ev["p2"]["cat_leechseed"], 2)        # usage credited to the seeder
+
+    def test_leechseed_ends_on_rapid_spin(self):
+        gp = parse([
+            "|switch|p1a: Starmie|Starmie|260/260",
+            "|turn|1",
+            "|-start|p1a: Starmie|move: Leech Seed",
+            "|-damage|p1a: Starmie|227/260|[from] Leech Seed|[of] p2a: X",         # tick 1
+            "|turn|2",
+            "|move|p1a: Starmie|Rapid Spin|p2a: X",
+            "|-end|p1a: Starmie|Leech Seed|[from] move: Rapid Spin|[of] p1a: Starmie",
+            "|turn|3",
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["seed_episodes"], 1)
+        self.assertEqual(e["seed_turns_sum"], 1)                 # closed at removal, no later ticks
+
     def test_boom_block_protect_sub_ghost_and_miss(self):
         # p1 blocks four enemy booms four different ways (Protect, Substitute, Ghost immunity) and
         # eats one; boom_faced counts all, boom_block counts the three that were neutralized.

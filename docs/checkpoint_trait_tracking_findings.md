@@ -73,7 +73,10 @@ Each point is one checkpoint; no aggregation.
 - **The weakest checkpoints can't close games.** v22-lr3m@100k times out (stalls to the turn cap)
   in ~50% of its self-play games; its *decided* games average ~57 turns. Timeout rate falls to ~0
   by 300k. avg-turns is reported over decided games only, with timeout rate as its own trajectory —
-  a checkpoint that cannot win is a distinct failure mode from one that wins slowly.
+  a checkpoint that cannot win is a distinct failure mode from one that wins slowly. That stall also
+  distorts its per-game trait counts, so **v22-lr3m@100k is excluded from every trajectory chart**
+  (Phase-1 basics and Phase-2 breakdowns alike, via `TRAJECTORY_EXCLUDE`), with the exclusion stated
+  in each section; the underlying metric is retained.
 
 ## Skilled-use traits (added this round)
 
@@ -109,12 +112,16 @@ usage rate with a *conditional* that measures whether the move is used **well**:
   on the switch-in turn — a hard read, distinct from the type-immunity switch-in (a full-HP absorb
   legitimately counts as both). Rises sharply, 0.06–0.09 → ~0.9–1.4, so later checkpoints
   increasingly switch absorbers into the move they wall.
-- **Average toxic stage reached** on badly-poisoned active mons (peak counter before the mon
-  switches out / cures / faints; the counter resets on switch, per gen3). Reads the "does it pivot
-  toxiced mons out to preserve HP" question directly, and the lineages **diverge**: l200-ep7-wu75
-  falls 3.15 → 2.34 over training (learns to switch them out), m50-ep7 stays flat ~2.9–3.1, and
-  v22-lr3m *rises* 1.07 → 2.83 (its 100k mons faint so fast they never escalate). Not a single story
-  — a genuinely lineage-dependent behavior.
+- **Residual-damage management — average toxic stage & average leech-seed turns-in.** Two parallel
+  metrics: the peak toxic counter a badly-poisoned mon reaches, and the number of turns a
+  leech-seeded mon stays active, each measured until the mon switches out / cures / faints (both
+  clear on switch, per gen3). Both read the same question — *does the policy pivot a draining mon
+  out, or eat the residual?* The lineages **diverge**, and consistently across both metrics:
+  l200-ep7-wu75 falls on toxic (3.15 → 2.34) *and* leech seed (3.95 → 2.69), i.e. it genuinely
+  learns to switch draining mons out; m50-ep7 stays flat (~2.9–3.1 toxic, ~3.4–3.5 seed); v22-lr3m
+  is flat-to-rising. A lineage-dependent behavior, not a single story.
+- **Leech Seed usage** rises with training everywhere (0.1–0.4 → 1.3–2.1 uses/seat-game when the
+  move is in the pool) — later checkpoints lean on the chip-and-heal far more than early ones.
 - **Boom blocks** — enemy Explosion/Self-Destruct neutralized by Protect, an absorbing Substitute,
   or a Ghost/type immunity, over booms faced. Rare (~0–11%), reported with the boom-faced count.
 
