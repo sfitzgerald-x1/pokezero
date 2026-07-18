@@ -1,6 +1,6 @@
 # Test-time search: working plan v2 (lean)
 
-Status: 2026-07-15. Successor to `test_time_search_plan.md` (v1, now closed —
+Status: 2026-07-18. Successor to `test_time_search_plan.md` (v1, now closed —
 see its Disposition section for what completed, what was descoped, and what
 remains undone). v1's ceremony — frozen plans, provenance gating,
 audit preconditions, reserved-seed choreography — is retired for everyday
@@ -24,9 +24,11 @@ untouched in case a formally defensible run is ever wanted.
   path is a *privileged benchmark guard* (its own comment says so) — the
   deployment-honest (hidden-mask) path has no equivalent legality guard.
 - **The search is one-ply**: root-PUCT over root actions with rollout tails /
-  value-leaf evaluation. No multi-ply tree, no in-tree chance nodes, no
-  batched NN evaluation, no tree reuse across moves. "Deeper search" today
-  means more root visits, scenarios, and longer tails — not depth.
+  value-leaf evaluation. There is no multi-ply tree, in-tree chance node, or
+  tree reuse across moves. The independent mandatory initial root-action value
+  leaves can now share one NN batch; adaptive PUCT revisits remain sequential
+  because each selection depends on the preceding backup. "Deeper search"
+  today means more root visits, scenarios, and longer tails — not depth.
 - **Fallback rate measured (W1): 19.4% of decisions**, dominated by
   missing_sampled_world (59% of failures); first fix wave (force-switch
   screening, reserve candidates, world-sampling retries) brought live reads to
@@ -136,12 +138,15 @@ classifying it.
    not the limiting cost. The earlier residual interpretation is therefore
    superseded. **Instrumentation status (2026-07-18):** Root-PUCT now splits
    forward time into value leaves, root priors, opponent priors, and policy
-   calls while retaining nested bridge timing. The next short probe must use
-   that breakdown to select either batching, served inference, or a CPU
-   threading fix; it must not assume the bridge is dominant. A one-round-trip
-   retained-snapshot branch candidate is merged behind the belief-sampled
-   bridge-handle guard; direct materialization remains the correct path but is
-   no longer the primary throughput lever.
+   calls while retaining nested bridge timing. The CPU-thread probe selected
+   eight Torch threads for the next validation wave (8.22s to 3.31s per
+   decision at extra-24, same direct materialization). Batched initial root
+   value leaves are merged behind an explicit opt-in and retain scalar-equivalent
+   inputs; only the independent mandatory sweep batches, while adaptive revisits
+   remain sequential. Its strict direct-materialization smoke is in flight.
+   A one-round-trip retained-snapshot branch candidate is merged behind the
+   belief-sampled bridge-handle guard; direct materialization remains the
+   correct path but is no longer the primary throughput lever.
 2. **Tier 2 — direct state construction (implemented; validation in
    progress):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
@@ -166,10 +171,10 @@ classifying it.
    not per iteration. No long-tailed validation batteries inside the
    redesign loop.
 
-Deferred until this lands: batched leaf NN evaluation, tree reuse, early
-termination, vectorized stepping, and the multi-ply question — all get
-re-priced on the fast path. Success remains **more winrate at fixed
-wall-clock**, not more visits.
+Deferred: tree reuse, early termination, vectorized stepping, and the multi-ply
+question — all get re-priced on the fast path once the batched-leaf validation
+has a durable result. Success remains **more winrate at fixed wall-clock**,
+not more visits.
 
 ## Order and cost
 
