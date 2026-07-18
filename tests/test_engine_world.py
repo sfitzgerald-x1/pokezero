@@ -610,5 +610,92 @@ class DittoTransformLiveTests(unittest.TestCase):
             env.close()
 
 
+class ShedinjaAndRechargeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+        self.dex.species["shedinja"] = SpeciesInfo(
+            id="shedinja", name="Shedinja", types=("bug", "ghost"),
+            base_stats={"hp": 1, "atk": 90, "def": 45, "spa": 30, "spd": 30, "spe": 40},
+            weight_kg=1.2,
+        )
+
+    def test_shedinja_maxhp_is_pinned_to_one(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"] = [
+            {"species": "Shedinja", "condition": "1/1", "active": True},
+        ]
+        override = BattleStartOverride(player_teams={
+            "p1": _override().player_teams["p1"],
+            "p2": pack_team(_team(
+                FixturePokemon(species="Shedinja", moves=("shadowball",), level=100,
+                               ability="Wonder Guard", item="Lum Berry",
+                               evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")}),
+            )),
+        })
+        world = battle_spec_from_payload(payload, override, dex=self.dex)
+        shedinja = world.spec.side_two.pokemon[0]
+        self.assertEqual((shedinja.hp, shedinja.maxhp), (1, 1))
+
+    def test_recharging_slot_gets_mustrecharge_volatile(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex), _override(), dex=self.dex, recharging_slots=("p2",)
+        )
+        self.assertIn("mustrecharge", world.spec.side_two.volatile_statuses)
+        self.assertNotIn("mustrecharge", world.spec.side_one.volatile_statuses)
+
+
+class BatonPassBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _bp_payload(self):
+        payload = _payload(self.dex, selfRequestKind="force-switch", pendingBatonPassSides=["p1"])
+        starmie_max = _maxhp(_STARMIE, self.dex)
+        # Passer (Swampert) is leaving; Starmie is the live bench recipient.
+        payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        payload["sides"]["p1"]["boosts"] = {"spa": 2}
+        return payload
+
+    def test_self_pending_baton_pass_constructs_and_populates_saved_move_field(self) -> None:
+        # NOTE: the gen3 engine does not resolve the saved move after the pass
+        # (probe-confirmed); this pins field population + determinism only.
+        import random as _random
+
+        world = battle_spec_from_payload(
+            self._bp_payload(), _override(), dex=self.dex, rng=_random.Random(7)
+        )
+        p1 = world.spec.side_one
+        p2 = world.spec.side_two
+        self.assertTrue(p1.baton_passing)
+        self.assertTrue(p1.force_switch)
+        self.assertEqual(p1.boosts, {"special_attack": 2})
+        self.assertTrue(p2.slow_uturn_move)
+        self.assertIn(
+            p2.switch_out_move_second_saved_move,
+            {m.id for m in p2.pokemon[p2.active_index].moves if m.id != "none"},
+        )
+        # Seeded rng -> deterministic commitment sample.
+        again = battle_spec_from_payload(
+            self._bp_payload(), _override(), dex=self.dex, rng=_random.Random(7)
+        )
+        self.assertEqual(
+            again.spec.side_two.switch_out_move_second_saved_move,
+            p2.switch_out_move_second_saved_move,
+        )
+
+    def test_self_pending_without_rng_fails_closed(self) -> None:
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(self._bp_payload(), _override(), dex=self.dex)
+        self.assertEqual(caught.exception.reason, "pending_baton_pass")
+
+    def test_opponent_pending_still_fails_closed(self) -> None:
+        import random as _random
+
+        payload = _payload(self.dex, pendingBatonPassSides=["p2"])
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex, rng=_random.Random(1))
+        self.assertEqual(caught.exception.reason, "pending_baton_pass")
+
+
 if __name__ == "__main__":
     unittest.main()
