@@ -34,13 +34,13 @@ Lineages are resolved from run-directory names by pattern (`trait_inventory.py`)
 continuation legs automatically; run names drift as new legs are added, so the inventory is re-run
 each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
-**Data.** 86 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — **80 checkpoints**, following the active lineages to their current frontiers:
-v22-lr3m 100k→2900k (29 pts), m50-ep7 →2700k (27), l200-ep7-wu75 →2200k (22), and v22-flat2m
-(2100k–2200k, the fork). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
+**Data.** 90 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — **84 checkpoints**, following the active lineages to their current frontiers:
+v22-lr3m 100k→3000k (30 pts), m50-ep7 →2800k (28), l200-ep7-wu75 →2300k (23), and v22-flat2m
+(2100k–2300k, the fork, 3 pts). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
 per lineage — 6 checkpoints. **Foul-play was not re-run for the latest refreshes, so its
 checkpoints trail the self-play frontiers badly** (m50-ep7 foul-play is @1000k while self-play now
-reaches 2700k); the foul-play panel and the trait↔win-rate correlations describe those specific
+reaches 2800k); the foul-play panel and the trait↔win-rate correlations describe those specific
 older checkpoints, not the current frontier. Self-play and foul-play are kept separate and never
 merged. The observation unit is the behavioral-seat-game (self-play has two behavioral seats,
 foul-play one), so rates are comparable across the two.
@@ -122,6 +122,10 @@ usage rate with a *conditional* that measures whether the move is used **well**:
   is flat-to-rising. A lineage-dependent behavior, not a single story.
 - **Leech Seed usage** rises with training everywhere (0.1–0.4 → 1.3–2.1 uses/seat-game when the
   move is in the pool) — later checkpoints lean on the chip-and-heal far more than early ones.
+- **Spikes — average max layers stacked** (peak layers put on the opponent, over games the team
+  carries Spikes; survives a Rapid Spin). Even at the frontier this sits at ~1.0–1.2 of a possible 3
+  — the policy reliably lays a layer but rarely commits the turns to fully stack the hazard. A
+  candidate for "does search or a stronger policy learn to invest in 3 layers?" later.
 - **Boom blocks** — enemy Explosion/Self-Destruct neutralized by Protect, an absorbing Substitute,
   or a Ghost/type immunity, over booms faced. Rare (~0–11%), reported with the boom-faced count.
 
