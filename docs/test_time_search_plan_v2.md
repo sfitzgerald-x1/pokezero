@@ -10,6 +10,15 @@ but never gating.** A 200-seed paired read costs ~40 minutes locally; shard on
 cluster for larger n. The primary capstone seed bands stay reserved and
 untouched in case a formally defensible run is ever wanted.
 
+## Scope boundary
+
+This plan owns the existing Python/Showdown **V2** search path only. The V3
+Rust/PokeEngine search work is owned separately and is intentionally excluded:
+do not port V2 mechanics, reuse V2 artifacts as V3 evidence, or make V2 launch
+decisions conditional on V3 results. V2 measurements remain useful on their
+own terms, and any later cross-engine comparison must be an explicitly scoped
+experiment with its own paired evaluation.
+
 ## Established results
 
 - **Search works.** Root-PUCT-120 + frozen isotonic leaf, fallback enabled, 1M
