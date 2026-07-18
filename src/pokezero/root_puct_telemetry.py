@@ -13,6 +13,7 @@ import math
 from typing import Any, Iterable, Mapping, Sequence
 
 from .mcts_diagnostics import (
+    root_puct_fallback_signature,
     sanitize_root_puct_direct_materialization_rejection_categories,
     sanitize_root_puct_missing_sampled_world_reason_categories,
 )
@@ -142,6 +143,9 @@ def root_puct_decision_telemetry(
     }
     if fallback:
         payload["fallback_category"] = str(metadata.get("root_puct_fallback_category") or "unknown")
+        signature = root_puct_fallback_signature(metadata.get("root_puct_fallback_reason"))
+        if signature is not None:
+            payload["fallback_signature"] = signature
     for field in _SCALAR_COUNT_FIELDS:
         value = _nonnegative_int(metadata.get(field))
         if value is not None:
@@ -187,6 +191,7 @@ def summarize_root_puct_decision_telemetry(
     fallbacks = sum(1 for item in records if item.get("outcome") == "fallback")
     total = len(records)
     fallback_categories: dict[str, int] = {}
+    fallback_signatures: dict[str, int] = {}
     counters: dict[str, dict[str, int]] = {field: {} for field in _COUNTER_MAP_FIELDS}
     timing_totals: dict[str, float | int] = {}
     root_elapsed_samples: list[float] = []
@@ -200,6 +205,9 @@ def summarize_root_puct_decision_telemetry(
         if item.get("outcome") == "fallback":
             category = str(item.get("fallback_category") or "unknown")
             fallback_categories[category] = fallback_categories.get(category, 0) + 1
+            signature = item.get("fallback_signature")
+            if isinstance(signature, str) and signature:
+                fallback_signatures[signature] = fallback_signatures.get(signature, 0) + 1
         for field in _COUNTER_MAP_FIELDS:
             counter_values = item.get("counters")
             source = counter_values.get(field) if isinstance(counter_values, Mapping) else None
@@ -250,6 +258,7 @@ def summarize_root_puct_decision_telemetry(
         "search_rate": searched / total if total else None,
         "fallback_rate": fallbacks / total if total else None,
         "fallback_categories": dict(sorted(fallback_categories.items())),
+        "fallback_signatures": dict(sorted(fallback_signatures.items())),
         "scenario_counts": {
             _SCENARIO_COUNT_NAMES[field]: count
             for field, count in sorted(scenario_counts.items())

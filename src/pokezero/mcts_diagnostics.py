@@ -37,6 +37,11 @@ _MISSING_WORLD_PLANNER_NONE_RE = re.compile(
     re.IGNORECASE,
 )
 _REJECTION_ATTEMPT_SUFFIX_RE = re.compile(r"\s+\((?P<count>[2-9]\d*) attempts\)\s*$", re.IGNORECASE)
+_FORCE_SWITCH_ILLEGAL_ACTION_RE = re.compile(
+    r"(?:(?P<player>p[12]):\s+)?action_index\s+(?P<action_index>\d+)\s+"
+    r"is not legal for the current request\s+\(request_kind=force_switch\)\.",
+    re.IGNORECASE,
+)
 
 _MISSING_SAMPLED_WORLD_REASON_CATEGORIES = frozenset(
     {
@@ -186,6 +191,26 @@ def root_puct_fallback_category(reason: object) -> str:
     if "search failed" in text:
         return "search_failed"
     return "other"
+
+
+def root_puct_fallback_signature(reason: object) -> str | None:
+    """Return a public-safe force-switch failure signature, when one is available.
+
+    Full fallback reasons can embed observation mismatch values, so benchmark artifacts retain
+    only categories. For force-switch failures, the acting side and whether the rejected action
+    was a move or switch identify the control-flow family without retaining battle state.
+    """
+
+    raw_reason = str(reason or "")
+    match = _FORCE_SWITCH_ILLEGAL_ACTION_RE.search(raw_reason)
+    if match is None:
+        return None
+    player = match.group("player") or "unknown-player"
+    action_index = int(match.group("action_index"))
+    action_kind = "move" if action_index < 4 else "switch"
+    is_all_scenarios = "all opponent action scenarios were replay-illegal" in raw_reason.lower()
+    scope = "all-scenarios" if is_all_scenarios else "search"
+    return f"force-switch:{scope}:{player}:{action_kind}"
 
 
 def root_puct_replay_rejection_decision_round_counts(reason: object) -> dict[str, int]:

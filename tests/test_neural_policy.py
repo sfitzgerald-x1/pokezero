@@ -3682,6 +3682,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                                 "root_puct_searches": 2,
                                 "root_puct_fallbacks": 1,
                                 "root_puct_fallback_categories": {"missing_sampled_world": 1},
+                                "root_puct_fallback_signatures": {"force-switch:search:p1:move": 1},
                                 "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                                     "opponent_belief_unavailable": 2,
                                 },
@@ -3726,6 +3727,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 2},
+                    "root_puct_fallback_signatures": {"force-switch:search:p1:move": 2},
                     "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 4,
                     },
@@ -3742,6 +3744,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "matchup_index": 2,
                     "matchup_label": "root-puct vs max-damage",
                     "root_puct_fallback_categories": {"missing_sampled_world": 3},
+                    "root_puct_fallback_signatures": {"force-switch:search:p1:move": 3},
                     "root_puct_opponent_action_missing_sampled_world_reason_categories": {
                         "opponent_belief_unavailable": 6,
                     },

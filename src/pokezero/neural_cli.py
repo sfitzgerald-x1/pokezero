@@ -3673,6 +3673,7 @@ def _root_puct_benchmark_progress_callback(
     cumulative_searches = 0
     cumulative_fallbacks = 0
     cumulative_fallback_categories: dict[str, int] = {}
+    cumulative_fallback_signatures: dict[str, int] = {}
     cumulative_missing_sampled_world_reason_categories: dict[str, int] = {}
     active_matchup_index: int | None = None
     has_root_puct_diagnostics = False
@@ -3686,6 +3687,7 @@ def _root_puct_benchmark_progress_callback(
             cumulative_searches = 0
             cumulative_fallbacks = 0
             cumulative_fallback_categories.clear()
+            cumulative_fallback_signatures.clear()
             cumulative_missing_sampled_world_reason_categories.clear()
             has_root_puct_diagnostics = False
         root_puct_by_player = getattr(progress, "root_puct_by_player", {})
@@ -3709,6 +3711,15 @@ def _root_puct_benchmark_progress_callback(
                         continue
                     cumulative_fallback_categories[category] = (
                         cumulative_fallback_categories.get(category, 0) + count
+                    )
+                    has_root_puct_diagnostics = True
+            signatures = diagnostics.get("root_puct_fallback_signatures")
+            if isinstance(signatures, Mapping):
+                for signature, count in signatures.items():
+                    if not isinstance(signature, str) or not isinstance(count, int) or isinstance(count, bool):
+                        continue
+                    cumulative_fallback_signatures[signature] = (
+                        cumulative_fallback_signatures.get(signature, 0) + count
                     )
                     has_root_puct_diagnostics = True
             for category, count in sanitize_root_puct_missing_sampled_world_reason_categories(
@@ -3746,6 +3757,8 @@ def _root_puct_benchmark_progress_callback(
                 payload["root_puct_opponent_action_missing_sampled_world_reason_categories"] = dict(
                     sorted(cumulative_missing_sampled_world_reason_categories.items())
                 )
+            if cumulative_fallback_signatures:
+                payload["root_puct_fallback_signatures"] = dict(sorted(cumulative_fallback_signatures.items()))
         print(
             "root_puct_play_benchmark_progress: " + json.dumps(payload, sort_keys=True),
             file=sys.stderr,
