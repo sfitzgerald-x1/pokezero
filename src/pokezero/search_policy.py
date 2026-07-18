@@ -1697,13 +1697,11 @@ def _top_prior_action_choices(
     if limit <= 0:
         raise ValueError("opponent action scenario limit must be positive.")
     if allowed_action_indices is not None:
-        legal = _requested_legal_action_indices_for_player(context, player)
-        indices = (
-            tuple(index for index in allowed_action_indices if index in legal)
-            if legal
-            else allowed_action_indices
-        )
-        candidates = tuple((index, priors[index]) for index in indices)
+        # A deferred move was committed before the acting side's forced replacement, so the
+        # current boundary deliberately has no opponent request mask. Filtering on a stale or
+        # synthetic mask would either leak private request state or silently do nothing. The
+        # direct sampled world validates availability when it restores the queued action.
+        candidates = tuple((index, priors[index]) for index in allowed_action_indices)
     else:
         legal = _requested_legal_action_indices_for_player(context, player)
         candidates = (

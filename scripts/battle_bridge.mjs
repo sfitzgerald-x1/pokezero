@@ -528,15 +528,27 @@ function restoreDeferredOpponentActions(simulatorBattle, publicState) {
   if (!Number.isInteger(actionIndex) || actionIndex < 0 || actionIndex >= 4) {
     throw new Error("Materialize cannot restore a non-move deferred opponent action.");
   }
-  const moveSlot = pokemon.moveSlots?.[actionIndex];
-  if (!moveSlot || moveSlot.disabled || moveSlot.pp <= 0) {
+  // The planner has no live opponent request at a Baton Pass replacement boundary. It supplies
+  // one ranked action index from player-knowable history; this sampled determinization then
+  // checks its own private move slots and falls through to another legal slot if needed. That is
+  // not a read from the live battle and keeps an unavailable hypothesis from discarding a world.
+  const candidateIndices = [
+    actionIndex,
+    ...[0, 1, 2, 3].filter(index => index !== actionIndex),
+  ];
+  const moveSlotIndex = candidateIndices.find(index => {
+    const candidate = pokemon.moveSlots?.[index];
+    return candidate && !candidate.disabled && candidate.pp > 0;
+  });
+  if (moveSlotIndex === undefined) {
     throw new Error("Materialize sampled an unavailable deferred opponent move.");
   }
+  const moveSlot = pokemon.moveSlots[moveSlotIndex];
   simulatorBattle.queue.addChoice({
     choice: "move",
     pokemon,
     moveid: moveSlot.id,
-    moveSlot: actionIndex,
+    moveSlot: moveSlotIndex,
     targetLoc: -1,
   });
   simulatorBattle.queue.addChoice({ choice: "residual" });

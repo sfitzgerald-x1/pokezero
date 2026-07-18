@@ -1262,8 +1262,22 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             search_env.step({"p1": 4})
             protocol = "\n".join(search_env.protocol_lines)
 
+            # A hidden-mode planner can rank an unavailable slot because this forced-switch
+            # boundary has no opponent request. The sampled world selects the next available
+            # move without reading the source battle's private request.
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=79,
+                deferred_opponent_actions={"p2": 3},
+            )
+            search_env.step({"p1": 4})
+            unavailable_slot_protocol = "\n".join(search_env.protocol_lines)
+
         self.assertIn("|move|p2a: Ditto|Protect|", protocol)
         self.assertNotIn("|move|p2a: Ditto|Harden|", protocol)
+        self.assertIn("|move|p2a: Ditto|Harden|", unavailable_slot_protocol)
+        self.assertNotIn("|move|p2a: Ditto|Protect|", unavailable_slot_protocol)
 
     def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
         config = integration_config()
