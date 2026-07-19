@@ -2322,9 +2322,11 @@ def _finish_puct_branch_search_group_batched_adaptive(
     """Advance independent roots one visit at a time, batching only ready leaves.
 
     A PUCT selection depends on its own prior backup, not another sampled
-    world's backup. Advancing each root once per wave therefore keeps the same
-    action sequence as scalar execution while allowing the resulting leaves to
-    share the exact value evaluator.
+    world's backup. Advancing each root once per wave therefore preserves the
+    scalar action sequence for a batch-composition-invariant value evaluator,
+    while allowing the resulting leaves to share one evaluator call. Callers
+    using floating-point evaluators whose output varies with batch shape must
+    treat this as semantic equivalence rather than bitwise identity.
     """
 
     states: list[_BatchedAdaptivePUCTState] = []
@@ -3387,9 +3389,9 @@ def _timed_value_batch_evaluation(
 ) -> tuple[float, ...]:
     """Evaluate independent mandatory root leaves in one model call.
 
-    This applies only to the initial one-visit-per-action sweep. Later PUCT
-    visits remain sequential because each selection depends on the preceding
-    backup, so batching cannot silently change the search policy.
+    Adaptive visits remain sequential within each sampled world because each
+    selection depends on that world's preceding backup. The separate
+    cross-world adaptive path may batch one already-selected leaf per world.
     """
 
     if not histories:
