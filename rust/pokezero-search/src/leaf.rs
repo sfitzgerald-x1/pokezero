@@ -17,17 +17,18 @@
 //!   epistemic surface) stay byte-identical to the root: they are epistemic,
 //!   not history, and are legitimately root-frozen per world.
 //!
-//! Delta families: a few belief-ledger scalars (opponent `move_uses`, sleep
-//! turn counts) cannot be recomputed from the leaf engine state alone because
-//! the world constructor seeds them approximately (full PP, fresh sleep).
-//! They evolve as ROOT VALUE + (leaf engine value − root engine value), which
-//! reproduces the root exactly at zero branches and adds exactly the
-//! simulated consumption at leaves.
+//! Beyond the engine state, several ledger surfaces are LINE-driven
+//! ([`LeafMeta`], evolved over the branch's synthesized protocol lines and
+//! chained per branch like the fold): toxic stages, active stints
+//! (turns_active), per-mon sleep counts, the self-team display order
+//! (Showdown switch-swap semantics), and the fresh-active choice-lock reset.
+//! Snapshot delta families (opponent `move_uses`, sleep-clause holders)
+//! evolve from a root engine snapshot. Both reduce to root values at zero
+//! branches. See docs/leaf_observation_column_map.md for the full contract.
 //!
-//! The root-parity gate (`scripts/leaf_root_parity.py`) drives this path at
-//! zero branches over the golden corpus: world from the recorded public
-//! payload + true teams, `encode_leaf` on the untouched root state, byte-diff
-//! against the recorded golden arrays.
+//! Gates: `scripts/leaf_root_parity.py` (depth-0 byte-parity vs golden) and
+//! `scripts/leaf_vs_reality.py` (one-branch differential vs the NEXT golden
+//! row — the gate that exercises everything above).
 
 use std::collections::HashMap;
 
@@ -88,7 +89,12 @@ fn weather_id(weather: Weather) -> Option<&'static str> {
 /// Engine volatiles -> the parser's TRACKED_VOLATILES ids (gen3-reachable
 /// subset). Engine-only mechanics volatiles (PROTECT, LOCKEDMOVE,
 /// MUSTRECHARGE, TRUANT, FLINCH, ...) have no tracked counterpart and are
-/// deliberately dropped — the parser never records them either.
+/// deliberately dropped — the parser never records them either. CURSE is
+/// handled separately (Ghost gate): the gen3 engine applies the base Curse
+/// choice (self boosts + USER volatile) with no Ghost/non-Ghost split, so a
+/// non-Ghost curser carries a spurious engine CURSE volatile the real
+/// protocol never starts (review F5; the Ghost-curse TARGET placement
+/// remains an engine-model deviation, documented in the column map).
 const VOLATILE_MAP: &[(PokemonVolatileStatus, &str)] = &[
     (PokemonVolatileStatus::CONFUSION, "confusion"),
     (PokemonVolatileStatus::LEECHSEED, "leechseed"),
@@ -99,7 +105,6 @@ const VOLATILE_MAP: &[(PokemonVolatileStatus, &str)] = &[
     (PokemonVolatileStatus::TORMENT, "torment"),
     (PokemonVolatileStatus::ATTRACT, "attract"),
     (PokemonVolatileStatus::NIGHTMARE, "nightmare"),
-    (PokemonVolatileStatus::CURSE, "curse"),
     (PokemonVolatileStatus::INGRAIN, "ingrain"),
     (PokemonVolatileStatus::FORESIGHT, "foresight"),
     (PokemonVolatileStatus::DESTINYBOND, "destinybond"),
@@ -127,11 +132,24 @@ const VOLATILE_MAP: &[(PokemonVolatileStatus, &str)] = &[
 ];
 
 fn tracked_volatiles(side: &Side) -> Vec<String> {
-    VOLATILE_MAP
+    use poke_engine::state::PokemonType;
+    let mut out: Vec<String> = VOLATILE_MAP
         .iter()
         .filter(|(vs, _)| side.volatile_statuses.contains(vs))
         .map(|(_, id)| (*id).to_string())
-        .collect()
+        .collect();
+    // CURSE Ghost gate (review F5): only a Ghost-typed curser's volatile is
+    // real; the engine's spurious non-Ghost USER volatile is dropped.
+    if side
+        .volatile_statuses
+        .contains(&PokemonVolatileStatus::CURSE)
+    {
+        let types = side.get_active_immutable().types;
+        if types.0 == PokemonType::GHOST || types.1 == PokemonType::GHOST {
+            out.push("curse".to_string());
+        }
+    }
+    out
 }
 
 /// Engine move id (Choices debug name, lowercased) -> showdown request id.
@@ -163,14 +181,6 @@ fn side_ref_for(state: &State, side_is_p1: bool) -> &Side {
     }
 }
 
-/// `p.status == SLEEP && p.hp > 0 && p.rest_turns == 0` — the engine's own
-/// sleep-clause predicate (gen3 state.rs), matching the parser's semantics.
-fn sleep_clause_used(side: &Side) -> bool {
-    side.pokemon
-        .into_iter()
-        .any(|p| p.status == PokemonStatus::SLEEP && p.hp > 0 && p.rest_turns == 0)
-}
-
 fn active_index_usize(side: &Side) -> usize {
     side.active_index.serialize().parse::<usize>().unwrap_or(0)
 }
@@ -186,17 +196,12 @@ struct MonSnapshot {
     pp: Vec<(String, i8)>,
     hp: i16,
     status: Option<&'static str>,
-    sleep_turns: i8,
-    rest_turns: i8,
 }
 
 #[derive(Clone, Debug, Default)]
 struct SideSnapshot {
     /// Party-index-aligned snapshots.
     mons: Vec<MonSnapshot>,
-    /// Root engine toxic counter (delta base: the payload seeds the engine at
-    /// the request-boundary convention, one below the parser's tracked stage).
-    toxic_count: i8,
     /// Root count of non-Rest sleepers (sleep-clause delta base: the world
     /// constructor cannot distinguish Rest sleep publicly, so the engine
     /// predicate alone over-counts at the root).
@@ -225,15 +230,126 @@ fn snapshot_side(side: &Side) -> SideSnapshot {
             pp,
             hp: p.hp,
             status: status_code(p.status),
-            sleep_turns: p.sleep_turns,
-            rest_turns: p.rest_turns,
         });
     }
     SideSnapshot {
         mons,
-        toxic_count: side.side_conditions.toxic_count,
         nonrest_sleepers: nonrest_sleepers(side),
     }
+}
+
+/// Line-driven side metadata (review F1 + F4): the parser's toxic stage and
+/// the belief ledger's active-stint counter are functions of the PROTOCOL
+/// LINES, not of engine state — the engine ticks its toxic counter on every
+/// end-of-turn run while the parser escalates only on `|turn|` lines (a
+/// faint-pending ply ticks the engine but never the parser: toxic_stall
+/// repro), and the stint counter advances per `|turn|` and resets on the
+/// side's switch lines. So both evolve by replaying the parser's own rules
+/// over the branch's synthesized lines, chained exactly like the fold.
+/// Indexed by engine side (0 = p1 / side one).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LeafMeta {
+    pub(crate) toxic: [i64; 2],
+    pub(crate) stint: [i64; 2],
+    /// Per-mon sleep bookkeeping keyed by (engine side, species key):
+    /// (started, cant_count). `started` marks a `|-status|..|slp` seen in the
+    /// branch (the ledger's counter restarts at 0 there); `cant_count` is the
+    /// observed `|cant ..|slp` turns — the ledger's sleep_turns unit
+    /// (belief.py: "observed |cant …|slp turns since the status landed").
+    /// Keyed per mon (not per side) so a sleeper that faints or switches out
+    /// after its cants still carries them.
+    pub(crate) sleep: HashMap<(usize, String), (bool, i64)>,
+    /// The side's active switched in during the branch and has not used a
+    /// move since (choice locks reset on switch; the world seeds benched
+    /// mons with stale per-stint disabled bits and `use_last_used_move` is
+    /// off in constructed worlds, so this is line-tracked).
+    pub(crate) fresh_active: [bool; 2],
+}
+
+fn line_slot(line_after_prefix: &str) -> Option<usize> {
+    // "...|p1a: Name|..." — the ident is the first field.
+    if line_after_prefix.starts_with("p1a: ") {
+        Some(0)
+    } else if line_after_prefix.starts_with("p2a: ") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// The species key from a line's leading ident field ("p1a: Dewgong|..." ->
+/// "dewgong"). Synthesized idents are species-based (local domain).
+fn ident_species_key(line_after_prefix: &str) -> String {
+    let ident = line_after_prefix.split('|').next().unwrap_or("");
+    let name = ident.splitn(2, ": ").nth(1).unwrap_or("");
+    normalize_identifier(name)
+}
+
+/// Normalized species key of a team/belief JSON entry.
+fn species_key(obj: &Map<String, Value>) -> String {
+    normalize_identifier(obj.get("species").and_then(Value::as_str).unwrap_or(""))
+}
+
+/// Replay the parser's toxic/stint rules over synthesized lines
+/// (`showdown._ReplayParser._feed_line`: `|-status|..|tox` sets stage 1,
+/// `|-curestatus|` clears, the side's `|switch|`/`|drag|` resets stage AND
+/// stint, `|turn|` escalates every nonzero stage (cap 15) and advances every
+/// stint).
+pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String]) -> LeafMeta {
+    let mut out = meta.clone();
+    for line in lines {
+        if line.starts_with("|turn|") {
+            for side in 0..2 {
+                if out.toxic[side] > 0 {
+                    out.toxic[side] = (out.toxic[side] + 1).min(15);
+                }
+                out.stint[side] += 1;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|move|") {
+            if let Some(side) = line_slot(rest) {
+                out.fresh_active[side] = false;
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("|cant|") {
+            if let Some(side) = line_slot(rest) {
+                if rest.split('|').nth(1).map(str::trim) == Some("slp") {
+                    let key = ident_species_key(rest);
+                    out.sleep.entry((side, key)).or_insert((false, 0)).1 += 1;
+                }
+            }
+            continue;
+        }
+        for (prefix, is_status, is_cure) in [
+            ("|switch|", false, false),
+            ("|drag|", false, false),
+            ("|-status|", true, false),
+            ("|-curestatus|", false, true),
+        ] {
+            let Some(rest) = line.strip_prefix(prefix) else { continue };
+            let Some(side) = line_slot(rest) else { break };
+            if is_status {
+                match rest.split('|').nth(1).map(|s| normalize_identifier(s.trim())) {
+                    Some(status) if status == "tox" => out.toxic[side] = 1,
+                    Some(status) if status == "slp" => {
+                        let key = ident_species_key(rest);
+                        out.sleep.insert((side, key), (true, 0));
+                    }
+                    _ => {}
+                }
+            } else if is_cure {
+                out.toxic[side] = 0;
+            } else {
+                out.toxic[side] = 0;
+                out.stint[side] = 0;
+                out.fresh_active[side] = true;
+            }
+            break;
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +364,17 @@ pub(crate) struct LeafContext {
     /// Normalized species keys per engine side, engine party order.
     species_keys: [Vec<String>; 2],
     root_snapshot: [SideSnapshot; 2],
+    /// Root self-team display order as normalized species keys (Showdown
+    /// request order, active first). Switches during a branch SWAP the
+    /// incoming mon with slot 0 — the exact `switchIn` semantics
+    /// (sim/battle-actions.ts) — via `evolve_self_order`.
+    root_self_order: Vec<String>,
+    /// Root line-driven metadata (toxic stages + active stints).
+    root_meta: LeafMeta,
+    /// Root battle turn + recorded weather (parser-formula weather ticking).
+    root_turn: i64,
+    root_weather: Option<String>,
+    root_weather_remaining: i64,
 }
 
 impl LeafContext {
@@ -287,6 +414,78 @@ impl LeafContext {
                 species_keys[out].push(normalize_identifier(name));
             }
         }
+        let root_self_order: Vec<String> = md
+            .get("self_team")
+            .and_then(Value::as_array)
+            .map(|team| {
+                team.iter()
+                    .map(|entry| {
+                        normalize_identifier(
+                            entry.get("species").and_then(Value::as_str).unwrap_or(""),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Root line-driven metadata: toxic stages from the recorded ledger
+        // fields, stints from the active belief entries' turns_active.
+        let mut root_meta = LeafMeta::default();
+        let (self_engine, opp_engine) = if self_is_p1 { (0, 1) } else { (1, 0) };
+        root_meta.toxic[self_engine] = md
+            .get("self_toxic_stage")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        root_meta.toxic[opp_engine] = md
+            .get("opponent_toxic_stage")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let belief = md.get("belief_view");
+        for (key, engine_side) in [
+            ("self_pokemon", self_engine),
+            ("opponent_pokemon", opp_engine),
+        ] {
+            // The root ACTIVE entry's stint: by ledger active flag, falling
+            // back to the engine root active's species.
+            let engine_active = if engine_side == 0 {
+                active_index_usize(&root_state.side_one)
+            } else {
+                active_index_usize(&root_state.side_two)
+            };
+            let active_key = species_keys[engine_side]
+                .get(engine_active)
+                .cloned()
+                .unwrap_or_default();
+            let stint = belief
+                .and_then(|b| b.get(key))
+                .and_then(Value::as_array)
+                .and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|entry| {
+                            entry.get("active").and_then(Value::as_bool).unwrap_or(false)
+                        })
+                        .or_else(|| {
+                            entries.iter().find(|entry| {
+                                normalize_identifier(
+                                    entry.get("species").and_then(Value::as_str).unwrap_or(""),
+                                ) == active_key
+                            })
+                        })
+                })
+                .and_then(|entry| entry.get("turns_active").and_then(Value::as_i64))
+                .unwrap_or(0);
+            root_meta.stint[engine_side] = stint;
+        }
+        let root_turn = ctx.get("turn").and_then(Value::as_i64).unwrap_or(0);
+        let root_weather = md
+            .get("weather")
+            .and_then(Value::as_str)
+            .filter(|w| !w.is_empty())
+            .map(|w| w.to_string());
+        let root_weather_remaining = md
+            .get("weather_turns_remaining")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         Ok(LeafContext {
             tables,
             root,
@@ -296,7 +495,28 @@ impl LeafContext {
                 snapshot_side(&root_state.side_one),
                 snapshot_side(&root_state.side_two),
             ],
+            root_self_order,
+            root_meta,
+            root_turn,
+            root_weather,
+            root_weather_remaining,
         })
+    }
+
+    pub(crate) fn root_self_order(&self) -> &[String] {
+        &self.root_self_order
+    }
+
+    pub(crate) fn root_meta(&self) -> &LeafMeta {
+        &self.root_meta
+    }
+
+    pub(crate) fn self_prefix(&self) -> &'static str {
+        if self.self_is_p1 {
+            "p1"
+        } else {
+            "p2"
+        }
     }
 
     fn engine_side_index(&self, slot_is_self: bool) -> usize {
@@ -314,8 +534,17 @@ impl LeafContext {
     }
 
     /// Rewrite the root row inputs into this LEAF state's view. `turn` is the
-    /// leaf's battle turn (root turn + completed simulated turns).
-    pub(crate) fn leaf_row_inputs(&self, state: &State, turn: i64) -> PyResult<Value> {
+    /// leaf's battle turn (root turn + completed simulated turns);
+    /// `self_order` the evolved self-team display order (None = root order);
+    /// `meta` the evolved line-driven metadata (None = root values).
+    pub(crate) fn leaf_row_inputs(
+        &self,
+        state: &State,
+        turn: i64,
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+    ) -> PyResult<Value> {
+        let meta = meta.unwrap_or(&self.root_meta);
         let mut row = self.root.clone();
 
         // Split borrows: rewrite metadata first, then the materialization.
@@ -332,11 +561,30 @@ impl LeafContext {
             .and_then(Value::as_object_mut)
             .ok_or_else(|| err("row inputs missing observation_metadata object"))?;
 
+        // Self-team display order (review F2): golden observations order the
+        // self team ACTIVE-FIRST per the request; switches during a branch
+        // SWAP the incoming mon with slot 0 (Showdown `switchIn` semantics).
+        // Reorder BEFORE any per-mon rewrite so active flags, switch tokens,
+        // and mask indices all land on the golden positions.
+        if let Some(order) = self_order {
+            if let Some(team) = md.get_mut("self_team").and_then(Value::as_array_mut) {
+                let mut remaining: Vec<Value> = std::mem::take(team);
+                let mut arranged: Vec<Value> = Vec::with_capacity(remaining.len());
+                for key in order {
+                    if let Some(pos) = remaining.iter().position(|entry| {
+                        normalize_identifier(
+                            entry.get("species").and_then(Value::as_str).unwrap_or(""),
+                        ) == *key
+                    }) {
+                        arranged.push(remaining.remove(pos));
+                    }
+                }
+                arranged.append(&mut remaining); // defensive: keep unmatched
+                *team = arranged;
+            }
+        }
+
         // Root ledger values for the delta families (read before overwrite).
-        let root_toxic = [
-            md.get("self_toxic_stage").and_then(Value::as_i64).unwrap_or(0),
-            md.get("opponent_toxic_stage").and_then(Value::as_i64).unwrap_or(0),
-        ];
         let root_sleep_clause = [
             md.get("self_sleep_clause_used")
                 .and_then(Value::as_bool)
@@ -357,16 +605,21 @@ impl LeafContext {
                 md.insert("weather".into(), json!(id));
                 let permanent = state.weather.turns_remaining < 0;
                 md.insert("weather_permanent".into(), json!(permanent));
-                md.insert(
-                    "weather_turns_remaining".into(),
-                    // Ability weather is permanent in gen3: production pins
-                    // the counter at the full duration.
-                    json!(if permanent {
-                        self.tables.layout_timed_condition_duration()
-                    } else {
-                        state.weather.turns_remaining as i64
-                    }),
-                );
+                // Weather ticking is TURN-driven for the parser
+                // (remaining = duration − (turn − set turn)) while the
+                // engine decrements per end-of-turn run — a faint-pending
+                // ply ticks the engine but not the parser. Same weather as
+                // the root: root remaining − completed simulated turns;
+                // weather set in-branch: the engine counter (set-ply
+                // granularity, documented).
+                let remaining = if permanent {
+                    self.tables.layout_timed_condition_duration()
+                } else if self.root_weather.as_deref() == Some(id) {
+                    (self.root_weather_remaining - (turn - self.root_turn).max(0)).max(0)
+                } else {
+                    state.weather.turns_remaining as i64
+                };
+                md.insert("weather_turns_remaining".into(), json!(remaining));
             }
             None => {
                 md.insert("weather".into(), Value::Null);
@@ -384,34 +637,52 @@ impl LeafContext {
         );
         md.insert("self_wish_pending".into(), json!(self_side.wish.0 != 0));
         md.insert("opponent_wish_pending".into(), json!(opp_side.wish.0 != 0));
-        // Sleep clause / toxic stage: delta families — root ledger value
-        // evolved by the engine's change since the root (the world seeds both
-        // at conventions the engine alone cannot invert; see the column map).
-        for (index, (key_sc, key_tox, side, engine_side)) in [
-            ("self_sleep_clause_used", "self_toxic_stage", self_side, self_engine),
+        // Sleep clause: the flag marks the side that INFLICTED sleep (the
+        // ledger's sleep_clause_holders; golden-proven: Sleep Powder on the
+        // opponent raises the USER's flag) — so a side's clause goes up when
+        // its OPPONENT gains a new non-Rest sleeper. Toxic stage:
+        // line-driven metadata (the parser escalates on |turn| lines only —
+        // review F1), with a cure guard only for full cures the mapper does
+        // not render (|-curestatus| is fold-invisible; a status REPLACEMENT
+        // like Rest's tox->slp keeps the parser stage — golden-proven).
+        for (index, (key_sc, key_tox, side, other, engine_side)) in [
+            (
+                "self_sleep_clause_used",
+                "self_toxic_stage",
+                self_side,
+                opp_side,
+                self_engine,
+            ),
             (
                 "opponent_sleep_clause_used",
                 "opponent_toxic_stage",
                 opp_side,
+                self_side,
                 opp_engine,
             ),
         ]
         .into_iter()
         .enumerate()
         {
-            let snapshot = &self.root_snapshot[engine_side];
-            let clause = root_sleep_clause[index]
-                || nonrest_sleepers(side) > snapshot.nonrest_sleepers;
-            md.insert(key_sc.into(), json!(clause));
-            let leaf_count = side.side_conditions.toxic_count as i64;
-            let root_count = snapshot.toxic_count as i64;
-            let stage = if leaf_count < root_count {
-                // The toxic mon left the field during the branch: fresh stint,
-                // engine and parser conventions agree from zero.
-                leaf_count
+            let other_engine = 1 - engine_side;
+            let leaf_sleepers = nonrest_sleepers(other);
+            let root_sleepers = self.root_snapshot[other_engine].nonrest_sleepers;
+            // Clause ENGAGES when the opponent gains a non-Rest sleeper and
+            // RELEASES when the sleeper leaves play (faint/wake) — the
+            // ledger's holder semantics (leaf-vs-reality double-KO repro).
+            let clause = if leaf_sleepers > root_sleepers {
+                true
+            } else if leaf_sleepers < root_sleepers {
+                false
             } else {
-                root_toxic[index] + (leaf_count - root_count)
+                root_sleep_clause[index]
             };
+            md.insert(key_sc.into(), json!(clause));
+            let active = side.get_active_immutable();
+            let mut stage = meta.toxic[engine_side];
+            if stage > 0 && active.hp > 0 && active.status == PokemonStatus::NONE {
+                stage = 0;
+            }
             md.insert(key_tox.into(), json!(stage));
         }
         md.insert(
@@ -462,6 +733,17 @@ impl LeafContext {
                     if changed {
                         let condition = condition_string(p.hp, p.maxhp, p.status);
                         obj.insert("condition".into(), json!(condition));
+                        if p.hp <= 0 {
+                            // A fainted mon's request condition is "0 fnt" —
+                            // no max HP to derive the actual-HP entry from
+                            // (`_max_hp_from_condition`); the five request
+                            // stats remain. Drop only the hp key.
+                            if let Some(stats) =
+                                obj.get_mut("stats").and_then(Value::as_object_mut)
+                            {
+                                stats.remove("hp");
+                            }
+                        }
                     }
                     obj.insert("active".into(), json!(party == active_party));
                 }
@@ -470,6 +752,21 @@ impl LeafContext {
 
         // --- belief-ledger evolution (exact-state fields only; belief FACTS
         //     are world-constants and stay untouched) ---
+        // Self-team display names (for synthesizing a fresh SELF ledger
+        // entry when a first-time-active mon has none — the self side is
+        // fully known, so ledger membership growth is NOT epistemic).
+        let self_display: Vec<(String, String)> = md
+            .get("self_team")
+            .and_then(Value::as_array)
+            .map(|team| {
+                team.iter()
+                    .filter_map(|entry| {
+                        let species = entry.get("species").and_then(Value::as_str)?;
+                        Some((normalize_identifier(species), species.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(belief) = md.get_mut("belief_view").and_then(Value::as_object_mut) {
             for (key, engine_side, side, is_self) in [
                 ("self_pokemon", self_engine, self_side, true),
@@ -480,6 +777,7 @@ impl LeafContext {
                 let Some(list) = belief.get_mut(key).and_then(Value::as_array_mut) else {
                     continue;
                 };
+                let mut active_covered = false;
                 for entry in list.iter_mut() {
                     let Some(obj) = entry.as_object_mut() else { continue };
                     let species = obj
@@ -522,16 +820,6 @@ impl LeafContext {
                                 },
                             );
                         }
-                        // Sleep bookkeeping: root ledger value + engine delta
-                        // (the world seeds sleep approximately, so the engine
-                        // alone cannot reproduce the ledger at the root).
-                        let root_sleep = obj
-                            .get("sleep_turns")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(0);
-                        let engine_delta = (p.sleep_turns - snapshot.sleep_turns).max(0) as i64
-                            + rest_sleep_delta(snapshot.rest_turns, p.rest_turns);
-                        obj.insert("sleep_turns".into(), json!(root_sleep + engine_delta));
                         let root_rest = obj
                             .get("rest_sleep")
                             .and_then(Value::as_bool)
@@ -540,8 +828,62 @@ impl LeafContext {
                             || (root_rest && p.status == PokemonStatus::SLEEP);
                         obj.insert("rest_sleep".into(), json!(rest_now));
                     }
+                    // Sleep counting is LINE-driven and PER-MON (belief.py:
+                    // "observed |cant …|slp turns since the status landed"):
+                    // a fresh |-status|slp restarts the count at 0, each
+                    // |cant ..|slp adds one — even when the sleeper later
+                    // faints or switches out. Root sleepers keep their
+                    // ledger base.
+                    if let Some((started, count)) =
+                        meta.sleep.get(&(engine_side, species_key(obj)))
+                    {
+                        let base = if *started {
+                            0
+                        } else {
+                            obj.get("sleep_turns").and_then(Value::as_i64).unwrap_or(0)
+                        };
+                        obj.insert("sleep_turns".into(), json!(base + count));
+                    }
+                    // Turns-active (review F4): the ledger counter is a
+                    // per-stint count — reset on the side's switch lines,
+                    // +1 per |turn| line while active — replayed over the
+                    // synthesized lines by the line-driven metadata
+                    // (`evolve_leaf_meta`), exactly the parser's rules.
+                    if party == active_party {
+                        obj.insert("turns_active".into(), json!(meta.stint[engine_side]));
+                        active_covered = true;
+                    }
                     if !is_self {
                         rewrite_move_uses(obj, &snapshot, *p);
+                    }
+                }
+                if is_self && !active_covered {
+                    // First-time-active self mon (e.g. the replacement after
+                    // a faint): production's ledger grows an entry for it —
+                    // synthesize the exact-state fields the encoder reads.
+                    if let (Some(p), Some(key_str)) = (
+                        mons.get(active_party),
+                        self.species_keys[engine_side].get(active_party),
+                    ) {
+                        let display = self_display
+                            .iter()
+                            .find(|(k, _)| k == key_str)
+                            .map(|(_, d)| d.clone())
+                            .unwrap_or_else(|| key_str.clone());
+                        let sleep_turns = meta
+                            .sleep
+                            .get(&(engine_side, key_str.clone()))
+                            .map(|(_, count)| *count)
+                            .unwrap_or(0);
+                        list.push(json!({
+                            "species": display,
+                            "condition": condition_string(p.hp, p.maxhp, p.status),
+                            "status": status_code(p.status),
+                            "active": true,
+                            "turns_active": meta.stint[engine_side],
+                            "sleep_turns": sleep_turns,
+                            "rest_sleep": p.rest_turns > 0,
+                        }));
                     }
                 }
             }
@@ -572,6 +914,7 @@ impl LeafContext {
             self_options,
             &self_team_order,
             self_force_switch,
+            meta.fresh_active[self_engine],
         )?;
         md.insert("action_candidates".into(), candidates);
 
@@ -600,6 +943,7 @@ impl LeafContext {
     /// Rebuild `action_candidates` + `pm.selfActiveMoves` from the engine's
     /// own option surface at this state (the leaf has no Showdown request;
     /// the engine IS the request authority on the search path).
+    #[allow(clippy::too_many_arguments)]
     fn action_surface(
         &self,
         self_side: &Side,
@@ -607,19 +951,36 @@ impl LeafContext {
         self_options: &[MoveChoice],
         self_team_order: &[(String, bool)],
         force_switch_shape: bool,
+        fresh_switch_in: bool,
     ) -> PyResult<(Value, Value)> {
         let action_count = self.tables.layout_action_count();
         let move_action_count = self.tables.layout_move_action_count();
 
-        // Engine move surface of the active mon, engine slot order.
+        // Engine move surface of the active mon, engine slot order. A
+        // recharging active (MUSTRECHARGE volatile) presents the production
+        // request shape instead: a single PP-less "recharge" pseudo-move,
+        // forced (no switching) — the engine's own option surface is a bare
+        // `None` which carries no request shape.
         let active = self_side.get_active_immutable();
+        let recharging = self_side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::MUSTRECHARGE);
+        // A fresh switch-in cannot be move-restricted: choice locks reset on
+        // switch, but the world constructor seeds benched mons with their
+        // LAST STINT's cached disabled bits (the payload caches per-mon move
+        // state) and the engine never re-enables them on a branch switch —
+        // present the request semantics instead (leaf-vs-reality repro:
+        // Choice-Band Nidoking fresh switch-in shows all four moves legal).
         let mut engine_moves: Vec<(String, bool, i8)> = Vec::new(); // (showdown id, disabled, pp)
-        for mv in active.moves.into_iter() {
-            let engine_id = format!("{:?}", mv.id).to_lowercase();
-            if engine_id == "none" {
-                continue;
+        if !recharging {
+            for mv in active.moves.into_iter() {
+                let engine_id = format!("{:?}", mv.id).to_lowercase();
+                if engine_id == "none" {
+                    continue;
+                }
+                let disabled = if fresh_switch_in { false } else { mv.disabled };
+                engine_moves.push((showdown_move_id(&engine_id), disabled, mv.pp));
             }
-            engine_moves.push((showdown_move_id(&engine_id), mv.disabled, mv.pp));
         }
 
         // Legal move indices + legal switch species from the option surface.
@@ -643,12 +1004,51 @@ impl LeafContext {
 
         let mut candidates: Vec<Value> = Vec::new();
         let mut payload_moves: Vec<Value> = Vec::new();
+        if recharging && !force_switch_shape {
+            // Production recharge request: one legal, PP-less "recharge"
+            // move in slot 1; no other moves; switching disallowed.
+            candidates.push(json!({
+                "action_index": 0,
+                "kind": "move",
+                "legal": active.hp > 0,
+                "move_slot": 1,
+                "move_id": "recharge",
+                "move_name": "recharge",
+                "disabled": false,
+            }));
+            payload_moves.push(json!({"id": "recharge", "disabled": false}));
+            for slot in 1..move_action_count {
+                candidates.push(json!({
+                    "action_index": slot,
+                    "kind": "move",
+                    "legal": false,
+                    "move_slot": slot + 1,
+                    "move_id": format!("slot{}", slot + 1),
+                    "move_name": format!("slot:{}", slot + 1),
+                    "disabled": true,
+                }));
+            }
+            for switch_slot in 0..(action_count - move_action_count) {
+                candidates.push(json!({
+                    "action_index": move_action_count + switch_slot,
+                    "kind": "switch",
+                    "legal": false,
+                    "switch_slot": switch_slot + 1,
+                    "team_index": Value::Null,
+                }));
+            }
+            return Ok((Value::Array(candidates), Value::Array(payload_moves)));
+        }
         let moves_present = !force_switch_shape;
         for slot in 0..move_action_count {
             let entry = if moves_present { engine_moves.get(slot) } else { None };
             match entry {
                 Some((move_id, disabled, pp)) => {
-                    let legal = legal_moves.contains(&slot) && active.hp > 0;
+                    let legal = if fresh_switch_in {
+                        *pp > 0 && active.hp > 0
+                    } else {
+                        legal_moves.contains(&slot) && active.hp > 0
+                    };
                     candidates.push(json!({
                         "action_index": slot,
                         "kind": "move",
@@ -731,26 +1131,45 @@ impl LeafContext {
         state: &State,
         fold: &FoldStateInner,
         turn: i64,
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
     ) -> PyResult<EncodedArrays> {
-        let row = self.leaf_row_inputs(state, turn)?;
+        let row = self.leaf_row_inputs(state, turn, self_order, meta)?;
         let products = fold.products();
         encode_row_value(&self.tables, &row, Some(&products))
     }
 }
 
-/// Rest-sleep contribution to the slept-turn delta: a fresh Rest sets the
-/// engine counter to 3 and decrements per sleeping turn, so turns slept since
-/// the root is (root_rest − rest) when resting at both ends, or (3 − rest)
-/// when the Rest happened inside the branch.
-fn rest_sleep_delta(root_rest: i8, rest: i8) -> i64 {
-    if rest <= 0 {
-        return 0;
+/// Apply the self side's switch/drag lines to a display order: each switch
+/// SWAPS the incoming mon with slot 0 — Showdown's exact `switchIn`
+/// position semantics (sim/battle-actions.ts: `pokemon.position = pos;
+/// side.pokemon[pos] = pokemon; side.pokemon[old.position] = old`). Species
+/// come from the DETAILS field (nickname-proof).
+pub(crate) fn evolve_self_order(
+    order: &[String],
+    lines: &[String],
+    self_prefix: &str,
+) -> Vec<String> {
+    let mut order = order.to_vec();
+    let switch_prefix = format!("|switch|{self_prefix}a: ");
+    let drag_prefix = format!("|drag|{self_prefix}a: ");
+    for line in lines {
+        if !line.starts_with(&switch_prefix) && !line.starts_with(&drag_prefix) {
+            continue;
+        }
+        let details = line.split('|').nth(3).unwrap_or("");
+        let species = details.split(',').next().unwrap_or("").trim();
+        let key = normalize_identifier(species);
+        if key.is_empty() {
+            continue;
+        }
+        if let Some(pos) = order.iter().position(|k| *k == key) {
+            if pos != 0 {
+                order.swap(0, pos);
+            }
+        }
     }
-    if root_rest > 0 {
-        (root_rest - rest).max(0) as i64
-    } else {
-        (3 - rest).max(0) as i64
-    }
+    order
 }
 
 /// Opponent `move_uses` evolution: root ledger uses + engine PP consumed
@@ -855,27 +1274,192 @@ impl PyLeafEncoder {
 
     /// Encode a leaf observation: ENGINE-STATE columns from `state_str`,
     /// FOLD columns from `fold`, WORLD-CONSTANT columns from the root row
-    /// inputs. At zero branches (`state_str` = the root state, `fold` = the
-    /// root fold, `turn` = the root turn) this must reproduce the golden
-    /// observation — the root-parity gate.
+    /// inputs. `lines` are the branch's synthesized protocol lines from the
+    /// root (they drive the self-team display order via Showdown's
+    /// switch-swap semantics AND the line-driven metadata: toxic stages,
+    /// active stints — None/empty keeps root values). At zero branches
+    /// (`state_str` = the root state, `fold` = the root fold, `turn` = the
+    /// root turn, no lines) this must reproduce the golden observation — the
+    /// root-parity gate.
+    #[pyo3(signature = (state_str, fold, turn, lines = None))]
     fn encode_leaf(
         &self,
         py: Python<'_>,
         state_str: &str,
         fold: &PyFoldState,
         turn: i64,
+        lines: Option<Vec<String>>,
     ) -> PyResult<Py<PyDict>> {
         let state = parse_state(state_str)?;
-        let encoded = self.ctx.encode_leaf(&state, fold.inner(), turn)?;
+        let (order, meta) = self.branch_context(lines.as_deref());
+        let encoded = self.ctx.encode_leaf(
+            &state,
+            fold.inner(),
+            turn,
+            order.as_deref(),
+            meta.as_ref(),
+        )?;
         encoded_to_dict(py, &encoded)
     }
 
     /// The rewritten row-inputs JSON for a leaf state (divergence debugging:
     /// diff this against the root inputs to see exactly which state fields
     /// the engine recompute changed).
-    fn leaf_inputs_json(&self, state_str: &str, turn: i64) -> PyResult<String> {
+    #[pyo3(signature = (state_str, turn, lines = None))]
+    fn leaf_inputs_json(
+        &self,
+        state_str: &str,
+        turn: i64,
+        lines: Option<Vec<String>>,
+    ) -> PyResult<String> {
         let state = parse_state(state_str)?;
-        let row = self.ctx.leaf_row_inputs(&state, turn)?;
+        let (order, meta) = self.branch_context(lines.as_deref());
+        let row = self
+            .ctx
+            .leaf_row_inputs(&state, turn, order.as_deref(), meta.as_ref())?;
         serde_json::to_string(&row).map_err(|e| err(format!("serialize leaf inputs: {e}")))
+    }
+}
+
+impl PyLeafEncoder {
+    fn branch_context(
+        &self,
+        lines: Option<&[String]>,
+    ) -> (Option<Vec<String>>, Option<LeafMeta>) {
+        match lines {
+            None => (None, None),
+            Some(lines) => (
+                Some(evolve_self_order(
+                    self.ctx.root_self_order(),
+                    lines,
+                    self.ctx.self_prefix(),
+                )),
+                Some(evolve_leaf_meta(self.ctx.root_meta(), lines)),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Review F1 repro shapes, replayed with the parser's own line rules.
+    #[test]
+    fn toxic_meta_fresh_apply_in_branch() {
+        // arr69 shape: no toxic at root; Toxic lands in-branch and the turn
+        // completes. Parser: |-status|tox -> 1, |turn| -> 2.
+        let meta = evolve_leaf_meta(
+            &LeafMeta::default(),
+            &lines(&[
+                "|move|p1a: Swampert|Toxic|p2a: Starmie",
+                "|-status|p2a: Starmie|tox",
+                "|upkeep",
+                "|turn|32",
+            ]),
+        );
+        assert_eq!(meta.toxic[1], 2);
+        assert_eq!(meta.toxic[0], 0);
+    }
+
+    #[test]
+    fn toxic_meta_reapply_after_switch() {
+        // arr82 shape: toxic at root (stage 4); the mon switches out (reset)
+        // and is re-poisoned; three completed turns later the stage is 4
+        // again — never 5.
+        let root = LeafMeta {
+            toxic: [0, 4],
+            stint: [0, 0],
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|switch|p2a: Blissey|Blissey, L80, F|100/100",
+                "|turn|20",
+                "|switch|p2a: Starmie|Starmie, L77|68/227",
+                "|-status|p2a: Starmie|tox",
+                "|turn|21",
+                "|turn|22",
+                "|turn|23",
+            ]),
+        );
+        assert_eq!(meta.toxic[1], 4);
+    }
+
+    /// toxic_stall repro: a faint-pending ply runs the ENGINE's end-of-turn
+    /// tick but emits no |turn| line — the parser (and therefore the leaf)
+    /// must NOT escalate.
+    #[test]
+    fn toxic_meta_faint_ply_does_not_escalate() {
+        let root = LeafMeta {
+            toxic: [0, 9],
+            stint: [0, 0],
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|move|p1a: Swampert|Earthquake|p2a: Starmie",
+                "|-damage|p2a: Starmie|58/227 tox",
+                "|-damage|p2a: Starmie|0 fnt|[from] psn",
+                "|faint|p2a: Starmie",
+                "|upkeep",
+            ]),
+        );
+        assert_eq!(meta.toxic[1], 9);
+    }
+
+    /// Review F4: stint counting — +1 per |turn| line, reset on the side's
+    /// own switch lines (Showdown `activeTurns = 0`).
+    #[test]
+    fn stint_meta_counts_turns_and_resets_on_switch() {
+        let root = LeafMeta {
+            toxic: [0, 0],
+            stint: [3, 5],
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                "|switch|p1a: Volbeat|Volbeat, L88, M|100/100",
+                "|turn|10",
+                "|turn|11",
+            ]),
+        );
+        // p1 switched (reset) then two completed turns; p2 stayed in.
+        assert_eq!(meta.stint[0], 2);
+        assert_eq!(meta.stint[1], 7);
+    }
+
+    /// Review F2: Showdown's switch-swap position semantics.
+    #[test]
+    fn self_order_swaps_with_slot_zero() {
+        let order: Vec<String> = ["kangaskhan", "volbeat", "snorlax"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Kangaskhan -> Volbeat: swap positions 0 and 1.
+        let after = evolve_self_order(
+            &order,
+            &["|switch|p1a: Volbeat|Volbeat, L88, M|100/100".to_string()],
+            "p1",
+        );
+        assert_eq!(after, ["volbeat", "kangaskhan", "snorlax"]);
+        // Chain: then Volbeat -> Snorlax (swap 0 and 2) — NOT a rotation.
+        let after2 = evolve_self_order(
+            &after,
+            &["|switch|p1a: Snorlax|Snorlax, L76, F|100/100".to_string()],
+            "p1",
+        );
+        assert_eq!(after2, ["snorlax", "kangaskhan", "volbeat"]);
+        // Opponent switches never touch the self order.
+        let untouched = evolve_self_order(
+            &order,
+            &["|switch|p2a: Blissey|Blissey, L80, F|100/100".to_string()],
+            "p1",
+        );
+        assert_eq!(untouched, order);
     }
 }

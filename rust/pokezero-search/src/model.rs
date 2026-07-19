@@ -604,10 +604,16 @@ fn multiply_batched_core<E: BatchLeafEval>(
 // native encode -> batched model eval -> exact-expectation backup)
 // ---------------------------------------------------------------------------
 
-/// Per-branch leaf record: the branch's advanced fold state and battle turn.
+/// Per-branch leaf record: the branch's advanced fold state, battle turn,
+/// and evolved self-team display order (Showdown switch-swap semantics).
+/// NOTE: entries are never pruned within one search — memory grows with the
+/// priced-branch count (fold state ~O(100KB) worst case each); fine at the
+/// intended <=8192-sim budgets, revisit before very large searches.
 struct BranchFold {
     fold: crate::fold::FoldStateInner,
     turn: i64,
+    self_order: Vec<String>,
+    meta: crate::leaf::LeafMeta,
 }
 
 /// Multi-ply batched search where every model row is a REAL leaf observation:
@@ -671,10 +677,20 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     }
                     // Parent fold prefix: the root fold for root edges, the
                     // ancestor branch's advanced fold otherwise.
-                    let (mut fold, mut turn) = match seam.parent {
-                        None => (root_fold.clone(), root_turn),
+                    let (mut fold, mut turn, parent_order, parent_meta) = match seam.parent {
+                        None => (
+                            root_fold.clone(),
+                            root_turn,
+                            leaf_ctx.root_self_order().to_vec(),
+                            leaf_ctx.root_meta().clone(),
+                        ),
                         Some(key) => match fold_by_branch.get(&key) {
-                            Some(rec) => (rec.fold.clone(), rec.turn),
+                            Some(rec) => (
+                                rec.fold.clone(),
+                                rec.turn,
+                                rec.self_order.clone(),
+                                rec.meta.clone(),
+                            ),
                             None => {
                                 leaf_error = Some(PyValueError::new_err(
                                     "parent branch fold missing (traversal order violated)",
@@ -707,14 +723,34 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if rendered.turn_completed {
                         turn += 1;
                     }
-                    let encoded = match leaf_ctx.encode_leaf(leaf, &fold, turn) {
+                    let self_order = crate::leaf::evolve_self_order(
+                        &parent_order,
+                        &rendered.lines,
+                        leaf_ctx.self_prefix(),
+                    );
+                    let meta = crate::leaf::evolve_leaf_meta(&parent_meta, &rendered.lines);
+                    let encoded = match leaf_ctx.encode_leaf(
+                        leaf,
+                        &fold,
+                        turn,
+                        Some(&self_order),
+                        Some(&meta),
+                    ) {
                         Ok(encoded) => encoded,
                         Err(error) => {
                             leaf_error = Some(error);
                             return LeafPrice::Ready(0.5);
                         }
                     };
-                    fold_by_branch.insert((seam.chance, seam.branch_index), BranchFold { fold, turn });
+                    fold_by_branch.insert(
+                        (seam.chance, seam.branch_index),
+                        BranchFold {
+                            fold,
+                            turn,
+                            self_order,
+                            meta,
+                        },
+                    );
                     let row = pending.len();
                     pending.push(encoded);
                     LeafPrice::Deferred(row)
