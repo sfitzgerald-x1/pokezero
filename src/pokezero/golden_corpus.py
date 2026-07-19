@@ -37,7 +37,11 @@ Layout of a corpus directory:
 - ``arrays.npz``     — the golden arrays, stacked over all decision rows in
                        row order (``array_row_index`` links a JSONL row to
                        its slice).
-- ``manifest.json``  — schema id + SHA-256 of both files + row counts +
+- ``fold.jsonl.gz``  — schema v2: the per-row fold surface (fold state at the
+                       boundary + inter-decision event slice + annotation
+                       overlay + boundary products), gzip JSONL in corpus row
+                       order; see :mod:`pokezero.golden_corpus_fold`.
+- ``manifest.json``  — schema id + SHA-256 of the files + row counts +
                        array shapes/dtypes.
 
 CLI:
@@ -57,6 +61,17 @@ import random
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
+from .golden_corpus_fold import (
+    FOLD_RECORD_FIELDS,
+    FOLD_ROWS_FILENAME,
+    FoldSidecarWriter,
+    FoldSurfaceRecorder,
+    GoldenFoldRow,
+    build_fold_rows,
+    fold_record_from_row,
+    fold_row_from_record,
+    iter_fold_records,
+)
 from .local_showdown import (
     LocalShowdownConfig,
     LocalShowdownEnv,
@@ -66,9 +81,10 @@ from .observation import PokeZeroObservationV0
 from .policy import PolicyContext, PolicyDecision, RandomLegalPolicy, SimpleLegalPolicy
 from .public_decision_corpus import sha256_file
 from .rollout import RolloutConfig, continue_rollout_from_current_state
+from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2
 from .showdown_fixture import FixturePokemon, pack_team
 
-GOLDEN_CORPUS_SCHEMA_VERSION = "pokezero.golden-encoder-corpus.v1"
+GOLDEN_CORPUS_SCHEMA_VERSION = "pokezero.golden-encoder-corpus.v2"
 
 GOLDEN_ROWS_FILENAME = "rows.jsonl"
 GOLDEN_ARRAYS_FILENAME = "arrays.npz"
@@ -119,6 +135,21 @@ GOLDEN_CORPUS_SCHEMA_DESCRIPTION: Mapping[str, Any] = {
         "sha256 over the row's array slices concatenated in GOLDEN_ARRAY_FIELDS "
         "order, C-order little-endian bytes"
     ),
+    # Schema v2: the fold surface. One gzip JSONL sidecar (fold.jsonl.gz,
+    # mtime=0) holding a fold_header record then one fold record per decision
+    # row, in corpus row order. Each fold record carries the serialized
+    # incremental fold state at the decision boundary
+    # (pokezero.transitions_fold.FoldState.to_payload, production-default tail
+    # limits), the |t:|-filtered inter-decision event slice since the previous
+    # SAME-SEAT decision boundary, the Tier-2 annotation overlay applied at the
+    # boundary, and the boundary products — the row-pair validation surface for
+    # candidate advance() implementations (scripts/validate_corpus_v2.py). The
+    # sidecar links to rows.jsonl by array_row_index + row_sha256 and is
+    # optional at the writer level (synthetic corpora may omit it); the
+    # reference corpus always carries it.
+    "fold_record_types": ("fold_header", "fold"),
+    "fold_fields": FOLD_RECORD_FIELDS,
+    "fold_file": FOLD_ROWS_FILENAME,
 }
 
 
@@ -321,6 +352,17 @@ class GoldenGameRecord:
 class GoldenGame:
     record: GoldenGameRecord
     rows: tuple[GoldenDecisionRow, ...]
+    # Schema-v2 fold surface, parallel to ``rows`` (one fold row per decision
+    # row) when present. Optional at the writer level so synthetic/array-only
+    # corpora stay expressible; the reference corpus always carries it.
+    fold_rows: tuple[GoldenFoldRow, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.fold_rows and len(self.fold_rows) != len(self.rows):
+            raise ValueError(
+                f"game {self.record.battle_id!r} carries {len(self.fold_rows)} fold rows "
+                f"for {len(self.rows)} decision rows; the fold surface must be parallel."
+            )
 
 
 @dataclass(frozen=True)
@@ -355,13 +397,24 @@ def write_golden_corpus(
     for key in ("record_type", "schema_version", "schema_sha256"):
         if key in header:
             raise ValueError(f"header must not pre-set writer-owned field {key!r}.")
+    fold_flags = {bool(game.fold_rows) for game in games if game.rows}
+    if fold_flags == {True, False}:
+        raise ValueError(
+            "either every game carries the fold surface or none does; a mixed corpus "
+            "would break per-row fold chain validation."
+        )
+    fold_present = fold_flags == {True}
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rows_path = out_dir / GOLDEN_ROWS_FILENAME
     arrays_path = out_dir / GOLDEN_ARRAYS_FILENAME
     manifest_path = out_dir / GOLDEN_MANIFEST_FILENAME
-    for path in (rows_path, arrays_path, manifest_path):
+    fold_path = out_dir / FOLD_ROWS_FILENAME
+    checked_paths = [rows_path, arrays_path, manifest_path]
+    if fold_present:
+        checked_paths.append(fold_path)
+    for path in checked_paths:
         if path.exists():
             raise FileExistsError(f"golden corpus file already exists: {path}")
 
@@ -375,28 +428,59 @@ def write_golden_corpus(
     stacked: dict[str, list[Any]] = {name: [] for name, _, _ in GOLDEN_ARRAY_FIELDS}
     reference_shapes: dict[str, tuple[int, ...]] | None = None
     array_row_index = 0
-    with rows_path.open("x", encoding="utf-8") as handle:
+    fold_writer: FoldSidecarWriter | None = None
+    try:
+        if fold_present:
+            fold_writer = FoldSidecarWriter(fold_path, canonical_json_bytes=_canonical_json_bytes)
+            fold_writer.write_header(
+                {
+                    "record_type": "fold_header",
+                    "schema_version": GOLDEN_CORPUS_SCHEMA_VERSION,
+                    "schema_sha256": GOLDEN_CORPUS_SCHEMA_SHA256,
+                    "fold_fields": list(FOLD_RECORD_FIELDS),
+                }
+            )
+        with rows_path.open("x", encoding="utf-8") as handle:
 
-        def _write_line(payload: Mapping[str, Any]) -> None:
-            handle.write(_canonical_json_bytes(payload).decode("utf-8"))
-            handle.write("\n")
+            def _write_line(payload: Mapping[str, Any]) -> None:
+                handle.write(_canonical_json_bytes(payload).decode("utf-8"))
+                handle.write("\n")
 
-        _write_line(header_record)
-        for game in games:
-            _write_line(game.record.to_json_dict(decision_row_count=len(game.rows)))
-            for row in game.rows:
-                shapes = {name: array.shape for name, array in row.arrays.field_arrays()}
-                if reference_shapes is None:
-                    reference_shapes = shapes
-                elif shapes != reference_shapes:
-                    raise ValueError(
-                        f"decision row {array_row_index} array shapes {shapes} do not match "
-                        f"the corpus shapes {reference_shapes}."
-                    )
-                for name, array in row.arrays.field_arrays():
-                    stacked[name].append(array)
-                _write_line(row.to_json_dict(array_row_index=array_row_index))
-                array_row_index += 1
+            _write_line(header_record)
+            for game in games:
+                _write_line(game.record.to_json_dict(decision_row_count=len(game.rows)))
+                for row_index, row in enumerate(game.rows):
+                    shapes = {name: array.shape for name, array in row.arrays.field_arrays()}
+                    if reference_shapes is None:
+                        reference_shapes = shapes
+                    elif shapes != reference_shapes:
+                        raise ValueError(
+                            f"decision row {array_row_index} array shapes {shapes} do not match "
+                            f"the corpus shapes {reference_shapes}."
+                        )
+                    for name, array in row.arrays.field_arrays():
+                        stacked[name].append(array)
+                    row_payload = row.to_json_dict(array_row_index=array_row_index)
+                    _write_line(row_payload)
+                    if fold_writer is not None:
+                        fold_writer.write_record(
+                            fold_record_from_row(
+                                game.fold_rows[row_index],
+                                schema_version=GOLDEN_CORPUS_SCHEMA_VERSION,
+                                battle_seed=row.battle_seed,
+                                battle_id=row.battle_id,
+                                format_id=row.format_id,
+                                player_id=row.player_id,
+                                decision_round_index=row.decision_round_index,
+                                array_row_index=array_row_index,
+                                row_sha256=row_payload["row_sha256"],
+                                canonical_sha256=golden_canonical_sha256,
+                            )
+                        )
+                    array_row_index += 1
+    finally:
+        if fold_writer is not None:
+            fold_writer.close()
 
     assert reference_shapes is not None
     arrays = {
@@ -406,22 +490,31 @@ def write_golden_corpus(
     with arrays_path.open("xb") as handle:
         numpy.savez_compressed(handle, **arrays)
 
+    counts: dict[str, int] = {"games": len(games), "decisions": array_row_index}
+    files: dict[str, Any] = {
+        GOLDEN_ROWS_FILENAME: {
+            "sha256": sha256_file(rows_path),
+            "bytes": rows_path.stat().st_size,
+        },
+        GOLDEN_ARRAYS_FILENAME: {
+            "sha256": sha256_file(arrays_path),
+            "bytes": arrays_path.stat().st_size,
+        },
+    }
+    if fold_writer is not None:
+        counts["fold_rows"] = fold_writer.record_count
+        files[FOLD_ROWS_FILENAME] = {
+            "sha256": sha256_file(fold_path),
+            "bytes": fold_path.stat().st_size,
+            "uncompressed_bytes": fold_writer.uncompressed_bytes,
+        }
     manifest = {
         "schema_version": GOLDEN_CORPUS_SCHEMA_VERSION,
         "schema_sha256": GOLDEN_CORPUS_SCHEMA_SHA256,
-        "counts": {"games": len(games), "decisions": array_row_index},
+        "counts": counts,
         "array_dtypes": {name: dtype for name, dtype, _ in GOLDEN_ARRAY_FIELDS},
         "array_shapes": {name: list(shape) for name, shape in reference_shapes.items()},
-        "files": {
-            GOLDEN_ROWS_FILENAME: {
-                "sha256": sha256_file(rows_path),
-                "bytes": rows_path.stat().st_size,
-            },
-            GOLDEN_ARRAYS_FILENAME: {
-                "sha256": sha256_file(arrays_path),
-                "bytes": arrays_path.stat().st_size,
-            },
-        },
+        "files": files,
     }
     manifest_path.write_text(
         json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=True, allow_nan=False) + "\n",
@@ -533,7 +626,14 @@ def _row_from_json(
 
 
 def load_golden_corpus(corpus_dir: Path) -> GoldenCorpus:
-    """Read and structurally validate a golden corpus (row hashes included)."""
+    """Read and structurally validate a golden corpus (row hashes included).
+
+    The fold sidecar is deliberately NOT loaded here (late-game fold payloads
+    are ~226 KB each; loading them all would multiply resident memory by an
+    order of magnitude). Stream it with
+    :func:`pokezero.golden_corpus_fold.iter_fold_records`;
+    :func:`verify_golden_corpus` checks its integrity and links.
+    """
 
     corpus_dir = Path(corpus_dir)
     manifest = _load_manifest(corpus_dir)
@@ -611,14 +711,87 @@ class GoldenCorpusVerification:
     array_shapes: Mapping[str, tuple[int, ...]]
     rows_sha256: str
     arrays_sha256: str
+    fold_rows: int = 0
+
+
+def _verify_fold_sidecar(corpus_dir: Path, corpus: GoldenCorpus, manifest: Mapping[str, Any]) -> int:
+    """Stream-verify the fold sidecar: links, hashes, chain contiguity."""
+
+    decision_rows = corpus.decision_rows
+    expected_index = 0
+    chain_expect: dict[tuple[str, str], int] = {}
+    for record in iter_fold_records(corpus_dir, expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION):
+        if expected_index >= len(decision_rows):
+            raise ValueError("fold sidecar carries more records than the corpus has decision rows.")
+        row = decision_rows[expected_index]
+        if int(record["array_row_index"]) != expected_index:
+            raise ValueError(
+                f"fold record #{expected_index} carries array_row_index "
+                f"{record['array_row_index']}; fold records must follow corpus row order."
+            )
+        rebuilt = row.to_json_dict(array_row_index=expected_index)
+        if record["row_sha256"] != rebuilt["row_sha256"]:
+            raise ValueError(f"fold record #{expected_index}: row_sha256 does not match its decision row.")
+        for key, want in (
+            ("battle_seed", row.battle_seed),
+            ("battle_id", row.battle_id),
+            ("format_id", row.format_id),
+            ("player_id", row.player_id),
+            ("decision_round_index", row.decision_round_index),
+        ):
+            if record[key] != want:
+                raise ValueError(
+                    f"fold record #{expected_index}: {key} {record[key]!r} does not match "
+                    f"its decision row ({want!r})."
+                )
+        for payload_key, hash_key in (("fold_state", "fold_state_sha256"), ("products", "products_sha256")):
+            if golden_canonical_sha256(record[payload_key]) != record[hash_key]:
+                raise ValueError(f"fold record #{expected_index}: {hash_key} does not match its payload.")
+        if record["fold_state"].get("perspective_slot") != row.player_id:
+            raise ValueError(
+                f"fold record #{expected_index}: fold state perspective does not match its seat."
+            )
+        for line in record["event_slice"]:
+            parts = str(line).split("|")
+            if (parts[1] if len(parts) > 1 else "") == "t:":
+                raise ValueError(
+                    f"fold record #{expected_index}: event_slice contains a |t:| wall-clock line."
+                )
+        chain_key = (str(record["battle_id"]), str(record["player_id"]))
+        expected_chain = chain_expect.get(chain_key, 0)
+        if int(record["chain_index"]) != expected_chain:
+            raise ValueError(
+                f"fold record #{expected_index}: chain_index {record['chain_index']} breaks the "
+                f"{chain_key} chain (expected {expected_chain})."
+            )
+        chain_expect[chain_key] = expected_chain + 1
+        expected_index += 1
+    if expected_index != len(decision_rows):
+        raise ValueError(
+            f"fold sidecar carries {expected_index} records for {len(decision_rows)} decision rows."
+        )
+    if expected_index != int(manifest["counts"].get("fold_rows", -1)):
+        raise ValueError("fold sidecar record count does not match its manifest.")
+    return expected_index
 
 
 def verify_golden_corpus(corpus_dir: Path) -> GoldenCorpusVerification:
-    """Full verification: manifest file hashes + every row/array checksum."""
+    """Full verification: manifest file hashes + every row/array checksum, plus
+    the fold sidecar's links, payload hashes, and chain contiguity when present."""
 
     corpus_dir = Path(corpus_dir)
     manifest = _load_manifest(corpus_dir)
-    for filename in (GOLDEN_ROWS_FILENAME, GOLDEN_ARRAYS_FILENAME):
+    fold_listed = FOLD_ROWS_FILENAME in manifest["files"]
+    fold_path = corpus_dir / FOLD_ROWS_FILENAME
+    if fold_listed != fold_path.exists():
+        raise ValueError(
+            f"fold sidecar presence mismatch: manifest lists it: {fold_listed}, "
+            f"file exists: {fold_path.exists()}."
+        )
+    filenames = [GOLDEN_ROWS_FILENAME, GOLDEN_ARRAYS_FILENAME]
+    if fold_listed:
+        filenames.append(FOLD_ROWS_FILENAME)
+    for filename in filenames:
         entry = manifest["files"][filename]
         path = corpus_dir / filename
         actual = sha256_file(path)
@@ -630,12 +803,14 @@ def verify_golden_corpus(corpus_dir: Path) -> GoldenCorpusVerification:
         if path.stat().st_size != int(entry["bytes"]):
             raise ValueError(f"golden corpus file {filename} size does not match its manifest.")
     corpus = load_golden_corpus(corpus_dir)
+    fold_rows = _verify_fold_sidecar(corpus_dir, corpus, manifest) if fold_listed else 0
     return GoldenCorpusVerification(
         games=len(corpus.games),
         decisions=len(corpus.decision_rows),
         array_shapes={name: tuple(shape) for name, shape in manifest["array_shapes"].items()},
         rows_sha256=manifest["files"][GOLDEN_ROWS_FILENAME]["sha256"],
         arrays_sha256=manifest["files"][GOLDEN_ARRAYS_FILENAME]["sha256"],
+        fold_rows=fold_rows,
     )
 
 
@@ -665,7 +840,23 @@ def sample_golden_corpus(src_dir: Path, dst_dir: Path, *, max_decisions: int = 5
         "games": int(corpus.manifest["counts"]["games"]),
         "decisions": int(corpus.manifest["counts"]["decisions"]),
     }
-    sampled = GoldenGame(record=first_game.record, rows=first_game.rows[:max_decisions])
+    fold_rows: tuple[GoldenFoldRow, ...] = ()
+    if FOLD_ROWS_FILENAME in corpus.manifest["files"]:
+        # Carry the sampled rows' fold surface (sidecar records are in corpus
+        # row order; the first game's rows are the first records). Link fields
+        # are recomputed by the writer; row hashes are unchanged, so the links
+        # stay identical to the source corpus.
+        sampled_records = []
+        for record in iter_fold_records(
+            Path(src_dir), expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION
+        ):
+            if int(record["array_row_index"]) >= max_decisions:
+                break
+            sampled_records.append(fold_row_from_record(record))
+        fold_rows = tuple(sampled_records)
+    sampled = GoldenGame(
+        record=first_game.record, rows=first_game.rows[:max_decisions], fold_rows=fold_rows
+    )
     return write_golden_corpus(Path(dst_dir), header=header, games=[sampled])
 
 
@@ -849,6 +1040,9 @@ def generate_golden_corpus(
         raise ValueError("games must be positive.")
     config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
     env = LocalShowdownEnv(config)
+    turn_merged_active = (
+        config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    )
     collected: list[GoldenGame] = []
     belief_hash: str | None = None
     try:
@@ -862,9 +1056,11 @@ def generate_golden_corpus(
             # to a policy.
             true_teams = _true_teams_from_bridge_snapshot(env.snapshot().bridge_snapshot)
             captures: list[tuple[PolicyContext, PolicyDecision]] = []
+            recorder = FoldSurfaceRecorder(env)
 
             def _sink(context: PolicyContext, decision: PolicyDecision) -> None:
                 captures.append((context, decision))
+                recorder.record(context.player_id)
 
             rotation = GOLDEN_POLICY_ROTATION[game_index % len(GOLDEN_POLICY_ROTATION)]
             policies = {
@@ -887,6 +1083,11 @@ def generate_golden_corpus(
                 _decision_row_from_context(context, decision, battle_seed=seed)
                 for context, decision in captures
             )
+            fold_rows = build_fold_rows(
+                replays=[context.public_materialization_state.replay for context, _ in captures],
+                surfaces=recorder.surfaces,
+                turn_merged_active=turn_merged_active,
+            )
             record = GoldenGameRecord(
                 battle_seed=seed,
                 battle_id=battle_id,
@@ -899,7 +1100,7 @@ def generate_golden_corpus(
                     "capped": result.terminal.capped,
                 },
             )
-            collected.append(GoldenGame(record=record, rows=rows))
+            collected.append(GoldenGame(record=record, rows=rows, fold_rows=fold_rows))
     finally:
         env.close()
 
@@ -981,6 +1182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "out": str(args.out),
                 "games": verification.games,
                 "decisions": verification.decisions,
+                "fold_rows": verification.fold_rows,
                 "array_shapes": {name: list(shape) for name, shape in verification.array_shapes.items()},
                 "rows_sha256": verification.rows_sha256,
                 "arrays_sha256": verification.arrays_sha256,

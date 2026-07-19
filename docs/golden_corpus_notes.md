@@ -2,11 +2,14 @@
 
 Companion to `docs/test_time_search_plan_v3.md` ("The golden corpus"). The
 corpus is the bit-exactness reference for the engine-side v2.2 encoder: track
-B is done when every stored observation tensor is reproduced bit-for-bit from
-the stored position context. Generator, reader, and verifier live in
-`src/pokezero/golden_corpus.py`; tests in `tests/test_golden_corpus.py`.
+B is done when the BOUNDARY cells are reproduced bit-for-bit from the per-row
+surface (met, PR #710) and the HISTORY cells via the fold-state advance check
+row-pair by row-pair (schema v2, below). Generator, reader, and verifier live
+in `src/pokezero/golden_corpus.py`; the schema-v2 fold surface in
+`src/pokezero/golden_corpus_fold.py`; tests in `tests/test_golden_corpus.py`,
+`tests/test_golden_corpus_fold.py`.
 
-## Corpus v1 (generated 2026-07-18)
+## Corpus v1 (generated 2026-07-18, superseded by v2 below)
 
 - Location: `corpus/golden-v1/` (gitignored — the corpus is a local/build
   artifact, never committed; regenerate with the command below).
@@ -35,11 +38,125 @@ the stored position context. Generator, reader, and verifier live in
 - A committed 5-row sample (first 5 decisions of seed 1000) lives at
   `tests/data/golden_corpus_sample/` and is verified by
   `GoldenCorpusCommittedSampleTest` on every test run — the permanent
-  regression net for schema and shapes.
+  regression net for schema and shapes. (Now regenerated as v2, below.)
 
-## Schema `pokezero.golden-encoder-corpus.v1`
+## Corpus v2 (generated 2026-07-18) — the per-row fold surface
 
-Directory layout: `rows.jsonl` + `arrays.npz` + `manifest.json`.
+Schema v2 implements the plan's schema-v2 decision
+(`test_time_search_plan_v3.md`, "Schema v2"): v1 rows cannot validate
+history-derived cells (transition tokens 23–150, tendency aggregates), so v2
+records, per decision row, the **incremental fold state** at the boundary
+(`pokezero.transitions_fold.FoldState.to_payload()`, production-default tail
+limits 512/128 — the corpus exercises production state, never shrunken knobs),
+the **inter-decision event slice** (public protocol lines since the previous
+SAME-SEAT decision boundary, `|t:|` wall-clock lines filtered), the **Tier-2
+annotation overlay** applied at the boundary (the live trackers' per-index
+conclusions — `apply_annotations`' runtime input), and the **boundary
+products** (`FoldProducts`, generation-time asserted equal to the production
+encoder state's surfaces before anything is written). The golden v1 columns
+are UNCHANGED — the regenerated random battery's `arrays.npz` is byte-identical
+to corpus v1 (`7c8b7f4c…`, same games, same golden arrays).
+
+Generated artifacts (both gitignored; regenerate with the commands below):
+
+- `corpus/golden-v2` — the random battery: 10 games (seeds 1000–1009),
+  **1028 decision rows / 1028 fold rows**, belief candidate-set source ON.
+  `python -m pokezero.golden_corpus --showdown-root <built-showdown> \
+   --games 10 --seed-start 1000 --out corpus/golden-v2 --belief-set-source on`
+- `corpus/golden-v2-scenarios` — the full curated scenario suite
+  (Truant/Transform/Encore/recharge/Baton Pass/Wish/sand+Shedinja/RestTalk/
+  screens/toxic): 10 games, **290 decision rows / 290 fold rows** — these
+  deterministically exercise the OOV safety net (screens/Safeguard are outside
+  the closed randbats vocab) and the risky fold components.
+  `python -m pokezero.golden_corpus_scenarios --showdown-root <built-showdown> \
+   --out corpus/golden-v2-scenarios --belief-set-source on`
+
+Review notes (PR #720): the scenario suite records **0/290 rows with an
+annotation overlay** — its scripted games produce no assessable Tier-2
+strikes (production-confirmed; the generation binding would fail otherwise),
+so overlay/annotation coverage comes from the random battery (905/1028 rows)
+and the `test_transitions_fold` differential (535 annotated boundaries), not
+the scenarios. Separately, overlays store ABSOLUTE token indices and the
+reference `advance` requires them within the last `action_tail_limit=512`
+actions; gen3randombattle maxes out around index reach 177 (~3x headroom),
+and exceeding the wall in a longer format is a LOUD generation/validation
+error ("annotation index outside identifiable range"), never silent
+divergence.
+
+### Size engineering (the fold payloads are tail-dominated)
+
+Late-game fold payloads are ~226 KB (mean fold record ~125 KB, max ~383 KB over
+1028 rows). The chosen lever is **whole-file gzip of the sidecar**
+(`fold.jsonl.gz`, `mtime=0` so bytes are deterministic; stdlib-only — no zstd
+dependency in the shared venv). Per-row compression was rejected (base64
+overhead, loses the enormous key-repetition redundancy), and every-Nth-state
+storage was not needed at these sizes (and would have indirected the row-pair
+contract).
+
+| corpus | fold rows | naive (uncompressed JSONL) | `fold.jsonl.gz` | ratio |
+|---|---|---|---|---|
+| golden-v2 | 1028 | 128,537,481 B (~122.6 MiB) | 5,069,549 B (~4.8 MiB) | 25.4x |
+| golden-v2-scenarios | 290 | 11,881,630 B (~11.3 MiB) | 375,861 B (~0.36 MiB) | 31.6x |
+
+(The golden files are unchanged: `rows.jsonl` ~32.5 MB / ~2.7 MB,
+`arrays.npz` ~2.3 MB / ~0.6 MB.) The naive total is recorded per corpus in
+`manifest.json` (`files."fold.jsonl.gz".uncompressed_bytes`).
+
+### Row-pair validation contract (the Rust advance() gate)
+
+`scripts/validate_corpus_v2.py` — per (game, seat) chain: row 0 must be
+reproduced from `FoldState.initial()` advanced over its slice (+ overlay);
+every consecutive same-seat pair must satisfy
+`load(row_n.fold_state).advance(row_{n+1}.event_slice)` +
+`apply_annotations(row_{n+1}.annotation_overlay)` == row_{n+1}'s recorded
+fold state AND products, **canonical-JSON byte-exact**, each pair validated
+independently from the recorded row-n state — exactly the transition a
+search-time advance performs. The backend seam
+(`pokezero.golden_corpus_fold.FoldBackend`: `start` / `load` / `step` over
+payload dicts) mirrors `validate_rust_encoder.py`'s: the Rust `advance()`
+port registers as one more backend and inherits the whole harness.
+
+Results (2026-07-18, `--backend python-reference --verify-corpus`):
+
+- golden-v2: 10 games x 2 seats = 20 chains, **1028/1028 boundaries validated**
+  (20 chain starts + 1008 row pairs), state + products byte-exact, 2.1s.
+- golden-v2-scenarios: 20 chains, **290/290 boundaries validated**
+  (20 starts + 270 pairs), byte-exact, 0.2s.
+
+Encoder-gate regression (unchanged golden surface, proven at scale):
+`validate_rust_encoder.py --backend compare-backends` exits 0 with **ALL
+EXACT** over all 1028 golden-v2 rows AND all 290 scenario rows (rust vs
+python-reference, every array byte-for-byte).
+
+### Determinism
+
+Two back-to-back single-game regenerations (seed 1000) produce byte-identical
+`rows.jsonl`, `arrays.npz`, `manifest.json`, AND `fold.jsonl.gz` (gzip written
+with `mtime=0`; canonical JSON throughout). The committed 5-row sample now
+carries its fold sidecar; `CommittedSampleFoldChainTest`
+(`tests/test_golden_corpus_fold.py`) row-pair-validates it on every test run
+with no Showdown checkout — the permanent regression net for
+`FoldState.advance` against recorded production state.
+
+## Schema `pokezero.golden-encoder-corpus.v2`
+
+Directory layout: `rows.jsonl` + `arrays.npz` + `fold.jsonl.gz` (schema v2)
++ `manifest.json`. The v1 record shapes below are carried unchanged (records
+now stamp the v2 schema id); the fold sidecar is optional at the writer level
+(synthetic/array-only corpora may omit it) and always present in the
+reference corpus.
+
+`fold.jsonl.gz` (gzip JSONL, `mtime=0`): one `fold_header` record, then one
+`fold` record per decision row in corpus row order. Fold record fields:
+identifiers (`battle_seed`/`battle_id`/`format_id`/`player_id`/
+`decision_round_index`), `chain_index` (per game+seat, from 0),
+`array_row_index` + `row_sha256` (links to the golden decision row),
+`event_slice`, `annotation_overlay` (`{token_index: [residual,
+residual_valid, cb_bit, investment]}`), `fold_state` (+`fold_state_sha256`),
+`products` (+`products_sha256`). `verify_golden_corpus` checks file hashes,
+per-record payload hashes, row links, and chain contiguity; the sidecar
+streams via `pokezero.golden_corpus_fold.iter_fold_records` and is
+deliberately not loaded by `load_golden_corpus`.
 
 `rows.jsonl` records (canonical JSON: sorted keys, ASCII, `allow_nan=False`):
 
