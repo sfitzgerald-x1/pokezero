@@ -193,3 +193,18 @@ Readings:
   branches already carry (the per-outcome instruction/event list).
 - Epistemic variance (belief worlds) stays a separate axis above this crate,
   aggregated at the root by the Python orchestration.
+
+## Review caveats (PR #721, non-blocking)
+
+- **f32 value accumulation drifts at very high sim counts.** `MoveStats.total_value`
+  sums f32 `visits` times before dividing; at a constant 0.85 backup the reported
+  Q reads 0.84941 at 200k sims and 0.85676 at 1M (deterministic, reproduced with a
+  pure-f32 accumulator). Negligible (<1e-4) at the intended <=8192-sim budgets and
+  pre-existing in the one-ply core, but the exact-expectation backup makes it the
+  dominant error at extreme sim counts — switch to f64 accumulation before any
+  high-sim regime.
+- **Keep batch << iterations on the throughput path.** `search_batched_multi`
+  root VALUE fidelity degrades as batch approaches iterations (0.934 -> 0.569 at
+  batch 1 -> 64 with iters=512; argmax stays stable) — the documented virtual-loss
+  tradeoff. Whoever wires the FoulPlay eval path must size batch well below the
+  per-decision sim budget.
