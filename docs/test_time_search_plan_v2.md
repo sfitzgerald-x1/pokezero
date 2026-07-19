@@ -96,6 +96,13 @@ strength. In order:
    Deliverable: **winrate vs seconds-per-turn curve** and its knee — "how far
    can we reasonably search" answered in points, not visits.
 
+**Execution status (2026-07-19):** the first two frontier W2 Jobs were
+intentionally retired before completion. They predated the validated CPU-thread
+and adaptive-batching W5 configuration, so their multi-hour partial rows are
+not the fast-path curve and must not select W3's knee. Their persisted artifacts
+remain diagnostic-only. Re-launch W2 after the current W5 telemetry fixes the
+next search configuration, then run the matching marker-backed W3 controller.
+
 ### W3 — Frontier small checkpoint (v2.2 @ 3M)
 
 **Current readiness (2026-07-18):** `emeta-v2-2-lr3m-3m-belief` continued from
@@ -104,9 +111,11 @@ strength. In order:
 capture/refit completed and selected an isotonic value leaf: Pearson `0.593`,
 sign accuracy `0.773`, and ECE `0.143`. The ranking and sign gates pass; the ECE
 miss is recorded as the plan's documented-proceed outcome rather than a clean
-calibration pass. The matching W2 curve is running, with a marker-backed W3
-controller staged to submit the paired frontier read from the resulting knee.
-No frontier paired-search result has been claimed yet.
+calibration pass. The pre-tuned matching W2 Jobs and their waiting W3
+controllers were retired before producing a curve; the replacement W2 run must
+use the validated W5 fast-path configuration. A marker-backed W3 controller
+will submit the paired frontier read from that resulting knee. No frontier
+paired-search result has been claimed yet.
 
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
    A 1M-fitted isotonic map on a 3M value head confounds the read — the one
@@ -283,9 +292,10 @@ result. Success remains **more winrate at fixed wall-clock**, not more visits.
 ## Order and cost
 
 W5 (materialization redesign) is now first — W1's diagnosis and W4's cost
-table are complete and both point at it. W2's value curve continues in
-parallel (its data is still wanted and re-runs cheaply on the fast path); W3
-proceeds once its leaf refit lands. Every strength
+table are complete and both point at it. The previous W2 runs were retired
+because they were not using the validated W5 fast path; W2 resumes from a fresh
+configuration after the current bounded telemetry selects its next target, and
+W3 follows that curve. Every strength
 claim uses the paired harness, both arms on shared seeds; no strength claims
 from unpaired or single-arm runs.
 
