@@ -313,6 +313,36 @@ Rust fold advance → per-outcome products, hit/miss histories diverging),
 and `scripts/validate_corpus_v2.py --backend rust` unchanged
 (1028+290 boundaries byte-exact — the fold itself is untouched).
 
+Review hardening (PR #727 adversarial review, both LOWs landed):
+attacker-side damage renders through an attribution ladder — Rough Skin
+contact punishment `[from] ability: Rough Skin|[of]` (engine order: before
+recoil, exact-amount matched), Destiny Bond `[from] move: Destiny Bond`,
+recoil `[from] Recoil`, genuine self-costs (Substitute / Belly Drum /
+Curse / Pain Split) bare, anything unexplained bare + `lossy`
+(`unattributed_self_damage`) — a bare line charges the fold's
+`self_hp_cost`, so opponent-inflicted damage is never mis-read as a self
+cost; and an ambiguous Sleep Talk call is flagged `lossy` even on an empty
+delta (the never-mis-attribute invariant holds universally).
+
+### Forward caveats for the in-crate-encoder PR (flagged in review; NOT built here)
+
+1. **Nicknames.** Synthesized idents use display SPECIES (`p1a: Slaking`).
+   Correct for randbats/local games (no nicknames) and for fold semantics
+   (occupants come from switch DETAILS, which are species either way), but
+   a live root fold built from a nicknamed ladder game carries nickname
+   idents — the encoder integration must source idents from the live
+   battle's nickname map, or keep relying on the fold's details-based
+   occupant tracking and document ident mismatch as cosmetic.
+2. **Opponent HP base reconciliation.** A live root fold has consumed the
+   real stream's opponent HP as `cur/100` fractions, while the mapper
+   renders true-`cur/maxhp` from the (belief-sampled) engine world. The
+   fractions are consistent to ±1/200 rounding, but damage_fraction deltas
+   at leaves will be computed against the /100-derived `hp_fraction` carried
+   in the root state — fine numerically, INVISIBLE in the fidelity corpus
+   (it records exact HP throughout). The integration should either render
+   opponent conditions on a /100 base to match the live stream's
+   granularity, or accept and document the sub-percent mixed-base error.
+
 ## Review caveats (PR #721, non-blocking)
 
 - **f32 value accumulation drifts at very high sim counts.** `MoveStats.total_value`

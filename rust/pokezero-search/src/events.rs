@@ -1041,9 +1041,13 @@ fn consume_move_prelude(
                     // protocol shows |cant|..|slp| AND the Sleep Talk lines.
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id != Choices::SLEEPTALK {
-                        prelude.used_move = false;
+                    if choice.move_id == Choices::SLEEPTALK {
+                        // Everything after the sleep gate belongs to the
+                        // CALLED move (e.g. a called Refresh's status cure
+                        // must not be mis-read as a natural wake).
+                        return prelude;
                     }
+                    prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
             }
@@ -1054,9 +1058,10 @@ fn consume_move_prelude(
                     // Still resting.
                     let ident = ctx.active_ident(sim.state, side);
                     out.lines.push(format!("|cant|{ident}|slp"));
-                    if choice.move_id != Choices::SLEEPTALK {
-                        prelude.used_move = false;
+                    if choice.move_id == Choices::SLEEPTALK {
+                        return prelude; // see above
                     }
+                    prelude.used_move = false;
                 }
                 sleep_gate_seen = true;
             }
@@ -1157,13 +1162,13 @@ fn render_move_phase(
                 }
                 None => {
                     // Unrecoverable from the delta (documented insufficiency):
-                    // fold-safe fallback — the effects accrue to the Sleep
-                    // Talk window.
-                    if !tail.is_empty() {
-                        out.lossy.push("sleeptalk_called_unidentified".to_string());
-                        for ins in &tail {
-                            render_residual_instruction(sim, ins, ctx, out, true);
-                        }
+                    // fold-safe fallback — the effects (if any) accrue to
+                    // the Sleep Talk window. ALWAYS flagged, even for an
+                    // empty delta (an ambiguous no-op call still means the
+                    // real stream had a called-move line we cannot emit).
+                    out.lossy.push("sleeptalk_called_unidentified".to_string());
+                    for ins in &tail {
+                        render_residual_instruction(sim, ins, ctx, out, true);
                     }
                 }
             }
@@ -1500,6 +1505,7 @@ fn render_move_phase(
     let mut defender_hits: i64 = 0;
     let mut crit_emitted = false;
     let mut damage_lines_done = false;
+    let mut roughskin_emitted = false;
     let mut pending_faints: Vec<SideReference> = Vec::new();
     macro_rules! note_faint {
         ($side:expr) => {
@@ -1558,9 +1564,49 @@ fn render_move_phase(
                     .push(format!("|-end|{defender_ident}|Substitute"));
             }
             Instruction::Damage(damage) if damage.side_ref == side => {
+                // Attacker-side damage attribution ladder. A bare render is
+                // read by the fold as SELF-COST, so opponent-inflicted
+                // damage (Rough Skin, Destiny Bond) must carry its [from]
+                // tag; anything unexplained is rendered bare but flagged
+                // lossy — never silently mis-attributed.
+                let (pre_hp, pre_maxhp) = sim.active_hp(side);
+                let roughskin_expected = std::cmp::min(pre_maxhp / 16, pre_hp);
+                let is_roughskin = !roughskin_emitted
+                    && defender_ability == Abilities::ROUGHSKIN
+                    && choice.flags.contact
+                    && deals_damage_to_defender
+                    && damage.damage_amount == roughskin_expected;
+                let is_destiny_bond = {
+                    let d = match defender {
+                        SideReference::SideOne => &sim.state.side_one,
+                        SideReference::SideTwo => &sim.state.side_two,
+                    };
+                    d.volatile_statuses
+                        .contains(&PokemonVolatileStatus::DESTINYBOND)
+                        && damage.damage_amount == pre_hp
+                        && deals_damage_to_defender
+                };
                 if is_self_faint_move {
                     // Explosion-class: the real protocol shows only |faint|.
                     sim.apply(ins);
+                    note_faint!(side);
+                } else if is_roughskin {
+                    // Engine order: the contact-punish damage lands BEFORE
+                    // any recoil damage (ability_after_damage_hit precedes
+                    // the recoil push in generate_instructions_from_damage).
+                    roughskin_emitted = true;
+                    sim.apply(ins);
+                    let condition = sim.hp_condition(side);
+                    out.lines.push(format!(
+                        "|-damage|{attacker_ident}|{condition}|[from] ability: Rough Skin|[of] {defender_ident}"
+                    ));
+                    note_faint!(side);
+                } else if is_destiny_bond {
+                    sim.apply(ins);
+                    let condition = sim.hp_condition(side);
+                    out.lines.push(format!(
+                        "|-damage|{attacker_ident}|{condition}|[from] move: Destiny Bond"
+                    ));
                     note_faint!(side);
                 } else if choice.recoil.is_some() {
                     sim.apply(ins);
@@ -1569,11 +1615,23 @@ fn render_move_phase(
                         "|-damage|{attacker_ident}|{condition}|[from] Recoil|[of] {defender_ident}"
                     ));
                     note_faint!(side);
+                } else if matches!(
+                    choice.move_id,
+                    Choices::SUBSTITUTE | Choices::BELLYDRUM | Choices::CURSE | Choices::PAINSPLIT
+                ) {
+                    // Genuine self-costs (the fold SHOULD count these, and
+                    // the real protocol renders them bare).
+                    sim.apply(ins);
+                    let condition = sim.hp_condition(side);
+                    out.lines
+                        .push(format!("|-damage|{attacker_ident}|{condition}"));
+                    note_faint!(side);
                 } else {
-                    // Unexpected self damage inside a move phase (e.g. Belly
-                    // Drum HP cost, curse): no [from] would corrupt the
-                    // window's self-cost only if wrong — Belly Drum/Curse
-                    // costs ARE self costs, so render bare.
+                    // Unexplained attacker-side damage: render bare (the
+                    // status-quo reading) but FLAG it — a bare line charges
+                    // the window's self_hp_cost, which is wrong if the true
+                    // source was opponent-inflicted.
+                    out.lossy.push("unattributed_self_damage".to_string());
                     sim.apply(ins);
                     let condition = sim.hp_condition(side);
                     out.lines

@@ -21,7 +21,16 @@ except ImportError:  # pragma: no cover
     pokezero_search = None  # type: ignore[assignment]
 
 
-def _build_state(side_one_moves, side_two_moves, *, s1_speed=200, s2_hp=100):
+def _build_state(
+    side_one_moves,
+    side_two_moves,
+    *,
+    s1_speed=200,
+    s2_hp=100,
+    s1_status="none",
+    s2_ability=None,
+    s2_maxhp=100,
+):
     from pokezero.poke_engine_adapter import (
         BattleSpec,
         MoveSpec,
@@ -30,7 +39,7 @@ def _build_state(side_one_moves, side_two_moves, *, s1_speed=200, s2_hp=100):
         build_poke_engine_state,
     )
 
-    def mon(species, moves, *, hp=100, maxhp=100, speed=100):
+    def mon(species, moves, *, hp=100, maxhp=100, speed=100, status="none", ability=None):
         return PokemonSpec(
             id=species,
             level=100,
@@ -42,13 +51,26 @@ def _build_state(side_one_moves, side_two_moves, *, s1_speed=200, s2_hp=100):
             special_attack=100,
             special_defense=100,
             speed=speed,
-            status="none",
+            status=status,
+            ability=ability,
             moves=tuple(MoveSpec(id=m, pp=32) for m in moves),
         )
 
     spec = BattleSpec(
-        side_one=SideSpec(pokemon=(mon("rattata", side_one_moves, speed=s1_speed),)),
-        side_two=SideSpec(pokemon=(mon("chansey", side_two_moves, hp=s2_hp),)),
+        side_one=SideSpec(
+            pokemon=(mon("rattata", side_one_moves, speed=s1_speed, status=s1_status),)
+        ),
+        side_two=SideSpec(
+            pokemon=(
+                mon(
+                    "chansey",
+                    side_two_moves,
+                    hp=s2_hp,
+                    maxhp=s2_maxhp,
+                    ability=s2_ability,
+                ),
+            )
+        ),
     )
     return build_poke_engine_state(spec).to_string()
 
@@ -123,6 +145,64 @@ class BranchEventsTest(unittest.TestCase):
         ko = "\n".join(branches[0]["events"])
         self.assertIn("|-damage|p2a: Chansey|0 fnt", ko)
         self.assertIn("|faint|p2a: Chansey", ko)
+
+    def test_rough_skin_contact_damage_is_not_a_self_cost(self) -> None:
+        # Contact-ability punishment (Rough Skin) must carry its [from]
+        # attribution: a bare attacker-side |-damage| would be read by the
+        # fold as self_hp_cost (PR #727 review, LOW-1).
+        state = _build_state(
+            ("tackle",), ("splash",), s2_ability="roughskin", s2_hp=400, s2_maxhp=400
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "tackle", "splash", CTX, True, False)
+        )
+        contact_branches = 0
+        for branch in report["branches"]:
+            self.assertEqual(branch["lossy"], [], branch)
+            attacker_damage = [
+                line for line in branch["events"] if line.startswith("|-damage|p1a: Rattata|")
+            ]
+            if not attacker_damage:
+                continue  # miss branch
+            contact_branches += 1
+            for line in attacker_damage:
+                self.assertIn(
+                    "|[from] ability: Rough Skin|[of] p2a: Chansey", line, line
+                )
+        self.assertGreater(contact_branches, 0)
+        # And the fold reads it as opponent-inflicted, not a self cost.
+        fold = pokezero_search.FoldState.initial("p1")
+        fold.advance_in_place(LEAD_LINES)
+        hit = next(
+            b
+            for b in report["branches"]
+            if any(l.startswith("|-damage|p1a: Rattata|") for l in b["events"])
+        )
+        fold.advance_in_place(hit["events"])
+        tackle = next(
+            token
+            for token in fold.products_payload()["transition_tokens"]
+            if token["kind"] == "move" and token["action"] == "tackle"
+        )
+        self.assertEqual(tackle["self_hp_cost"], 0.0)
+
+    def test_ambiguous_sleep_talk_call_is_flagged_lossy(self) -> None:
+        # An asleep Sleep Talker whose callable moves ALL produce an empty
+        # delta (splash, and roar against a reserve-less side): the called
+        # move cannot be identified, and the invariant is flag-lossy, never
+        # silently drop (PR #727 review, LOW-2).
+        state = _build_state(
+            ("sleeptalk", "splash", "roar"), ("splash",), s1_status="sleep"
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, False)
+        )
+        flagged = [
+            b
+            for b in report["branches"]
+            if "sleeptalk_called_unidentified" in b["lossy"]
+        ]
+        self.assertTrue(flagged, report["branches"])
 
 
 @unittest.skipIf(pokezero_search is None, "pokezero_search native module not built")
