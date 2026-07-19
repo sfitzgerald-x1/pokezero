@@ -103,31 +103,6 @@ def _source() -> Gen3RandbatSource:
                     }
                 ],
             },
-            "charizard": {
-                "level": 79,
-                "sets": [
-                    {
-                        "role": "Berry Sweeper",
-                        "movepool": ["fireblast", "dragonclaw", "hiddenpowergrass", "substitute"],
-                        "abilities": ["Blaze"],
-                    },
-                    {
-                        "role": "Support",
-                        "movepool": ["fireblast", "dragonclaw", "hiddenpowergrass", "rest"],
-                        "abilities": ["Blaze"],
-                    },
-                ],
-            },
-            "shedinja": {
-                "level": 100,
-                "sets": [
-                    {
-                        "role": "Physical Attacker",
-                        "movepool": ["hiddenpowerfighting", "shadowball", "toxic", "silverwind"],
-                        "abilities": ["Wonder Guard"],
-                    }
-                ],
-            },
             "tauros": {
                 "level": 76,
                 "sets": [
@@ -280,7 +255,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertIsNotNone(profile)
         assert profile is not None
-        self.assertEqual(profile.combination_count, 56)
+        self.assertEqual(profile.combination_count, 12)
         self.assertEqual(profile.sample_count, 8)
         self.assertGreater(profile.uncertainty_bits, 3.0)
         self.assertEqual(profile.uncertain_slot_count, 3)
@@ -454,6 +429,23 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         assert callable(source)
         xatu = source().player_teams["p1"].split("]", maxsplit=1)[0]
         self.assertTrue(xatu.endswith("|84|"))
+
+    def test_planner_does_not_treat_cached_candidate_subset_as_public_evidence(self) -> None:
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+        abilities = set()
+        for seed in range(16):
+            source = planner(
+                _context(_metadata()),
+                OpponentActionScenario(actions={"p1": 0}),
+                0,
+                random.Random(seed),
+            )
+            self.assertTrue(callable(source))
+            assert callable(source)
+            xatu = source().player_teams["p1"].split("]", maxsplit=1)[0]
+            abilities.add(xatu.split("|")[3])
+
+        self.assertEqual(abilities, {"Synchronize", "EarlyBird"})
 
     def test_planner_preserves_public_ability_exclusions_when_rebuilding_candidates(self) -> None:
         metadata = _metadata()

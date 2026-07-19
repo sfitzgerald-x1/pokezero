@@ -1176,35 +1176,7 @@ def _canonical_revealed_variant_payloads(
         ruled_out_abilities=pokemon.ruled_out_abilities,
         ruled_out_items=pokemon.ruled_out_items,
     )
-    canonical_payloads = tuple(variant.to_summary() for variant in variants)
-    if not canonical_payloads or not pokemon.candidate_variants:
-        return canonical_payloads
-    narrowed = tuple(
-        candidate
-        for canonical in canonical_payloads
-        for candidate in pokemon.candidate_variants
-        if _candidate_payload_matches_canonical(candidate, canonical)
-    )
-    # A stale serialized candidate set must not discard catalog-valid worlds.
-    return narrowed or canonical_payloads
-
-
-def _candidate_payload_matches_canonical(
-    candidate: Mapping[str, Any],
-    canonical: Mapping[str, Any],
-) -> bool:
-    """Return whether a serialized candidate describes the same source variant."""
-
-    candidate_moves = tuple(_normalize_id(move) for move in _moves_from_payload(candidate.get("moves")))
-    canonical_moves = tuple(_normalize_id(move) for move in _moves_from_payload(canonical.get("moves")))
-    if len(candidate_moves) != len(canonical_moves) or frozenset(candidate_moves) != frozenset(canonical_moves):
-        return False
-    for field in ("ability", "item"):
-        if _normalize_id(str(candidate.get(field) or "")) != _normalize_id(str(canonical.get(field) or "")):
-            return False
-    candidate_level = candidate.get("level")
-    canonical_level = canonical.get("level")
-    return candidate_level == canonical_level
+    return tuple(variant.to_summary() for variant in variants)
 
 
 def _witnessed_opponent_fixture(
