@@ -490,10 +490,13 @@ class RootPUCTSearchPolicy:
     # Its counters are cumulative across decisions; ``select_action_with_context``
     # records only the local delta in RootPUCTSearchTiming.
     neural_timing_snapshot: NeuralTimingSnapshot | None = None
-    # Optional exact batch evaluator for independent sampled-world root leaves.
+    # Optional batch evaluator for independent sampled-world root leaves. A
+    # caller that requires bitwise-scalar trajectories must provide a
+    # batch-composition-invariant evaluator.
     # Keep these new fields last so existing positional construction keeps its
     # historical argument layout. Adaptive batching remains opt-in because it
-    # changes the evaluator schedule, though not any per-world PUCT trajectory.
+    # changes the evaluator schedule, though it retains each world's independent
+    # PUCT state and advances it in scalar order.
     value_batch_fn: ObservationValueBatchFunction | None = None
     batch_adaptive_root_values: bool = False
 

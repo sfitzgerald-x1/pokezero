@@ -36,7 +36,8 @@ experiment with its own paired evaluation.
   value-leaf evaluation. There is no multi-ply tree, in-tree chance node, or
   tree reuse across moves. The independent mandatory initial root-action value
   leaves can now share one NN batch; adaptive PUCT revisits remain sequential
-  because each selection depends on the preceding backup. "Deeper search"
+  within each sampled world, although already-selected leaves can share a
+  cross-world value batch. "Deeper search"
   today means more root visits, scenarios, and longer tails — not depth.
 - **Fallback rate measured (W1): 19.4% of decisions**, dominated by
   missing_sampled_world (59% of failures); first fix wave (force-switch
@@ -160,8 +161,8 @@ classifying it.
    eight Torch threads for the next validation wave (8.22s to 3.31s per
    decision at extra-24, same direct materialization). Batched initial root
    value leaves are merged behind an explicit opt-in and retain scalar-equivalent
-   inputs; only the independent mandatory sweep batches, while adaptive revisits
-   remain sequential. **Strict batched smoke (2026-07-18):** one extra-120
+   inputs. Adaptive revisits remain sequential within each sampled world, while
+   ready leaves may batch across worlds. **Strict batched smoke (2026-07-18):** one extra-120
    mechanics game completed with `prefix_replay_count = 0`, no mechanics
    fallbacks across 35 decisions, and 124/139 (89.2%) direct world
    materializations. It measured 15.61s mean / 17.99s p95 per decision, so it
@@ -216,8 +217,10 @@ classifying it.
    selected non-terminal leaves, then back up each result before that world's
    next selection. The mechanism is opt-in (`--batch-adaptive-root-values`),
    requires the existing initial-leaf batch, non-time visit budgets, and zero
-   rollout tails. It must reproduce scalar per-world candidates, visit counts,
-   and selected actions exactly, then pass the same 1–2 game P-1 smoke and
+   rollout tails. With a batch-composition-invariant evaluator, it must
+   reproduce scalar per-world candidates, visit counts, and selected actions;
+   otherwise it must preserve the same per-world selection semantics and report
+   the batch evaluator used. It then passes the same 1–2 game P-1 smoke and
    bounded telemetry probe before any throughput claim.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
