@@ -105,7 +105,11 @@ def belief_world_sampling_profile(
         return None
 
     revealed_candidate_counts = tuple(
-        max(1, len(pokemon.candidate_variants))
+        _public_revealed_variant_count(
+            pokemon,
+            set_source=set_source,
+            format_id=context.format_id,
+        )
         for pokemon in view.opponent_pokemon
     )
     revealed_combination_count = math.prod(revealed_candidate_counts) if revealed_candidate_counts else 1
@@ -123,6 +127,28 @@ def belief_world_sampling_profile(
         uncertainty_bits=math.log2(combination_count),
         uncertain_slot_count=sum(count > 1 for count in revealed_candidate_counts) + hidden_slot_count,
         public_checksum=_belief_world_public_checksum(context=context, view=view),
+    )
+
+
+def _public_revealed_variant_count(
+    pokemon: RevealedPokemonBelief,
+    *,
+    set_source: Gen3RandbatSource | None,
+    format_id: str,
+) -> int:
+    """Count the same public catalog worlds that the V2 planner can sample."""
+
+    if set_source is None:
+        return max(1, len(pokemon.candidate_variants))
+    return max(
+        1,
+        len(
+            _canonical_revealed_variant_payloads(
+                pokemon,
+                set_source=set_source,
+                format_id=format_id,
+            )
+        ),
     )
 
 

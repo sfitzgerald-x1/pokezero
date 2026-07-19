@@ -447,6 +447,23 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertEqual(abilities, {"Synchronize", "EarlyBird"})
 
+    def test_planner_world_budget_counts_all_catalog_valid_revealed_variants(self) -> None:
+        context = _context(_metadata())
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=1, world_sample_cap=4)
+
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=4,
+            set_source=_source(),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.combination_count, 2)
+        self.assertEqual(profile.sample_count, 2)
+        self.assertEqual(planner.sample_count_for_context(context), 2)  # type: ignore[attr-defined]
+
     def test_planner_preserves_public_ability_exclusions_when_rebuilding_candidates(self) -> None:
         metadata = _metadata()
         opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
