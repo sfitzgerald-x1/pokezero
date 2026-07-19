@@ -338,8 +338,9 @@ delta (the never-mis-attribute invariant holds universally).
    (occupants come from switch DETAILS, which are species either way).
    Resolution: rely on the fold's details-based occupant tracking; ident
    mismatch on nicknamed ladder games is documented as cosmetic
-   (docs/leaf_observation_column_map.md). Revisit only if a ladder
-   integration consumes idents directly.
+   (docs/leaf_observation_column_map.md). OUT OF SCOPE (owner decision
+   2026-07-19): this is a randbats-only project — no nicknamed-ladder
+   integration is planned, so the caveat is closed rather than deferred.
 2. **Opponent HP base reconciliation.** Evidence: the local harness feeds
    the OMNISCIENT stream — exact HP for both sides (corpus slices confirm)
    — so in the training/eval/paired-read domain the mapper's true-base

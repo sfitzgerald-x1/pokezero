@@ -1093,7 +1093,13 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             token_embeddings = self.token_type_embedding(
                 token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
             )
-            numeric_embeddings = self.numeric_projection(numeric_features.float())
+            # Match the projection weight dtype rather than hard-upcasting to
+            # fp32: identical under fp32 weights, and keeps real fp16/bf16
+            # weight copies traceable (fp32 activations against half weights
+            # hard-error in F.linear).
+            numeric_embeddings = self.numeric_projection(
+                numeric_features.to(self.numeric_projection.weight.dtype)
+            )
             return category_embeddings + token_embeddings + numeric_embeddings
 
         def _pool_encoded_history(self, *, encoded: Any, attention_mask: Any, history_mask: Any) -> Any:
@@ -3058,7 +3064,10 @@ def _validate_row_indexed_tensor_shapes(
 
 def _masked_mean(values: Any, mask: Any) -> Any:
     torch_module = require_torch()
-    weights = mask.float().unsqueeze(-1)
+    # Weight in the values dtype: identical under fp32, and avoids promoting
+    # reduced-precision (fp16/bf16) activations to fp32 mid-forward, which
+    # would dtype-mismatch the downstream heads on a real half/bf16 copy.
+    weights = mask.to(values.dtype).unsqueeze(-1)
     denominator = weights.sum(dim=1).clamp(min=1.0)
     return (values * weights).sum(dim=1) / denominator
 
