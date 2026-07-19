@@ -55,6 +55,11 @@ _BRANCH_STEP_TIMING_SECONDS = (
     "branch_result_projection_seconds",
     "branch_observation_projection_seconds",
 )
+_BRANCH_STEP_TIMING_OPTIONAL_SECONDS = (
+    "branch_observation_state_normalization_seconds",
+    "branch_observation_encoding_seconds",
+    "branch_belief_overlay_projection_seconds",
+)
 _BRANCH_STEP_TIMING_COUNTS = (
     "branch_local_state_restore_count",
     "branch_choice_encoding_count",
@@ -62,6 +67,11 @@ _BRANCH_STEP_TIMING_COUNTS = (
     "branch_bridge_node_processing_count",
     "branch_result_projection_count",
     "branch_observation_projection_count",
+)
+_BRANCH_STEP_TIMING_OPTIONAL_COUNTS = (
+    "branch_observation_state_normalization_count",
+    "branch_observation_encoding_count",
+    "branch_belief_overlay_projection_count",
 )
 _ILLEGAL_ACTION_FOR_REQUEST_RE = re.compile(
     r"^(?:(?P<player_id>[^:]+): )?action_index (?P<action_index>\d+) "
@@ -151,6 +161,15 @@ class RootPUCTSearchTiming:
     # around it without changing additive branch accounting.
     branch_observation_projection_seconds: float = 0.0
     branch_observation_projection_count: int = 0
+    # These nested slices partition player-view construction inside
+    # ``branch_observation_projection``. They are diagnostics only and do not
+    # alter the additive branch wall-clock accounting.
+    branch_observation_state_normalization_seconds: float = 0.0
+    branch_observation_state_normalization_count: int = 0
+    branch_observation_encoding_seconds: float = 0.0
+    branch_observation_encoding_count: int = 0
+    branch_belief_overlay_projection_seconds: float = 0.0
+    branch_belief_overlay_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -348,6 +367,21 @@ class RootPUCTSearchTiming:
     @property
     def branch_projection_unattributed_seconds(self) -> float:
         return max(0.0, self.branch_projection_raw_unattributed_seconds)
+
+    @property
+    def branch_observation_raw_unattributed_seconds(self) -> float:
+        """Return player-view time not covered by its measured nested slices."""
+
+        return (
+            self.branch_observation_projection_seconds
+            - self.branch_observation_state_normalization_seconds
+            - self.branch_observation_encoding_seconds
+            - self.branch_belief_overlay_projection_seconds
+        )
+
+    @property
+    def branch_observation_unattributed_seconds(self) -> float:
+        return max(0.0, self.branch_observation_raw_unattributed_seconds)
 
     def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -602,6 +636,12 @@ class RootPUCTSearchTiming:
         branch_result_projection_count: int,
         branch_observation_projection_seconds: float = 0.0,
         branch_observation_projection_count: int = 0,
+        branch_observation_state_normalization_seconds: float = 0.0,
+        branch_observation_state_normalization_count: int = 0,
+        branch_observation_encoding_seconds: float = 0.0,
+        branch_observation_encoding_count: int = 0,
+        branch_belief_overlay_projection_seconds: float = 0.0,
+        branch_belief_overlay_projection_count: int = 0,
     ) -> "RootPUCTSearchTiming":
         """Attach nested local/bridge slices for fused branch execution."""
 
@@ -642,6 +682,28 @@ class RootPUCTSearchTiming:
             ),
             branch_observation_projection_count=(
                 self.branch_observation_projection_count + branch_observation_projection_count
+            ),
+            branch_observation_state_normalization_seconds=(
+                self.branch_observation_state_normalization_seconds
+                + branch_observation_state_normalization_seconds
+            ),
+            branch_observation_state_normalization_count=(
+                self.branch_observation_state_normalization_count
+                + branch_observation_state_normalization_count
+            ),
+            branch_observation_encoding_seconds=(
+                self.branch_observation_encoding_seconds + branch_observation_encoding_seconds
+            ),
+            branch_observation_encoding_count=(
+                self.branch_observation_encoding_count + branch_observation_encoding_count
+            ),
+            branch_belief_overlay_projection_seconds=(
+                self.branch_belief_overlay_projection_seconds
+                + branch_belief_overlay_projection_seconds
+            ),
+            branch_belief_overlay_projection_count=(
+                self.branch_belief_overlay_projection_count
+                + branch_belief_overlay_projection_count
             ),
         )
 
@@ -692,6 +754,24 @@ class RootPUCTSearchTiming:
             ),
             branch_observation_projection_count=sum(
                 timing.branch_observation_projection_count for timing in timings
+            ),
+            branch_observation_state_normalization_seconds=sum(
+                timing.branch_observation_state_normalization_seconds for timing in timings
+            ),
+            branch_observation_state_normalization_count=sum(
+                timing.branch_observation_state_normalization_count for timing in timings
+            ),
+            branch_observation_encoding_seconds=sum(
+                timing.branch_observation_encoding_seconds for timing in timings
+            ),
+            branch_observation_encoding_count=sum(
+                timing.branch_observation_encoding_count for timing in timings
+            ),
+            branch_belief_overlay_projection_seconds=sum(
+                timing.branch_belief_overlay_projection_seconds for timing in timings
+            ),
+            branch_belief_overlay_projection_count=sum(
+                timing.branch_belief_overlay_projection_count for timing in timings
             ),
             state_snapshot_seconds=sum(timing.state_snapshot_seconds for timing in timings),
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
@@ -874,6 +954,24 @@ class RootPUCTSearchTiming:
             "branch_result_projection_count": self.branch_result_projection_count,
             "branch_observation_projection_seconds": self.branch_observation_projection_seconds,
             "branch_observation_projection_count": self.branch_observation_projection_count,
+            "branch_observation_state_normalization_seconds": (
+                self.branch_observation_state_normalization_seconds
+            ),
+            "branch_observation_state_normalization_count": (
+                self.branch_observation_state_normalization_count
+            ),
+            "branch_observation_encoding_seconds": self.branch_observation_encoding_seconds,
+            "branch_observation_encoding_count": self.branch_observation_encoding_count,
+            "branch_belief_overlay_projection_seconds": (
+                self.branch_belief_overlay_projection_seconds
+            ),
+            "branch_belief_overlay_projection_count": (
+                self.branch_belief_overlay_projection_count
+            ),
+            "branch_observation_raw_unattributed_seconds": (
+                self.branch_observation_raw_unattributed_seconds
+            ),
+            "branch_observation_unattributed_seconds": self.branch_observation_unattributed_seconds,
             "branch_projection_raw_unattributed_seconds": (
                 self.branch_projection_raw_unattributed_seconds
             ),
@@ -991,6 +1089,12 @@ class _RootPUCTSearchTimingAccumulator:
     branch_result_projection_count: int = 0
     branch_observation_projection_seconds: float = 0.0
     branch_observation_projection_count: int = 0
+    branch_observation_state_normalization_seconds: float = 0.0
+    branch_observation_state_normalization_count: int = 0
+    branch_observation_encoding_seconds: float = 0.0
+    branch_observation_encoding_count: int = 0
+    branch_belief_overlay_projection_seconds: float = 0.0
+    branch_belief_overlay_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -1046,6 +1150,24 @@ class _RootPUCTSearchTimingAccumulator:
         )
         self.branch_observation_projection_count += int(
             timing["branch_observation_projection_count"]
+        )
+        self.branch_observation_state_normalization_seconds += float(
+            timing.get("branch_observation_state_normalization_seconds", 0.0)
+        )
+        self.branch_observation_state_normalization_count += int(
+            timing.get("branch_observation_state_normalization_count", 0)
+        )
+        self.branch_observation_encoding_seconds += float(
+            timing.get("branch_observation_encoding_seconds", 0.0)
+        )
+        self.branch_observation_encoding_count += int(
+            timing.get("branch_observation_encoding_count", 0)
+        )
+        self.branch_belief_overlay_projection_seconds += float(
+            timing.get("branch_belief_overlay_projection_seconds", 0.0)
+        )
+        self.branch_belief_overlay_projection_count += int(
+            timing.get("branch_belief_overlay_projection_count", 0)
         )
 
     def add_state_snapshot(self, elapsed_seconds: float) -> None:
@@ -1138,6 +1260,20 @@ class _RootPUCTSearchTimingAccumulator:
             branch_result_projection_count=self.branch_result_projection_count,
             branch_observation_projection_seconds=self.branch_observation_projection_seconds,
             branch_observation_projection_count=self.branch_observation_projection_count,
+            branch_observation_state_normalization_seconds=(
+                self.branch_observation_state_normalization_seconds
+            ),
+            branch_observation_state_normalization_count=(
+                self.branch_observation_state_normalization_count
+            ),
+            branch_observation_encoding_seconds=self.branch_observation_encoding_seconds,
+            branch_observation_encoding_count=self.branch_observation_encoding_count,
+            branch_belief_overlay_projection_seconds=(
+                self.branch_belief_overlay_projection_seconds
+            ),
+            branch_belief_overlay_projection_count=(
+                self.branch_belief_overlay_projection_count
+            ),
             state_snapshot_seconds=self.state_snapshot_seconds,
             state_snapshot_count=self.state_snapshot_count,
             state_restore_seconds=self.state_restore_seconds,
@@ -1241,16 +1377,16 @@ def _branch_step_timing_snapshot(env: PokeZeroEnv) -> dict[str, float | int] | N
     if not isinstance(payload, Mapping):
         return None
     result: dict[str, float | int] = {}
-    for field in _BRANCH_STEP_TIMING_SECONDS:
-        value = payload.get(field)
+    for field in _BRANCH_STEP_TIMING_SECONDS + _BRANCH_STEP_TIMING_OPTIONAL_SECONDS:
+        value = payload.get(field, 0.0)
         if isinstance(value, bool) or not isinstance(value, (float, int)):
             return None
         parsed = float(value)
         if not math.isfinite(parsed) or parsed < 0.0:
             return None
         result[field] = parsed
-    for field in _BRANCH_STEP_TIMING_COUNTS:
-        value = payload.get(field)
+    for field in _BRANCH_STEP_TIMING_COUNTS + _BRANCH_STEP_TIMING_OPTIONAL_COUNTS:
+        value = payload.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
         result[field] = value
@@ -1266,12 +1402,12 @@ def _branch_step_timing_delta(
     if before is None or after is None:
         return None
     result: dict[str, float | int] = {}
-    for field in _BRANCH_STEP_TIMING_SECONDS:
+    for field in _BRANCH_STEP_TIMING_SECONDS + _BRANCH_STEP_TIMING_OPTIONAL_SECONDS:
         delta = float(after[field]) - float(before[field])
         if delta < 0.0:
             return None
         result[field] = delta
-    for field in _BRANCH_STEP_TIMING_COUNTS:
+    for field in _BRANCH_STEP_TIMING_COUNTS + _BRANCH_STEP_TIMING_OPTIONAL_COUNTS:
         delta = int(after[field]) - int(before[field])
         if delta < 0:
             return None

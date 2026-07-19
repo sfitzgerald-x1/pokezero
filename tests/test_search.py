@@ -11,6 +11,7 @@ from pokezero.rollout import RolloutConfig
 from pokezero.search import (
     PUCTBranchSearchRequest,
     RootPUCTSearchTiming,
+    _branch_step_timing_snapshot,
     _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
@@ -259,6 +260,12 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_result_projection_count = 0
         self._branch_observation_projection_seconds = 0.0
         self._branch_observation_projection_count = 0
+        self._branch_observation_state_normalization_seconds = 0.0
+        self._branch_observation_state_normalization_count = 0
+        self._branch_observation_encoding_seconds = 0.0
+        self._branch_observation_encoding_count = 0
+        self._branch_belief_overlay_projection_seconds = 0.0
+        self._branch_belief_overlay_projection_count = 0
 
     def root_puct_branch_step_timing_snapshot(self) -> dict[str, float | int]:
         return {
@@ -274,6 +281,20 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
             "branch_result_projection_count": self._branch_result_projection_count,
             "branch_observation_projection_seconds": self._branch_observation_projection_seconds,
             "branch_observation_projection_count": self._branch_observation_projection_count,
+            "branch_observation_state_normalization_seconds": (
+                self._branch_observation_state_normalization_seconds
+            ),
+            "branch_observation_state_normalization_count": (
+                self._branch_observation_state_normalization_count
+            ),
+            "branch_observation_encoding_seconds": self._branch_observation_encoding_seconds,
+            "branch_observation_encoding_count": self._branch_observation_encoding_count,
+            "branch_belief_overlay_projection_seconds": (
+                self._branch_belief_overlay_projection_seconds
+            ),
+            "branch_belief_overlay_projection_count": (
+                self._branch_belief_overlay_projection_count
+            ),
         }
 
     def step_from_search_snapshot(self, snapshot, actions: dict[str, int]) -> StepResult:
@@ -293,6 +314,12 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_result_projection_count += 1
         self._branch_observation_projection_seconds += 0.003
         self._branch_observation_projection_count += 1
+        self._branch_observation_state_normalization_seconds += 0.001
+        self._branch_observation_state_normalization_count += 1
+        self._branch_observation_encoding_seconds += 0.0015
+        self._branch_observation_encoding_count += 1
+        self._branch_belief_overlay_projection_seconds += 0.0005
+        self._branch_belief_overlay_projection_count += 1
         return result
 
 
@@ -312,6 +339,33 @@ class PlayerObservationFusedBridgeEnv(FusedBridgeTimedSnapshotValueBranchEnv):
     ) -> StepResult:
         self.player_observation_calls.append(observation_player)
         return self.step_from_search_snapshot(snapshot, actions)
+
+
+class BranchStepTimingCompatibilityTest(unittest.TestCase):
+    def test_missing_nested_observation_slices_default_to_zero(self) -> None:
+        env = FusedBridgeTimedSnapshotValueBranchEnv()
+        legacy_payload = env.root_puct_branch_step_timing_snapshot()
+        for field in (
+            "branch_observation_state_normalization_seconds",
+            "branch_observation_state_normalization_count",
+            "branch_observation_encoding_seconds",
+            "branch_observation_encoding_count",
+            "branch_belief_overlay_projection_seconds",
+            "branch_belief_overlay_projection_count",
+        ):
+            legacy_payload.pop(field)
+        env.root_puct_branch_step_timing_snapshot = lambda: legacy_payload  # type: ignore[method-assign]
+
+        timing = _branch_step_timing_snapshot(env)
+
+        self.assertIsNotNone(timing)
+        assert timing is not None
+        self.assertEqual(timing["branch_observation_state_normalization_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_encoding_seconds"], 0.0)
+        self.assertEqual(timing["branch_belief_overlay_projection_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_state_normalization_count"], 0)
+        self.assertEqual(timing["branch_observation_encoding_count"], 0)
+        self.assertEqual(timing["branch_belief_overlay_projection_count"], 0)
 
 
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
@@ -1272,6 +1326,13 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(timing["branch_result_projection_seconds"], 0.020)
         self.assertEqual(timing["branch_observation_projection_count"], 5)
         self.assertAlmostEqual(timing["branch_observation_projection_seconds"], 0.015)
+        self.assertEqual(timing["branch_observation_state_normalization_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_state_normalization_seconds"], 0.005)
+        self.assertEqual(timing["branch_observation_encoding_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_encoding_seconds"], 0.0075)
+        self.assertEqual(timing["branch_belief_overlay_projection_count"], 5)
+        self.assertAlmostEqual(timing["branch_belief_overlay_projection_seconds"], 0.0025)
+        self.assertAlmostEqual(timing["branch_observation_unattributed_seconds"], 0.0)
         self.assertAlmostEqual(timing["branch_projection_raw_unattributed_seconds"], 0.005)
         self.assertAlmostEqual(timing["branch_projection_unattributed_seconds"], 0.005)
         self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
