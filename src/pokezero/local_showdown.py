@@ -280,6 +280,8 @@ class LocalShowdownEnv:
         self._root_puct_branch_bridge_node_processing_count = 0
         self._root_puct_branch_result_projection_seconds = 0.0
         self._root_puct_branch_result_projection_count = 0
+        self._root_puct_branch_observation_projection_seconds = 0.0
+        self._root_puct_branch_observation_projection_count = 0
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
@@ -925,7 +927,17 @@ class LocalShowdownEnv:
                 if terminal is not None
                 else (next_requested if observation_players is None else observation_players)
             )
-            observations = {player: self.observe(player) for player in players_to_observe}
+            observation_started_at = time.perf_counter() if root_puct_branch_step else None
+            observation_count = 0
+            try:
+                observations = {player: self.observe(player) for player in players_to_observe}
+                observation_count = len(observations)
+            finally:
+                if observation_started_at is not None:
+                    self._root_puct_branch_observation_projection_seconds += max(
+                        0.0, time.perf_counter() - observation_started_at
+                    )
+                    self._root_puct_branch_observation_projection_count += observation_count
             rewards = self._rewards()
             # On terminal we leave the bridge process alive (warm pool): the finished battle is freed
             # by the next reset()'s "end" command, or by close() on shutdown. This avoids a node
@@ -1072,6 +1084,10 @@ class LocalShowdownEnv:
             "branch_bridge_node_processing_count": self._root_puct_branch_bridge_node_processing_count,
             "branch_result_projection_seconds": self._root_puct_branch_result_projection_seconds,
             "branch_result_projection_count": self._root_puct_branch_result_projection_count,
+            "branch_observation_projection_seconds": (
+                self._root_puct_branch_observation_projection_seconds
+            ),
+            "branch_observation_projection_count": self._root_puct_branch_observation_projection_count,
         }
 
     def _bridge_request_event(

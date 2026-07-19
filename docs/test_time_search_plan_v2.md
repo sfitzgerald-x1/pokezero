@@ -211,17 +211,23 @@ classifying it.
    0.36s, and raw residual is 0.01s per decision. This is a throughput
    diagnostic, not a strength result.
 
-   **Next target — adaptive cross-world value batches (implemented; validation
-   pending):** keep each retained belief world's PUCT accumulator independent,
-   select at most one adaptive visit per world, batch only those already
-   selected non-terminal leaves, then back up each result before that world's
-   next selection. The mechanism is opt-in (`--batch-adaptive-root-values`),
-   requires the existing initial-leaf batch, non-time visit budgets, and zero
-   rollout tails. With a batch-composition-invariant evaluator, it must
-   reproduce scalar per-world candidates, visit counts, and selected actions;
-   otherwise it must preserve the same per-world selection semantics and report
-   the batch evaluator used. It then passes the same 1–2 game P-1 smoke and
-   bounded telemetry probe before any throughput claim.
+   **Adaptive cross-world value batches (validated as mechanics and telemetry):**
+   each retained belief world's PUCT accumulator stays independent; at most one
+   adaptive visit per world is selected, only already-selected non-terminal
+   leaves batch together, and each result backs up before that world's next
+   selection. The mechanism is opt-in (`--batch-adaptive-root-values`), requires
+   the existing initial-leaf batch, non-time visit budgets, and zero rollout
+   tails. With a batch-composition-invariant evaluator, it reproduces scalar
+   per-world candidates, visit counts, and selected actions. A bounded
+   extra-120 read completed with 120/120 direct
+   materializations, zero prefix replays, a 6.25% fallback rate, and cross-world
+   batches for all 14,400 adaptive leaves. Initial and adaptive batching reduced
+   15,348 semantic value evaluations to 3,630 physical forwards. Its 10.05s
+   mean / 12.35s p95 searched-decision wall is a one-game telemetry result, not
+   a paired speed claim. It moved raw residual to 0.09s per decision and showed
+   that the largest remaining nested branch stage is result projection (3.57s),
+   so the next image splits player-view construction from the remainder before
+   optimizing either.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh

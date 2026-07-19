@@ -53,6 +53,7 @@ _BRANCH_STEP_TIMING_SECONDS = (
     "branch_bridge_round_trip_seconds",
     "branch_bridge_node_processing_seconds",
     "branch_result_projection_seconds",
+    "branch_observation_projection_seconds",
 )
 _BRANCH_STEP_TIMING_COUNTS = (
     "branch_local_state_restore_count",
@@ -60,6 +61,7 @@ _BRANCH_STEP_TIMING_COUNTS = (
     "branch_bridge_round_trip_count",
     "branch_bridge_node_processing_count",
     "branch_result_projection_count",
+    "branch_observation_projection_count",
 )
 _ILLEGAL_ACTION_FOR_REQUEST_RE = re.compile(
     r"^(?:(?P<player_id>[^:]+): )?action_index (?P<action_index>\d+) "
@@ -144,6 +146,11 @@ class RootPUCTSearchTiming:
     branch_bridge_node_processing_count: int = 0
     branch_result_projection_seconds: float = 0.0
     branch_result_projection_count: int = 0
+    # This is a nested slice of ``branch_result_projection``. It isolates
+    # player-view construction from the small amount of result bookkeeping
+    # around it without changing additive branch accounting.
+    branch_observation_projection_seconds: float = 0.0
+    branch_observation_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -331,6 +338,16 @@ class RootPUCTSearchTiming:
     @property
     def branch_unattributed_seconds(self) -> float:
         return max(0.0, self.branch_raw_unattributed_seconds)
+
+    @property
+    def branch_projection_raw_unattributed_seconds(self) -> float:
+        """Return result-projection work outside player-view construction."""
+
+        return self.branch_result_projection_seconds - self.branch_observation_projection_seconds
+
+    @property
+    def branch_projection_unattributed_seconds(self) -> float:
+        return max(0.0, self.branch_projection_raw_unattributed_seconds)
 
     def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -583,6 +600,8 @@ class RootPUCTSearchTiming:
         branch_bridge_node_processing_count: int,
         branch_result_projection_seconds: float,
         branch_result_projection_count: int,
+        branch_observation_projection_seconds: float = 0.0,
+        branch_observation_projection_count: int = 0,
     ) -> "RootPUCTSearchTiming":
         """Attach nested local/bridge slices for fused branch execution."""
 
@@ -617,6 +636,12 @@ class RootPUCTSearchTiming:
             ),
             branch_result_projection_count=(
                 self.branch_result_projection_count + branch_result_projection_count
+            ),
+            branch_observation_projection_seconds=(
+                self.branch_observation_projection_seconds + branch_observation_projection_seconds
+            ),
+            branch_observation_projection_count=(
+                self.branch_observation_projection_count + branch_observation_projection_count
             ),
         )
 
@@ -661,6 +686,12 @@ class RootPUCTSearchTiming:
             ),
             branch_result_projection_count=sum(
                 timing.branch_result_projection_count for timing in timings
+            ),
+            branch_observation_projection_seconds=sum(
+                timing.branch_observation_projection_seconds for timing in timings
+            ),
+            branch_observation_projection_count=sum(
+                timing.branch_observation_projection_count for timing in timings
             ),
             state_snapshot_seconds=sum(timing.state_snapshot_seconds for timing in timings),
             state_snapshot_count=sum(timing.state_snapshot_count for timing in timings),
@@ -841,6 +872,12 @@ class RootPUCTSearchTiming:
             ),
             "branch_result_projection_seconds": self.branch_result_projection_seconds,
             "branch_result_projection_count": self.branch_result_projection_count,
+            "branch_observation_projection_seconds": self.branch_observation_projection_seconds,
+            "branch_observation_projection_count": self.branch_observation_projection_count,
+            "branch_projection_raw_unattributed_seconds": (
+                self.branch_projection_raw_unattributed_seconds
+            ),
+            "branch_projection_unattributed_seconds": self.branch_projection_unattributed_seconds,
             "branch_raw_unattributed_seconds": self.branch_raw_unattributed_seconds,
             "branch_unattributed_seconds": self.branch_unattributed_seconds,
             "state_snapshot_seconds": self.state_snapshot_seconds,
@@ -952,6 +989,8 @@ class _RootPUCTSearchTimingAccumulator:
     branch_bridge_node_processing_count: int = 0
     branch_result_projection_seconds: float = 0.0
     branch_result_projection_count: int = 0
+    branch_observation_projection_seconds: float = 0.0
+    branch_observation_projection_count: int = 0
     state_snapshot_seconds: float = 0.0
     state_snapshot_count: int = 0
     state_restore_seconds: float = 0.0
@@ -1002,6 +1041,12 @@ class _RootPUCTSearchTimingAccumulator:
         )
         self.branch_result_projection_seconds += float(timing["branch_result_projection_seconds"])
         self.branch_result_projection_count += int(timing["branch_result_projection_count"])
+        self.branch_observation_projection_seconds += float(
+            timing["branch_observation_projection_seconds"]
+        )
+        self.branch_observation_projection_count += int(
+            timing["branch_observation_projection_count"]
+        )
 
     def add_state_snapshot(self, elapsed_seconds: float) -> None:
         self.state_snapshot_seconds += elapsed_seconds
@@ -1091,6 +1136,8 @@ class _RootPUCTSearchTimingAccumulator:
             branch_bridge_node_processing_count=self.branch_bridge_node_processing_count,
             branch_result_projection_seconds=self.branch_result_projection_seconds,
             branch_result_projection_count=self.branch_result_projection_count,
+            branch_observation_projection_seconds=self.branch_observation_projection_seconds,
+            branch_observation_projection_count=self.branch_observation_projection_count,
             state_snapshot_seconds=self.state_snapshot_seconds,
             state_snapshot_count=self.state_snapshot_count,
             state_restore_seconds=self.state_restore_seconds,
