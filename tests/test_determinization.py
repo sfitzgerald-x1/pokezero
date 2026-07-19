@@ -373,6 +373,27 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIs(first, second)
 
+    def test_planner_materializes_public_witness_when_catalog_variant_is_unusable(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        # Simulate source drift: the only stored candidate is unusable, but the
+        # public move witness remains a valid fact for a sampled fallback world.
+        opponent["candidate_variants"] = [{"moves": []}]  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        override = source()
+        self.assertIn("Xatu", override.player_teams["p1"])
+        self.assertIn("Psychic", override.player_teams["p1"])
+
     def test_planner_exposes_public_context_world_count_and_checksum(self) -> None:
         metadata = _metadata()
         opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
