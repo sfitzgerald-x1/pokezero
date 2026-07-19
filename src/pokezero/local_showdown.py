@@ -282,6 +282,15 @@ class LocalShowdownEnv:
         self._root_puct_branch_result_projection_count = 0
         self._root_puct_branch_observation_projection_seconds = 0.0
         self._root_puct_branch_observation_projection_count = 0
+        # Observation construction dominates the remaining W5 branch cost. Keep
+        # its nested timings separate so the next optimization targets measured
+        # state normalization, feature encoding, or belief-overlay work.
+        self._root_puct_branch_observation_state_normalization_seconds = 0.0
+        self._root_puct_branch_observation_state_normalization_count = 0
+        self._root_puct_branch_observation_encoding_seconds = 0.0
+        self._root_puct_branch_observation_encoding_count = 0
+        self._root_puct_branch_belief_overlay_projection_seconds = 0.0
+        self._root_puct_branch_belief_overlay_projection_count = 0
         # Persistent incremental state: the parser + belief engine are fed each new protocol line
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
@@ -410,7 +419,25 @@ class LocalShowdownEnv:
         return requested_players_from_requests(self._latest_requests)
 
     def observe(self, player: PlayerId) -> PokeZeroObservationV0:
-        state = self._state_for_player(player)
+        return self._observe(player)
+
+    def _observe(
+        self,
+        player: PlayerId,
+        *,
+        root_puct_branch_observation: bool = False,
+    ) -> PokeZeroObservationV0:
+        state_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            state = self._state_for_player(player)
+        finally:
+            if state_started_at is not None:
+                self._root_puct_branch_observation_state_normalization_seconds += max(
+                    0.0, time.perf_counter() - state_started_at
+                )
+                self._root_puct_branch_observation_state_normalization_count += 1
+
+        encoding_started_at = time.perf_counter() if root_puct_branch_observation else None
         root = self.config.resolved_showdown_root()
         # Prefer the explicitly-paired model vocabulary; otherwise build it from the root.
         # A v2.2 (turn-merged) spec needs the tt_phase/tt2_* families or every merged
@@ -421,21 +448,37 @@ class LocalShowdownEnv:
                 self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
             ),
         )
-        observation = observation_from_player_state(
-            state,
-            category_vocab=vocab,
-            spec=self.config.observation_spec,
-            dex=load_showdown_dex_cached(root),
-            feature_masks=self.config.feature_masks,
-        )
+        try:
+            observation = observation_from_player_state(
+                state,
+                category_vocab=vocab,
+                spec=self.config.observation_spec,
+                dex=load_showdown_dex_cached(root),
+                feature_masks=self.config.feature_masks,
+            )
+        finally:
+            if encoding_started_at is not None:
+                self._root_puct_branch_observation_encoding_seconds += max(
+                    0.0, time.perf_counter() - encoding_started_at
+                )
+                self._root_puct_branch_observation_encoding_count += 1
+
         # The belief view is derived from the same public protocol transcript as
         # the observation. Keeping it in metadata makes public-corpus capture
         # consistent across fixed-driver and controlled FoulPlay games without
         # exposing either player's request payload.
-        return replace(
-            observation,
-            metadata={**dict(observation.metadata), "belief_view": state.belief_view.to_overlay_payload()},
-        )
+        overlay_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            return replace(
+                observation,
+                metadata={**dict(observation.metadata), "belief_view": state.belief_view.to_overlay_payload()},
+            )
+        finally:
+            if overlay_started_at is not None:
+                self._root_puct_branch_belief_overlay_projection_seconds += max(
+                    0.0, time.perf_counter() - overlay_started_at
+                )
+                self._root_puct_branch_belief_overlay_projection_count += 1
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:
         return self.observe(player).legal_action_mask
@@ -930,7 +973,10 @@ class LocalShowdownEnv:
             observation_started_at = time.perf_counter() if root_puct_branch_step else None
             observation_count = 0
             try:
-                observations = {player: self.observe(player) for player in players_to_observe}
+                observations = {
+                    player: self._observe(player, root_puct_branch_observation=root_puct_branch_step)
+                    for player in players_to_observe
+                }
                 observation_count = len(observations)
             finally:
                 if observation_started_at is not None:
@@ -1088,6 +1134,20 @@ class LocalShowdownEnv:
                 self._root_puct_branch_observation_projection_seconds
             ),
             "branch_observation_projection_count": self._root_puct_branch_observation_projection_count,
+            "branch_observation_state_normalization_seconds": (
+                self._root_puct_branch_observation_state_normalization_seconds
+            ),
+            "branch_observation_state_normalization_count": (
+                self._root_puct_branch_observation_state_normalization_count
+            ),
+            "branch_observation_encoding_seconds": self._root_puct_branch_observation_encoding_seconds,
+            "branch_observation_encoding_count": self._root_puct_branch_observation_encoding_count,
+            "branch_belief_overlay_projection_seconds": (
+                self._root_puct_branch_belief_overlay_projection_seconds
+            ),
+            "branch_belief_overlay_projection_count": (
+                self._root_puct_branch_belief_overlay_projection_count
+            ),
         }
 
     def _bridge_request_event(

@@ -1639,12 +1639,21 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             2,
         )
         for key in (
+            "branch_observation_state_normalization_count",
+            "branch_observation_encoding_count",
+            "branch_belief_overlay_projection_count",
+        ):
+            self.assertEqual(after_fused_branch[key] - before_fused_branch[key], 2)
+        for key in (
             "branch_local_state_restore_seconds",
             "branch_choice_encoding_seconds",
             "branch_bridge_round_trip_seconds",
             "branch_bridge_node_processing_seconds",
             "branch_result_projection_seconds",
             "branch_observation_projection_seconds",
+            "branch_observation_state_normalization_seconds",
+            "branch_observation_encoding_seconds",
+            "branch_belief_overlay_projection_seconds",
         ):
             self.assertGreaterEqual(after_fused_branch[key] - before_fused_branch[key], 0.0)
 
