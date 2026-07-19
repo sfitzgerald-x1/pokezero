@@ -257,6 +257,8 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_bridge_node_processing_count = 0
         self._branch_result_projection_seconds = 0.0
         self._branch_result_projection_count = 0
+        self._branch_observation_projection_seconds = 0.0
+        self._branch_observation_projection_count = 0
 
     def root_puct_branch_step_timing_snapshot(self) -> dict[str, float | int]:
         return {
@@ -270,6 +272,8 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
             "branch_bridge_node_processing_count": self._branch_bridge_node_processing_count,
             "branch_result_projection_seconds": self._branch_result_projection_seconds,
             "branch_result_projection_count": self._branch_result_projection_count,
+            "branch_observation_projection_seconds": self._branch_observation_projection_seconds,
+            "branch_observation_projection_count": self._branch_observation_projection_count,
         }
 
     def step_from_search_snapshot(self, snapshot, actions: dict[str, int]) -> StepResult:
@@ -287,6 +291,8 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         result = ValueBranchEnv.step(self, actions)
         self._branch_result_projection_seconds += 0.004
         self._branch_result_projection_count += 1
+        self._branch_observation_projection_seconds += 0.003
+        self._branch_observation_projection_count += 1
         return result
 
 
@@ -1264,6 +1270,10 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(timing["branch_bridge_python_orchestration_seconds"], 0.040)
         self.assertEqual(timing["branch_result_projection_count"], 5)
         self.assertAlmostEqual(timing["branch_result_projection_seconds"], 0.020)
+        self.assertEqual(timing["branch_observation_projection_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_projection_seconds"], 0.015)
+        self.assertAlmostEqual(timing["branch_projection_raw_unattributed_seconds"], 0.005)
+        self.assertAlmostEqual(timing["branch_projection_unattributed_seconds"], 0.005)
         self.assertGreaterEqual(timing["raw_residual_seconds"], -1e-9)
 
     def test_puct_branch_search_uses_single_view_fast_path_without_rollout_tails(self) -> None:
@@ -1625,6 +1635,24 @@ class FlatBranchSearchTest(unittest.TestCase):
 
         self.assertEqual(timing["raw_residual_seconds"], -1.0)
         self.assertEqual(timing["residual_seconds"], 0.0)
+
+    def test_branch_step_subtiming_accepts_pre_observation_timing_callers(self) -> None:
+        timing = RootPUCTSearchTiming().with_branch_step_subtiming(
+            branch_local_state_restore_seconds=0.01,
+            branch_local_state_restore_count=1,
+            branch_choice_encoding_seconds=0.02,
+            branch_choice_encoding_count=1,
+            branch_bridge_round_trip_seconds=0.03,
+            branch_bridge_round_trip_count=1,
+            branch_bridge_node_processing_seconds=0.02,
+            branch_bridge_node_processing_count=1,
+            branch_result_projection_seconds=0.04,
+            branch_result_projection_count=1,
+        )
+
+        self.assertEqual(timing.branch_observation_projection_count, 0)
+        self.assertEqual(timing.branch_observation_projection_seconds, 0.0)
+        self.assertEqual(timing.branch_projection_unattributed_seconds, 0.04)
 
     def test_root_puct_timing_partitions_residual_outside_branch_search_results(self) -> None:
         timing = (
