@@ -136,6 +136,10 @@ batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); remaining = encoder hand-off (track B) +
 prior/action mapping + `search.py` integration.
 Speed POC complete; scenario corpus suite complete.
+Multi-ply decision/chance tree per the search-tree contract LANDED in the
+crate (exact-expectation backup, plies-1-2 damage branching + deep
+KO-threshold splits, batched-through-chance virtual loss — see
+docs/crate_search_design.md).
 
 ## The golden corpus (track B's definition of done)
 
