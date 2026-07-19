@@ -55,6 +55,7 @@ from golden_encoder_backends import (  # noqa: E402
     ARRAY_NAMES,
     PythonReferenceBackend,
     RustBackend,
+    RustFoldBackend,
     row_inputs_from_decision_row,
 )
 
@@ -309,11 +310,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=("python-reference", "rust", "compare-backends"),
+        choices=("python-reference", "rust", "rust-fold", "compare-backends"),
         required=True,
         help="Backend to diff against golden, or compare-backends for a direct "
         "rust-vs-python-reference byte diff (exit 0 on full parity — the "
-        "reproducible form of the cross-backend byte-identity claim).",
+        "reproducible form of the cross-backend byte-identity claim). "
+        "rust-fold additionally feeds each row's recorded fold state (schema v2 "
+        "sidecar) through the native in-crate product consumption — the FULL "
+        "observation surface, expected ALL EXACT against golden.",
     )
     parser.add_argument("--rows", type=int, default=None, help="Only diff the first N rows.")
     parser.add_argument("--examples", type=int, default=20, help="Example cap per array.")
@@ -348,11 +352,26 @@ def main(argv: Iterable[str] | None = None) -> int:
             example_cap=args.examples,
             json_out=args.json,
         )
+    fold_states: dict[int, Any] = {}
     if args.backend == "python-reference":
         if args.showdown_root is None:
             print("--showdown-root (or POKEZERO_SHOWDOWN_ROOT) is required", file=sys.stderr)
             return 2
         backend = PythonReferenceBackend(showdown_root=args.showdown_root, header=header)
+    elif args.backend == "rust-fold":
+        if args.tables is None:
+            print("--tables is required for the rust-fold backend", file=sys.stderr)
+            return 2
+        backend = RustFoldBackend(
+            tables_json=args.tables.read_text(encoding="utf-8"), header=header
+        )
+        from pokezero.golden_corpus import GOLDEN_CORPUS_SCHEMA_VERSION  # noqa: E402
+        from pokezero.golden_corpus_fold import iter_fold_records  # noqa: E402
+
+        for record in iter_fold_records(
+            args.corpus, expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION
+        ):
+            fold_states[int(record["array_row_index"])] = record["fold_state"]
     else:
         if args.tables is None:
             print("--tables is required for the rust backend", file=sys.stderr)
@@ -364,7 +383,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.rows is not None:
         rows = rows[: args.rows]
     for row_index, row in enumerate(rows):
-        got = backend.encode(row_inputs_from_decision_row(row))
+        if args.backend == "rust-fold":
+            fold_state = fold_states.get(row_index)
+            if fold_state is None:
+                print(f"no fold record for array row {row_index}", file=sys.stderr)
+                return 2
+            got = backend.encode_with_fold(row_inputs_from_decision_row(row), fold_state)
+        else:
+            got = backend.encode(row_inputs_from_decision_row(row))
         want = _golden_arrays_dict(row)
         diff_row(
             row_index,

@@ -453,13 +453,62 @@ class RustBackend:
 
     def encode(self, row_inputs: Mapping[str, Any]) -> dict[str, Any]:
         payload = self._encode(json.dumps(row_inputs, sort_keys=True), self._tables_json)
-        if not isinstance(payload, Mapping):
-            raise ValueError("encode_decision must return a dict of array buffers.")
-        arrays: dict[str, Any] = {}
-        for name in ARRAY_NAMES:
-            buffer = payload.get(name)
-            if buffer is None:
-                raise ValueError(f"encode_decision returned no buffer for {name}.")
-            array = numpy.frombuffer(buffer, dtype=ARRAY_DTYPES[name]).reshape(self._shapes[name])
-            arrays[name] = array
-        return arrays
+        return _arrays_from_buffers(payload, self._shapes)
+
+
+def _arrays_from_buffers(
+    payload: Any, shapes: Mapping[str, tuple[int, ...]]
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("the encoder must return a dict of array buffers.")
+    arrays: dict[str, Any] = {}
+    for name in ARRAY_NAMES:
+        buffer = payload.get(name)
+        if buffer is None:
+            raise ValueError(f"the encoder returned no buffer for {name}.")
+        arrays[name] = numpy.frombuffer(buffer, dtype=ARRAY_DTYPES[name]).reshape(shapes[name])
+    return arrays
+
+
+class RustFoldBackend:
+    """Full-surface native encode: boundary cells from the row inputs plus the
+    history cells (transition rows, tendency/stats counters, pinned Tier-2
+    conclusions, transition attention extent) from the row's recorded fold
+    state, consumed NATIVELY in-crate (``NativeEncoder.encode_with_fold`` —
+    no ``products_payload`` Python crossing). Against golden arrays this
+    backend must be ALL EXACT: any divergence is an encoder bug, not a
+    stored-surface gap.
+    """
+
+    name = "rust-fold"
+
+    def __init__(self, *, tables_json: str, header: Mapping[str, Any]) -> None:
+        import pokezero_search
+
+        if not hasattr(pokezero_search, "NativeEncoder"):
+            raise RuntimeError(
+                "the installed pokezero_search wheel has no NativeEncoder; "
+                "rebuild from rust/pokezero-search (scripts/build_search_crate_model.sh)."
+            )
+        self._module = pokezero_search
+        self._encoder = pokezero_search.NativeEncoder(tables_json)
+        spec, _ = observation_contract_from_header(header)
+        self._shapes = {
+            "categorical_ids": (spec.token_count, spec.categorical_feature_count),
+            "numeric_features": (spec.token_count, spec.numeric_feature_count),
+            "token_type_ids": (spec.token_count,),
+            "attention_mask": (spec.token_count,),
+            "legal_action_mask": (ACTION_COUNT,),
+        }
+
+    def encode(self, row_inputs: Mapping[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("rust-fold requires the row's fold state; use encode_with_fold.")
+
+    def encode_with_fold(
+        self, row_inputs: Mapping[str, Any], fold_state_payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        fold = self._module.FoldState.from_payload(fold_state_payload)
+        payload = self._encoder.encode_with_fold(
+            json.dumps(row_inputs, sort_keys=True), fold
+        )
+        return _arrays_from_buffers(payload, self._shapes)

@@ -185,15 +185,22 @@ Readings:
   TorchScript evaluator compiles and runs against the identical tree core
   (`search_batched_multi`). Priors remain uniform until the action-index →
   `MoveChoice` mapping lands (encoder stream).
-- **Per-outcome fold-state advance** (track B): the instruction→event
-  mapping (`src/events.rs`, section below) renders each branch's engine
-  instruction list as protocol lines, and the Rust `FoldState` advances a
-  clone of the root fold state over them — per-outcome REAL history at
-  leaves (no freezing). The leaf pricing closure now receives a
-  `BranchSeam` (joint move pair + the branch's instruction list) alongside
-  the leaf state, so the in-crate encoder integration plugs in at the
-  batch-row write in `multiply_batched_core` with everything it needs;
-  leaves remain template-stub encoded until that integration (the NEXT PR).
+- **Per-outcome fold-state advance + native leaf encode (LANDED)**: the
+  instruction→event mapping (`src/events.rs`) renders each branch's engine
+  instruction list as protocol lines, the Rust `FoldState` advances a clone
+  of the PARENT branch's fold state over them (fold states chain through
+  the tree via the `BranchSeam` parent key — depth-k leaves carry
+  root-prefix + k simulated plies of real history), and the in-crate
+  encoder (`src/leaf.rs` `LeafEncoder` + `src/encoder.rs`
+  `write_history_cells`) writes the REAL leaf observation at the batch-row
+  write (`multiply_batched_encoded_core`, `search_batched_multi_encoded`).
+  Contract + validation: docs/leaf_observation_column_map.md — root-parity
+  gate 1015/1015 + 235/235 driven corpus rows byte-exact at depth 0;
+  full-surface fold-product consumption byte-exact over all 1318 rows
+  (`validate_rust_encoder.py --backend rust-fold`); real-observation
+  overhead ~115–190µs/eval vs the template stub
+  (`scripts/bench_leaf_search.py`). The template-stub paths remain exported
+  for benching.
 - Epistemic variance (belief worlds) stays a separate axis above this crate,
   aggregated at the root by the Python orchestration.
 
@@ -324,24 +331,25 @@ Curse / Pain Split) bare, anything unexplained bare + `lossy`
 cost; and an ambiguous Sleep Talk call is flagged `lossy` even on an empty
 delta (the never-mis-attribute invariant holds universally).
 
-### Forward caveats for the in-crate-encoder PR (flagged in review; NOT built here)
+### Forward caveats for the in-crate-encoder PR (RESOLVED 2026-07-19)
 
 1. **Nicknames.** Synthesized idents use display SPECIES (`p1a: Slaking`).
    Correct for randbats/local games (no nicknames) and for fold semantics
-   (occupants come from switch DETAILS, which are species either way), but
-   a live root fold built from a nicknamed ladder game carries nickname
-   idents — the encoder integration must source idents from the live
-   battle's nickname map, or keep relying on the fold's details-based
-   occupant tracking and document ident mismatch as cosmetic.
-2. **Opponent HP base reconciliation.** A live root fold has consumed the
-   real stream's opponent HP as `cur/100` fractions, while the mapper
-   renders true-`cur/maxhp` from the (belief-sampled) engine world. The
-   fractions are consistent to ±1/200 rounding, but damage_fraction deltas
-   at leaves will be computed against the /100-derived `hp_fraction` carried
-   in the root state — fine numerically, INVISIBLE in the fidelity corpus
-   (it records exact HP throughout). The integration should either render
-   opponent conditions on a /100 base to match the live stream's
-   granularity, or accept and document the sub-percent mixed-base error.
+   (occupants come from switch DETAILS, which are species either way).
+   Resolution: rely on the fold's details-based occupant tracking; ident
+   mismatch on nicknamed ladder games is documented as cosmetic
+   (docs/leaf_observation_column_map.md). Revisit only if a ladder
+   integration consumes idents directly.
+2. **Opponent HP base reconciliation.** Evidence: the local harness feeds
+   the OMNISCIENT stream — exact HP for both sides (corpus slices confirm)
+   — so in the training/eval/paired-read domain the mapper's true-base
+   rendering already matches the root fold's base; the /100 regime exists
+   only on ladder (player-view) streams. Resolution: default exact;
+   `EventContext.hp_percent` opts a side into Showdown's exact HP
+   Percentage Mod rendering (`ceil(100*hp/maxhp)`, 99-cap; unit-tested)
+   so ladder-rooted leaf fractions land on the /100 grid the root fold
+   consumed. Grid distinction pinned by
+   `tests/test_leaf_encoder.py::HpPercentGridTest`.
 
 ## Review caveats (PR #721, non-blocking)
 

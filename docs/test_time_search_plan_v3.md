@@ -148,13 +148,23 @@ docs/crate_search_design.md "Instruction→event mapping"); the leaf pricing
 seam now carries the branch context (`BranchSeam`) at the
 `multiply_batched_core` row write and the end-to-end leaf flow (root fold →
 branch events → Rust advance → per-outcome products) is gated by
-tests/test_instruction_event_mapping.py; remaining = native consumption of
-fold products by the in-crate encoder (tokens 23-150) at that seam.
+tests/test_instruction_event_mapping.py; **capstone integration LANDED
+(2026-07-19)** — the in-crate encoder consumes fold products natively
+(tokens 23-150 + tendency/stats/pinned cells; full observation surface
+byte-exact over ALL 1318 corpus rows, `--backend rust-fold`), the leaf path
+builds real per-outcome observations (engine-state recompute +
+world-constant carry + per-branch fold advance chained through the tree),
+the ROOT-PARITY GATE passes 1015/1015 + 235/235 driven rows byte-exact at
+depth 0 (`scripts/leaf_root_parity.py`), and `search_batched_multi_encoded`
+runs the full model-priced loop at ~115-190µs real-observation overhead per
+eval (see docs/leaf_observation_column_map.md — the column contract, /100
+resolution, bench, and the remaining-to-paired-read list).
 D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
-docs/crate_model_integration.md); remaining = encoder hand-off (track B) +
-prior/action mapping + `search.py` integration.
+docs/crate_model_integration.md); encoder hand-off (track B) LANDED via the
+leaf path above; remaining = prior/action mapping + `search.py` integration
++ live root-fold export.
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep

@@ -217,6 +217,22 @@ pub(crate) struct BranchSeam<'a> {
     pub s2: &'a MoveChoice,
     #[allow(dead_code)]
     pub instructions: &'a [Instruction],
+    /// The ancestor (chance node, branch index) whose child decision node is
+    /// being expanded; `None` when expanding a root edge. The consumer's
+    /// fold-state cache is keyed on this: the parent branch's advanced fold
+    /// is the prefix this branch's events extend.
+    #[allow(dead_code)]
+    pub parent: Option<(usize, usize)>,
+    /// Arena index the expanding chance node will occupy.
+    #[allow(dead_code)]
+    pub chance: usize,
+    /// This outcome's index within the expanding chance node.
+    #[allow(dead_code)]
+    pub branch_index: usize,
+    /// The damage-branching flag this expansion was generated with (the
+    /// instruction→event mapper re-generates with the same flag).
+    #[allow(dead_code)]
+    pub branch_on_damage: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -288,8 +304,11 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
         match tree.decisions[node_idx].children.get(&key).copied() {
             None => {
                 // --- expansion: enumerate the engine's chance outcomes ---
+                let parent = path
+                    .last()
+                    .map(|step| (step.chance, step.branch.expect("descended steps carry a branch")));
                 let chance_idx =
-                    expand_edge(tree, state, node_idx, i, j, cfg, counters, price);
+                    expand_edge(tree, state, node_idx, i, j, cfg, counters, price, parent);
                 tree.decisions[node_idx].children.insert(key, chance_idx);
                 path.push(PathStep {
                     decision: node_idx,
@@ -393,12 +412,15 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     cfg: &MultiPlyConfig,
     counters: &mut SearchCounters,
     price: &mut F,
+    parent: Option<(usize, usize)>,
 ) -> usize {
     counters.expansions += 1;
     let depth = tree.decisions[node_idx].depth;
     let node = &tree.decisions[node_idx];
     let s1_move = node.s1_options[i];
     let s2_move = node.s2_options[j];
+    // The arena index this chance node will occupy (pushed at the end).
+    let chance_idx = tree.chances.len();
 
     // Engine damage-branch policy (plies 1-2) + deep KO-threshold splits.
     let mut branch_on_damage = depth < DAMAGE_BRANCH_DEPTH;
@@ -419,6 +441,10 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             s1: &s1_move,
             s2: &s2_move,
             instructions: &[],
+            parent,
+            chance: chance_idx,
+            branch_index: 0,
+            branch_on_damage,
         };
         let (value_sum, visits, terminal, pending_row) =
             price_outcome(outcome, state, counters, price, &seam);
@@ -439,7 +465,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             "engine branch percentages sum to {total}, expected 100"
         );
         let norm = if total > 0.0 { total } else { 100.0 };
-        for state_instructions in generated {
+        for (branch_index, state_instructions) in generated.into_iter().enumerate() {
             let probability = state_instructions.percentage / norm;
             let instructions = state_instructions.instruction_list;
             state.apply_instructions(&instructions);
@@ -448,6 +474,10 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                 s1: &s1_move,
                 s2: &s2_move,
                 instructions: &instructions,
+                parent,
+                chance: chance_idx,
+                branch_index,
+                branch_on_damage,
             };
             let (value_sum, visits, terminal, pending_row) =
                 price_outcome(outcome, state, counters, price, &seam);
