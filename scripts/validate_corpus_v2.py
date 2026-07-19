@@ -44,6 +44,7 @@ from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from pokezero.golden_corpus import GOLDEN_CORPUS_SCHEMA_VERSION, verify_golden_corpus  # noqa: E402
 from pokezero.golden_corpus_fold import (  # noqa: E402
@@ -52,11 +53,17 @@ from pokezero.golden_corpus_fold import (  # noqa: E402
     validate_fold_chains,
 )
 
-# Backend registry: name -> zero-argument factory. The Rust advance() port adds
-# one entry here (an adapter class implementing FoldBackend over the crate's
-# payload-in/payload-out advance) and inherits the whole harness.
+from golden_fold_backends import CompareFoldBackend, RustFoldBackend  # noqa: E402
+
+# Backend registry: name -> zero-argument factory. ``rust`` is the native
+# crate's advance (pokezero_search.FoldState, rust/pokezero-search src/fold.rs);
+# ``compare-backends`` runs rust and python-reference side by side and prints
+# JSON-path locators for any divergence between the two (returning the rust
+# outputs, so the corpus comparison stays the rust gate).
 BACKENDS = {
     "python-reference": PythonReferenceFoldBackend,
+    "rust": RustFoldBackend,
+    "compare-backends": CompareFoldBackend,
 }
 
 

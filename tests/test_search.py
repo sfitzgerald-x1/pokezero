@@ -420,6 +420,9 @@ class BranchStepTimingCompatibilityTest(unittest.TestCase):
         self.assertEqual(timing["branch_observation_replay_snapshot_count"], 0)
         self.assertEqual(timing["branch_observation_player_state_normalization_count"], 0)
         self.assertEqual(timing["branch_observation_state_annotation_count"], 0)
+        self.assertEqual(timing["branch_observation_encoding_seconds"], 0.0)
+        self.assertEqual(timing["branch_belief_overlay_projection_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_state_normalization_count"], 0)
         self.assertEqual(timing["branch_observation_encoding_count"], 0)
         self.assertEqual(timing["branch_belief_overlay_projection_count"], 0)
 

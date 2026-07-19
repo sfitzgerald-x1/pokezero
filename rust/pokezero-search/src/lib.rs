@@ -9,8 +9,11 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod encoder;
+pub mod events;
+pub mod fold;
 #[cfg(feature = "model")]
 pub mod model;
+pub mod tree;
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -233,7 +236,7 @@ fn select(stats: &[MoveStats], parent_visits: u32, c_puct: f32, for_side_one: bo
 /// Run the core loop with a caller-supplied leaf evaluator. Kept generic over
 /// [`LeafEval`] so the learned-model evaluator slots in without touching the
 /// tree logic.
-fn puct_search_with_eval<E: LeafEval>(
+pub(crate) fn puct_search_with_eval<E: LeafEval>(
     state: &mut State,
     iterations: usize,
     c_puct: f32,
@@ -342,7 +345,10 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MODEL_FEATURE_ENABLED", cfg!(feature = "model"))?;
     m.add_function(wrap_pyfunction!(bench_apply_reverse, m)?)?;
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
+    m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
+    m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
     Ok(())

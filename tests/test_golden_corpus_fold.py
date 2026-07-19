@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -48,6 +49,18 @@ from pokezero.transitions_fold import FoldState
 
 TESTS_DATA_DIR = Path(__file__).parent / "data"
 COMMITTED_SAMPLE_DIR = TESTS_DATA_DIR / "golden_corpus_sample"
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+
+
+def _rust_fold_available() -> bool:
+    """True when the installed pokezero_search wheel carries the fold port
+    (skip-if-absent, like the encoder gate in test_validate_rust_encoder)."""
+
+    try:
+        import pokezero_search
+    except (ImportError, OSError):  # pragma: no cover - environment guard
+        return False
+    return hasattr(pokezero_search, "FoldState")
 
 # A small two-boundary protocol log: the lead slice (what both seats' chains
 # see at their first decision) and one played turn (the second decision's
@@ -319,6 +332,62 @@ class CommittedSampleFoldChainTest(unittest.TestCase):
         self.assertEqual(report.rows_validated, 5)
         self.assertEqual(report.chains, 2)
         self.assertGreater(report.pair_validations, 0)
+
+
+@unittest.skipIf(not _rust_fold_available(), "pokezero_search.FoldState not installed")
+class RustCommittedSampleFoldChainTest(unittest.TestCase):
+    """The Rust advance() port (rust/pokezero-search src/fold.rs) must keep
+    reproducing the committed sample's recorded production fold states and
+    products byte-exactly — the no-Showdown regression net for the native
+    backend, gated on the wheel being importable."""
+
+    def test_committed_sample_chains_validate_rust(self) -> None:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        try:
+            from golden_fold_backends import RustFoldBackend
+        finally:
+            sys.path.remove(str(SCRIPTS_DIR))
+        report = validate_fold_chains(
+            COMMITTED_SAMPLE_DIR,
+            RustFoldBackend(),
+            expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION,
+        )
+        self.assertTrue(report.ok, report.mismatches)
+        self.assertEqual(report.rows_validated, 5)
+        self.assertEqual(report.chains, 2)
+        self.assertGreater(report.pair_validations, 0)
+
+
+@unittest.skipIf(not _rust_fold_available(), "pokezero_search.FoldState not installed")
+class RustFoldNanHpClampTest(unittest.TestCase):
+    """LOW-2 (PR #724 review): a literal-NaN HP field must clamp exactly like
+    the Python reference's ``max(0.0, min(1.0, v))`` (NaN/+inf -> 1.0,
+    -inf -> 0.0) and the resulting payloads must stay JSON-serializable with
+    ``allow_nan=False`` — the guard for the future in-crate encoder, which
+    consumes products natively with no JSON gate in the path."""
+
+    NAN_SLICE = [
+        "|switch|p1a: Snorlax|Snorlax, L91|nan/100",
+        "|switch|p2a: Zapdos|Zapdos, L77|inf/inf",
+        "|turn|1",
+    ]
+
+    def test_nan_hp_matches_reference_and_stays_serializable(self) -> None:
+        import pokezero_search
+
+        reference, _ = FoldState.initial(perspective_slot="p1").advance(self.NAN_SLICE)
+        rust = pokezero_search.FoldState.initial("p1")
+        rust.advance_in_place(list(self.NAN_SLICE))
+
+        rust_payload = rust.to_payload()
+        self.assertEqual(rust_payload["hp_fraction"], {"p1": 1.0, "p2": 1.0})
+        for surface in (rust_payload, rust.products_payload()):
+            canonical = json.dumps(surface, sort_keys=True, allow_nan=False)
+            self.assertNotIn("NaN", canonical)
+        self.assertEqual(
+            json.dumps(rust_payload, sort_keys=True, allow_nan=False),
+            json.dumps(reference.to_payload(), sort_keys=True, allow_nan=False),
+        )
 
 
 if __name__ == "__main__":

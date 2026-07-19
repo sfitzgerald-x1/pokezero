@@ -129,13 +129,37 @@ in Rust (PR #710); fold-state advance built + closure-proven
 with per-row fold state + event slices + overlays, row-pair advance
 validation green over every boundary of the random battery AND the full
 scenario suite (`scripts/validate_corpus_v2.py`, backend seam ready for the
-Rust advance; see docs/golden_corpus_notes.md "Corpus v2"); remaining = the
-Rust advance() port + the instruction->event mapping. D: crate model integration
+Rust advance; see docs/golden_corpus_notes.md "Corpus v2"); **Rust advance()
+VALIDATED** — `pokezero_search.FoldState` (rust/pokezero-search `src/fold.rs`)
+passes the row-pair harness byte-exact over ALL boundaries of both corpora
+(golden-v2 1028/1028, golden-v2-scenarios 290/290; state + products; the
+`--backend compare-backends` rust-vs-python diff shows zero divergences), with
+the committed-sample chain test as the permanent no-Showdown gate; per-boundary
+clone+advance is ~9.8µs vs the Python reference's ~92µs (~9x; see
+docs/golden_corpus_notes.md "Rust backend"); **instruction→event mapping
+LANDED** (`rust/pokezero-search/src/events.rs` + `branch_events` PyO3
+surface): per-outcome engine instruction lists render as protocol lines via
+engine re-generation phase segmentation, real-game fidelity gate over BOTH
+corpora (scripts/fidelity_gate_events.py: scenarios 77a/87b/19c of 183
+driven, random 378a/291b/106c of 775; every class-c case attributed —
+engine-merged no-op branches, KO-capped crit labels, and three ENGINE-model
+deviations incl. fixed-damage-through-Protect; see
+docs/crate_search_design.md "Instruction→event mapping"); the leaf pricing
+seam now carries the branch context (`BranchSeam`) at the
+`multiply_batched_core` row write and the end-to-end leaf flow (root fold →
+branch events → Rust advance → per-outcome products) is gated by
+tests/test_instruction_event_mapping.py; remaining = native consumption of
+fold products by the in-crate encoder (tokens 23-150) at that seam.
+D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); remaining = encoder hand-off (track B) +
 prior/action mapping + `search.py` integration.
 Speed POC complete; scenario corpus suite complete.
+Multi-ply decision/chance tree per the search-tree contract LANDED in the
+crate (exact-expectation backup, plies-1-2 damage branching + deep
+KO-threshold splits, batched-through-chance virtual loss — see
+docs/crate_search_design.md).
 
 ## The golden corpus (track B's definition of done)
 

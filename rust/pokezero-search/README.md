@@ -83,6 +83,18 @@ mis-patching.
   `1 - value`), stochastic branch sampling by engine percentages, terminal
   detection, and leaf values through `LeafEval`. Returns JSON with visit
   counts and mean values per root move for both sides.
+- `puct_search_multi(state_str, iterations, max_depth=2, c_puct=1.4, seed=0,
+  deep_ko_split=True) -> str` — multi-ply decision/chance tree per the
+  search-tree contract: explicit chance nodes carrying the engine's exact
+  enumerated branch probabilities, EXACT-EXPECTATION backup (never sampled
+  outcomes), damage branching at plies 1-2 (the engine's own policy) plus
+  KO-threshold splits at deeper plies via a `calculate_damage_rolls`-based
+  straddle detector. Deterministic per seed. Design, backup math, and bench:
+  `docs/crate_search_design.md`.
+- `NativeLeafModel.search_batched_multi(...)` (`model` feature) — the same
+  tree core with virtual-loss batched TorchScript leaf pricing; model rows
+  are collected at expansions so every joint edge resolves as an exact
+  expectation over model values.
 
 State strings come from the production adapter:
 `pokezero.poke_engine_adapter.build_poke_engine_state(spec).to_string()`.
@@ -128,8 +140,6 @@ Reading:
 
 ## What is deliberately not here yet
 
-- Multi-ply tree (the `puct_search` skeleton is root-only by design — the
-  plan re-prices depth after the swap).
 - The Rust v2.2 encoder (track B's deliverable; validated bit-exactly by the
   golden corpus before anything is trusted). Until it lands, model-priced
   search leaves carry a caller-supplied template observation — throughput is
@@ -146,5 +156,12 @@ determinism, and a loose regime floor (>100k steps/s).
 `tests/test_crate_model_leafeval.py` — the model-feature parity gate
 (crate vs venv torch on the same TorchScript artifact, bit-exact expected)
 plus batched-search mechanics: visit conservation, seed determinism, the
-batch=1 sequential regime, and masked-prior correctness. Skips cleanly
-unless the crate was built with `--features model`.
+batch=1 sequential regime, and masked-prior correctness (one-ply AND
+multi-ply classes). Skips cleanly unless the crate was built with
+`--features model`.
+
+`tests/test_multiply_chance_search.py` + `cargo test` in the crate — the
+multi-ply correctness gates: analytic exact-expectation fixture, depth-1
+regression against the one-ply core, seed determinism, probability
+conservation (also `debug_assert`ed at every chance node in debug builds),
+and the deep KO-split toggle.
