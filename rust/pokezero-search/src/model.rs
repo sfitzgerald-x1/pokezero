@@ -637,7 +637,9 @@ fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f
         sum += prior;
         gathered.push(prior);
     }
-    if sum <= 1e-8 {
+    // NaN comparisons are false, so a non-finite logit would slip past the
+    // underflow guard alone and propagate into stat.prior.
+    if !sum.is_finite() || sum <= 1e-8 {
         return None;
     }
     for prior in &mut gathered {

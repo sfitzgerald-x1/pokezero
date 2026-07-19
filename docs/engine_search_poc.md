@@ -70,6 +70,12 @@ premium over the handcrafted eval (3.2ms vs 1.7µs batched). Consequences:
 
 ## Fallback anatomy (fifth revision: 47% -> 0.8% -> 0.45% -> 0.0%)
 
+> Revision note (2026-07-19, PR #737): the 0.0% figure below is specific to
+> the original bench seed set and was seed-lucky — fresh seeds hit the
+> documented fail-closed world walls (item mutation, Transform,
+> request-state) at ~15% of decisions, identically under the HpFraction
+> control. The trajectory below remains accurate for the walls it removed.
+
 Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
 (235/237 decisions searched) after the dead-end hunt:
 
@@ -119,8 +125,10 @@ Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
   field kept for forward compatibility). The fallback win is the boundary
   itself searching: recipient choice with boosts passing. Unsupported pending shapes
   (opponent-side pending) still fail closed. 15-game bench: **0.0% fallback
-  (329/329 searched)**; residue is per-attempt catalog two-HP-variant
-  rejects that never cost a decision.
+  (329/329 searched) on the original seed set** (seed-lucky — see the
+  revision note above; fresh seeds read ~15% via the remaining walls);
+  residue is per-attempt catalog two-HP-variant rejects that never cost a
+  decision.
 - Remaining (both principled fail-closes, ~1 decision each per 10 games):
   **encore** (meaningless without `last_used_move` wiring) and **pending
   Baton Pass** (needs deferred opponent-action semantics). Plus a rare

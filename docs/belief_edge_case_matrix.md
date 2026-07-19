@@ -32,7 +32,7 @@ construct · **NOTE** = residual risk documented.
 | Pursuit mid-switch (no forceSwitch cycle) | N/A — turn-structure concern; construct reads request-boundary payload state only | — |
 | Roar/Whirlwind phazing (drag ≠ BP) | HANDLED — payload boosts/volatiles reflect the drag reset; force-switch boundaries construct | force-switch test |
 | Wish (interrupted/expired) | HANDLED — pending-only payload + carrier-independent engine semantics (amount ignored by engine; deviation documented) | wish tests |
-| Deferred simultaneous-turn opponent action (Baton Pass boundary) | FIXED-NOW — self-pending BP constructs: passer `baton_passing`+`force_switch`, opponent commitment sampled into the engine's saved-move field, but review probes show the gen3 build does NOT resolve it (fail-soft under-model; field kept for forward compat). The boundary itself searches — recipient choice with boosts passing — which was the fallback cost. Opponent-pending shapes stay closed. Bench: 0.0% fallback | BP boundary tests |
+| Deferred simultaneous-turn opponent action (Baton Pass boundary) | FIXED-NOW — self-pending BP constructs: passer `baton_passing`+`force_switch`, opponent commitment sampled into the engine's saved-move field, but review probes show the gen3 build does NOT resolve it (fail-soft under-model; field kept for forward compat). The boundary itself searches — recipient choice with boosts passing — which was the fallback cost. Opponent-pending shapes stay closed. Bench: 0.0% fallback (original seed set — see baseline note below) | BP boundary tests |
 | Unown formes / Deoxys formes | HANDLED — Unown collapsed (with party-species consistency); Deoxys formes are real dex entries | forme test |
 | Screens presence vs turns-remaining | HANDLED — turns derived from set turns; expiry validated multi-turn | screens tests + S4 |
 | Leftovers/pinch residual ORDER | HANDLED — engine build patched (order-5/10 split), differential + pins | #686 gates |
@@ -78,4 +78,10 @@ Every decision-level fallback is now LOUD, three tiers:
 3. `EngineMctsConfig(strict_fallbacks=True)` → `EngineSearchFallbackError`
    for sweeps/CI that require zero, and the bench CLI's
    `--fail-on-fallback` flag exits nonzero with a stderr banner.
-At the 0.0% baseline, every alert is a potential regression worth a look.
+Baseline note (revised 2026-07-19, PR #737): the original "0.0% fallback"
+15-game bench was seed-lucky. On fresh seeds the fail-closed world walls
+(Trick/Knock-Off item mutation, Transform, request-state flags) produce a
+~15% decision-level fallback rate concentrated in a minority of battles —
+identical under the HpFraction control, so the pipeline adds none of its
+own. Alerts remain worth a look, judged against the per-reason taxonomy
+rather than a zero baseline.
