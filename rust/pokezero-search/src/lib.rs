@@ -11,6 +11,7 @@
 pub mod encoder;
 pub mod events;
 pub mod fold;
+pub mod leaf;
 #[cfg(feature = "model")]
 pub mod model;
 pub mod tree;
@@ -349,6 +350,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
     m.add_class::<encoder::NativeEncoder>()?;
+    m.add_class::<leaf::PyLeafEncoder>()?;
     m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;

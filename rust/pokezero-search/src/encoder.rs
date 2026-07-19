@@ -362,6 +362,22 @@ impl Tables {
         })
     }
 
+    pub(crate) fn layout_action_count(&self) -> usize {
+        self.layout.action_count
+    }
+
+    pub(crate) fn layout_move_action_count(&self) -> usize {
+        self.layout.move_action_count
+    }
+
+    pub(crate) fn layout_timed_condition_duration(&self) -> i64 {
+        self.layout.timed_condition_duration
+    }
+
+    pub(crate) fn move_max_pp(&self, id: &str) -> Option<i64> {
+        self.move_info(id).map(|info| info.max_pp)
+    }
+
     /// `CategoryVocabulary.encode`: pad 0 for empty, direct row lookup, else
     /// the deterministic blake2b-8 OOV bucket.
     fn vocab_encode(&self, value: &str) -> i32 {
@@ -2416,7 +2432,7 @@ fn bytes_from_i16(py: Python<'_>, values: &[i16]) -> Py<PyBytes> {
     PyBytes::new(py, &buffer).into()
 }
 
-fn encoded_to_dict(py: Python<'_>, encoded: &EncodedArrays) -> PyResult<Py<PyDict>> {
+pub(crate) fn encoded_to_dict(py: Python<'_>, encoded: &EncodedArrays) -> PyResult<Py<PyDict>> {
     let out = PyDict::new(py);
     out.set_item("categorical_ids", bytes_from_i32(py, &encoded.categorical))?;
     out.set_item("numeric_features", bytes_from_f64(py, &encoded.numeric))?;
