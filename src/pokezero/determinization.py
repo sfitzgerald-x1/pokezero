@@ -1204,7 +1204,7 @@ def _candidate_payload_matches_canonical(
             return False
     candidate_level = candidate.get("level")
     canonical_level = canonical.get("level")
-    return candidate_level is None or candidate_level == canonical_level
+    return candidate_level == canonical_level
 
 
 def _witnessed_opponent_fixture(

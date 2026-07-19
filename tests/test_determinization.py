@@ -437,6 +437,24 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
             or "psychic,calmmind,rest,hiddenpowerfire" in override.player_teams["p1"]
         )
 
+    def test_planner_rebuilds_candidate_missing_catalog_level(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"][0].pop("level")  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        xatu = source().player_teams["p1"].split("]", maxsplit=1)[0]
+        self.assertTrue(xatu.endswith("|84|"))
+
     def test_planner_preserves_public_ability_exclusions_when_rebuilding_candidates(self) -> None:
         metadata = _metadata()
         opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
