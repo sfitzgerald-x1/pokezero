@@ -241,6 +241,17 @@ classifying it.
    into state normalization, feature encoding, and belief-overlay projection;
    do not revisit replay or bridge transport until that split identifies the
    dominant substage.
+   **State-normalization attribution (2026-07-19):** the strict CPU-only
+   extra-120 mechanics smoke completed with 132/132 direct materializations,
+   zero prefix replays, zero mechanics fallbacks, and 33 searched decisions.
+   It measured 12.53s mean / 14.78s p95 full-decision wall time. Player-view
+   projection was 4.13s per decision: state normalization was 3.15s, feature
+   encoding was 0.94s, belief-overlay projection was 0.02s, and only 0.01s
+   remained unattributed. This is a mechanics telemetry result, not a strength
+   claim. The next image subdivides state normalization into incremental
+   parser/belief sync, replay snapshotting, player-relative normalization, and
+   post-normalization annotations; optimize only the dominant measured
+   substage. No GPU expansion is justified by this CPU-side profile.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
