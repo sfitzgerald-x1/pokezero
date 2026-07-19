@@ -1,9 +1,10 @@
 # Root-PUCT W4 scale-cost preliminary readout
 
-Status: **preliminary cost evidence, not a strength benchmark**. This note records the completed
-portion of W4 from [`test_time_search_plan_v2.md`](test_time_search_plan_v2.md). It answers the
-practical latency question for the current root-only search implementation at two policy scales; it
-does not establish that any budget improves play.
+Status: **pre-W5 preliminary cost evidence, not a strength benchmark**. This note records the
+completed portion of W4 from [`test_time_search_plan_v2.md`](test_time_search_plan_v2.md) on the
+former replay-from-root implementation. W5 has since moved the primary path to direct
+materialization, so these rows are a useful scale baseline rather than a current serving-latency
+claim. They do not establish that any budget improves play.
 
 ## Scope
 
@@ -41,20 +42,20 @@ search.
 
 ## Readout
 
-The present implementation does not demonstrate a reliable two-second search budget at either
-model scale: even the smallest search setting has a mean above two seconds and a materially higher
-P95. `0` extra visits is the closest current configuration to an aggressive envelope, but remains
-a cost/coverage tradeoff to improve rather than a deployable two-second claim.
+The pre-W5 implementation did not demonstrate a reliable two-second search budget at either model
+scale: even the smallest search setting had a mean above two seconds and a materially higher P95.
+`0` extra visits was the closest configuration to an aggressive envelope, but remained a
+cost/coverage tradeoff rather than a deployable two-second claim.
 
 For a roughly ten-second ladder-like envelope, M50 with 24 extra visits is the only completed row
 whose P95 is below ten seconds. L200 with 24 extra visits is close by mean but just above ten seconds
 at P95. At both scales, 120 extra visits and above are already far beyond that envelope, so further
 measurements at larger budgets would not change the operational conclusion.
 
-This leaves `0` and `24` extra visits as the only currently plausible budgets for a later
-strength-vs-cost tradeoff. W2 must provide that strength curve before selecting either as a working
-search budget. The nontrivial fallback rates also mean that W1's fallback taxonomy and repair remain
-necessary before treating these timings as a stable serving envelope.
+At the time of this probe, `0` and `24` extra visits were the only plausible budgets for a later
+strength-vs-cost tradeoff. W2 must refresh the curve on W5's direct-materialization path before
+selecting a working search budget. The nontrivial fallback rates also mean that W1's fallback
+baseline remains necessary before treating any timing row as a stable serving envelope.
 
 ## Verification Evidence
 
