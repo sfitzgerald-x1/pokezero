@@ -9,7 +9,9 @@ for BOTH model scales, measures the MPS partial-final-batch recompile
 regression with real shapes, and validates the documented-but-unbuilt fix
 (pad-to-batch). Machine: Apple M5 Max laptop (CPU + MPS as the local GPU
 proxy); the cluster-GPU rerun is specced at the end and is a config change,
-not new code.
+not new code. UPDATE 2026-07-19: the cluster rerun HAS RUN (1x NVIDIA GB200,
+torch-reported name; owner-extended to bf16 + a 4-GPU replica-sharding leg)
+— see "CUDA results" below.
 
 ## Checkpoints (fetched 2026-07-19, sha256-verified; `checkpoints/curated/MANIFEST.json`)
 
@@ -271,9 +273,10 @@ Where the tradeoff lands:
    m50-fp32 collapses ~70x, m50-fp16 destabilizes — cap local/MPS search
    batches at 256, prefer 16-64.
 
-## What needs a real CUDA GPU (specced, NOT run — separate owner-approved step)
+## What needs a real CUDA GPU (specced 2026-07-19; RUN same day — results in the next section)
 
-The open questions MPS cannot answer:
+The open questions MPS cannot answer (each is answered under "CUDA
+results" below):
 
 1. **m50 fp16 tensor-core throughput.** MPS half-rate says nothing about
    A100/H100/GB200 tensor cores; fp16/bf16 on CUDA is where the m50-at-search
@@ -299,6 +302,11 @@ Exact experiment (one job, <30 GPU-minutes):
   run; add `--batch-sizes ...,2048` for m50 fp16 — tensor-core saturation
   sits higher than MPS's). CUDA artifacts for the crate come from
   `scripts/export_model.py --device cuda --formats ts` on the same box.
+  (Note: re-exporting after the dtype-cast fix in this change produces a
+  byte-DIFFERENT TorchScript artifact — the delta is only `.debug_pkl`
+  source-line metadata and the derived serialization id; weights and the
+  executable graph are byte-identical and parity stays 0.0, so existing
+  artifacts do not functionally require regeneration.)
 - **Image:** the standard training image already used by this repo's cluster
   jobs (it carries the matching torch); no new image work.
 - **Resource ask:** 1 GPU, 8 CPU, 32Gi, runAsJob with `ttlSecondsAfterFinished:
@@ -310,6 +318,166 @@ Exact experiment (one job, <30 GPU-minutes):
   weights — follow-up after the Python-side curves, since tch links the same
   libtorch and the findings doc showed TS==eager throughput on both CPU and
   MPS; expectation is the same on CUDA.
+
+## CUDA results (2026-07-19, 1x NVIDIA GB200)
+
+One short batch job, ~8 min wall on a 4-GPU node (~32 GPU-min, inside the
+owner-extended ~45 GPU-min budget). Hardware as reported by torch 2.13.0
+(CUDA 13.0): 4x "NVIDIA GB200", compute capability sm_100, 184 GB each;
+CPU cells ran on the same node's arm64 CPU pinned to 8 torch threads
+(`OMP_NUM_THREADS=8` — the specced 8-vCPU worker shape). Methodology
+identical to the local grids: TorchScript traced in-process per
+(device, dtype), 3 warmups then >=1.5s / >=4 iterations, device-
+synchronized. Owner extension over the original spec: bf16 added to the
+dtype grid (the natural tensor-core dtype on this part), and a 4-GPU
+replica-sharding leg (4 independent bench processes pinned one-per-GPU —
+replicas over sharding; NO tensor/model parallelism, which a 10-52M-param
+model does not need).
+
+Two notes the run forced:
+
+- **Real half/bf16 weight copies exposed two latent dtype assumptions in
+  the model code** — `_embed_expanded_inputs` hard-upcast numeric features
+  with `.float()` and `_masked_mean` weighted masks in fp32, both of which
+  dtype-mismatch `F.linear` the moment weights are genuinely fp16/bf16
+  (MPS never reached them: Metal aborts earlier, so the "real half traced"
+  path had never actually executed anywhere). Fixed in
+  `src/pokezero/neural_policy.py` with dtype-following casts — bit-identical
+  under fp32 weights (the full neural test suite and export parity gates
+  pass unchanged).
+- **fp32 cells are honest CUDA-core fp32**: torch's matmul TF32 default is
+  off and the bench does not touch it. The fp32 rows are therefore the
+  parity-clean ceiling the crate ships today; fp16/bf16 remain throughput
+  probes with no parity story (and sm_100 also carries fp8 tensor cores — a
+  possible future probe, deliberately NOT built here).
+
+### emeta (10.18M, d=512, 3 layers) — evals/s (ms/batch), 1x GB200
+
+| device/dtype | batch 1 | batch 16 | batch 64 | batch 128 | batch 256 | batch 512 | batch 1024 |
+|---|---|---|---|---|---|---|---|
+| cuda/fp32 (ts) | 679/s (1.5ms) | 9,393/s (1.7ms) | 13,804/s (4.6ms) | 14,508/s (8.8ms) | 14,809/s (17.3ms) | 15,004/s (34.1ms) | 15,149/s (67.6ms) |
+| cuda/fp16 (ts, real half) | 743/s (1.3ms) | 10,770/s (1.5ms) | 42,065/s (1.5ms) | 51,841/s (2.5ms) | 55,143/s (4.6ms) | 58,115/s (8.8ms) | 59,929/s (17.1ms) |
+| cuda/bf16 (ts, real bf16) | 728/s (1.4ms) | 10,730/s (1.5ms) | 42,999/s (1.5ms) | 51,971/s (2.5ms) | 56,084/s (4.6ms) | 58,399/s (8.8ms) | 60,084/s (17.0ms) |
+| cpu/fp32 (ts, 8 threads) | 107/s (9.3ms) | 156/s (102.7ms) | 152/s (421.9ms) | - | 147/s (1745.1ms) | - | - |
+
+### m50 (51.84M, d=1024, 4 layers) — evals/s (ms/batch), 1x GB200
+
+| device/dtype | batch 1 | batch 16 | batch 64 | batch 128 | batch 256 | batch 512 | batch 1024 | batch 2048 |
+|---|---|---|---|---|---|---|---|---|
+| cuda/fp32 (ts) | 551/s (1.8ms) | 3,142/s (5.1ms) | 3,536/s (18.1ms) | 3,575/s (35.8ms) | 3,605/s (71.0ms) | 3,628/s (141.1ms) | 3,648/s (280.7ms) | 3,660/s (559.6ms) |
+| cuda/fp16 (ts, real half) | 565/s (1.8ms) | 8,440/s (1.9ms) | 22,283/s (2.9ms) | 23,998/s (5.3ms) | 25,225/s (10.1ms) | 25,930/s (19.7ms) | 26,290/s (39.0ms) | 26,360/s (77.7ms) |
+| cuda/bf16 (ts, real bf16) | 569/s (1.8ms) | 8,596/s (1.9ms) | 22,463/s (2.8ms) | 24,289/s (5.3ms) | 25,466/s (10.1ms) | 26,211/s (19.5ms) | 26,531/s (38.6ms) | 26,771/s (76.5ms) |
+| cpu/fp32 (ts, 8 threads) | 27/s (37.3ms) | 35/s (461.7ms) | 34/s (1856.9ms) | - | 32/s (7885.4ms) | - | - | - |
+
+Reading the grids (answers to the four specced questions):
+
+1. **m50 fp16 tensor cores flatten the price ratio — but only in reduced
+   precision.** The headline: m50 runs 25,225 evals/s at batch 256 and
+   26,360/s at 2048 under real-half TorchScript (bf16 within ~1-2% of fp16
+   at every grid point, topping at 26,771/s). fp16/bf16 buy ~7x over fp32
+   for m50 vs ~3.8x for emeta — the d=1024 matmuls utilize tensor cores
+   better — so the emeta:m50 cost ratio COMPRESSES from 4.1x in fp32
+   (14,809 vs 3,605 at b256, parameter-ratio pricing intact) to 2.2x in
+   bf16 (56,084 vs 25,466). MPS's erratic m50-fp16 behavior does not exist
+   here: the grids are monotone and clean, and there is no batch-512
+   cliff anywhere (m50 fp32 at 2048 is still on-trend). Tensor-core
+   saturation does sit higher than the MPS knee: fp16/bf16 reach ~70-90%
+   of peak at batch 64-128 and keep creeping to 1024-2048, vs batch 16 on
+   MPS fp32. For a 1024-sim decision the batch<<sims cap (<=256) still
+   costs nothing material.
+2. **CUDA graphs / torch.compile remain unmeasured** (out of this job's
+   scope). Batch-1 is visibly launch-bound (~1.3-1.8ms/forward, 551-743
+   evals/s — a fraction of the M5's per-eval latency advantage), so graphs
+   would matter for a latency-critical batch-1 path; at the batch >=16
+   sizes search actually uses, the plain traced module already delivers
+   9-11k evals/s (emeta), and the question is deprioritized.
+3. **The partial-final-batch regression DOES NOT EXIST on CUDA** — verified,
+   not assumed. fp32: cold == warm at every leftover size and both scale
+   proportionally with rows (emeta 12 rows: 1.8ms cold vs 17.3ms steady
+   full-batch; m50 12 rows: 4.9ms vs 71.0ms), i.e. CUDA kernels are
+   shape-agnostic where Metal specializes. Padding, by contrast, always
+   costs the full-batch forward (padded-1st == padded-2nd == steady on
+   every cell, pad outputs inert: diff 5.96e-07/9.54e-07 fp32, ~1e-3 at
+   reduced precision). fp16/bf16 show only small one-shot cold jitter
+   (worst 10.1ms vs 4.6ms steady, once per shape). **Verdict: pad-to-batch
+   is an MPS-only workaround. Do not port it to the CUDA path — on CUDA it
+   is strictly counterproductive (full-batch compute for proportionally
+   cheap partial forwards).**
+4. **The CPU-vs-GPU crossover collapses on the cluster.** The node's arm64
+   cores at the 8-thread worker shape run emeta at ~147-156 evals/s and m50
+   at ~32-35 — roughly 0.4x the M5 Max's CPU rates, so the laptop numbers
+   flattered the CPU option. One GB200 equals ~97 such emeta CPU workers in
+   fp32 and ~369 in bf16 (m50: ~106 / ~749). emeta-search-on-CPU-workers
+   survives only as scavenging of idle cores next to collectors, not as an
+   alternative to a GPU slot.
+
+### 4-GPU replica-sharding leg (4 processes, one per GPU, knee batches)
+
+| model | dtype | batch | per-GPU evals/s (min-max) | summed | vs 4x single-GPU |
+|---|---|---|---|---|---|
+| emeta | fp32 | 256 | 14,746-14,869 | 59,256 | 100.0% |
+| emeta | fp16 | 256 | 54,521-55,899 | 221,947 | 100.6% |
+| emeta | bf16 | 256 | 54,828-56,151 | 223,087 | 99.4% |
+| m50 | fp32 | 256 | 3,603-3,620 | 14,448 | 100.2% |
+| m50 | fp16 | 256 | 25,072-25,338 | 100,780 | 99.9% |
+| m50 | bf16 | 256 | 25,417-25,578 | 101,916 | 100.1% |
+
+Replica sharding scales essentially perfectly at saturating batches —
+within noise of 4x the single-GPU rate for BOTH models and all three
+dtypes (the models are far too small to contend for anything but launch
+resources). Smaller batches show co-start jitter, not contention: at batch
+16-64 the four processes' aggregate lands at 89-95% of 4x single-GPU with
+wide per-process spread (e.g. emeta fp16@64: 23.5k-44.4k/s per GPU) because
+cells overlap siblings' trace/compile phases — a benchmarking artifact of
+starting four processes simultaneously, gone by batch 256.
+
+This is exactly the production shape for belief search: K worlds are
+independent searches, so each GPU serves a subset of worlds (the same
+replicas-over-sharding lesson the inference-service scaling work landed
+on). Per-decision wall-clock for a K=16-world, 1024-sims-per-world
+decision split 4-way across the node: **emeta 0.28s fp32 / 0.073s bf16;
+m50 1.13s fp32 / 0.16s bf16** (217/817 and 53/373 decisions/min). Even the
+most expensive cell — m50, parity-clean fp32, 16 worlds — clears a
+decision in ~1.1s on one node.
+
+### Decision synthesis at search batch sizes (1024-sim decision)
+
+| model | runtime | batch | evals/s (~sims/s) | s per 1024-sim decision | decisions/min |
+|---|---|---|---|---|---|
+| emeta | 1x GB200 fp32 | 64 | 13,804 | 0.074 | 809 |
+| emeta | 1x GB200 fp32 | 256 | 14,809 | 0.069 | 868 |
+| emeta | 1x GB200 bf16 | 256 | 56,084 | 0.018 | 3,286 |
+| m50 | 1x GB200 fp32 | 64 | 3,536 | 0.290 | 207 |
+| m50 | 1x GB200 fp32 | 256 | 3,605 | 0.284 | 211 |
+| m50 | 1x GB200 bf16 | 256 | 25,466 | 0.040 | 1,492 |
+| emeta | node CPU fp32 (8T) | 64 | 152 | 6.7 | 8.9 |
+| m50 | node CPU fp32 (8T) | 64 | 34 | 30.1 | 2.0 |
+
+(Same caveat as the local synthesis: forward-only upper bounds; the
+crate-side loop must keep its overhead down to quote these for search —
+though with no partial-batch cliff to fix, the CUDA crate path needs no
+pad-to-batch machinery at all.)
+
+### Updated recommendation
+
+**"Search on emeta, spend the savings on sims" survives the real GPU — in
+fp32, unambiguously.** The parity-clean runtime the crate actually ships
+prices m50 at 4.1x emeta (parameter-ratio pricing, same as every other
+fp32/CPU surface), m50 still shows no hi-fi strength edge over emeta
+(0.386 vs 0.388), so emeta remains the default search policy and the saved
+budget still buys ~4x sims. The nuance tensor cores add: under bf16/fp16
+the ratio compresses to 2.2x, so IF a reduced-precision leaf eval is ever
+validated for search use (bf16 is the candidate — fp16-equal speed, wider
+exponent; fp8 a future probe), m50-at-search stops costing "four emetas"
+and becomes "two" — a real shift, not a flip, and contingent on a parity
+story that does not exist today. What DID flip is the CPU option: on
+cluster cores emeta manages ~152 evals/s per 8-thread worker (97-369x
+under one GB200), so CPU-only emeta search is a scavenging play, not a
+plan. And the capstone-scale picture is now trivial: one 4-GPU node at
+plain fp32 sustains ~870 emeta or ~210 m50 1024-sim decisions/min per GPU
+with perfect replica scaling — the 200-seed paired FoulPlay read and any
+near-term capstone eval fit in minutes of wall-clock, for either model,
+without sharding heroics.
 
 ## Artifacts
 
@@ -324,7 +492,14 @@ Exact experiment (one job, <30 GPU-minutes):
   above). `exports/bench_emeta_full_earlier_run.json` is the completed
   earlier single-invocation run — the source of the emeta fp16@512 cell
   and the reproducibility cross-check (fp32 cells agree within ~1%).
+- `checkpoints/curated/bench-cuda-20260719/` (gitignored, local-only): the
+  CUDA run's raw JSONs — per-checkpoint cuda + cpu grids with partial
+  studies, 4x per-GPU replica-leg JSONs and logs, `env.json` (torch/driver/
+  device identification), and the full job log. This doc's CUDA tables
+  render from them.
 - `scripts/bench_model_eval.py` (committed): the grid runner (+
   `pad_obs_batch` helper, unit-tested in `tests/test_bench_model_eval.py`).
+  Now takes `bf16` in `--dtypes` (real bfloat16 copy traced to TorchScript,
+  CUDA-oriented).
 - `scripts/verify_real_checkpoint_outputs.py` (committed): real-row parity +
   non-degeneracy gate.

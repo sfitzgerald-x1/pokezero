@@ -23,8 +23,9 @@ shapes cold, the same shapes warm, and the same rows run through
 shape, slice the padded rows off the outputs), and checks the padded
 outputs match the unpadded forward.
 
-fp16 is a throughput probe only: fp16 outputs have no parity story
-(model_export_findings.md corrections) and must not feed collection.
+fp16/bf16 are throughput probes only: reduced-precision outputs have no
+parity story (model_export_findings.md corrections) and must not feed
+collection.
 On CUDA, fp16 is a REAL half-precision weight copy (model.half(), half
 inputs) traced to TorchScript. On MPS, a real half copy CANNOT run in this
 torch build — both the traced and the eager half forward hard-abort in
@@ -32,6 +33,9 @@ Metal ("Destination NDArray and Accumulator NDArray cannot have different
 datatype in MPSNDArrayMatrixMultiplication", torch 2.12.1 / macOS 25.5) —
 so --fp16-runtime auto falls back to EAGER AUTOCAST on MPS (fp32 weights,
 per-op fp16 cast: the same probe docs/model_export_findings.md measured).
+bf16 is always a REAL bfloat16 weight copy traced to TorchScript — the
+natural tensor-core dtype on modern CUDA parts (B200/H100); it is intended
+for CUDA and skipped on cpu like fp16 (no MPS fallback path is provided).
 
 Usage:
     python scripts/bench_model_eval.py \
@@ -120,6 +124,15 @@ class PartialStudy:
     notes: list[str] = field(default_factory=list)
 
 
+LOW_PRECISION_DTYPES = ("fp16", "bf16")
+
+
+def _torch_float_dtype(dtype: str) -> Any:
+    import torch
+
+    return {"fp16": torch.float16, "bf16": torch.bfloat16}[dtype]
+
+
 class _AutocastForward:
     """Eager forward under torch.autocast — the only fp16 path MPS can run."""
 
@@ -172,18 +185,18 @@ def _trace_on(shim: Any, config: Any, device: str, dtype: str, seed: int) -> Any
     import torch
 
     example = make_random_inputs(config, TRACE_BATCH, seed=seed, device=device)
-    if dtype == "fp16":
-        example = _cast_fp16(example)
+    if dtype in LOW_PRECISION_DTYPES:
+        example = _cast_low_precision(example, _torch_float_dtype(dtype))
     with torch.no_grad(), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return torch.jit.trace(shim, example)
 
 
-def _cast_fp16(inputs: tuple[Any, ...]) -> tuple[Any, ...]:
+def _cast_low_precision(inputs: tuple[Any, ...], float_dtype: Any) -> tuple[Any, ...]:
     import torch
 
     return tuple(
-        tensor.half() if tensor.dtype in (torch.float32, torch.float64) else tensor
+        tensor.to(float_dtype) if tensor.dtype in (torch.float32, torch.float64) else tensor
         for tensor in inputs
     )
 
@@ -211,7 +224,7 @@ def run_partial_study(
     batch: int,
     seed: int,
     steady_ms: float,
-    cast_half: bool = False,
+    cast_dtype: Any = None,
 ) -> PartialStudy:
     """Cold/warm partial-shape latency vs pad-to-batch at fixed shape."""
 
@@ -226,7 +239,7 @@ def run_partial_study(
     per_size_inputs = {}
     for size in sizes:
         inputs = make_random_inputs(config, size, seed=seed + size, device=device)
-        per_size_inputs[size] = _cast_fp16(inputs) if cast_half else inputs
+        per_size_inputs[size] = _cast_low_precision(inputs, cast_dtype) if cast_dtype is not None else inputs
 
     cold = [_forward_ms(module, per_size_inputs[size], synchronize) for size in sizes]
     warm = [_forward_ms(module, per_size_inputs[size], synchronize) for size in sizes]
@@ -285,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--label", required=True, help="Row label, e.g. emeta-final or m50-latest.")
     parser.add_argument("--devices", default="cpu,mps", help="Comma subset of {cpu,mps,cuda}; unavailable devices are skipped with a note.")
-    parser.add_argument("--dtypes", default="fp32,fp16", help="Comma subset of {fp32,fp16}; fp16 runs on mps/cuda only.")
+    parser.add_argument("--dtypes", default="fp32,fp16", help="Comma subset of {fp32,fp16,bf16}; fp16/bf16 run on mps/cuda only (bf16 = real bfloat16 copy traced, intended for CUDA tensor cores).")
     parser.add_argument("--batch-sizes", default=",".join(str(size) for size in DEFAULT_BATCH_SIZES))
     parser.add_argument("--partial-study", type=int, default=0, metavar="BATCH", help="Run the partial-final-batch study at this batch size on non-cpu devices (0 = off).")
     parser.add_argument(
@@ -331,19 +344,23 @@ def main(argv: list[str] | None = None) -> int:
             continue
         synchronize = _sync_fn(device)
         for dtype in dtypes:
-            if dtype == "fp16" and device == "cpu":
+            if dtype in LOW_PRECISION_DTYPES and device == "cpu":
                 continue
             fp16_runtime = args.fp16_runtime
             if fp16_runtime == "auto":
                 fp16_runtime = "autocast" if device == "mps" else "ts"
+            if dtype == "bf16":
+                # bf16 is always a real bfloat16 copy traced to TorchScript
+                # (no autocast fallback — it targets CUDA tensor cores).
+                fp16_runtime = "ts"
             uses_shared_model = dtype == "fp32" or fp16_runtime == "autocast"
-            cast_half = dtype == "fp16" and fp16_runtime != "autocast"
-            if dtype == "fp16" and fp16_runtime != "autocast":
-                # A REAL half-precision copy; deepcopy keeps the base fp32
-                # weights pristine for every other cell (half() is lossy).
+            cast_dtype = _torch_float_dtype(dtype) if dtype in LOW_PRECISION_DTYPES and fp16_runtime != "autocast" else None
+            if cast_dtype is not None:
+                # A REAL reduced-precision copy; deepcopy keeps the base fp32
+                # weights pristine for every other cell (the cast is lossy).
                 import copy
 
-                device_model = copy.deepcopy(model).to(device).half()
+                device_model = copy.deepcopy(model).to(device).to(cast_dtype)
             else:
                 device_model = model.to(device)
             shim = build_exportable_module(device_model)
@@ -354,12 +371,12 @@ def main(argv: list[str] | None = None) -> int:
                 runner = shim
                 runtime_label = "eager-half"
             else:
-                runner = _trace_on(shim, config, device, dtype if cast_half else "fp32", args.seed)
-                runtime_label = "ts-half" if cast_half else "ts"
+                runner = _trace_on(shim, config, device, dtype if cast_dtype is not None else "fp32", args.seed)
+                runtime_label = {None: "ts", "fp16": "ts-half", "bf16": "ts-bf16"}[dtype if cast_dtype is not None else None]
             for batch in batch_sizes:
                 inputs = make_random_inputs(config, batch, seed=args.seed + batch, device=device)
-                if cast_half:
-                    inputs = _cast_fp16(inputs)
+                if cast_dtype is not None:
+                    inputs = _cast_low_precision(inputs, cast_dtype)
 
                 def run_once(runner: Any = runner, inputs: tuple[Any, ...] = inputs) -> None:
                     with torch.no_grad():
@@ -388,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
                 study = run_partial_study(
                     runner, config, label=args.label, device=device, dtype=dtype,
                     batch=args.partial_study, seed=args.seed, steady_ms=steady,
-                    cast_half=cast_half,
+                    cast_dtype=cast_dtype,
                 )
                 studies.append(study)
                 print(

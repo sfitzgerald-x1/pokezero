@@ -221,8 +221,9 @@ the exact formula (`events.rs hp_percent_condition`; unit-tested against the
 formula's edge cases), so leaf-synthesized fractions land on the same /100
 grid the root fold consumed. `tests/test_leaf_encoder.py::HpPercentGridTest`
 pins the two grids apart. Nicknames (forward caveat #1) remain cosmetic:
-fold occupant tracking is details-based (species either way); revisit only
-if a live ladder integration consumes idents directly.
+fold occupant tracking is details-based (species either way). OUT OF SCOPE
+(owner decision 2026-07-19): randbats-only project, no nicknamed-ladder
+integration planned — closed, not deferred.
 
 ## End-to-end bench (2026-07-19, `scripts/bench_leaf_search.py`)
 
