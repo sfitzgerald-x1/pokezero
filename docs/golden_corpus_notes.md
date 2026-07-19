@@ -71,6 +71,18 @@ Generated artifacts (both gitignored; regenerate with the commands below):
   `python -m pokezero.golden_corpus_scenarios --showdown-root <built-showdown> \
    --out corpus/golden-v2-scenarios --belief-set-source on`
 
+Review notes (PR #720): the scenario suite records **0/290 rows with an
+annotation overlay** — its scripted games produce no assessable Tier-2
+strikes (production-confirmed; the generation binding would fail otherwise),
+so overlay/annotation coverage comes from the random battery (905/1028 rows)
+and the `test_transitions_fold` differential (535 annotated boundaries), not
+the scenarios. Separately, overlays store ABSOLUTE token indices and the
+reference `advance` requires them within the last `action_tail_limit=512`
+actions; gen3randombattle maxes out around index reach 177 (~3x headroom),
+and exceeding the wall in a longer format is a LOUD generation/validation
+error ("annotation index outside identifiable range"), never silent
+divergence.
+
 ### Size engineering (the fold payloads are tail-dominated)
 
 Late-game fold payloads are ~226 KB (mean fold record ~125 KB, max ~383 KB over
