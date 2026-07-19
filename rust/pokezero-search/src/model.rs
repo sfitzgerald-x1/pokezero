@@ -34,8 +34,8 @@ use poke_engine::engine::generate_instructions::generate_instructions_from_move_
 use poke_engine::state::State;
 
 use crate::tree::{
-    finalize, multiply_report_json, traverse, LeafPrice, MultiPlyConfig, MultiPlyOutcome,
-    SearchCounters, Traversal, Tree,
+    finalize, multiply_report_json, traverse, BranchSeam, LeafPrice, MultiPlyConfig,
+    MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -510,10 +510,15 @@ fn multiply_batched_core<E: BatchLeafEval>(
                 &mut rng,
                 &cfg,
                 &mut counters,
-                &mut |_leaf: &State| {
+                &mut |_leaf: &State, _seam: &BranchSeam| {
                     // Template-stub encode happens after collection (content
                     // is state-independent until the track-B encoder lands);
-                    // this closure only claims the batch row.
+                    // this closure only claims the batch row. `_seam` carries
+                    // the joint move pair + the branch's instruction list —
+                    // the in-crate encoder integration renders the branch's
+                    // events (events::render_branch_events), advances a clone
+                    // of the root fold state, and writes the REAL leaf
+                    // observation for this row at exactly this seam.
                     let row = pending_rows;
                     pending_rows += 1;
                     LeafPrice::Deferred(row)

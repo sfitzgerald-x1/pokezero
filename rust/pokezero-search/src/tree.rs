@@ -199,6 +199,26 @@ pub(crate) enum LeafPrice {
     Deferred(usize),
 }
 
+/// Per-branch context handed to the leaf pricing seam alongside the leaf
+/// state: the joint move pair of the expanded edge plus the branch's own
+/// instruction list. This is exactly what the instruction→event mapping
+/// (`events::render_branch_events`) needs — the track-B encoder integration
+/// renders the branch's events from (pre-branch state, moves, instructions),
+/// advances a clone of the root fold state, and encodes the leaf's REAL
+/// observation at the batch-row write (docs/crate_search_design.md). NOTE:
+/// the `&State` passed with this context has the branch's instructions
+/// APPLIED (it is the leaf state); the mapper wants the pre-branch state,
+/// which the consumer reconstructs via `reverse_instructions` on the same
+/// shared state or by rendering before descent.
+pub(crate) struct BranchSeam<'a> {
+    #[allow(dead_code)]
+    pub s1: &'a MoveChoice,
+    #[allow(dead_code)]
+    pub s2: &'a MoveChoice,
+    #[allow(dead_code)]
+    pub instructions: &'a [Instruction],
+}
+
 // ---------------------------------------------------------------------------
 // Traversal (selection + expansion) with virtual loss
 // ---------------------------------------------------------------------------
@@ -237,7 +257,7 @@ pub(crate) struct Traversal {
 /// the one-ply batched core; traversed branches: provisional visit) so
 /// batched collection stays well-defined; `finalize` replaces provisionals
 /// with real values. The shared `State` is restored before returning.
-pub(crate) fn traverse<F: FnMut(&State) -> LeafPrice>(
+pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     tree: &mut Tree,
     state: &mut State,
     rng: &mut StdRng,
@@ -364,7 +384,7 @@ fn new_decision_node(tree: &mut Tree, state: &State, depth: u8) -> usize {
 /// branches (exact percentages), price every branch (terminal or leaf), and
 /// return the new chance node's arena index.
 #[allow(clippy::too_many_arguments)]
-fn expand_edge<F: FnMut(&State) -> LeafPrice>(
+fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     tree: &mut Tree,
     state: &mut State,
     node_idx: usize,
@@ -395,7 +415,13 @@ fn expand_edge<F: FnMut(&State) -> LeafPrice>(
         // No instructions (e.g. both sides forced to None): a single certain
         // pseudo-outcome pricing the current state, never expanded further.
         let outcome = state.battle_is_over();
-        let (value_sum, visits, terminal, pending_row) = price_outcome(outcome, state, counters, price);
+        let seam = BranchSeam {
+            s1: &s1_move,
+            s2: &s2_move,
+            instructions: &[],
+        };
+        let (value_sum, visits, terminal, pending_row) =
+            price_outcome(outcome, state, counters, price, &seam);
         branches.push(ChanceBranch {
             probability: 1.0,
             instructions: Vec::new(),
@@ -418,8 +444,13 @@ fn expand_edge<F: FnMut(&State) -> LeafPrice>(
             let instructions = state_instructions.instruction_list;
             state.apply_instructions(&instructions);
             let outcome = state.battle_is_over();
+            let seam = BranchSeam {
+                s1: &s1_move,
+                s2: &s2_move,
+                instructions: &instructions,
+            };
             let (value_sum, visits, terminal, pending_row) =
-                price_outcome(outcome, state, counters, price);
+                price_outcome(outcome, state, counters, price, &seam);
             state.reverse_instructions(&instructions);
             branches.push(ChanceBranch {
                 probability,
@@ -440,11 +471,12 @@ fn expand_edge<F: FnMut(&State) -> LeafPrice>(
 
 /// Price one enumerated outcome: exact terminal value when the battle ended,
 /// else the leaf seam. Returns (value_sum, visits, terminal, pending_row).
-fn price_outcome<F: FnMut(&State) -> LeafPrice>(
+fn price_outcome<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     outcome: f32,
     state: &State,
     counters: &mut SearchCounters,
     price: &mut F,
+    seam: &BranchSeam,
 ) -> (f32, u32, Option<f32>, Option<usize>) {
     if outcome != 0.0 {
         counters.terminal_branches += 1;
@@ -452,7 +484,7 @@ fn price_outcome<F: FnMut(&State) -> LeafPrice>(
         return (v, 1, Some(v), None);
     }
     counters.leaf_evals += 1;
-    match price(state) {
+    match price(state, seam) {
         LeafPrice::Ready(v) => (v, 1, None, None),
         LeafPrice::Deferred(row) => (0.0, 1, None, Some(row)),
     }
@@ -600,7 +632,7 @@ pub(crate) fn multiply_search_with_eval<E: LeafEval>(
             &mut rng,
             cfg,
             &mut counters,
-            &mut |leaf: &State| LeafPrice::Ready(evaluator.eval(leaf)),
+            &mut |leaf: &State, _seam: &BranchSeam| LeafPrice::Ready(evaluator.eval(leaf)),
         );
         finalize(&mut tree, &traversal, &[]);
     }
