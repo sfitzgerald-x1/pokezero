@@ -11,6 +11,7 @@ from pokezero.rollout import RolloutConfig
 from pokezero.search import (
     PUCTBranchSearchRequest,
     RootPUCTSearchTiming,
+    _branch_step_timing_snapshot,
     _is_candidate_illegal_action_error,
     flat_branch_search,
     puct_branch_search,
@@ -338,6 +339,33 @@ class PlayerObservationFusedBridgeEnv(FusedBridgeTimedSnapshotValueBranchEnv):
     ) -> StepResult:
         self.player_observation_calls.append(observation_player)
         return self.step_from_search_snapshot(snapshot, actions)
+
+
+class BranchStepTimingCompatibilityTest(unittest.TestCase):
+    def test_missing_nested_observation_slices_default_to_zero(self) -> None:
+        env = FusedBridgeTimedSnapshotValueBranchEnv()
+        legacy_payload = env.root_puct_branch_step_timing_snapshot()
+        for field in (
+            "branch_observation_state_normalization_seconds",
+            "branch_observation_state_normalization_count",
+            "branch_observation_encoding_seconds",
+            "branch_observation_encoding_count",
+            "branch_belief_overlay_projection_seconds",
+            "branch_belief_overlay_projection_count",
+        ):
+            legacy_payload.pop(field)
+        env.root_puct_branch_step_timing_snapshot = lambda: legacy_payload  # type: ignore[method-assign]
+
+        timing = _branch_step_timing_snapshot(env)
+
+        self.assertIsNotNone(timing)
+        assert timing is not None
+        self.assertEqual(timing["branch_observation_state_normalization_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_encoding_seconds"], 0.0)
+        self.assertEqual(timing["branch_belief_overlay_projection_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_state_normalization_count"], 0)
+        self.assertEqual(timing["branch_observation_encoding_count"], 0)
+        self.assertEqual(timing["branch_belief_overlay_projection_count"], 0)
 
 
 class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):

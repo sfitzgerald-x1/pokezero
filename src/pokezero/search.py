@@ -54,6 +54,8 @@ _BRANCH_STEP_TIMING_SECONDS = (
     "branch_bridge_node_processing_seconds",
     "branch_result_projection_seconds",
     "branch_observation_projection_seconds",
+)
+_BRANCH_STEP_TIMING_OPTIONAL_SECONDS = (
     "branch_observation_state_normalization_seconds",
     "branch_observation_encoding_seconds",
     "branch_belief_overlay_projection_seconds",
@@ -65,6 +67,8 @@ _BRANCH_STEP_TIMING_COUNTS = (
     "branch_bridge_node_processing_count",
     "branch_result_projection_count",
     "branch_observation_projection_count",
+)
+_BRANCH_STEP_TIMING_OPTIONAL_COUNTS = (
     "branch_observation_state_normalization_count",
     "branch_observation_encoding_count",
     "branch_belief_overlay_projection_count",
@@ -1148,18 +1152,22 @@ class _RootPUCTSearchTimingAccumulator:
             timing["branch_observation_projection_count"]
         )
         self.branch_observation_state_normalization_seconds += float(
-            timing["branch_observation_state_normalization_seconds"]
+            timing.get("branch_observation_state_normalization_seconds", 0.0)
         )
         self.branch_observation_state_normalization_count += int(
-            timing["branch_observation_state_normalization_count"]
+            timing.get("branch_observation_state_normalization_count", 0)
         )
-        self.branch_observation_encoding_seconds += float(timing["branch_observation_encoding_seconds"])
-        self.branch_observation_encoding_count += int(timing["branch_observation_encoding_count"])
+        self.branch_observation_encoding_seconds += float(
+            timing.get("branch_observation_encoding_seconds", 0.0)
+        )
+        self.branch_observation_encoding_count += int(
+            timing.get("branch_observation_encoding_count", 0)
+        )
         self.branch_belief_overlay_projection_seconds += float(
-            timing["branch_belief_overlay_projection_seconds"]
+            timing.get("branch_belief_overlay_projection_seconds", 0.0)
         )
         self.branch_belief_overlay_projection_count += int(
-            timing["branch_belief_overlay_projection_count"]
+            timing.get("branch_belief_overlay_projection_count", 0)
         )
 
     def add_state_snapshot(self, elapsed_seconds: float) -> None:
@@ -1369,16 +1377,16 @@ def _branch_step_timing_snapshot(env: PokeZeroEnv) -> dict[str, float | int] | N
     if not isinstance(payload, Mapping):
         return None
     result: dict[str, float | int] = {}
-    for field in _BRANCH_STEP_TIMING_SECONDS:
-        value = payload.get(field)
+    for field in _BRANCH_STEP_TIMING_SECONDS + _BRANCH_STEP_TIMING_OPTIONAL_SECONDS:
+        value = payload.get(field, 0.0)
         if isinstance(value, bool) or not isinstance(value, (float, int)):
             return None
         parsed = float(value)
         if not math.isfinite(parsed) or parsed < 0.0:
             return None
         result[field] = parsed
-    for field in _BRANCH_STEP_TIMING_COUNTS:
-        value = payload.get(field)
+    for field in _BRANCH_STEP_TIMING_COUNTS + _BRANCH_STEP_TIMING_OPTIONAL_COUNTS:
+        value = payload.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
         result[field] = value
@@ -1394,12 +1402,12 @@ def _branch_step_timing_delta(
     if before is None or after is None:
         return None
     result: dict[str, float | int] = {}
-    for field in _BRANCH_STEP_TIMING_SECONDS:
+    for field in _BRANCH_STEP_TIMING_SECONDS + _BRANCH_STEP_TIMING_OPTIONAL_SECONDS:
         delta = float(after[field]) - float(before[field])
         if delta < 0.0:
             return None
         result[field] = delta
-    for field in _BRANCH_STEP_TIMING_COUNTS:
+    for field in _BRANCH_STEP_TIMING_COUNTS + _BRANCH_STEP_TIMING_OPTIONAL_COUNTS:
         delta = int(after[field]) - int(before[field])
         if delta < 0:
             return None
