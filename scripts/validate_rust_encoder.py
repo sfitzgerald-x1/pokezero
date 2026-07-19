@@ -253,6 +253,52 @@ def _default_showdown_root() -> str | None:
     return os.environ.get("POKEZERO_SHOWDOWN_ROOT")
 
 
+def _compare_backends(
+    corpus: Any,
+    header: Mapping[str, Any],
+    *,
+    showdown_root: Path,
+    tables_json: str,
+    row_limit: int | None,
+    example_cap: int,
+    json_out: Path | None,
+) -> int:
+    """Direct rust-vs-python-reference byte diff over every row and array.
+
+    This is the machine-checkable form of the cross-backend byte-identity
+    claim: unlike the golden diff (which cannot exit 0 on a v1 corpus — the
+    history cells are unreproducible by design), full parity here exits 0.
+    """
+
+    reference = PythonReferenceBackend(showdown_root=showdown_root, header=header)
+    rust = RustBackend(tables_json=tables_json, header=header)
+    reports = {name: ArrayReport(name=name) for name in ARRAY_NAMES}
+    rows = corpus.decision_rows
+    if row_limit is not None:
+        rows = rows[:row_limit]
+    for row_index, row in enumerate(rows):
+        inputs = row_inputs_from_decision_row(row)
+        diff_row(
+            row_index,
+            rust.encode(inputs),
+            reference.encode(inputs),
+            reports,
+            max_examples=example_cap,
+            context={
+                "battle_seed": row.battle_seed,
+                "player_id": row.player_id,
+                "decision_round_index": row.decision_round_index,
+            },
+        )
+    payload = build_report(reports, rows=len(rows), backend="rust-vs-python-reference")
+    print(render_text_report(payload))
+    if json_out is not None:
+        json_out.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return 0 if payload["all_exact"] else 1
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -261,7 +307,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=REPO_ROOT / "tests" / "data" / "golden_corpus_sample",
         help="Golden corpus directory (default: the committed 5-row sample).",
     )
-    parser.add_argument("--backend", choices=("python-reference", "rust"), required=True)
+    parser.add_argument(
+        "--backend",
+        choices=("python-reference", "rust", "compare-backends"),
+        required=True,
+        help="Backend to diff against golden, or compare-backends for a direct "
+        "rust-vs-python-reference byte diff (exit 0 on full parity — the "
+        "reproducible form of the cross-backend byte-identity claim).",
+    )
     parser.add_argument("--rows", type=int, default=None, help="Only diff the first N rows.")
     parser.add_argument("--examples", type=int, default=20, help="Example cap per array.")
     parser.add_argument("--json", type=Path, default=None, help="Also write the JSON report here.")
@@ -282,6 +335,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     corpus = load_golden_corpus(args.corpus)
     header = corpus.header
 
+    if args.backend == "compare-backends":
+        if args.showdown_root is None or args.tables is None:
+            print("compare-backends requires --showdown-root and --tables", file=sys.stderr)
+            return 2
+        return _compare_backends(
+            corpus,
+            header,
+            showdown_root=args.showdown_root,
+            tables_json=args.tables.read_text(encoding="utf-8"),
+            row_limit=args.rows,
+            example_cap=args.examples,
+            json_out=args.json,
+        )
     if args.backend == "python-reference":
         if args.showdown_root is None:
             print("--showdown-root (or POKEZERO_SHOWDOWN_ROOT) is required", file=sys.stderr)
