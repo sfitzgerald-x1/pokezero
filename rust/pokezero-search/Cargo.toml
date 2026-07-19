@@ -19,6 +19,13 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.26.0" }
 rand = "0.9"
 poke-engine = { path = "../../third_party/poke-engine-src", default-features = false, features = ["gen3"] }
+# model feature (track D): in-crate TorchScript leaf evaluation via tch-rs.
+# Pinned exactly — torch-sys 0.24.0 expects libtorch 2.11.0 and the shared
+# venv ships torch 2.12.1, so builds run with LIBTORCH_USE_PYTORCH=1 +
+# LIBTORCH_BYPASS_VERSION_CHECK=1 (see scripts/build_search_crate_model.sh);
+# the parity gate (tests/test_crate_model_leafeval.py) is the real
+# compatibility check, and a silent tch bump would invalidate it.
+tch = { version = "=0.24.0", optional = true }
 # encoder.rs (track B): tables/row-input JSON + the vocab OOV hash (blake2b-8).
 # float_roundtrip is REQUIRED for bit-exactness: serde_json's default fast
 # float path parses e.g. 0.09090909090909091 one ULP off the correctly-rounded
@@ -26,6 +33,13 @@ poke-engine = { path = "../../third_party/poke-engine-src", default-features = f
 # NUMERIC_UNCERTAINTY column).
 serde_json = { version = "1", features = ["float_roundtrip"] }
 blake2 = "0.10"
+
+[features]
+default = []
+# Enables TorchScriptLeafEval + batched model-in-the-loop search entrypoints.
+# Requires a libtorch at build AND run time; the supported recipe links the
+# shared venv's own torch (scripts/build_search_crate_model.sh).
+model = ["dep:tch"]
 
 # Standalone package: do not get absorbed into any enclosing workspace.
 [workspace]

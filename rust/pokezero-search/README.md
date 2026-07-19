@@ -7,7 +7,7 @@ directly, so the whole search loop — instruction generation, apply, leaf
 evaluation, reverse — runs inside Rust with zero Python/FFI crossings per
 simulation step.
 
-Two things are proven here, and only these two:
+Three things are proven here, and only these three:
 
 1. **The throughput regime.** A native loop over engine primitives runs at
    the same order of magnitude as poke-engine's built-in MCTS, 13–27× the
@@ -15,7 +15,14 @@ Two things are proven here, and only these two:
 2. **The eval-hook architecture.** Leaf values flow through the pluggable
    `LeafEval` trait — the hook poke-engine's own MCTS lacks and the reason a
    custom loop is required at all. The trivial `HpFractionEval` stands in
-   where the learned model (batched TorchScript/ONNX per the plan) plugs in.
+   where the learned model plugs in.
+3. **In-crate model leaf evaluation** (track D, cargo feature `model`): the
+   TorchScript-exported checkpoint runs INSIDE the crate via tch-rs
+   (`TorchScriptLeafEval` behind the batched `BatchLeafEval` trait), with
+   virtual-loss batched one-ply PUCT and GIL-released pyo3 entrypoints.
+   Bit-exact against the venv's torch on identical inputs; numbers, design
+   tradeoffs, and scoping (template-stub leaf observations until the Rust
+   encoder lands) in `docs/crate_model_integration.md`.
 
 Search *quality* is explicitly not a goal: `puct_search` is one ply deep with
 uniform priors. Do not read strength into its outputs.
@@ -35,6 +42,27 @@ uv pip install --python <venv-python> --force-reinstall target/wheels/pokezero_s
 
 (`maturin develop` does not reliably target a venv outside the crate dir;
 build-then-install is the supported path.)
+
+### With the model feature (in-crate TorchScript leaf eval)
+
+```sh
+scripts/build_search_crate_model.sh <venv-python>
+```
+
+= `LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 maturin build
+--release --features model` + wheel install. The crate links the venv's OWN
+libtorch (never a vendored one); tch is pinned `=0.24.0` (torch-sys expects
+libtorch 2.11.0, venv ships 2.12.x — the bypass covers the skew and the
+parity gate `tests/test_crate_model_leafeval.py` is the real compatibility
+check; re-run it after any tch/torch bump). `build.rs` embeds an rpath to
+the venv's `torch/lib`, so import order does not matter at runtime.
+
+Artifacts are per-device (`torch.jit.trace` bakes device constants): export
+CPU via `scripts/export_model.py --formats ts`; re-trace on MPS/CUDA for
+those devices. `NativeLeafModel(artifact, device=...)` then serves parity
+probes (`eval_obs_flat`), forward benches (`bench_forward`), and
+model-in-the-loop batched search (`search_batched`) — see
+`scripts/bench_crate_search.py` and `docs/crate_model_integration.md`.
 
 The Cargo `path` dependency points at the sdist's workspace root, which *is*
 the engine crate (`src/gen3/` lives there; the `poke-engine-py` member is
@@ -102,13 +130,21 @@ Reading:
 
 - Multi-ply tree (the `puct_search` skeleton is root-only by design — the
   plan re-prices depth after the swap).
-- In-tree leaf batching and native model inference (tch-rs / ONNX Runtime)
-  behind `LeafEval`.
 - The Rust v2.2 encoder (track B's deliverable; validated bit-exactly by the
-  golden corpus before anything is trusted).
+  golden corpus before anything is trusted). Until it lands, model-priced
+  search leaves carry a caller-supplied template observation — throughput is
+  real, leaf content is not (`docs/crate_model_integration.md`).
+- Model priors in selection (needs the action-index → `MoveChoice` mapping;
+  the evaluator already emits masked-softmax priors per the contract).
 
 ## Tests
 
 `tests/test_pokezero_search_crate.py` — skips cleanly unless the built module
 imports; otherwise smoke-tests both entry points, JSON shape, seed
 determinism, and a loose regime floor (>100k steps/s).
+
+`tests/test_crate_model_leafeval.py` — the model-feature parity gate
+(crate vs venv torch on the same TorchScript artifact, bit-exact expected)
+plus batched-search mechanics: visit conservation, seed determinism, the
+batch=1 sequential regime, and masked-prior correctness. Skips cleanly
+unless the crate was built with `--features model`.
