@@ -70,11 +70,14 @@ premium over the handcrafted eval (3.2ms vs 1.7µs batched). Consequences:
 
 ## Fallback anatomy (fifth revision: 47% -> 0.8% -> 0.45% -> 0.0%)
 
-> Revision note (2026-07-19, PR #737): the 0.0% figure below is specific to
-> the original bench seed set and was seed-lucky — fresh seeds hit the
-> documented fail-closed world walls (item mutation, Transform,
-> request-state) at ~15% of decisions, identically under the HpFraction
-> control. The trajectory below remains accurate for the walls it removed.
+> Revision note (2026-07-19, PR #737; attribution corrected same day): the
+> 0.0% figure below is specific to the original bench seed set and was
+> seed-lucky — fresh seeds (7000-7014) read 15.2%, identically under the
+> HpFraction control. Actual wall composition from the bench logs: a genuine
+> Trick swap (by-design fail-close, 48/60), request-state flags (7/60), and
+> the unseeded flashfire volatile (5/60). No Transform or Knock-Off-removal
+> wall occurred on these seeds. The trajectory below remains accurate for
+> the walls it removed.
 
 Same-seed bench trajectory: 55% -> 47% (alignment wave 1) -> **0.8%**
 (235/237 decisions searched) after the dead-end hunt:

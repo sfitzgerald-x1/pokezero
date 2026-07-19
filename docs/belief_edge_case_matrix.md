@@ -78,10 +78,19 @@ Every decision-level fallback is now LOUD, three tiers:
 3. `EngineMctsConfig(strict_fallbacks=True)` → `EngineSearchFallbackError`
    for sweeps/CI that require zero, and the bench CLI's
    `--fail-on-fallback` flag exits nonzero with a stderr banner.
-Baseline note (revised 2026-07-19, PR #737): the original "0.0% fallback"
-15-game bench was seed-lucky. On fresh seeds the fail-closed world walls
-(Trick/Knock-Off item mutation, Transform, request-state flags) produce a
-~15% decision-level fallback rate concentrated in a minority of battles —
-identical under the HpFraction control, so the pipeline adds none of its
-own. Alerts remain worth a look, judged against the per-reason taxonomy
-rather than a zero baseline.
+Baseline note (revised 2026-07-19, PR #737; attribution corrected same day
+from the bench logs): the original "0.0% fallback" 15-game bench was
+seed-lucky. On the fresh seed set (7000-7014) the rate is 15.2% (60/394
+decisions), identical under the HpFraction control, so the pipeline adds
+none of its own. Per-battle wall composition (from the per-decision
+world-failure deltas): seed 7013 = 48/60 decisions, `public_effect_blocked`
+via a GENUINE Trick swap (opponent Furret holding a Tricked Petaya Berry) —
+fail-closed BY DESIGN and expected to stay closed even after the
+Knock-Off-removal recovery lands; seed 7010 = 7/60,
+`self_request_state_unsupported` (request flags, unrelated to items); seeds
+7005/7014 = 5/60, `volatile_unsupported: flashfire` (an unseeded but
+publicly-derivable volatile — a knockable wall, same shape as the
+Truant/MUSTRECHARGE seeding). No Transform wall occurred on these seeds,
+and the hidden-power IV mismatches were world-attempt-level only (never
+cost a decision). Alerts remain worth a look, judged against this
+per-reason taxonomy rather than a zero baseline.
