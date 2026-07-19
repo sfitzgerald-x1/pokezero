@@ -140,7 +140,16 @@ def hidden_power_engine_id(move_id: str, ivs: Mapping[str, int] | None) -> str:
 
 
 def _engine_species_id(species_id: str) -> str:
-    """Collapse cosmetic formes to the id the dex/engine know (Unown letters)."""
+    """Collapse cosmetic formes to the id the dex/engine know (Unown letters).
+
+    Applied to ENGINE-facing ids only (`PokemonSpec.id`, stats/dex lookups).
+    ``EngineWorld.party_species`` deliberately keeps the sampled team's OWN
+    species ids (protocol/request convention, e.g. ``unownc``): the leaf
+    path's event context contract is "display species in engine party order"
+    — synthesized protocol lines and md-team matching must land on the same
+    species keys the real protocol and the request use, not the engine's
+    collapsed base id.
+    """
 
     if species_id.startswith("unown"):
         return "unown"
@@ -516,7 +525,12 @@ def _build_side_spec(
                 raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has two active rows")
             active_index = len(party)
         party.append(member)
-        species_order.append(_engine_species_id(species_id))
+        # The sampled team's own id, NOT the engine-collapsed base id: this is
+        # the ctx/party_species surface (request/protocol naming convention).
+        # Pre-fix the collapse here made an Unown team trip the
+        # self_world_mismatch guard on every decision (request "unownc" vs
+        # world "unown") and broke ctx→md species matching on the leaf path.
+        species_order.append(species_id)
     if rows_by_species:
         raise EngineWorldUnsupported(
             "public_species_not_in_world",

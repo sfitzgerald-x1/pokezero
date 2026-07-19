@@ -1,20 +1,26 @@
-"""POC: native-engine MCTS over belief-sampled worlds (engine swap plan v3).
+"""Native-engine MCTS over belief-sampled worlds (engine swap plan v3).
 
 FoulPlay's architecture on pokezero's belief engine: per decision, sample K
 determinized worlds from the public belief (the existing
 ``gen3_randbat_belief_start_override`` planner), construct each as a
-poke-engine state via the track-A world constructor, run poke-engine's native
-multi-ply MCTS per world for a fixed time budget, and aggregate the acting
-side's root visit distributions across worlds. ~10⁵ simulations per decision
-in a few hundred milliseconds — the speed regime the plan targets.
+poke-engine state via the track-A world constructor, search each world
+natively, and aggregate the acting side's root visit distributions across
+worlds. Two leaf-eval modes, selected by ``EngineMctsConfig.leaf_eval``:
 
-Deliberate POC boundaries (the tradeoffs this exists to measure):
+- ``"hp_fraction"`` (default, the POC path): poke-engine's built-in MCTS
+  with its handcrafted evaluation for a fixed time budget — no learned
+  model, no policy priors. Kept as the default until the paired read.
+- ``"model"`` (the full in-crate pipeline): per world, the crate's
+  ``search_batched_multi_encoded`` — the LIVE root fold state (maintained
+  incrementally here, see ``_advance_live_fold``) plus per-branch
+  synthesized events, per-outcome fold advance, native v2.2 leaf encode,
+  batched TorchScript leaf evaluation, and the acting seat's decision arms
+  weighted by the model's masked policy priors (opponent arms stay uniform
+  — see docs/crate_search_design.md "Model priors"). NO strength claim is
+  attached to this mode until the 200-seed paired FoulPlay read.
 
-- **No learned model in the loop.** Leaves are priced by poke-engine's
-  handcrafted evaluation and the tree explores without our policy priors.
-  This isolates the speed question from the strength question; the paired
-  +10pt result came from the learned value, so POC speed does NOT imply POC
-  strength. Track B (encoder) is what puts the learned model on this path.
+Shared boundaries (both modes):
+
 - **Fail-closed construction.** Decisions whose worlds cannot be expressed
   exactly (see ``engine_world``'s reason taxonomy) fall back to uniform
   legal; the bench reports the rate and taxonomy rather than hiding it.
@@ -41,6 +47,7 @@ from .determinization import (
 )
 from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
+from .randbat import canonical_gen3_randbat_species_id
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 
@@ -55,13 +62,34 @@ class EngineSearchFallbackWarning(UserWarning):
     logging, can escalate them to hard errors with
     ``warnings.simplefilter("error", EngineSearchFallbackWarning)`` or
     ``EngineMctsConfig(strict_fallbacks=True)``, and can grep the stable
-    logger name ``pokezero.engine_search.fallback``. At the current 0.0%
-    bench rate every occurrence is a potential regression worth a look.
+    logger name ``pokezero.engine_search.fallback``. Every occurrence must
+    be attributable through the fallback/world-failure reason taxonomy —
+    benches report the rate and the reasons rather than hiding either.
+    (The one-time 0.0% bench rate does not hold on all seed trajectories:
+    battles where the opponent publicly Tricks/Knock-Offs an item or
+    Transforms fail worlds closed for the rest of the battle by design —
+    both leaf-eval modes hit the same wall on the same battles.)
     """
 
 
 class EngineSearchFallbackError(RuntimeError):
     """Raised instead of falling back when ``strict_fallbacks`` is set."""
+
+
+class EngineSearchFoldMismatchWarning(UserWarning):
+    """The live incremental root fold diverged from the whole-log batch refold
+    (or an advance failed outright).
+
+    Same loudness contract as the fallback warning: visible in test output
+    and default logging, escalatable to a hard error via
+    ``warnings.simplefilter("error", ...)`` or ``strict_fallbacks``, and
+    greppable on the stable logger name ``pokezero.engine_search.fold``. The
+    incremental fold is closure-proven (PR #718) and byte-exact over both
+    corpora, so any occurrence is a real regression signal.
+    """
+
+
+_fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
 @dataclass(frozen=True)
@@ -83,10 +111,53 @@ class EngineMctsConfig:
     # For sweeps/CI that require zero fallbacks; production keeps the safe
     # uniform-legal fallback (a crash mid-collection is worse than a miss).
     strict_fallbacks: bool = False
+    # --- full in-crate pipeline (plan v3 "Integration endgame") ---
+    # "hp_fraction": poke-engine's native MCTS + handcrafted eval (the POC
+    # path; stays the default until the paired read). "model": per belief
+    # world, the crate's search_batched_multi_encoded — live root fold +
+    # per-branch observations + in-crate TorchScript leaf eval + self-side
+    # model priors in PUCT selection.
+    leaf_eval: str = "hp_fraction"
+    # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
+    # artifact must run on cpu) and the encoder tables JSON
+    # (scripts/export_encoder_tables.py). Both required in model mode.
+    model_path: str | None = None
+    model_device: str = "cpu"
+    tables_path: str | None = None
+    # Per-world search budget (model mode). Keep search_batch << search_sims
+    # (virtual-loss fidelity; docs/crate_search_design.md review caveats).
+    search_sims: int = 256
+    search_batch: int = 16
+    search_depth: int = 2
+    c_puct: float = 1.4
+    deep_ko_split: bool = True
+    # Self-side model priors in selection (the opponent side stays uniform in
+    # this integration; docs/crate_search_design.md "Model priors").
+    model_priors: bool = True
+    # Debug cross-check: per decision, batch-refold the whole public log
+    # (production's per-observe path, turn_merged.extract_transition_products)
+    # and compare its surfaces against the live incremental fold's products.
+    fold_cross_check: bool = False
 
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
+        if self.leaf_eval not in ("hp_fraction", "model"):
+            raise ValueError(
+                f"leaf_eval must be 'hp_fraction' or 'model', got {self.leaf_eval!r}."
+            )
+        if self.leaf_eval == "model":
+            if not self.model_path or not self.tables_path:
+                raise ValueError("leaf_eval='model' requires model_path and tables_path.")
+            if self.search_sims <= 0 or self.search_batch <= 0 or self.search_depth <= 0:
+                raise ValueError(
+                    "search_sims, search_batch, and search_depth must be positive."
+                )
+            if self.search_batch > self.search_sims:
+                raise ValueError(
+                    "search_batch must be <= search_sims (keep batch << sims; "
+                    "docs/crate_search_design.md review caveats)."
+                )
 
 
 @dataclass
@@ -104,6 +175,13 @@ class EngineMctsStats:
     world_failure_reasons: Counter = field(default_factory=Counter)
     fallback_reasons: Counter = field(default_factory=Counter)
     unmapped_choices: Counter = field(default_factory=Counter)
+    # Model-mode telemetry (zero on the hp_fraction path).
+    model_evals: int = 0
+    lossy_renders: int = 0
+    prior_fallbacks: int = 0
+    fold_advanced_lines: int = 0
+    fold_cross_checks: int = 0
+    fold_cross_check_failures: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -119,6 +197,12 @@ class EngineMctsStats:
             "world_failure_reasons": dict(self.world_failure_reasons),
             "fallback_reasons": dict(self.fallback_reasons),
             "unmapped_choices": dict(self.unmapped_choices),
+            "model_evals": self.model_evals,
+            "lossy_renders": self.lossy_renders,
+            "prior_fallbacks": self.prior_fallbacks,
+            "fold_advanced_lines": self.fold_advanced_lines,
+            "fold_cross_checks": self.fold_cross_checks,
+            "fold_cross_check_failures": self.fold_cross_check_failures,
         }
         if self.searched_decisions:
             payload["iterations_per_searched_decision"] = (
@@ -158,6 +242,24 @@ class EngineMctsPolicy:
         self._module = module
         self.stats = EngineMctsStats()
         self._world_failures_before: dict[str, int] = {}
+        # Live incremental root fold, per (battle, seat): the ledger's "live
+        # root fold export". transitions_fold.FoldState from initial() at
+        # battle start, advanced over exactly the new public lines at every
+        # decision (_advance_live_fold) — never a whole-log refold.
+        self._live_folds: dict[tuple[str, str], Any] = {}
+        self._fold_consumed: dict[tuple[str, str], int] = {}
+        self._fold_broken: set[tuple[str, str]] = set()
+        self._tables_json: str | None = None
+        self._native_model: Any | None = None
+        if self._config.leaf_eval == "model":
+            from pathlib import Path  # noqa: PLC0415 — model-mode-only dependency
+
+            model_path = Path(str(self._config.model_path))
+            if not model_path.exists():
+                raise ValueError(f"model artifact not found: {model_path}")
+            self._tables_json = Path(str(self._config.tables_path)).read_text(
+                encoding="utf-8"
+            )
 
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
@@ -180,6 +282,14 @@ class EngineMctsPolicy:
         self._world_failures_before = dict(self.stats.world_failure_reasons)
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
+        # Live root fold: advanced at EVERY decision boundary (model mode and
+        # cross-check debugging) so the fold state is current whichever
+        # decisions end up searched.
+        live_fold = None
+        if self._config.leaf_eval == "model" or self._config.fold_cross_check:
+            live_fold = self._advance_live_fold(context)
+            if live_fold is None and self._config.leaf_eval == "model":
+                return self._fallback(context, rng, "live_fold_broken")
         blocked_slots, encored_moves = self._public_effect_signals(context)
         recharging_slots = self._recharging_slots(context)
         truant_slots = self._truant_loaf_slots(context)
@@ -220,7 +330,12 @@ class EngineMctsPolicy:
                 state = build_poke_engine_state(world.spec, module=self._module)
             except EngineWorldUnsupported as error:
                 key = error.reason
-                if key in ("volatile_unsupported", "hidden_power_iv_mismatch", "wish_carrier_ambiguous"):
+                if key in (
+                    "volatile_unsupported",
+                    "hidden_power_iv_mismatch",
+                    "wish_carrier_ambiguous",
+                    "self_world_mismatch",
+                ):
                     key = f"{error.reason}: {error.detail}"
                 self.stats.world_failure_reasons[key] += 1
                 continue
@@ -228,6 +343,9 @@ class EngineMctsPolicy:
 
         if not worlds:
             return self._fallback(context, rng, "no_worlds_constructed")
+
+        if self._config.leaf_eval == "model":
+            return self._search_model(context, worlds, live_fold, rng)
 
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
@@ -266,6 +384,295 @@ class EngineMctsPolicy:
         )
 
 
+
+    # ------------------------------------------------------------------------------
+    # Live incremental root fold (ledger item: "live root-fold export")
+    # ------------------------------------------------------------------------------
+
+    def _advance_live_fold(self, context: PolicyContext) -> Any | None:
+        """Advance this battle's fold state over the NEW public lines only.
+
+        ``transitions_fold.FoldState`` from ``initial()`` at battle start;
+        each decision folds exactly the lines appended to
+        ``replay.public_events`` since the previous decision (``|t:|``
+        wall-clock lines are filtered inside ``advance_in_place`` — the
+        schema-v2 rule). This is the #718-proven production-cheapening path:
+        production refolds the WHOLE log per observe; the incremental
+        advance is closure-proven and byte-exact over both corpora.
+
+        Tier-2 annotation overlays are deliberately NOT applied here: tracker
+        conclusions are env-side state (as-of-first-assessment,
+        ``local_showdown._tier2_tracker_for``), inactive in this bench env
+        configuration; wiring them across the env→policy boundary is an
+        enumerated follow-up (docs/test_time_search_plan_v3.md ledger).
+
+        Returns None when this battle's fold is broken (an advance failed or
+        the event stream rewound) — model-mode callers fall back loudly, and
+        the battle stays broken rather than searching on silent garbage.
+        """
+        from .transitions_fold import FoldState  # noqa: PLC0415 — keep import-light
+
+        key = (str(getattr(context, "battle_id", "?")), context.player_id)
+        if key in self._fold_broken:
+            return None
+        replay = context.public_materialization_state.replay
+        events = replay.public_events
+        fold = self._live_folds.get(key)
+        consumed = self._fold_consumed.get(key, 0)
+        if fold is None:
+            self._drop_stale_folds(key[0])
+            fold = FoldState.initial(perspective_slot=context.player_id)
+            consumed = 0
+        if len(events) < consumed:
+            self._mark_fold_broken(context, key, "public event stream rewound")
+            return None
+        new_lines = [event.raw_line for event in events[consumed:]]
+        try:
+            fold.advance_in_place(new_lines)
+        except Exception as error:  # noqa: BLE001 — loud, then fail closed
+            self._mark_fold_broken(
+                context, key, f"advance failed: {type(error).__name__}: {error}"
+            )
+            return None
+        self._live_folds[key] = fold
+        self._fold_consumed[key] = len(events)
+        self.stats.fold_advanced_lines += len(new_lines)
+        if self._config.fold_cross_check:
+            self._fold_cross_check(context, fold, replay)
+        return fold
+
+    def _drop_stale_folds(self, battle_id: str) -> None:
+        """Free fold state from earlier battles (drivers run one at a time)."""
+
+        for key in [k for k in self._live_folds if k[0] != battle_id]:
+            self._live_folds.pop(key, None)
+            self._fold_consumed.pop(key, None)
+        self._fold_broken = {k for k in self._fold_broken if k[0] == battle_id}
+
+    def _mark_fold_broken(
+        self, context: PolicyContext, key: tuple[str, str], reason: str
+    ) -> None:
+        self._fold_broken.add(key)
+        message = (
+            f"live-fold BROKEN: battle={key[0]} seat={key[1]} "
+            f"round={getattr(context, 'decision_round_index', '?')} reason={reason}"
+        )
+        warnings.warn(message, EngineSearchFoldMismatchWarning, stacklevel=4)
+        _fold_logger.warning(message)
+
+    def _fold_cross_check(self, context: PolicyContext, fold: Any, replay: Any) -> None:
+        """Debug gate: live fold products vs a from-scratch whole-log refold.
+
+        The batch arm is production's own per-observe path
+        (``turn_merged.extract_transition_products``); both arms are
+        UNANNOTATED (Tier-2 overlays apply downstream of each), so the
+        surfaces must match exactly. Mismatches warn loudly and are counted;
+        ``strict_fallbacks`` escalates to a hard error.
+        """
+        from .turn_merged import extract_transition_products  # noqa: PLC0415
+
+        self.stats.fold_cross_checks += 1
+        tokens, merged, tendencies = extract_transition_products(
+            replay, perspective_slot=context.player_id
+        )
+        products = fold.products()
+        mismatched = [
+            name
+            for name, ok in (
+                ("transition_token_total", products.transition_token_total == len(tokens)),
+                (
+                    "transition_tokens",
+                    products.transition_tokens == tuple(tokens[-fold.action_tail_limit :]),
+                ),
+                ("turn_merged_total", products.turn_merged_total == len(merged)),
+                (
+                    "turn_merged_tokens",
+                    products.turn_merged_tokens == tuple(merged[-fold.merged_tail_limit :]),
+                ),
+                ("tendency_stats", products.tendency_stats == tendencies),
+            )
+            if not ok
+        ]
+        if mismatched:
+            self.stats.fold_cross_check_failures += 1
+            message = (
+                f"live-fold cross-check MISMATCH: battle={getattr(context, 'battle_id', '?')} "
+                f"round={getattr(context, 'decision_round_index', '?')} "
+                f"seat={context.player_id} surfaces={mismatched}"
+            )
+            if self._config.strict_fallbacks:
+                raise EngineSearchFallbackError(message)
+            warnings.warn(message, EngineSearchFoldMismatchWarning, stacklevel=5)
+            _fold_logger.warning(message)
+
+    # ------------------------------------------------------------------------------
+    # Full in-crate pipeline (leaf_eval="model")
+    # ------------------------------------------------------------------------------
+
+    def _root_inputs_json(self, context: PolicyContext) -> str:
+        """The crate encoder's sanctioned input surface for the LIVE decision.
+
+        Field-for-field the golden corpus's row-inputs contract
+        (``scripts/golden_encoder_backends.row_inputs_from_decision_row``):
+        identifiers + the seat's ``observation_metadata`` verbatim + the
+        public-materialization payload, built with the same helpers corpus
+        generation uses — the crate consumes exactly the surface the
+        root-parity gate proved byte-exact.
+        """
+        from .golden_corpus import _json_safe  # noqa: PLC0415
+        from .local_showdown import _public_materialization_payload  # noqa: PLC0415
+
+        state = context.public_materialization_state
+        row = {
+            "battle_id": str(getattr(context, "battle_id", "")),
+            "battle_seed": int(getattr(context, "seed", 0) or 0),
+            "format_id": str(getattr(context, "format_id", "")),
+            "player_id": context.player_id,
+            "observation_schema_version": context.observation.schema_version,
+            "observation_metadata": _json_safe(
+                dict(context.observation.metadata), context="observation_metadata"
+            ),
+            "public_materialization": _json_safe(
+                _public_materialization_payload(state), context="public_materialization"
+            ),
+        }
+        return json.dumps(row, sort_keys=True)
+
+    def _native(self) -> Any:
+        """The in-crate TorchScript search handle, loaded once per policy."""
+
+        if self._native_model is None:
+            import pokezero_search  # noqa: PLC0415 — optional native dependency
+
+            if not getattr(pokezero_search, "MODEL_FEATURE_ENABLED", False):
+                raise RuntimeError(
+                    "pokezero_search was built without the model feature; rebuild via "
+                    "scripts/build_search_crate_model.sh before leaf_eval='model'."
+                )
+            layout = json.loads(self._tables_json or "{}")["layout"]
+            self._native_model = pokezero_search.NativeLeafModel(
+                str(self._config.model_path),
+                device=self._config.model_device,
+                window=1,
+                tokens=int(layout["token_count"]),
+                categorical_features=int(layout["categorical_feature_count"]),
+                numeric_features=int(layout["numeric_feature_count"]),
+            )
+        return self._native_model
+
+    def _search_model(
+        self,
+        context: PolicyContext,
+        worlds: list[tuple[EngineWorld, Any]],
+        live_fold: Any,
+        rng: random.Random,
+    ) -> PolicyDecision:
+        """Full in-crate pipeline per belief world.
+
+        Per sampled world: engine state → ``search_batched_multi_encoded``
+        (live root fold + per-branch synthesized-event observations +
+        TorchScript leaf eval + self-side model priors) → the acting side's
+        root visit distribution; distributions aggregate uniformly across
+        worlds and map to an action through the same request-candidate
+        correspondence as the hp_fraction path. Every failure shape stays
+        inside the loud fallback taxonomy (world failures are counted per
+        reason; a decision with zero searched worlds falls back).
+        """
+        import pokezero_search  # noqa: PLC0415 — optional native dependency
+
+        from .observation import OBSERVATION_SCHEMA_VERSION_V2_2  # noqa: PLC0415
+
+        schema = context.observation.schema_version
+        if schema != OBSERVATION_SCHEMA_VERSION_V2_2:
+            # Misconfiguration, not a per-decision condition: the model was
+            # trained on v2.2 observations — never quietly search on another
+            # schema's surface.
+            raise EngineSearchFallbackError(
+                f"leaf_eval='model' requires {OBSERVATION_SCHEMA_VERSION_V2_2} observations; "
+                f"this env produced {schema!r}."
+            )
+        try:
+            root_inputs = self._root_inputs_json(context)
+            rust_fold = pokezero_search.FoldState.from_payload(live_fold.to_payload())
+        except Exception as error:  # noqa: BLE001 — taxonomy, never a crash
+            self.stats.world_failure_reasons[
+                f"root_inputs: {type(error).__name__}: {str(error)[:120]}"
+            ] += 1
+            return self._fallback(context, rng, "root_inputs_failed")
+        native = self._native()
+        replay = context.public_materialization_state.replay
+        turn = int(getattr(replay, "turn_number", 0) or 0)
+        config = self._config
+
+        aggregated: Counter = Counter()
+        worlds_searched_here = 0
+        search_started = time.perf_counter()
+        for world, state in worlds:
+            ctx_json = json.dumps(
+                {
+                    "p1": list(world.party_species["p1"]),
+                    "p2": list(world.party_species["p2"]),
+                    "turn": turn,
+                }
+            )
+            world_seed = rng.getrandbits(63)
+            try:
+                report = json.loads(
+                    native.search_batched_multi_encoded(
+                        state.to_string(),
+                        config.search_sims,
+                        config.search_batch,
+                        self._tables_json,
+                        root_inputs,
+                        ctx_json,
+                        rust_fold,
+                        config.search_depth,
+                        config.c_puct,
+                        world_seed,
+                        config.deep_ko_split,
+                        config.model_priors,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                detail = str(error).splitlines()[0][:160] if str(error) else type(error).__name__
+                self.stats.world_failure_reasons[f"crate_search: {detail}"] += 1
+                continue
+            side_key = (
+                "side_one"
+                if world.slot_sides[context.player_id] == "side_one"
+                else "side_two"
+            )
+            entries = report[side_key]
+            total = max(sum(entry["visits"] for entry in entries), 1)
+            for entry in entries:
+                aggregated[entry["move"]] += entry["visits"] / total
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.model_evals += int(report["model_evals"])
+            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            self.stats.worlds_searched += 1
+            worlds_searched_here += 1
+        self.stats.search_wall_seconds += time.perf_counter() - search_started
+
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
+        action_index = self._map_choices(context, aggregated)
+        if action_index is None:
+            return self._fallback(context, rng, "choices_unmapped")
+        self.stats.searched_decisions += 1
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=self.policy_id,
+            metadata={
+                "engine_mcts": {
+                    "leaf_eval": "model",
+                    "worlds_searched": worlds_searched_here,
+                    "aggregated_choices": {
+                        choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                    },
+                }
+            },
+        )
 
     # Gen 3 pool's only recharge move; the recharge turn itself is public.
     _RECHARGE_MOVES = frozenset({"hyperbeam"})
@@ -450,6 +857,7 @@ class EngineMctsPolicy:
         move_index_by_id: dict[str, int] = {}
         hidden_power_index: Optional[int] = None
         switch_index_by_species: dict[str, int] = {}
+        switch_index_by_canonical: dict[str, int] = {}
         for candidate in candidates:
             if not isinstance(candidate, Mapping) or not candidate.get("legal"):
                 continue
@@ -471,13 +879,25 @@ class EngineMctsPolicy:
                 )
                 if species:
                     switch_index_by_species[species] = index
+                    # Cosmetic-forme tolerance: the engine displays the
+                    # collapsed base id ("switch unown") while the request
+                    # candidate carries the lettered forme ("Unown-C");
+                    # species clause keeps the canonical key unique per team.
+                    switch_index_by_canonical[
+                        canonical_gen3_randbat_species_id(species)
+                    ] = index
 
         best_index: Optional[int] = None
         best_weight = 0.0
         for choice, weight in aggregated.items():
             index: Optional[int] = None
             if choice.startswith("switch "):
-                index = switch_index_by_species.get(normalize_id(choice[len("switch "):]))
+                species = normalize_id(choice[len("switch "):])
+                index = switch_index_by_species.get(species)
+                if index is None:
+                    index = switch_index_by_canonical.get(
+                        canonical_gen3_randbat_species_id(species)
+                    )
             else:
                 move_id = normalize_id(choice)
                 index = move_index_by_id.get(move_id)
@@ -528,9 +948,58 @@ class EngineMctsPolicy:
 # ---------------------------------------------------------------------------------------------
 
 
+class _ArgmaxComparePolicy:
+    """Bench-only wrapper: the primary (model-mode) policy drives the game;
+    the reference (hp_fraction engine MCTS) is ALSO asked on the first
+    ``limit`` decisions and both argmax choices are recorded.
+
+    Sanity contract: both decisions must be LEGAL under the request mask;
+    AGREEMENT IS NOT EXPECTED — the two modes price leaves with different
+    evaluations by design. The record shows both, per the gate's honesty rule.
+    """
+
+    def __init__(self, primary: Any, reference: Any, *, limit: int, records: list) -> None:
+        self.primary = primary
+        self.reference = reference
+        self.limit = limit
+        self.records = records
+        self.policy_id = primary.policy_id
+
+    def select_action(self, observation: Any, *, rng: random.Random) -> PolicyDecision:
+        return self.primary.select_action(observation, rng=rng)
+
+    def select_action_with_context(
+        self, context: PolicyContext, *, rng: random.Random
+    ) -> PolicyDecision:
+        decision = self.primary.select_action_with_context(context, rng=rng)
+        if len(self.records) < self.limit:
+            mask = context.observation.legal_action_mask
+            reference_rng = random.Random(
+                (int(getattr(context, "seed", 0) or 0) * 1000003)
+                + int(getattr(context, "decision_round_index", 0) or 0)
+            )
+            reference = self.reference.select_action_with_context(context, rng=reference_rng)
+            primary_meta = (decision.metadata or {}).get("engine_mcts", {})
+            reference_meta = (reference.metadata or {}).get("engine_mcts", {})
+            self.records.append(
+                {
+                    "battle_id": str(getattr(context, "battle_id", "?")),
+                    "round": getattr(context, "decision_round_index", None),
+                    "model_action": decision.action_index,
+                    "model_legal": bool(mask[decision.action_index]),
+                    "hp_fraction_action": reference.action_index,
+                    "hp_fraction_legal": bool(mask[reference.action_index]),
+                    "agree": decision.action_index == reference.action_index,
+                    "model_fallback": primary_meta.get("fallback"),
+                    "hp_fraction_fallback": reference_meta.get("fallback"),
+                }
+            )
+        return decision
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="POC bench: poke-engine MCTS over belief worlds vs a baseline"
+        description="Bench: engine MCTS over belief worlds (hp_fraction or full model pipeline)"
     )
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument("--games", type=int, default=10)
@@ -544,6 +1013,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--strict-sleep", action="store_true",
                         help="fail worlds closed on publicly-asleep mons instead of approximating")
     parser.add_argument("--out", default=None)
+    # --- full in-crate pipeline (leaf_eval="model") ---
+    parser.add_argument("--leaf-eval", choices=("hp-fraction", "model"), default="hp-fraction")
+    parser.add_argument("--model-path", default=None,
+                        help="TorchScript artifact (scripts/export_model.py)")
+    parser.add_argument("--tables", default=None,
+                        help="encoder tables JSON (scripts/export_encoder_tables.py)")
+    parser.add_argument("--model-device", default="cpu")
+    parser.add_argument("--sims", type=int, default=256,
+                        help="per-world simulation budget (model mode)")
+    parser.add_argument("--batch", type=int, default=16,
+                        help="leaf-eval batch size (model mode; keep << sims)")
+    parser.add_argument("--depth", type=int, default=2,
+                        help="max decision plies (model mode)")
+    parser.add_argument("--no-model-priors", action="store_true",
+                        help="model mode with uniform priors (A/B kill switch)")
+    parser.add_argument("--fold-cross-check", action="store_true",
+                        help="debug: batch-refold vs the live incremental fold per decision")
+    parser.add_argument("--argmax-compare", type=int, default=0,
+                        help="model mode: also run the hp_fraction policy on the first N "
+                             "decisions and record both argmaxes (legality sanity, not agreement)")
     args = parser.parse_args(argv)
 
     from .dex import load_showdown_dex
@@ -552,24 +1041,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     from .randbat import Gen3RandbatSource
     from .rollout import RolloutConfig, RolloutDriver
 
+    model_mode = args.leaf_eval == "model"
     dex = load_showdown_dex(args.showdown_root)
     set_source = Gen3RandbatSource.from_showdown_root(args.showdown_root)
-    policy = EngineMctsPolicy(
-        dex=dex,
-        set_source=set_source,
-        config=EngineMctsConfig(
-            worlds=args.worlds,
-            search_time_ms=args.search_time_ms,
-            threads=args.threads,
-            approximate_sleep_turns=not args.strict_sleep,
-        ),
+    base_config = dict(
+        worlds=args.worlds,
+        search_time_ms=args.search_time_ms,
+        threads=args.threads,
+        approximate_sleep_turns=not args.strict_sleep,
     )
+    config = EngineMctsConfig(
+        **base_config,
+        leaf_eval="model" if model_mode else "hp_fraction",
+        model_path=args.model_path,
+        tables_path=args.tables,
+        model_device=args.model_device,
+        search_sims=args.sims,
+        search_batch=args.batch,
+        search_depth=args.depth,
+        model_priors=not args.no_model_priors,
+        fold_cross_check=args.fold_cross_check,
+    )
+    policy = EngineMctsPolicy(dex=dex, set_source=set_source, config=config)
+    compare_records: list[dict[str, Any]] = []
+    p1_policy: Any = policy
+    if model_mode and args.argmax_compare > 0:
+        reference = EngineMctsPolicy(
+            dex=dex, set_source=set_source, config=EngineMctsConfig(**base_config)
+        )
+        p1_policy = _ArgmaxComparePolicy(
+            policy, reference, limit=args.argmax_compare, records=compare_records
+        )
     opponent = RandomLegalPolicy() if args.opponent == "random-legal" else SimpleLegalPolicy()
 
-    env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=args.showdown_root))
+    # Model mode needs the belief candidate-set source: the v2.2 observation's
+    # belief columns (candidate variants, possible sets) are part of the
+    # surface the model was trained on.
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        set_belief_source=True if model_mode else None,
+    )
+    env = LocalShowdownEnv(env_config)
     driver = RolloutDriver(
         env=env,
-        policies={"p1": policy, "p2": opponent},
+        policies={"p1": p1_policy, "p2": opponent},
         config=RolloutConfig(format_id="gen3randombattle"),
     )
     wins = 0
@@ -597,13 +1112,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             "approximate_sleep_turns": not args.strict_sleep,
             "opponent": args.opponent,
             "games": args.games,
+            "leaf_eval": config.leaf_eval,
+            "model_path": args.model_path,
+            "sims": args.sims,
+            "batch": args.batch,
+            "depth": args.depth,
+            "model_priors": config.model_priors,
         },
         "wins": wins,
         "win_rate": wins / args.games if args.games else 0.0,
         "games": games,
         "engine_mcts": policy.stats.to_dict(),
     }
-    print(json.dumps({k: v for k, v in report.items() if k != "games"}, indent=2))
+    if compare_records:
+        illegal = [r for r in compare_records if not (r["model_legal"] and r["hp_fraction_legal"])]
+        agreements = sum(1 for r in compare_records if r["agree"])
+        report["argmax_compare"] = {
+            "decisions": len(compare_records),
+            "agreements": agreements,
+            "illegal_decisions": len(illegal),
+            "records": compare_records,
+        }
+        print(
+            f"argmax compare: {agreements}/{len(compare_records)} agree, "
+            f"{len(illegal)} illegal decisions (must be 0; agreement not required)"
+        )
+    printable = {k: v for k, v in report.items() if k != "games"}
+    if "argmax_compare" in printable:
+        printable["argmax_compare"] = {
+            k: v for k, v in printable["argmax_compare"].items() if k != "records"
+        }
+    print(json.dumps(printable, indent=2))
     if args.out:
         with open(args.out, "w") as handle:
             json.dump(report, handle, indent=2)
@@ -614,7 +1153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"\n{'!' * 72}\n!! {fallback_count} FALLBACK DECISION(S) — reasons: "
             f"{dict(policy.stats.fallback_reasons)}\n"
-            f"!! every fallback at the current 0.0% baseline is a potential regression\n{'!' * 72}",
+            f"!! attribute every fallback via world_failure_reasons before accepting a run\n{'!' * 72}",
             file=_sys.stderr,
         )
         if args.fail_on_fallback:
