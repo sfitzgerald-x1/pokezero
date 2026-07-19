@@ -37,7 +37,6 @@ import unittest
 from pathlib import Path
 
 from pokezero.showdown import _normalize_identifier, parse_showdown_replay
-from pokezero.transitions import TOKEN_KIND_MOVE
 from pokezero.transitions_fold import (
     DEFAULT_ACTION_TAIL_LIMIT,
     DEFAULT_MERGED_TAIL_LIMIT,
@@ -241,11 +240,18 @@ class FoldAnnotatedSurfaceTest(unittest.TestCase):
     InvestmentLiveTracker + annotate_turn_merged_tokens); the incremental arm
     receives the tracker conclusions as a per-index overlay (exactly what the
     trackers hold) and must reproduce the annotated per-action tail, the annotated
-    merged tail, and the full-stream pinned reductions the encoder derives
-    (showdown.py tier2_cb_pinned_species / tier2_investment_pinned).
+    merged tail, and the full-stream pinned surfaces. The pinned check is bound to
+    PRODUCTION, not a test-local reduction: showdown.py's tier2_cb_pinned_species /
+    tier2_investment_pinned are locals of observation_from_player_state, so the
+    binding surface is where they land — the per-opponent-mon
+    NUMERIC_TIER2_CB_PINNED / NUMERIC_TIER2_INVESTMENT_PINNED columns of the
+    encoded observation the env emits.
     """
 
-    GAMES = 3
+    # 17001-17003 exercise the residual channel densely; 17007/17012 reach pinned CB
+    # conclusions and 17013 a pinned investment conclusion (seed-scanned), so the
+    # production-column binding below is non-vacuous for BOTH pinned surfaces.
+    SEEDS = (17001, 17002, 17003, 17007, 17012, 17013)
 
     def test_annotated_products_match(self) -> None:
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -263,13 +269,15 @@ class FoldAnnotatedSurfaceTest(unittest.TestCase):
                 self.skipTest("belief set source unavailable; Tier-2 trackers inactive")
             total_boundaries = 0
             annotated_indices = 0
-            for seed in range(17001, 17001 + self.GAMES):
+            pinned_cb_boundaries = 0
+            pinned_investment_boundaries = 0
+            for seed in self.SEEDS:
                 harness = _DifferentialHarness(
                     self, serialize_at_boundary=9, compare_pure_batch=False
                 )
 
                 def on_boundary(player, state):
-                    nonlocal annotated_indices
+                    nonlocal annotated_indices, pinned_cb_boundaries, pinned_investment_boundaries
                     overlay = {
                         index: (
                             token.residual,
@@ -295,36 +303,52 @@ class FoldAnnotatedSurfaceTest(unittest.TestCase):
                         state.turn_merged_tokens[-DEFAULT_MERGED_TAIL_LIMIT:],
                     )
                     self.assertEqual(products.tendency_stats, state.tendency_stats)
-                    # The encoder's full-stream pinned reductions (showdown.py).
-                    opponent = state.perspective.opponent_showdown_slot
-                    expected_cb = frozenset(
-                        _normalize_identifier(token.actor_species)
-                        for token in state.transition_tokens
-                        if token.cb_bit
-                        and token.kind == TOKEN_KIND_MOVE
-                        and token.actor_slot == opponent
+                    # Pinned surfaces, bound to production: the encoded observation's
+                    # per-opponent-mon pinned columns must equal what the fold's
+                    # bounded reductions predict for every opponent team member.
+                    from pokezero.showdown import (
+                        NUMERIC_TIER2_CB_PINNED,
+                        NUMERIC_TIER2_INVESTMENT_PINNED,
+                        OPPONENT_POKEMON_TOKEN_OFFSET,
                     )
-                    self.assertEqual(products.cb_pinned_species, expected_cb)
-                    expected_investment = {}
-                    for token in state.transition_tokens:
-                        if (
-                            token.investment
-                            and token.kind == TOKEN_KIND_MOVE
-                            and token.actor_slot == state.perspective.showdown_slot
-                            and token.defender_species
-                        ):
-                            expected_investment[
-                                _normalize_identifier(token.defender_species)
-                            ] = token.investment
-                    self.assertEqual(dict(products.investment_pinned), expected_investment)
+
+                    observation = env.observe(player)
+                    if products.cb_pinned_species:
+                        pinned_cb_boundaries += 1
+                    if products.investment_pinned:
+                        pinned_investment_boundaries += 1
+                    for mon_index, mon in enumerate(state.opponent_team[:6]):
+                        row = observation.numeric_features[
+                            OPPONENT_POKEMON_TOKEN_OFFSET + mon_index
+                        ]
+                        species = _normalize_identifier(mon.species)
+                        self.assertEqual(
+                            row[NUMERIC_TIER2_CB_PINNED],
+                            1.0 if species in products.cb_pinned_species else 0.0,
+                            f"CB-pinned column mismatch for {species}",
+                        )
+                        self.assertEqual(
+                            row[NUMERIC_TIER2_INVESTMENT_PINNED],
+                            products.investment_pinned.get(species, 0.0),
+                            f"investment-pinned column mismatch for {species}",
+                        )
 
                 _drive_random_game(self, env, seed, harness, on_boundary=on_boundary)
                 total_boundaries += harness.boundaries
         finally:
             env.close()
+        # Non-vacuity: both pinned surfaces must have been exercised with real
+        # nonzero conclusions somewhere in the battery, or the column binding
+        # above only ever compared zeros.
+        self.assertGreater(pinned_cb_boundaries, 0, "no boundary reached a pinned CB conclusion")
+        self.assertGreater(
+            pinned_investment_boundaries, 0, "no boundary reached a pinned investment conclusion"
+        )
         print(
-            f"\n[fold-closure] annotated: {self.GAMES} games, {total_boundaries} boundaries, "
-            f"max overlay size {annotated_indices} (all annotated surfaces equal)"
+            f"\n[fold-closure] annotated: {len(self.SEEDS)} games, {total_boundaries} boundaries, "
+            f"max overlay size {annotated_indices}, pinned boundaries "
+            f"cb={pinned_cb_boundaries} investment={pinned_investment_boundaries} "
+            "(all annotated surfaces equal, production pinned columns bound)"
         )
 
 
@@ -480,6 +504,30 @@ class FoldSerializationTest(unittest.TestCase):
         resumed.apply_annotations({target: (-0.05, True, True, 0.0)})
         with self.assertRaises(ValueError):
             resumed.apply_annotations({target: (0.10, True, True, 0.0)})
+
+    def test_loosely_typed_overlay_serializes_byte_identically(self) -> None:
+        """apply_annotations canonicalizes value types like from_payload: an int-typed
+        overlay (cb_bit=1, residual_valid=1, investment=0) must yield a byte-identical
+        payload to the bool/float-typed application, not just dataclass-equal products."""
+        base, products = FoldState.initial(perspective_slot="p1").advance(_SYNTHETIC_LINES)
+        target = next(
+            index
+            for index, token in enumerate(products.transition_tokens)
+            if token.action == "drillpeck"
+        )
+        typed = base.apply_annotations({target: (-0.05, True, True, 0.0)})
+        loose = base.apply_annotations({target: (-0.05, 1, 1, 0)})
+        self.assertEqual(loose.products(), typed.products())
+        self.assertEqual(
+            json.dumps(loose.to_payload(), sort_keys=True),
+            json.dumps(typed.to_payload(), sort_keys=True),
+        )
+        # And the loosely-typed state still round-trips deterministically.
+        canonical = json.dumps(loose.to_payload(), sort_keys=True)
+        self.assertEqual(
+            json.dumps(FoldState.from_payload(json.loads(canonical)).to_payload(), sort_keys=True),
+            canonical,
+        )
 
 
 @unittest.skipUnless(

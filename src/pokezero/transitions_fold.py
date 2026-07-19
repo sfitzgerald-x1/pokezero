@@ -308,7 +308,16 @@ class FoldState:
 
     def apply_annotations_in_place(self, overlay: Mapping[int, AnnotationValues]) -> None:
         for index in sorted(overlay):
-            values = tuple(overlay[index])
+            raw_residual, raw_valid, raw_cb, raw_investment = overlay[index]
+            # Canonicalize value types exactly as from_payload does, so a state built
+            # from loosely-typed overlays (int-flag trackers, JSON round-trips)
+            # serializes byte-identically to one built from bool/float values.
+            values = (
+                raw_residual if raw_residual is None else float(raw_residual),
+                bool(raw_valid),
+                bool(raw_cb),
+                float(raw_investment),
+            )
             existing = self.annotations.get(index)
             if existing is not None:
                 if tuple(existing) != values:
@@ -336,7 +345,13 @@ class FoldState:
                 key = _normalize_identifier(token.defender_species)
                 previous = self.investment_pinned_state.get(key)
                 if previous is None or index >= previous[0]:
-                    self.investment_pinned_state[key] = (index, float(investment))
+                    # Same clamp as the production pinned reduction (showdown.py
+                    # tier2_investment_pinned): logic-identical under future drift of
+                    # the code vocabulary; a no-op for today's {-1,-0.5,0.5,1} codes.
+                    self.investment_pinned_state[key] = (
+                        index,
+                        max(-1.0, min(1.0, float(investment))),
+                    )
         self._prune_annotations()
 
     def products(self) -> FoldProducts:

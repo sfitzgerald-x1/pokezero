@@ -122,11 +122,17 @@ RESULTS (2026-07-18, this machine, vendored Showdown at
   wish_boundary:24, sand_shedinja:9, resttalk_snorlax:17, screens_jirachi:18,
   toxic_stall:14; round-trip at boundary 3).
 - Annotated surfaces (tier2 residuals + investment masks on, belief set
-  source on; seeds 17001-17003): 3 games, **245 boundaries**, the acting
-  player's tracker overlay (up to 27 annotated indices) applied per boundary —
-  annotated per-action tail, annotated merged tail, TendencyStats, and both
-  pinned reductions all equal to the production env state at every boundary;
-  round-trip at boundary 9.
+  source on; seeds 17001-17003 + pin-bearing seeds 17007/17012/17013):
+  6 games, **535 boundaries**, the acting player's tracker overlay (up to 27
+  annotated indices) applied per boundary — annotated per-action tail,
+  annotated merged tail, and TendencyStats equal to the production env state
+  at every boundary. The pinned surfaces are bound to PRODUCTION, not a
+  test-local reduction: `tier2_cb_pinned_species`/`tier2_investment_pinned`
+  are locals of `observation_from_player_state`, so the check reads where they
+  land — the per-opponent-mon `NUMERIC_TIER2_CB_PINNED` /
+  `NUMERIC_TIER2_INVESTMENT_PINNED` columns of the encoded observation —
+  and is non-vacuous by assertion: 138 boundaries carried a real pinned CB
+  conclusion and 48 a pinned investment conclusion. Round-trip at boundary 9.
 - Synthetic battery (no Showdown): line-by-line advance vs the batch fold on
   EVERY prefix of a hand-built log (41 prefixes × 2 perspectives — mid-chunk
   cuts included), Pursuit-intercept incremental flagging, `|t:|` filtering,
