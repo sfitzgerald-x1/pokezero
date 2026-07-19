@@ -132,6 +132,11 @@ _TIMING_KEYS = (
     "value_neural_forward_count",
     "value_evaluation_seconds",
     "value_evaluation_count",
+    # Adaptive leaves are semantically evaluated one per sampled world. The
+    # second counter credits only leaves that actually joined a cross-world
+    # batch, so telemetry can distinguish enabled batching from execution.
+    "adaptive_value_evaluation_count",
+    "adaptive_cross_world_batched_leaf_count",
     "rollout_tail_seconds",
     "rollout_tail_count",
     "policy_value_evaluation_seconds",

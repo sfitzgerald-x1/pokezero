@@ -944,6 +944,17 @@ class FlatBranchSearchTest(unittest.TestCase):
             ],
         )
         self.assertEqual(sum(result.timing.value_evaluation_count for result in results), 10)
+        self.assertEqual(
+            [result.timing.adaptive_value_evaluation_count for result in results],
+            [3, 3],
+        )
+        self.assertEqual(
+            [result.timing.adaptive_cross_world_batched_leaf_count for result in results],
+            [3, 3],
+        )
+        aggregate_timing = RootPUCTSearchTiming.aggregate(tuple(result.timing for result in results))
+        self.assertEqual(aggregate_timing.adaptive_value_evaluation_count, 6)
+        self.assertEqual(aggregate_timing.adaptive_cross_world_batched_leaf_count, 6)
 
     def test_puct_branch_search_group_batches_only_nonterminal_adaptive_leaves(self) -> None:
         trajectory = BattleTrajectory(battle_id="batch-adaptive-terminals", format_id="gen3randombattle", seed=79)
@@ -1009,6 +1020,16 @@ class FlatBranchSearchTest(unittest.TestCase):
         )
         self.assertEqual([result.total_visits for result in results], [5, 5])
         self.assertEqual([result.timing.value_evaluation_count for result in results], [0, 5])
+        self.assertEqual(
+            [result.timing.adaptive_value_evaluation_count for result in results],
+            [0, 3],
+        )
+        # Only one world had nonterminal leaves, so adaptive dispatch ran but
+        # did not create a cross-world batch in this fixture.
+        self.assertEqual(
+            [result.timing.adaptive_cross_world_batched_leaf_count for result in results],
+            [0, 0],
+        )
 
     def test_puct_branch_search_group_batches_adaptive_leaves_with_per_world_budgets(self) -> None:
         trajectory = BattleTrajectory(battle_id="batch-adaptive-budgets", format_id="gen3randombattle", seed=79)

@@ -193,6 +193,11 @@ class RootPUCTSearchTiming:
     value_neural_forward_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
+    # Adaptive leaf batching is shared across sampled worlds. These counters
+    # prove whether a cross-world batch actually formed without entering wall
+    # time accounting a second time.
+    adaptive_value_evaluation_count: int = 0
+    adaptive_cross_world_batched_leaf_count: int = 0
     rollout_tail_seconds: float = 0.0
     rollout_tail_count: int = 0
     # These diagnostic fields partition residual wall time without changing the
@@ -763,6 +768,12 @@ class RootPUCTSearchTiming:
             ),
             value_evaluation_seconds=sum(timing.value_evaluation_seconds for timing in timings),
             value_evaluation_count=sum(timing.value_evaluation_count for timing in timings),
+            adaptive_value_evaluation_count=sum(
+                timing.adaptive_value_evaluation_count for timing in timings
+            ),
+            adaptive_cross_world_batched_leaf_count=sum(
+                timing.adaptive_cross_world_batched_leaf_count for timing in timings
+            ),
             rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
             rollout_tail_count=sum(timing.rollout_tail_count for timing in timings),
             puct_search_result_residual_seconds=sum(
@@ -884,6 +895,10 @@ class RootPUCTSearchTiming:
             "value_neural_forward_count": self.value_neural_forward_count,
             "value_evaluation_seconds": self.value_evaluation_seconds,
             "value_evaluation_count": self.value_evaluation_count,
+            "adaptive_value_evaluation_count": self.adaptive_value_evaluation_count,
+            "adaptive_cross_world_batched_leaf_count": (
+                self.adaptive_cross_world_batched_leaf_count
+            ),
             "policy_value_evaluation_seconds": self.policy_value_evaluation_seconds,
             "policy_value_evaluation_count": self.policy_value_evaluation_count,
             "rollout_tail_seconds": self.rollout_tail_seconds,
@@ -959,6 +974,8 @@ class _RootPUCTSearchTimingAccumulator:
     bridge_node_processing_count: int = 0
     value_evaluation_seconds: float = 0.0
     value_evaluation_count: int = 0
+    adaptive_value_evaluation_count: int = 0
+    adaptive_cross_world_batched_leaf_count: int = 0
     rollout_tail_seconds: float = 0.0
     rollout_tail_count: int = 0
 
@@ -1045,6 +1062,15 @@ class _RootPUCTSearchTimingAccumulator:
         self.value_evaluation_seconds += elapsed_seconds
         self.value_evaluation_count += count
 
+    def add_adaptive_value_batch(self, *, batch_size: int) -> None:
+        """Record one adaptive leaf evaluated in a shared cross-world wave."""
+
+        if batch_size <= 0:
+            raise ValueError("adaptive value batch size must be positive.")
+        self.adaptive_value_evaluation_count += 1
+        if batch_size > 1:
+            self.adaptive_cross_world_batched_leaf_count += 1
+
     def add_rollout_tail(self, elapsed_seconds: float) -> None:
         self.rollout_tail_seconds += elapsed_seconds
         self.rollout_tail_count += 1
@@ -1089,6 +1115,10 @@ class _RootPUCTSearchTimingAccumulator:
             bridge_node_processing_count=self.bridge_node_processing_count,
             value_evaluation_seconds=self.value_evaluation_seconds,
             value_evaluation_count=self.value_evaluation_count,
+            adaptive_value_evaluation_count=self.adaptive_value_evaluation_count,
+            adaptive_cross_world_batched_leaf_count=(
+                self.adaptive_cross_world_batched_leaf_count
+            ),
             rollout_tail_seconds=self.rollout_tail_seconds,
             rollout_tail_count=self.rollout_tail_count,
             total_seconds=total_seconds,
@@ -2447,6 +2477,7 @@ def _finish_puct_branch_search_group_batched_adaptive(
         per_leaf_seconds = batch_elapsed_seconds / len(pending_values)
         for pending, value in zip(pending_values, batch_values, strict=True):
             pending.state.timing.add_value_evaluation(per_leaf_seconds)
+            pending.state.timing.add_adaptive_value_batch(batch_size=len(pending_values))
             pending.state.adaptive_elapsed_seconds += per_leaf_seconds
             _record_batched_adaptive_candidate(
                 pending.state,
