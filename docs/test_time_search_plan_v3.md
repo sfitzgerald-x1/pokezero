@@ -172,13 +172,30 @@ incremental root fold in `EngineMctsPolicy` (per-battle
 batch-refold cross-check flag stayed 0-mismatch), and the config-gated full
 pipeline `EngineMctsConfig(leaf_eval="model")` — per belief world
 `search_batched_multi_encoded` with the real fold + TorchScript eval, root
-aggregation across worlds, the full fallback taxonomy live (15-game bench,
-seeds 7000-7014, fallback 0.0% with --fail-on-fallback; real
-emeta-v2-2-lr3m-belief FINAL checkpoint artifact, throughput/mechanics only
-— NO strength claim). Remaining = the 200-seed paired read + follow-ups
+aggregation across worlds, the full fallback taxonomy live. 15-game bench
+(seeds 7000-7014, worlds=4 × sims=64 × batch=8 × depth=2, CPU, the real
+emeta-v2-2-lr3m-belief FINAL checkpoint artifact — throughput/mechanics
+only, NO strength claim): 334/394 decisions searched, 2.92 s wall per
+decision (3.42 s search wall per searched decision, ~216k model evals,
+lossy renders 0.12%), prior fallbacks 0, unmapped choices 0, live-fold
+cross-check 394/394 clean. Fallback rate 15.2% — every one
+`no_worlds_constructed` from the PRE-EXISTING fail-closed world walls
+(public_effect_blocked: Trick/Knock-Off item mutation + Transform;
+self_request_state_unsupported; flashfire volatile), concentrated in
+battles 7010/7013; the PAIRED hp_fraction CONTROL on the same seeds reads
+15.9% with the same reasons on the same battles, so the new pipeline's own
+taxonomy (crate_search / root_inputs / live_fold / choices_unmapped) is
+EMPTY and the historical 0.0% simply does not reproduce on today's
+build/seeds in either arm — a world-construction finding, not a search
+regression (follow-up below). Argmax sanity vs hp_fraction: 10 decisions,
+6/10 agree (agreement not expected — different leaf evals), 0 illegal.
+Remaining = the 200-seed paired read + follow-ups
 (opponent priors spec'd in docs/crate_search_design.md; Tier-2 overlay at
 live boundaries; batch/virtual-loss re-pricing under real observation
-costs — see docs/leaf_observation_column_map.md "Remaining").
+costs — see docs/leaf_observation_column_map.md "Remaining"; the
+determinized-world fallback walls above — the belief_view Knock-Off
+removal/Trick swap distinction the blocked-slot comment already
+enumerates is the highest-leverage one).
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep

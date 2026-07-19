@@ -62,8 +62,13 @@ class EngineSearchFallbackWarning(UserWarning):
     logging, can escalate them to hard errors with
     ``warnings.simplefilter("error", EngineSearchFallbackWarning)`` or
     ``EngineMctsConfig(strict_fallbacks=True)``, and can grep the stable
-    logger name ``pokezero.engine_search.fallback``. At the current 0.0%
-    bench rate every occurrence is a potential regression worth a look.
+    logger name ``pokezero.engine_search.fallback``. Every occurrence must
+    be attributable through the fallback/world-failure reason taxonomy —
+    benches report the rate and the reasons rather than hiding either.
+    (The one-time 0.0% bench rate does not hold on all seed trajectories:
+    battles where the opponent publicly Tricks/Knock-Offs an item or
+    Transforms fail worlds closed for the rest of the battle by design —
+    both leaf-eval modes hit the same wall on the same battles.)
     """
 
 
@@ -1148,7 +1153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"\n{'!' * 72}\n!! {fallback_count} FALLBACK DECISION(S) — reasons: "
             f"{dict(policy.stats.fallback_reasons)}\n"
-            f"!! every fallback at the current 0.0% baseline is a potential regression\n{'!' * 72}",
+            f"!! attribute every fallback via world_failure_reasons before accepting a run\n{'!' * 72}",
             file=_sys.stderr,
         )
         if args.fail_on_fallback:
