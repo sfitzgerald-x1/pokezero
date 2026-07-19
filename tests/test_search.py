@@ -262,6 +262,14 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_observation_projection_count = 0
         self._branch_observation_state_normalization_seconds = 0.0
         self._branch_observation_state_normalization_count = 0
+        self._branch_observation_incremental_sync_seconds = 0.0
+        self._branch_observation_incremental_sync_count = 0
+        self._branch_observation_replay_snapshot_seconds = 0.0
+        self._branch_observation_replay_snapshot_count = 0
+        self._branch_observation_player_state_normalization_seconds = 0.0
+        self._branch_observation_player_state_normalization_count = 0
+        self._branch_observation_state_annotation_seconds = 0.0
+        self._branch_observation_state_annotation_count = 0
         self._branch_observation_encoding_seconds = 0.0
         self._branch_observation_encoding_count = 0
         self._branch_belief_overlay_projection_seconds = 0.0
@@ -286,6 +294,30 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
             ),
             "branch_observation_state_normalization_count": (
                 self._branch_observation_state_normalization_count
+            ),
+            "branch_observation_incremental_sync_seconds": (
+                self._branch_observation_incremental_sync_seconds
+            ),
+            "branch_observation_incremental_sync_count": (
+                self._branch_observation_incremental_sync_count
+            ),
+            "branch_observation_replay_snapshot_seconds": (
+                self._branch_observation_replay_snapshot_seconds
+            ),
+            "branch_observation_replay_snapshot_count": (
+                self._branch_observation_replay_snapshot_count
+            ),
+            "branch_observation_player_state_normalization_seconds": (
+                self._branch_observation_player_state_normalization_seconds
+            ),
+            "branch_observation_player_state_normalization_count": (
+                self._branch_observation_player_state_normalization_count
+            ),
+            "branch_observation_state_annotation_seconds": (
+                self._branch_observation_state_annotation_seconds
+            ),
+            "branch_observation_state_annotation_count": (
+                self._branch_observation_state_annotation_count
             ),
             "branch_observation_encoding_seconds": self._branch_observation_encoding_seconds,
             "branch_observation_encoding_count": self._branch_observation_encoding_count,
@@ -316,6 +348,14 @@ class FusedBridgeTimedSnapshotValueBranchEnv(BridgeTimedSnapshotValueBranchEnv):
         self._branch_observation_projection_count += 1
         self._branch_observation_state_normalization_seconds += 0.001
         self._branch_observation_state_normalization_count += 1
+        self._branch_observation_incremental_sync_seconds += 0.0001
+        self._branch_observation_incremental_sync_count += 1
+        self._branch_observation_replay_snapshot_seconds += 0.0002
+        self._branch_observation_replay_snapshot_count += 1
+        self._branch_observation_player_state_normalization_seconds += 0.0006
+        self._branch_observation_player_state_normalization_count += 1
+        self._branch_observation_state_annotation_seconds += 0.0001
+        self._branch_observation_state_annotation_count += 1
         self._branch_observation_encoding_seconds += 0.0015
         self._branch_observation_encoding_count += 1
         self._branch_belief_overlay_projection_seconds += 0.0005
@@ -348,6 +388,14 @@ class BranchStepTimingCompatibilityTest(unittest.TestCase):
         for field in (
             "branch_observation_state_normalization_seconds",
             "branch_observation_state_normalization_count",
+            "branch_observation_incremental_sync_seconds",
+            "branch_observation_incremental_sync_count",
+            "branch_observation_replay_snapshot_seconds",
+            "branch_observation_replay_snapshot_count",
+            "branch_observation_player_state_normalization_seconds",
+            "branch_observation_player_state_normalization_count",
+            "branch_observation_state_annotation_seconds",
+            "branch_observation_state_annotation_count",
             "branch_observation_encoding_seconds",
             "branch_observation_encoding_count",
             "branch_belief_overlay_projection_seconds",
@@ -361,9 +409,17 @@ class BranchStepTimingCompatibilityTest(unittest.TestCase):
         self.assertIsNotNone(timing)
         assert timing is not None
         self.assertEqual(timing["branch_observation_state_normalization_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_incremental_sync_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_replay_snapshot_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_player_state_normalization_seconds"], 0.0)
+        self.assertEqual(timing["branch_observation_state_annotation_seconds"], 0.0)
         self.assertEqual(timing["branch_observation_encoding_seconds"], 0.0)
         self.assertEqual(timing["branch_belief_overlay_projection_seconds"], 0.0)
         self.assertEqual(timing["branch_observation_state_normalization_count"], 0)
+        self.assertEqual(timing["branch_observation_incremental_sync_count"], 0)
+        self.assertEqual(timing["branch_observation_replay_snapshot_count"], 0)
+        self.assertEqual(timing["branch_observation_player_state_normalization_count"], 0)
+        self.assertEqual(timing["branch_observation_state_annotation_count"], 0)
         self.assertEqual(timing["branch_observation_encoding_count"], 0)
         self.assertEqual(timing["branch_belief_overlay_projection_count"], 0)
 
@@ -1328,6 +1384,22 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(timing["branch_observation_projection_seconds"], 0.015)
         self.assertEqual(timing["branch_observation_state_normalization_count"], 5)
         self.assertAlmostEqual(timing["branch_observation_state_normalization_seconds"], 0.005)
+        self.assertEqual(timing["branch_observation_incremental_sync_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_incremental_sync_seconds"], 0.0005)
+        self.assertEqual(timing["branch_observation_replay_snapshot_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_replay_snapshot_seconds"], 0.001)
+        self.assertEqual(timing["branch_observation_player_state_normalization_count"], 5)
+        self.assertAlmostEqual(
+            timing["branch_observation_player_state_normalization_seconds"], 0.003
+        )
+        self.assertEqual(timing["branch_observation_state_annotation_count"], 5)
+        self.assertAlmostEqual(timing["branch_observation_state_annotation_seconds"], 0.0005)
+        self.assertAlmostEqual(
+            timing["branch_observation_state_normalization_raw_unattributed_seconds"], 0.0
+        )
+        self.assertAlmostEqual(
+            timing["branch_observation_state_normalization_unattributed_seconds"], 0.0
+        )
         self.assertEqual(timing["branch_observation_encoding_count"], 5)
         self.assertAlmostEqual(timing["branch_observation_encoding_seconds"], 0.0075)
         self.assertEqual(timing["branch_belief_overlay_projection_count"], 5)

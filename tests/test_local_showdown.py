@@ -1640,6 +1640,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         )
         for key in (
             "branch_observation_state_normalization_count",
+            "branch_observation_incremental_sync_count",
+            "branch_observation_replay_snapshot_count",
+            "branch_observation_player_state_normalization_count",
+            "branch_observation_state_annotation_count",
             "branch_observation_encoding_count",
             "branch_belief_overlay_projection_count",
         ):
@@ -1652,6 +1656,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             "branch_result_projection_seconds",
             "branch_observation_projection_seconds",
             "branch_observation_state_normalization_seconds",
+            "branch_observation_incremental_sync_seconds",
+            "branch_observation_replay_snapshot_seconds",
+            "branch_observation_player_state_normalization_seconds",
+            "branch_observation_state_annotation_seconds",
             "branch_observation_encoding_seconds",
             "branch_belief_overlay_projection_seconds",
         ):
