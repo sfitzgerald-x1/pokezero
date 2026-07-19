@@ -105,7 +105,11 @@ def belief_world_sampling_profile(
         return None
 
     revealed_candidate_counts = tuple(
-        max(1, len(pokemon.candidate_variants))
+        _public_revealed_variant_count(
+            pokemon,
+            set_source=set_source,
+            format_id=context.format_id,
+        )
         for pokemon in view.opponent_pokemon
     )
     revealed_combination_count = math.prod(revealed_candidate_counts) if revealed_candidate_counts else 1
@@ -126,6 +130,28 @@ def belief_world_sampling_profile(
     )
 
 
+def _public_revealed_variant_count(
+    pokemon: RevealedPokemonBelief,
+    *,
+    set_source: Gen3RandbatSource | None,
+    format_id: str,
+) -> int:
+    """Count the same public catalog worlds that the V2 planner can sample."""
+
+    if set_source is None:
+        return max(1, len(pokemon.candidate_variants))
+    return max(
+        1,
+        len(
+            _canonical_revealed_variant_payloads(
+                pokemon,
+                set_source=set_source,
+                format_id=format_id,
+            )
+        ),
+    )
+
+
 def gen3_randbat_belief_start_override_planner(
     set_source: Gen3RandbatSource,
     *,
@@ -136,8 +162,10 @@ def gen3_randbat_belief_start_override_planner(
 
     The returned planner is hidden-info safe: it reads the acting player's observation metadata,
     which contains the player's own request-known team plus public belief about the opponent. It
-    does not inspect the opponent's private observation or legal-action mask. Each sampled world is
-    shared across all candidate root actions for its scenario.
+    does not inspect the opponent's private observation or legal-action mask. It rederives each
+    revealed mon from the current catalog and public witness facts, so stale serialized candidate
+    payloads cannot make an otherwise legal world unavailable. Each sampled world is shared across
+    all candidate root actions for its scenario.
     """
 
     if team_size <= 0:
@@ -159,6 +187,7 @@ def gen3_randbat_belief_start_override_planner(
             set_source=set_source,
             rng=rng,
             team_size=team_size,
+            canonicalize_revealed_variants=True,
         )
         if sampled_override is None:
             reason = failure_reason or "unknown reason"
@@ -336,6 +365,7 @@ def _gen3_randbat_belief_start_override_result(
     rng: random.Random,
     team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
     witnessed_fallback: bool = False,
+    canonicalize_revealed_variants: bool = False,
 ) -> tuple[BattleStartOverride | None, str | None]:
     """Return a sampled start override plus a public-data failure reason for diagnostics."""
 
@@ -372,6 +402,7 @@ def _gen3_randbat_belief_start_override_result(
         move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
         team_index_constraints=team_index_constraints,
         witnessed_fallback=witnessed_fallback,
+        canonicalize_revealed_variants=canonicalize_revealed_variants,
     )
     if opponent_team is None:
         return None, opponent_team_failure or "opponent belief could not be materialized"
@@ -943,6 +974,7 @@ def _opponent_team_from_belief_result(
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
     team_index_constraints: Mapping[str, int] | None = None,
     witnessed_fallback: bool = False,
+    canonicalize_revealed_variants: bool = False,
 ) -> tuple[tuple[FixturePokemon, ...] | None, str | None]:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
@@ -954,6 +986,7 @@ def _opponent_team_from_belief_result(
             rng=rng,
             move_slot_constraints=move_slot_constraints,
             witnessed_fallback=witnessed_fallback,
+            canonicalize_revealed_variants=canonicalize_revealed_variants,
         )
         if fixture is None:
             return None, f"opponent {belief.species} could not be sampled from public belief"
@@ -1038,18 +1071,30 @@ def _sample_revealed_opponent_fixture(
     rng: random.Random,
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
     witnessed_fallback: bool = False,
+    canonicalize_revealed_variants: bool = False,
 ) -> FixturePokemon | None:
-    variants = pokemon.candidate_variants
-    if not variants:
-        summary = set_source.summarize(
+    if canonicalize_revealed_variants:
+        # Candidate variants are serialized observation cache data and can be
+        # stale or incomplete. V2 Root-PUCT revalidates them against the local
+        # source and fails closed when public facts have no catalog-valid world.
+        variants = _canonical_revealed_variant_payloads(
+            pokemon,
+            set_source=set_source,
             format_id=format_id,
-            species=pokemon.species,
-            revealed_moves=pokemon.revealed_moves,
-            revealed_ability=pokemon.revealed_ability,
-            revealed_item=pokemon.revealed_item,
-            ruled_out_abilities=pokemon.ruled_out_abilities,
         )
-        variants = tuple(summary.candidate_variants) if summary is not None else ()
+    else:
+        variants = pokemon.candidate_variants
+        if not variants:
+            summary = set_source.summarize(
+                format_id=format_id,
+                species=pokemon.species,
+                revealed_moves=pokemon.revealed_moves,
+                revealed_ability=pokemon.revealed_ability,
+                revealed_item=None if pokemon.item_mutated else pokemon.revealed_item,
+                ruled_out_abilities=pokemon.ruled_out_abilities,
+                ruled_out_items=pokemon.ruled_out_items,
+            )
+            variants = tuple(summary.candidate_variants) if summary is not None else ()
     species_constraints = (move_slot_constraints or {}).get(_normalize_species_id(pokemon.species), {})
     if not variants:
         return (
@@ -1133,6 +1178,31 @@ def _sample_revealed_opponent_fixture(
         if witnessed_fallback
         else None
     )
+
+
+def _canonical_revealed_variant_payloads(
+    pokemon: RevealedPokemonBelief,
+    *,
+    set_source: Gen3RandbatSource,
+    format_id: str,
+) -> tuple[Mapping[str, Any], ...]:
+    """Return only source-valid variants consistent with public opponent facts."""
+
+    if not set_source.supports(format_id):
+        return ()
+    universe = set_source.universe_for(pokemon.species)
+    if universe is None:
+        return ()
+    variants = universe.filter_variants(
+        revealed_moves=pokemon.revealed_moves,
+        revealed_ability=pokemon.revealed_ability,
+        # Trick and Knock Off reveal the current item, not the RandBat
+        # assignment at battle start. The mutation itself remains public.
+        revealed_item=None if pokemon.item_mutated else pokemon.revealed_item,
+        ruled_out_abilities=pokemon.ruled_out_abilities,
+        ruled_out_items=pokemon.ruled_out_items,
+    )
+    return tuple(variant.to_summary() for variant in variants)
 
 
 def _witnessed_opponent_fixture(
@@ -1679,6 +1749,8 @@ def _revealed_pokemon_from_payload(payload: Any) -> RevealedPokemonBelief | None
         revealed_ability=_optional_text(payload.get("revealed_ability")),
         revealed_item=_optional_text(payload.get("revealed_item")),
         ruled_out_abilities=_moves_from_payload(payload.get("ruled_out_abilities")),
+        ruled_out_items=_moves_from_payload(payload.get("ruled_out_items")),
+        item_mutated=bool(payload.get("item_mutated")),
         candidate_set_count=_optional_int(payload.get("candidate_set_count")),
         uncertainty=_optional_float(payload.get("uncertainty"), default=1.0),
         possible_abilities=_moves_from_payload(payload.get("possible_abilities")),

@@ -218,6 +218,19 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(view.opponent_pokemon[0].species, "Xatu")
         self.assertEqual(view.opponent_pokemon[0].revealed_moves, ("Psychic",))
 
+    def test_parses_public_item_mutation_and_rule_out_evidence(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["item_mutated"] = True  # type: ignore[index]
+        opponent["ruled_out_items"] = ["Leftovers"]  # type: ignore[index]
+
+        view = player_belief_view_from_payload(metadata["belief_view"])
+
+        self.assertIsNotNone(view)
+        assert view is not None
+        self.assertTrue(view.opponent_pokemon[0].item_mutated)
+        self.assertEqual(view.opponent_pokemon[0].ruled_out_items, ("Leftovers",))
+
     def test_belief_world_sampling_profile_is_bounded_by_public_variant_combinations(self) -> None:
         metadata = _metadata()
         opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
@@ -372,6 +385,145 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         second = source()
         self.assertIsNotNone(first)
         self.assertIs(first, second)
+
+    def test_planner_rebuilds_stale_candidates_from_the_catalog(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        # Simulate stale serialized candidate data. The public move witness is
+        # compatible with the canonical Xatu catalog, so the planner must not
+        # reject the world or fabricate a cross-set move combination.
+        opponent["candidate_variants"] = [{"moves": []}]  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        override = source()
+        self.assertIn("Xatu", override.player_teams["p1"])
+        self.assertIn("psychic", override.player_teams["p1"].lower())
+        self.assertTrue(
+            "psychic,thunderwave,wish,protect" in override.player_teams["p1"]
+            or "psychic,calmmind,rest,hiddenpowerfire" in override.player_teams["p1"]
+        )
+
+    def test_planner_rebuilds_candidate_missing_catalog_level(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"][0].pop("level")  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        xatu = source().player_teams["p1"].split("]", maxsplit=1)[0]
+        self.assertTrue(xatu.endswith("|84|"))
+
+    def test_planner_does_not_treat_cached_candidate_subset_as_public_evidence(self) -> None:
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+        abilities = set()
+        for seed in range(16):
+            source = planner(
+                _context(_metadata()),
+                OpponentActionScenario(actions={"p1": 0}),
+                0,
+                random.Random(seed),
+            )
+            self.assertTrue(callable(source))
+            assert callable(source)
+            xatu = source().player_teams["p1"].split("]", maxsplit=1)[0]
+            abilities.add(xatu.split("|")[3])
+
+        self.assertEqual(abilities, {"Synchronize", "EarlyBird"})
+
+    def test_planner_world_budget_counts_all_catalog_valid_revealed_variants(self) -> None:
+        context = _context(_metadata())
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=1, world_sample_cap=4)
+
+        profile = belief_world_sampling_profile(
+            context,
+            sample_cap=4,
+            set_source=_source(),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.combination_count, 2)
+        self.assertEqual(profile.sample_count, 2)
+        self.assertEqual(planner.sample_count_for_context(context), 2)  # type: ignore[attr-defined]
+
+    def test_planner_preserves_public_ability_exclusions_when_rebuilding_candidates(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"] = [{"moves": []}]  # type: ignore[index]
+        opponent["ruled_out_abilities"] = ["Synchronize"]  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        override = source()
+        self.assertIn("EarlyBird", override.player_teams["p1"])
+        self.assertNotIn("Synchronize", override.player_teams["p1"])
+
+    def test_planner_uses_original_catalog_item_after_public_item_mutation(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"] = [{"moves": []}]  # type: ignore[index]
+        opponent["revealed_item"] = "Choice Band"  # type: ignore[index]
+        opponent["item_mutated"] = True  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        override = source()
+        xatu = override.player_teams["p1"].split("]", maxsplit=1)[0]
+        self.assertIn("Xatu", xatu)
+        self.assertNotIn("ChoiceBand", xatu)
+
+    def test_planner_fails_closed_when_public_item_rule_out_exhausts_catalog(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["candidate_variants"] = [{"moves": []}]  # type: ignore[index]
+        opponent["ruled_out_items"] = ["Leftovers"]  # type: ignore[index]
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        with self.assertRaisesRegex(ValueError, "could not be sampled from public belief"):
+            source()
 
     def test_planner_exposes_public_context_world_count_and_checksum(self) -> None:
         metadata = _metadata()
