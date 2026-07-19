@@ -185,14 +185,163 @@ Readings:
   TorchScript evaluator compiles and runs against the identical tree core
   (`search_batched_multi`). Priors remain uniform until the action-index →
   `MoveChoice` mapping lands (encoder stream).
-- **Per-outcome fold-state advance** (track B) is NOT yet available in Rust:
-  leaves are priced from engine state only (trivial eval) or template-stub
-  observations (model path). Root observations are deliberately NOT frozen
-  onto leaves. The encoder plugs in at the batch-row write in
-  `multiply_batched_core` and needs nothing from the tree beyond what
-  branches already carry (the per-outcome instruction/event list).
+- **Per-outcome fold-state advance** (track B): the instruction→event
+  mapping (`src/events.rs`, section below) renders each branch's engine
+  instruction list as protocol lines, and the Rust `FoldState` advances a
+  clone of the root fold state over them — per-outcome REAL history at
+  leaves (no freezing). The leaf pricing closure now receives a
+  `BranchSeam` (joint move pair + the branch's instruction list) alongside
+  the leaf state, so the in-crate encoder integration plugs in at the
+  batch-row write in `multiply_batched_core` with everything it needs;
+  leaves remain template-stub encoded until that integration (the NEXT PR).
 - Epistemic variance (belief worlds) stays a separate axis above this crate,
   aggregated at the root by the Python orchestration.
+
+## Instruction→event mapping (track B seam, `src/events.rs`)
+
+The engine's instruction list is an unlabeled state-delta stream: no line
+says which move produced an instruction, who moved first, or where the
+end-of-turn residual phase begins. The mapper recovers phase structure
+EXACTLY by re-running the engine's own public per-move generator
+(`generate_instructions_from_move`) and prefix-matching the branch: phase 1
+(first mover) must be a prefix, phase 2 (second mover, phase-1 list as
+`incoming`) must extend it, and the remaining tail is the end-of-turn
+segment. Generation is deterministic, so segmentation is exact; a branch
+that fails to segment is flagged `lossy` and rendered fold-safe, never
+silently mis-attributed. Python surface: `pokezero_search.branch_events(
+state, s1, s2, ctx_json, branch_on_damage, include_post_state)`; context is
+`{"p1": [display species in engine party order], "p2": [...], "turn": N}`
+(see `EngineWorld.party_species`).
+
+### Coverage (fold-consumed line classes)
+
+| Fold-consumed class | Rendered | Notes |
+|---|---|---|
+| `\|move\|` w/ target | ✅ | opponent-target explicit (+`[miss]`); self-target explicit on success, blank+`[still]` on failure (corpus-measured rule); Curse-by-non-Ghost self-target special case; `[from]lockedmove` continuations; Sleep Talk renders both lines with the called move recovered by candidate re-generation |
+| `\|switch\|/\|drag\|` | ✅ | display details from ctx; `[from] Baton Pass`; spikes chip `[from] Spikes`; drag branches render `\|drag\|` |
+| `\|cant\|` | ✅ | slp / frz / par / flinch / recharge / `ability: Truant` / `move: Taunt` |
+| `\|-damage\|/\|-heal\|/\|-sethp\|` | ✅ (sethp: n/a — engine models Pain Split as Damage+Heal) | cur/max from live engine HP (plain ASCII); recoil `[from] Recoil\|[of]`; drain `[from] drain`; Rest heal `[silent]`; crash `[from] <move>`; confusion self-hit `[from] confusion`; residual damage/heals carry best-effort `[from]` tags (windows are closed there, so tags are belt-and-braces) |
+| `\|faint\|` | ✅ | deferred to end of the move phase (real ordering: after recoil/drain lines) |
+| `\|-status\|` | ✅ | NONE→X transitions only; Rest `[from] move: Rest` |
+| `\|-boost\|/-unboost\|` | ✅ | move/intimidate boosts bare; end-of-turn (berry/ability) boosts `[from] item:`-tagged; capped boost moves emit the real 0-amount lines |
+| `\|-sidestart\|/-sideend\|` | ✅ | sets vs. expiry distinguished from counter state; Rapid Spin `[from]` |
+| `\|-weather\|` | ✅ | set / `[from] ability:`+`[of]` on switch-in / `[upkeep]` on decrement / `none` on dissipation |
+| `\|-prepare\|` | ✅ | charge volatiles (SolarBeam class) → move-name payload (fold `pending_charge`) |
+| `\|-crit\|` | ◐ | labeled by exact match against `calculate_both_damage_rolls`' collapsed crit value; NOT labelable on the KO-straddle branch (engine conflates kill-roll and crit) |
+| `\|-miss\|` | ◐ | inferred (empty delta + acc<100 + deterministic causes ruled out); merged with full-para / move-fail branches where deltas coincide (below) |
+| `\|-supereffective\|/-resisted\|/-immune\|` | ✅ | from the engine type chart on the mutated choice; suppressed for fixed-damage moves (real protocol rule); `-immune` covers type immunity, type-status immunity (Steel/psn etc.), and the modeled ability immunities (Levitate, Wonder Guard, absorb trio, Immunity, Insomnia/Vital Spirit, Limber, Water Veil, Magma Armor) |
+| `\|-hitcount\|` | ✅ | count of rendered hits (the engine collapses 2-5-hit moves to 3 — its model, rendered faithfully) |
+| `\|-activate\|` Protect/Sub, `\|-end\|` Sub, absorb `\|-heal/-immune [from] ability:` | ✅ | Blocked / hit-sub / broke-sub / Absorbed outcomes |
+| `\|-transform\|` | ✅ | single line; internals silent |
+| `\|turn\|/\|upkeep\|/blank` | ✅ | ply-shape aware: end-of-turn plies emit residuals+upkeep (+turn when no replacement pending); faint-replacement plies emit switch+turn; pivot follow-ups emit upkeep+turn with no residuals (the engine never runs pivot-turn residuals — its model) |
+
+Deliberately omitted (fold provably ignores them — `fold.rs process_line`):
+`|-singleturn|`, `|-curestatus|`, `|-fail|`, `|-ability|`, `|-enditem|`,
+`|-mustrecharge|`, `|-start|` (except absorb signatures), `|-anim|`,
+`|debug|`, chat/meta lines.
+
+### Insufficiency findings (instruction stream ↔ event stream)
+
+1. **The engine merges semantically distinct outcomes with identical
+   deltas** (`combine_duplicate_instructions`): a fully-paralyzed turn, a
+   missed move, and a failed move can be ONE branch. No mapper can split
+   them — the branch is rendered as the highest-probability cause
+   (deterministic causes first, then full-para over miss, fail over miss on
+   already-statused targets), and the residual mass is a documented,
+   measured ambiguity (the dominant class-(c) family below).
+2. **The KO-straddle branch conflates kill-roll and crit** (single branch
+   with combined probability): `|-crit|` is never emitted for it.
+3. **Sleep Talk's called move id is not in the delta**; it is recovered by
+   re-generating each `get_sleep_talk_choices` candidate and exact-matching
+   the tail — unique in practice; ambiguous matches flag `lossy`.
+4. **The engine has no turn counter**: `|turn|N` numbering is context
+   (`ctx.turn`) + ply-shape bookkeeping (`turn_completed` in the result).
+
+### Fidelity gate (scripts/fidelity_gate_events.py, 2026-07-18)
+
+For every same-seat row pair of the corpus v2 fold sidecar: construct the
+engine state from the recorded public payload + TRUE teams
+(`engine_world.battle_spec_from_payload`, no belief sampling), step the
+rounds between the boundaries with the joint actions the players actually
+took, select the enumerated branch consistent with the realized outcome
+(post-state actives/HP/status/boosts; HP tolerance scaled by the engine's
+damage-roll collapse; post-state ties resolved on the realized action
+order), advance the RECORDED row-n Rust fold state over the synthesized
+lines, apply row n+1's annotation overlay, and compare fold PRODUCTS
+(tokens + tendencies — the encoder-visible surface) against row n+1's
+recorded products. Classes: (a) byte-identical canonical JSON, (b) equal
+modulo documented equivalences (damage-roll floats within the collapse
+envelope), (c) real divergence.
+
+| corpus | boundaries | driven | (a) | (b) | (c) | skipped |
+|---|---|---|---|---|---|---|
+| golden-v2-scenarios | 270 | 183 | 77 (42%) | 87 (48%) | 19 (10%) | 87 |
+| golden-v2 (random) | 1008 | 775 | 378 (49%) | 291 (37%) | 106 (14%) | 233 |
+
+Class (c) decomposition (every case examined and attributed):
+
+- **merged no-op branches** (full-para vs miss vs fail; 2 scenario + ~34
+  random): insufficiency #1 — the realized minority outcome renders as the
+  majority one.
+- **move-line target minutiae** (~24 random): per-move `[still]`/target
+  blanking details of the real sim not fully replicated (affects
+  `defender_species` on failed/self-target moves only).
+- **`|-crit|` on KO-capped rolls** (~9 random): insufficiency #2.
+- **residual immunity classes** (~12 random): ability/clause immunities not
+  in the modeled set (e.g. Soundproof, sleep clause).
+- **ENGINE-MODEL deviations, not mapper defects** (fidelity findings for
+  track C): (i) fixed-damage special effects (Seismic Toss class,
+  `choice_special_effect`) IGNORE Protect — the engine deals damage through
+  it (16 scenario + 3 random class-c; the wish_boundary scenario hits it
+  every protect turn); (ii) a recharge is consumed by the engine during a
+  faint-replacement ply (one ply early vs. the real game); (iii) a pivot's
+  saved move never resolves after the replacement (known fail-soft,
+  belief_edge_case_matrix) — these also drive most `no_branch_match` skips
+  (baton_pass chains).
+
+Skips are counted, not hidden: world construction fail-closed reasons
+(encore/transform/request-state — `EngineWorldUnsupported`), and
+`no_branch_match` where no enumerated branch reproduces the realized
+post-state (dominated by the engine deviations above plus the documented
+world approximations: sleep/rest turn counts unknown publicly, 2-5-hit
+collapse to 3, screens-boundary damage).
+
+Regression gates: `cargo test` (events unit test: render + state
+restoration), `tests/test_instruction_event_mapping.py` (mapper contract +
+the END-TO-END LEAF DEMO: root fold state → branch → synthesized events →
+Rust fold advance → per-outcome products, hit/miss histories diverging),
+and `scripts/validate_corpus_v2.py --backend rust` unchanged
+(1028+290 boundaries byte-exact — the fold itself is untouched).
+
+Review hardening (PR #727 adversarial review, both LOWs landed):
+attacker-side damage renders through an attribution ladder — Rough Skin
+contact punishment `[from] ability: Rough Skin|[of]` (engine order: before
+recoil, exact-amount matched), Destiny Bond `[from] move: Destiny Bond`,
+recoil `[from] Recoil`, genuine self-costs (Substitute / Belly Drum /
+Curse / Pain Split) bare, anything unexplained bare + `lossy`
+(`unattributed_self_damage`) — a bare line charges the fold's
+`self_hp_cost`, so opponent-inflicted damage is never mis-read as a self
+cost; and an ambiguous Sleep Talk call is flagged `lossy` even on an empty
+delta (the never-mis-attribute invariant holds universally).
+
+### Forward caveats for the in-crate-encoder PR (flagged in review; NOT built here)
+
+1. **Nicknames.** Synthesized idents use display SPECIES (`p1a: Slaking`).
+   Correct for randbats/local games (no nicknames) and for fold semantics
+   (occupants come from switch DETAILS, which are species either way), but
+   a live root fold built from a nicknamed ladder game carries nickname
+   idents — the encoder integration must source idents from the live
+   battle's nickname map, or keep relying on the fold's details-based
+   occupant tracking and document ident mismatch as cosmetic.
+2. **Opponent HP base reconciliation.** A live root fold has consumed the
+   real stream's opponent HP as `cur/100` fractions, while the mapper
+   renders true-`cur/maxhp` from the (belief-sampled) engine world. The
+   fractions are consistent to ±1/200 rounding, but damage_fraction deltas
+   at leaves will be computed against the /100-derived `hp_fraction` carried
+   in the root state — fine numerically, INVISIBLE in the fidelity corpus
+   (it records exact HP throughout). The integration should either render
+   opponent conditions on a /100 base to match the live stream's
+   granularity, or accept and document the sub-percent mixed-base error.
 
 ## Review caveats (PR #721, non-blocking)
 

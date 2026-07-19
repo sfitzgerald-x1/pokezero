@@ -136,9 +136,21 @@ passes the row-pair harness byte-exact over ALL boundaries of both corpora
 `--backend compare-backends` rust-vs-python diff shows zero divergences), with
 the committed-sample chain test as the permanent no-Showdown gate; per-boundary
 clone+advance is ~9.8µs vs the Python reference's ~92µs (~9x; see
-docs/golden_corpus_notes.md "Rust backend"); remaining = the
-instruction->event mapping + native consumption of fold products by the
-in-crate encoder (tokens 23-150). D: crate model integration
+docs/golden_corpus_notes.md "Rust backend"); **instruction→event mapping
+LANDED** (`rust/pokezero-search/src/events.rs` + `branch_events` PyO3
+surface): per-outcome engine instruction lists render as protocol lines via
+engine re-generation phase segmentation, real-game fidelity gate over BOTH
+corpora (scripts/fidelity_gate_events.py: scenarios 77a/87b/19c of 183
+driven, random 378a/291b/106c of 775; every class-c case attributed —
+engine-merged no-op branches, KO-capped crit labels, and three ENGINE-model
+deviations incl. fixed-damage-through-Protect; see
+docs/crate_search_design.md "Instruction→event mapping"); the leaf pricing
+seam now carries the branch context (`BranchSeam`) at the
+`multiply_batched_core` row write and the end-to-end leaf flow (root fold →
+branch events → Rust advance → per-outcome products) is gated by
+tests/test_instruction_event_mapping.py; remaining = native consumption of
+fold products by the in-crate encoder (tokens 23-150) at that seam.
+D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); remaining = encoder hand-off (track B) +
