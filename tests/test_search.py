@@ -318,6 +318,36 @@ class TimedSnapshotValueBranchEnv(SnapshotValueBranchEnv):
         super().restore(snapshot)
 
 
+class OpponentConditionalTerminalValueBranchEnv(TimedSnapshotValueBranchEnv):
+    """Make one sampled opponent world terminate while another needs value leaves."""
+
+    def __init__(self, terminal_winners: dict[tuple[int, int], str | None]) -> None:
+        super().__init__()
+        self.terminal_winners = terminal_winners
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.all_step_calls.append(dict(actions))
+        p1_action = int(actions["p1"])
+        p2_action = int(actions["p2"])
+        winner = self.terminal_winners.get((p2_action, p1_action))
+        if (p2_action, p1_action) in self.terminal_winners:
+            self._terminal = TerminalState(winner=winner, turn_count=len(self.all_step_calls))
+            self._requested = ()
+            return StepResult(
+                observations={},
+                rewards={"p1": 1.0 if winner == "p1" else -1.0 if winner == "p2" else 0.0},
+                terminal=self._terminal,
+                requested_players=(),
+            )
+        self._requested = ("p1", "p2")
+        return StepResult(
+            observations={"p1": _observation(p1_action), "p2": _observation(0)},
+            rewards={"p1": 0.0, "p2": 0.0},
+            terminal=None,
+            requested_players=self._requested,
+        )
+
+
 class DirectMaterializationValueBranchEnv(SnapshotValueBranchEnv):
     def __init__(
         self,
@@ -914,6 +944,71 @@ class FlatBranchSearchTest(unittest.TestCase):
             ],
         )
         self.assertEqual(sum(result.timing.value_evaluation_count for result in results), 10)
+
+    def test_puct_branch_search_group_batches_only_nonterminal_adaptive_leaves(self) -> None:
+        trajectory = BattleTrajectory(battle_id="batch-adaptive-terminals", format_id="gen3randombattle", seed=79)
+        batch_histories = []
+
+        def batch_values(histories):
+            batch_histories.append(histories)
+            return tuple(float(_only_legal_action(history[-1])) for history in histories)
+
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+        }
+        requests = (
+            PUCTBranchSearchRequest(opponent_actions={"p2": 0}),
+            PUCTBranchSearchRequest(opponent_actions={"p2": 1}),
+        )
+        terminal_winners = {(0, 0): "p1", (0, 1): "p2"}
+        reference = tuple(
+            puct_branch_search(
+                env=OpponentConditionalTerminalValueBranchEnv(terminal_winners),
+                opponent_actions=request.opponent_actions,
+                value_fn=lambda history: float(_only_legal_action(history[-1])),
+                **common_kwargs,
+            )
+            for request in requests
+        )
+
+        results = puct_branch_search_group(
+            env=OpponentConditionalTerminalValueBranchEnv(terminal_winners),
+            requests=requests,
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("all nonterminal leaves must batch")),
+            value_batch_fn=batch_values,
+            batch_adaptive_values=True,
+            **common_kwargs,
+        )
+
+        # The p2=0 world backs up terminal leaves directly. Only p2=1 leaves
+        # enter the initial or adaptive evaluator batches.
+        self.assertEqual([len(histories) for histories in batch_histories], [2, 1, 1, 1])
+        self.assertEqual(
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in results
+            ],
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in reference
+            ],
+        )
+        self.assertEqual([result.total_visits for result in results], [5, 5])
+        self.assertEqual([result.timing.value_evaluation_count for result in results], [0, 5])
 
     def test_puct_branch_search_group_batches_adaptive_leaves_with_per_world_budgets(self) -> None:
         trajectory = BattleTrajectory(battle_id="batch-adaptive-budgets", format_id="gen3randombattle", seed=79)
