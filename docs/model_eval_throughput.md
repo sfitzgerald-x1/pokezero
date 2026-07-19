@@ -302,6 +302,11 @@ Exact experiment (one job, <30 GPU-minutes):
   run; add `--batch-sizes ...,2048` for m50 fp16 — tensor-core saturation
   sits higher than MPS's). CUDA artifacts for the crate come from
   `scripts/export_model.py --device cuda --formats ts` on the same box.
+  (Note: re-exporting after the dtype-cast fix in this change produces a
+  byte-DIFFERENT TorchScript artifact — the delta is only `.debug_pkl`
+  source-line metadata and the derived serialization id; weights and the
+  executable graph are byte-identical and parity stays 0.0, so existing
+  artifacts do not functionally require regeneration.)
 - **Image:** the standard training image already used by this repo's cluster
   jobs (it carries the matching torch); no new image work.
 - **Resource ask:** 1 GPU, 8 CPU, 32Gi, runAsJob with `ttlSecondsAfterFinished:
