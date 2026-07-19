@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import queue
 import shutil
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 from typing import Any
 
+import pokezero.local_showdown as local_showdown_module
 from pokezero.local_showdown import (
     DEFAULT_SHOWDOWN_ROOT,
     LocalShowdownConfig,
@@ -264,6 +266,71 @@ class LocalShowdownRequestTest(unittest.TestCase):
 
         self.assertIsNone(output_queue.get_nowait())
         self.assertEqual(stderr_lines, [])
+
+
+class BranchObservationTimingTest(unittest.TestCase):
+    def test_state_normalization_substages_have_exact_timing_boundaries(self) -> None:
+        env = object.__new__(LocalShowdownEnv)
+        replay = object()
+        state = object()
+        belief_engine = object()
+        env._parser = mock.Mock()
+        env.config = SimpleNamespace(observation_spec=V2_1_REPLAY_OBSERVATION_SPEC)
+        env._observation_format_id = "gen3randombattle"
+        env._belief_engine = belief_engine
+        env._root_puct_branch_observation_incremental_sync_seconds = 0.0
+        env._root_puct_branch_observation_incremental_sync_count = 0
+        env._root_puct_branch_observation_replay_snapshot_seconds = 0.0
+        env._root_puct_branch_observation_replay_snapshot_count = 0
+        env._root_puct_branch_observation_player_state_normalization_seconds = 0.0
+        env._root_puct_branch_observation_player_state_normalization_count = 0
+        env._root_puct_branch_observation_state_annotation_seconds = 0.0
+        env._root_puct_branch_observation_state_annotation_count = 0
+
+        def timed_sync() -> None:
+            local_showdown_module.time.perf_counter()
+
+        def timed_snapshot() -> object:
+            local_showdown_module.time.perf_counter()
+            return replay
+
+        def timed_normalize(*args: object, **kwargs: object) -> object:
+            local_showdown_module.time.perf_counter()
+            return state
+
+        def timed_tracker(_: str) -> None:
+            local_showdown_module.time.perf_counter()
+            return None
+
+        env._sync_incremental_state = timed_sync  # type: ignore[method-assign]
+        env._parser.snapshot.side_effect = timed_snapshot
+        env._tier2_tracker_for = timed_tracker  # type: ignore[method-assign]
+        env._investment_tracker_for = timed_tracker  # type: ignore[method-assign]
+
+        with (
+            mock.patch(
+                "pokezero.local_showdown.time.perf_counter", side_effect=range(13)
+            ),
+            mock.patch("pokezero.local_showdown.normalize_for_player", side_effect=timed_normalize) as normalizer,
+        ):
+            self.assertIs(env._state_for_player("p1", root_puct_branch_observation=True), state)
+
+        normalizer.assert_called_once_with(
+            replay,
+            player_id="p1",
+            configured_showdown_slot="p1",
+            format_id="gen3randombattle",
+            belief_engine=belief_engine,
+            include_turn_merged=False,
+        )
+        self.assertEqual(env._root_puct_branch_observation_incremental_sync_seconds, 2.0)
+        self.assertEqual(env._root_puct_branch_observation_replay_snapshot_seconds, 2.0)
+        self.assertEqual(env._root_puct_branch_observation_player_state_normalization_seconds, 2.0)
+        self.assertEqual(env._root_puct_branch_observation_state_annotation_seconds, 3.0)
+        self.assertEqual(env._root_puct_branch_observation_incremental_sync_count, 1)
+        self.assertEqual(env._root_puct_branch_observation_replay_snapshot_count, 1)
+        self.assertEqual(env._root_puct_branch_observation_player_state_normalization_count, 1)
+        self.assertEqual(env._root_puct_branch_observation_state_annotation_count, 1)
 
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
@@ -1664,23 +1731,6 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             "branch_belief_overlay_projection_seconds",
         ):
             self.assertGreaterEqual(after_fused_branch[key] - before_fused_branch[key], 0.0)
-        nested_state_normalization_seconds = sum(
-            after_fused_branch[key] - before_fused_branch[key]
-            for key in (
-                "branch_observation_incremental_sync_seconds",
-                "branch_observation_replay_snapshot_seconds",
-                "branch_observation_player_state_normalization_seconds",
-                "branch_observation_state_annotation_seconds",
-            )
-        )
-        parent_state_normalization_seconds = (
-            after_fused_branch["branch_observation_state_normalization_seconds"]
-            - before_fused_branch["branch_observation_state_normalization_seconds"]
-        )
-        self.assertGreaterEqual(
-            parent_state_normalization_seconds + 1e-9,
-            nested_state_normalization_seconds,
-        )
 
     def test_search_snapshot_fast_path_reuses_choices_and_limits_zero_rollout_view(self) -> None:
         config = integration_config()
