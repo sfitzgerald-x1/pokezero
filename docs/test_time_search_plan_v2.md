@@ -1,6 +1,6 @@
 # Test-time search: working plan v2 (lean)
 
-Status: 2026-07-18. Successor to `test_time_search_plan.md` (v1, now closed —
+Status: 2026-07-19. Successor to `test_time_search_plan.md` (v1, now closed —
 see its Disposition section for what completed, what was descoped, and what
 remains undone). v1's ceremony — frozen plans, provenance gating,
 audit preconditions, reserved-seed choreography — is retired for everyday
@@ -39,19 +39,25 @@ experiment with its own paired evaluation.
   within each sampled world, although already-selected leaves can share a
   cross-world value batch. "Deeper search"
   today means more root visits, scenarios, and longer tails — not depth.
-- **Fallback rate measured (W1): 19.4% of decisions**, dominated by
-  missing_sampled_world (59% of failures); first fix wave (force-switch
+- **Fallback baseline (pre-W5): 19.4% of decisions**, dominated by
+  missing_sampled_world (59% of failures); the first fix wave (force-switch
   screening, reserve candidates, world-sampling retries) brought live reads to
-  ~15.3%. Diagnosis is complete; taxonomy work is closed as a workstream.
-- **Search cost is scale-independent (W4): ~5–6.5 visits/sec at BOTH 50M and
-  200M** — H4 (NN-eval-bound) is refuted. No 2s budget exists at any scale
-  today; only extra-{0,24} fit a ~10s envelope (docs/w4_scale_cost_preliminary.md).
-- **Root cause of both, identified in code**: branch evaluation resets the env
-  and replays the recorded prefix from the battle root per visit
-  (replay_branching.py — its own header calls this a paused-search-era
-  placeholder). O(game-length) reconstruction per visit is the latency floor,
-  and replay divergence *is* the missing_sampled_world fallback class. One
-  mechanism, both symptoms.
+  ~15.3%. A bounded direct-materialization diagnostic later observed 1 fallback
+  in 61 decisions (1.6%), but that short read is not a replacement for the W1
+  baseline. Diagnosis is complete; taxonomy work is closed as a workstream.
+- **Pre-W5 scale-cost baseline (W4): ~5–6.5 visits/sec at BOTH 50M and 200M**
+  refuted H4 (NN-eval-bound) on the former replay-from-root path. Its conclusion
+  that no 2s budget existed was valid for that implementation, but is not a
+  current serving claim after W5's direct-materialization redesign. W2 must
+  refresh the budget curve on the new primary path before selecting a budget
+  (docs/w4_scale_cost_preliminary.md).
+- **Former root cause, removed from the primary path (W5):** branch evaluation
+  used to reset the env and replay the recorded prefix from the battle root per
+  visit (the paused-search-era placeholder in `replay_branching.py`). Direct
+  state construction now produces zero prefix replays in bounded telemetry. The
+  remaining measured branch bottleneck is player-view construction (2.61s per
+  searched decision); W5 is splitting it into normalization, encoding, and
+  belief-overlay work before selecting the next optimization.
 - Value-leaf calibration (Step 0) is a repeatable job. The 1M frozen isotonic
   leaf: Pearson 0.503, sign 0.758, ECE 0.063 — with a known weak late-game
   slice (phase ECE 0.089/0.054/0.136). Timing and hazard artifacts exist; no
