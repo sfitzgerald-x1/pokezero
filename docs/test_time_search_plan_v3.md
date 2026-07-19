@@ -69,10 +69,24 @@ below), not inherited as an assumption.
    Worlds are constructed ONLY from public information plus belief-sampled
    hypotheses — never from the live battle's hidden state. The P-1
    anti-leakage checksum gate must pass unchanged.
-2. **Encoder contract.** Input: (poke-engine state, instruction list since
-   the last decision). Output: a v2.2 observation **bit-identical** to what
-   the production protocol-stream encoder emits for the same position.
-   Identity is defined by the golden corpus (below), not by code review.
+2. **Encoder contract (revised 2026-07-18, owner-aligned).** The unit of
+   correctness is the incremental **fold-state advance**, not a from-scratch
+   encode: `advance(fold_state, events) -> (fold_state', transition_tokens')`
+   where the fold state is a first-class serializable struct carrying
+   everything cumulative the production encoder holds across decisions —
+   the transition-token buffer AND the raw tendency counters (counts, not
+   the normalized values the observation exposes), plus any other running
+   state. Rationale: at search time the root's tokens already exist (real
+   boundary); every branch shares the root prefix and appends only its own
+   simulated events. Nothing in production ever folds a full game stream
+   from scratch. NO FREEZING of history-derived columns at search leaves:
+   a leaf whose transition tokens show simulated turns that its tendency
+   columns ignore is internally inconsistent — an out-of-distribution input
+   the model never saw in training (owner decision; early-game tendency
+   denominators are small enough that even 3 turns shift them materially).
+   Boundary-state tokens (0-22) keep the original bit-identity contract —
+   already met (PR #710). Identity is defined by the golden corpus, not by
+   code review.
 
 ## Tracks (parallel; only meet at integration)
 
@@ -92,6 +106,17 @@ Track C reports first by design — it is the go/no-go gate on poke-engine's
 gen3 accuracy. If it fails badly, A and B pivot before they are deep. (One
 gen3 bug is already known and patched locally: Rest/Sleep Talk PP
 underflow.)
+
+**Status ledger (2026-07-18 EOD):** A COMPLETE (world constructor + four
+edge-case waves — Transform, Shedinja HP, recharge, Trick, Truant, Encore,
+Baton Pass boundary; engine-search fallback 0.0% with three-tier loud
+alerting; see docs/belief_edge_case_matrix.md). C COMPLETE for waves 1-2
+(one-turn 15/15 on the patched build; multi-turn 6/6; tier-2 real-game
+sweep still owes the per-source matcher). B: boundary tokens 0-22 bit-exact
+in Rust (PR #710); remaining = schema v2 + the fold-state advance + the
+instruction->event mapping. D: pending the crate model integration
+(LeafEval batching redesign, tch-rs, per-device TorchScript artifacts).
+Speed POC complete; scenario corpus suite complete.
 
 ## The golden corpus (track B's definition of done)
 
@@ -123,6 +148,19 @@ residual domain-shift risk being accepted.
 
 Corpus generation does not need track A: convert positions from real game
 transcripts via foul-play's existing helpers.
+
+**Schema v2 (decided 2026-07-18):** v1 rows cannot validate history-derived
+content (transition tokens 23-150, tendency aggregates) — the stored surface
+is a boundary snapshot, and even the production encoder cannot reproduce
+those cells from it (PR #710's phase-1 finding). v2 adds, per row: the
+exported **encoder fold state** at the previous same-seat decision plus the
+**inter-decision event slice** (public events since that decision; filter
+`|t:|` wall-clock lines for byte-determinism). The validation contract
+becomes the advance operation itself, checked row-pair by row-pair —
+exactly the operation search executes. This supersedes the earlier
+full-stream + prefix-index proposal, which would have validated an
+operation nothing runs. Prerequisite probe: confirm the production fold is
+(state + slice)-closed and the state cleanly exportable from the parser.
 
 ## Validation gates (right-sized per the 2026-07-17 owner directive)
 
@@ -164,6 +202,31 @@ regardless. The endgame is therefore NOT an upstream fork but our own
 - implements the v2.2 encoder ONCE, in Rust, exposed to Python via PyO3 so
   the golden corpus validates it bit-exactly — this becomes track B's
   deliverable, replacing a Python encoder that would need a Rust rewrite.
+
+**Search-tree contract (owner-aligned 2026-07-18).** The value head
+outputs win probability, so by the law of total expectation the optimal
+policy maximizes plain expected value — no risk adjustment is ever correct
+on top of it. Variance is handled structurally, in three places:
+
+1. **Chance nodes are explicit and exact.** `generate_instructions` returns
+   the enumerated branch distribution with exact probabilities (2-8
+   branches/joint action). Decision nodes run PUCT over our actions; each
+   joint-action edge resolves by exact expectation over the enumerated
+   branches, not sampling — strictly lower estimator variance at equal
+   budget on small supports. Sampling only past a depth/branch-product
+   cutoff.
+2. **Per-outcome fold-state advance.** Each chance-child advances its OWN
+   copy of the fold state with that branch's events (the crit branch's
+   history shows the crit). Shared/frozen history across outcomes is the
+   same internal inconsistency rejected above.
+3. **Lossy spots, mitigated:** the engine collapses damage rolls to a
+   representative per branch — enable damage branching at plies 1-2
+   (matching the engine's own MCTS policy) and split explicitly when the
+   exact roll list straddles a KO/berry/Substitute threshold. Epistemic
+   variance (hidden info -> belief worlds) stays a SEPARATE axis,
+   aggregated at the root (likelihood-weighted eventually); the leaf value
+   head absorbs all variance beyond the horizon — the thing it was trained
+   on.
 
 Interim (no new machinery): the Python engine loop + shared GPU inference
 service clears >10³ model-priced evals/sec for throughput work (self-play
