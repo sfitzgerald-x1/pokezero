@@ -9,6 +9,9 @@ dist/
 runs/
 checkpoints/curated/
 .venv-analysis/
+# model-export artifacts (scripts/export_model.py --out-dir exports/): 40MB
+# TorchScript/ONNX traces + synthetic checkpoints, regenerated on demand
+exports/
 
 
 # engine-swap (native search crate): vendored engine source is fetched by

@@ -125,8 +125,11 @@ alerting; see docs/belief_edge_case_matrix.md). C COMPLETE for waves 1-2
 (one-turn 15/15 on the patched build; multi-turn 6/6; tier-2 real-game
 sweep still owes the per-source matcher). B: boundary tokens 0-22 bit-exact
 in Rust (PR #710); remaining = schema v2 + the fold-state advance + the
-instruction->event mapping. D: pending the crate model integration
-(LeafEval batching redesign, tch-rs, per-device TorchScript artifacts).
+instruction->event mapping. D: crate model integration
+LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
+batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
+docs/crate_model_integration.md); remaining = encoder hand-off (track B) +
+prior/action mapping + `search.py` integration.
 Speed POC complete; scenario corpus suite complete.
 
 ## The golden corpus (track B's definition of done)

@@ -1,5 +1,10 @@
 # Model export + native-inference throughput (engine-swap stream S2)
 
+> Follow-up landed: the recommended tch-rs path is now implemented in the
+> crate — in-crate TorchScript leaf evaluation, parity gate (bit-exact), and
+> model-in-the-loop batched-search benches live in
+> [`crate_model_integration.md`](crate_model_integration.md).
+
 Proves the export path the native search crate depends on
 (docs/test_time_search_plan_v3.md, "Integration endgame": TorchScript via
 tch-rs or ONNX via onnxruntime) and prices what each runtime buys over the

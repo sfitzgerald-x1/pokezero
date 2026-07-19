@@ -9,6 +9,8 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod encoder;
+#[cfg(feature = "model")]
+pub mod model;
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -336,8 +338,12 @@ fn puct_search(state_str: &str, iterations: usize, c_puct: f32, seed: u64) -> Py
 fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("ENGINE_FEATURES", "gen3 (residual-order patched)")?;
+    // True when the crate was built with `--features model` (tch-rs linked).
+    m.add("MODEL_FEATURE_ENABLED", cfg!(feature = "model"))?;
     m.add_function(wrap_pyfunction!(bench_apply_reverse, m)?)?;
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    #[cfg(feature = "model")]
+    m.add_class::<model::NativeLeafModel>()?;
     Ok(())
 }
