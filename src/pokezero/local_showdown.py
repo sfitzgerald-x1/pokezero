@@ -185,6 +185,21 @@ class LocalShowdownConfig:
 
 
 @dataclass(frozen=True)
+class SearchSnapshotAnnotationCache:
+    """Branch-point annotation state for a determinized search snapshot.
+
+    Root-PUCT visits restore the same sampled world many times. These trackers have
+    already folded its public prefix while building the search-choice cache, so each
+    visit starts from an independent clone and only consumes its branch suffix. The
+    cached tracker instances are never mutated after capture. Generic simulator
+    snapshots deliberately do not carry this search-only cache.
+    """
+
+    tier2_trackers: Mapping[PlayerId, Tier2LiveTracker] = field(default_factory=dict)
+    investment_trackers: Mapping[PlayerId, InvestmentLiveTracker] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class LocalShowdownSnapshot:
     """Restorable simulator plus local public-state snapshot for a live bridge battle."""
 
@@ -205,6 +220,10 @@ class LocalShowdownSnapshot:
     # world used for the branch. They avoid rebuilding public player state for
     # every repeated Root-PUCT visit without exposing data outside that world.
     search_choice_cache: Mapping[PlayerId, Mapping[int, str]] = field(default_factory=dict)
+    # Incremental public-evidence trackers paired with ``search_choice_cache``.
+    # Kept search-only so ordinary ``snapshot``/``restore`` behavior remains a
+    # from-scratch tracker rebuild.
+    search_annotation_cache: SearchSnapshotAnnotationCache | None = None
 
 
 @dataclass(frozen=True)
@@ -669,8 +688,13 @@ class LocalShowdownEnv:
         # the shell to the exact paired snapshot so creating a search handle is
         # observationally side-effect-free for any caller that keeps using it.
         search_choice_cache = self._search_choice_cache()
+        search_annotation_cache = self._search_annotation_cache()
         self._restore_local_snapshot_state(snapshot)
-        return replace(snapshot, search_choice_cache=search_choice_cache)
+        return replace(
+            snapshot,
+            search_choice_cache=search_choice_cache,
+            search_annotation_cache=search_annotation_cache,
+        )
 
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
         """Restore a snapshot into the current live bridge battle shell.
@@ -845,8 +869,6 @@ class LocalShowdownEnv:
             player: [_json_clone_mapping(request) for request in snapshot.request_history.get(player, ())]
             for player in PLAYER_IDS
         }
-        self._tier2_trackers = {}
-        self._investment_trackers = {}
         self._latest_turn = snapshot.latest_turn
         self._terminal = snapshot.terminal
         self._last_step_had_error = False
@@ -854,6 +876,20 @@ class LocalShowdownEnv:
         self._belief_engine = snapshot.belief_engine.clone()
         self._parsed_line_count = len(self._lines)
         self._belief_fed_count = len(snapshot.replay.public_events)
+        annotation_cache = snapshot.search_annotation_cache
+        if annotation_cache is None:
+            self._tier2_trackers = {}
+            self._investment_trackers = {}
+        else:
+            # The cache is a branch point: every restore gets fresh mutable
+            # trackers so sibling Root-PUCT visits can only add their own suffix.
+            self._tier2_trackers = {
+                player: tracker.clone() for player, tracker in annotation_cache.tier2_trackers.items()
+            }
+            self._investment_trackers = {
+                player: tracker.clone()
+                for player, tracker in annotation_cache.investment_trackers.items()
+            }
 
     def reseed_simulator_rng(self, seed: int) -> None:
         """Reset Showdown's battle PRNG at the current simulator state."""
@@ -908,6 +944,18 @@ class LocalShowdownEnv:
                 if state.legal_action_mask[action_index]
             }
         return cache
+
+    def _search_annotation_cache(self) -> SearchSnapshotAnnotationCache:
+        """Freeze the current public-prefix trackers for repeated search restores."""
+
+        return SearchSnapshotAnnotationCache(
+            tier2_trackers={
+                player: tracker.clone() for player, tracker in self._tier2_trackers.items()
+            },
+            investment_trackers={
+                player: tracker.clone() for player, tracker in self._investment_trackers.items()
+            },
+        )
 
     def _cached_search_choices(
         self,

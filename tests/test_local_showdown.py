@@ -1793,6 +1793,61 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(set(result.observations), {"p1"})
         self.assertEqual(result.requested_players, ("p1", "p2"))
 
+    def test_search_snapshot_restores_independent_annotation_trackers(self) -> None:
+        config = integration_config()
+        assert config is not None
+        config = replace(
+            config,
+            set_belief_source=True,
+            feature_masks=ObservationFeatureMasks(tier2_investment=True),
+        )
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=23, start_override=start_override)
+            snapshot = env.snapshot_for_search()
+            annotation_cache = snapshot.search_annotation_cache
+            self.assertIsNotNone(annotation_cache)
+            assert annotation_cache is not None
+            self.assertEqual(set(annotation_cache.tier2_trackers), {"p1", "p2"})
+            self.assertEqual(set(annotation_cache.investment_trackers), {"p1", "p2"})
+
+            first_result = env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 1})
+            self.assertIsNot(env._tier2_trackers["p1"], annotation_cache.tier2_trackers["p1"])
+            self.assertIsNot(
+                env._investment_trackers["p1"], annotation_cache.investment_trackers["p1"]
+            )
+            self.assertGreater(
+                env._tier2_trackers["p1"]._fold._processed,
+                annotation_cache.tier2_trackers["p1"]._fold._processed,
+            )
+
+            env.restore_search_snapshot(snapshot)
+            self.assertIsNot(env._tier2_trackers["p1"], annotation_cache.tier2_trackers["p1"])
+            self.assertIsNot(
+                env._investment_trackers["p1"], annotation_cache.investment_trackers["p1"]
+            )
+            self.assertEqual(
+                env._tier2_trackers["p1"]._assessed_until,
+                annotation_cache.tier2_trackers["p1"]._assessed_until,
+            )
+            self.assertEqual(
+                env._investment_trackers["p1"]._assessed_until,
+                annotation_cache.investment_trackers["p1"]._assessed_until,
+            )
+            second_result = env.step({"p1": 0, "p2": 1})
+
+        self.assertEqual(first_result.observations, second_result.observations)
+
     def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
         config = integration_config()
         assert config is not None
