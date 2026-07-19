@@ -358,5 +358,37 @@ class RustCommittedSampleFoldChainTest(unittest.TestCase):
         self.assertGreater(report.pair_validations, 0)
 
 
+@unittest.skipIf(not _rust_fold_available(), "pokezero_search.FoldState not installed")
+class RustFoldNanHpClampTest(unittest.TestCase):
+    """LOW-2 (PR #724 review): a literal-NaN HP field must clamp exactly like
+    the Python reference's ``max(0.0, min(1.0, v))`` (NaN/+inf -> 1.0,
+    -inf -> 0.0) and the resulting payloads must stay JSON-serializable with
+    ``allow_nan=False`` — the guard for the future in-crate encoder, which
+    consumes products natively with no JSON gate in the path."""
+
+    NAN_SLICE = [
+        "|switch|p1a: Snorlax|Snorlax, L91|nan/100",
+        "|switch|p2a: Zapdos|Zapdos, L77|inf/inf",
+        "|turn|1",
+    ]
+
+    def test_nan_hp_matches_reference_and_stays_serializable(self) -> None:
+        import pokezero_search
+
+        reference, _ = FoldState.initial(perspective_slot="p1").advance(self.NAN_SLICE)
+        rust = pokezero_search.FoldState.initial("p1")
+        rust.advance_in_place(list(self.NAN_SLICE))
+
+        rust_payload = rust.to_payload()
+        self.assertEqual(rust_payload["hp_fraction"], {"p1": 1.0, "p2": 1.0})
+        for surface in (rust_payload, rust.products_payload()):
+            canonical = json.dumps(surface, sort_keys=True, allow_nan=False)
+            self.assertNotIn("NaN", canonical)
+        self.assertEqual(
+            json.dumps(rust_payload, sort_keys=True, allow_nan=False),
+            json.dumps(reference.to_payload(), sort_keys=True, allow_nan=False),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

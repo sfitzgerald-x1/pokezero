@@ -157,6 +157,23 @@ wheel, like the encoder gate). Rebuild the wheel with
 `scripts/build_search_crate_model.sh` (keeps the `model` feature) or plain
 `maturin build --release` from rust/pokezero-search.
 
+**Input contract (matters most for the upcoming instruction→event mapping):**
+the fold advance assumes well-formed Showdown protocol with ASCII-integer
+numeric fields (HP `155/307`, `|turn|N`, `|-hitcount|...|N`). Inside that
+domain rust and python-reference are byte-exact (corpus-proven; the PR #724
+adversarial review's ~42k-slice differential fuzz found zero
+protocol-plausible divergences). Outside it there is a documented
+both-succeed-different class on malformed numeric literals: Python's
+`float()`/`int()` accept underscore separators and non-ASCII unicode digits
+(`float("1_0") == 10.0`, `int("٣") == 3`) where Rust's `str::parse` rejects
+them — affecting the HP-fraction, `|turn|`, and `-hitcount` parses. Such
+literals are unreachable from engine-emitted protocol; whoever builds the
+instruction→event mapping must synthesize plain ASCII integers or the two
+implementations may silently disagree. Literal `nan`/`inf` HP fields (both
+languages parse them) follow Python's clamp exactly — NaN/+inf → 1.0,
+-inf → 0.0, kept finite for native product consumption — guarded by
+`RustFoldNanHpClampTest` and the crate's `fold::tests`.
+
 Perf (`scripts/bench_fold_advance.py`, golden-v2's 1028 real boundary cases,
 mean slice 9.6 lines, best of 5 passes): rust `clone_state()+advance_in_place`
 **9.8µs/boundary (~102k boundaries/s)** vs the Python reference's pure

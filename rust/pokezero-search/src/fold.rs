@@ -18,6 +18,25 @@
 //! objects (dict/list/float/int/bool/str/None) so the validation harness's
 //! own `json.dumps` canonicalization defines the bytes — this crate never
 //! emits JSON text for the fold surfaces.
+//!
+//! # Input contract (READ before feeding non-engine lines — esp. the
+//! instruction→event mapping)
+//!
+//! The advance assumes WELL-FORMED Showdown protocol with ASCII-integer
+//! numeric fields (HP `155/307`, `|turn|N`, `|-hitcount|...|N`). Inside that
+//! domain the port is byte-exact against the Python reference (corpus-proven,
+//! plus a ~42k-slice differential fuzz with zero protocol-plausible
+//! divergences). Outside it, numeric-literal parsing intentionally differs:
+//! Python's `float()`/`int()` accept underscore separators and non-ASCII
+//! unicode digits (`float("1_0") == 10.0`, `int("٣") == 3`) where Rust's
+//! `str::parse` rejects them — affecting [`condition_hp_fraction`], the
+//! `|turn|` number parse, and the `-hitcount` parse. Such malformed literals
+//! are unreachable from engine-emitted protocol, so this is documented rather
+//! than emulated; anyone SYNTHESIZING event lines (the upcoming
+//! instruction→event mapping for search) must emit plain ASCII integers, or
+//! the two implementations may silently disagree. Literal `nan`/`inf` HP
+//! fields, which both languages parse, follow Python's clamp exactly (see
+//! [`condition_hp_fraction`]).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -425,13 +444,17 @@ fn condition_hp_fraction(condition: Option<&str>) -> Option<f64> {
             return None; // Python raises ZeroDivisionError -> None
         }
         let value = numerator / denominator;
-        Some(if value < 0.0 {
-            0.0
-        } else if value > 1.0 {
-            1.0
-        } else {
-            value
-        })
+        // Python's exact clamp semantics: `max(0.0, min(1.0, value))`.
+        // min(1.0, value) returns value only when `value < 1.0` is true, so a
+        // NaN quotient (e.g. literal "nan/100", "inf/inf") clamps to 1.0 —
+        // measured empirically against `_condition_features` (2026-07-18):
+        // nan -> 1.0, +inf -> 1.0, -inf -> 0.0. A naive `if v < 0 .. else if
+        // v > 1 ..` clamp would pass NaN through; harmless on the JSON path
+        // (allow_nan=False rejects loudly) but the future in-crate encoder
+        // consumes products natively, where a NaN would propagate silently.
+        let value = if value < 1.0 { value } else { 1.0 };
+        let value = if value > 0.0 { value } else { 0.0 };
+        Some(value)
     } else if head == "0" {
         Some(0.0)
     } else {
@@ -3057,5 +3080,39 @@ impl PyFoldState {
     #[getter]
     fn event_index(&self) -> i64 {
         self.inner.event_index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::condition_hp_fraction;
+
+    /// LOW-2 (PR #724 review): literal-NaN/inf HP fields must reproduce the
+    /// Python reference's `max(0.0, min(1.0, v))` exactly — NaN and +inf clamp
+    /// to 1.0 (NaN < 1.0 is false, so Python's min keeps 1.0), -inf to 0.0 —
+    /// and the result must stay finite (JSON-serializable with allow_nan=False,
+    /// and safe for native consumption by the in-crate encoder).
+    #[test]
+    fn nan_and_inf_hp_clamp_matches_python() {
+        for (condition, want) in [
+            ("nan/100", 1.0),
+            ("-nan/5", 1.0),
+            ("inf/inf", 1.0),
+            ("inf/5", 1.0),
+            ("-inf/5", 0.0),
+            ("155/307", 155.0 / 307.0),
+        ] {
+            let got = condition_hp_fraction(Some(condition))
+                .unwrap_or_else(|| panic!("{condition:?} must parse"));
+            assert!(
+                got.is_finite(),
+                "{condition:?} produced non-finite {got} (would break native \
+                 product consumption and allow_nan=False JSON)"
+            );
+            assert_eq!(got, want, "{condition:?}");
+        }
+        // Python raises ZeroDivisionError -> None; "0" alone is 0.0.
+        assert_eq!(condition_hp_fraction(Some("5/0")), None);
+        assert_eq!(condition_hp_fraction(Some("0 fnt")), Some(0.0));
     }
 }
