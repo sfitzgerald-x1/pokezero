@@ -105,8 +105,11 @@ usage rate with a *conditional* that measures whether the move is used **well**:
   **decided games only** — see corrections below.
 - **Absorb switch-in reads / game** (Volt Absorb / Water Absorb heal, Flash Fire boost) triggering
   on the switch-in turn — a hard read, distinct from the type-immunity switch-in (a full-HP absorb
-  legitimately counts as both). Rises sharply, 0.06–0.09 → ~0.9–1.4, so later checkpoints
-  increasingly switch absorbers into the move they wall.
+  legitimately counts as both). Gated *exactly* on an absorber being on the team, which needs the
+  per-mon-ability capture, so this is shown **only for the re-eval'd checkpoints** (m50-ep7 ≥2800k,
+  l200-ep7-wu75 ≥2300k, v22-lr3m 3000k); pre-capture points are **dropped**, not shown with the
+  inflated fallback (see caveat). At exact gating it sits ~0.09–0.13 reads/game — too few points yet
+  for a trend.
 - **Residual-damage management — average toxic stage & average leech-seed turns-in.** Two parallel
   metrics: the peak toxic counter a badly-poisoned mon reaches, and the number of turns a
   leech-seeded mon stays active, each measured until the mon switches out / cures / faints (both
@@ -124,13 +127,18 @@ usage rate with a *conditional* that measures whether the move is used **well**:
 - **Boom blocks** — enemy Explosion/Self-Destruct neutralized by Protect, an absorbing Substitute,
   or a Ghost/type immunity, over booms faced. Rare (~0–11%), reported with the boom-faced count.
 
-**Ability-gated traits carry a gating caveat.** The captured events hold species + moves but not
-abilities, so Intimidate and the absorb abilities gate "on the team" via *protocol-detected
-presence* (the ability fired at least once). This is essentially exact for Intimidate (an
-intimidator almost always triggers when it sees play) but slightly under-counts presence for an
-absorber never hit by its type, nudging that rate up. `trait_eval` now captures per-mon abilities,
-so a future re-eval gates exactly (`trait_extract` prefers moveset abilities when present); the
-existing frontier uses the fallback.
+**Ability-gated traits and the abilities gap.** The captured events hold species + moves but not
+abilities, so "is this ability on the team?" cannot be answered exactly on older data. `trait_eval`
+now captures per-mon abilities, so re-eval'd checkpoints gate exactly; older ones can only fall back
+to *protocol-detected presence* (the ability fired at least once). That fallback under-counts
+presence — an ability is "seen" only when the opponent triggers it:
+- **Intimidate** triggers on nearly every switch-in, so the fallback ≈ exact; its full history is
+  **kept**.
+- The **absorb abilities** fire only when hit by the matching type (rare) — a **~7× under-count**
+  that badly inflated the rate (an apparent "collapse" on recent checkpoints was just the switch to
+  exact gating, ~3% → ~29% of seat-games carrying an absorber). So absorb **requires exact gating**
+  (`require_exact` in `ability_present`) and its pre-capture checkpoints are dropped rather than
+  shown wrong. A full historical re-eval would fill the absorb trajectory back in.
 
 ## Strength vs FoulPlay improves with training
 
@@ -250,8 +258,9 @@ frontier its two points sit on a continuum, so excluding it would only discard w
 - **status-only moves**: dedicated status moves only (paralysis, sleep, Will-O-Wisp burn, Toxic,
   Yawn); a secondary status on an attacking move is not a status *choice* and is excluded.
 - **intimidate / game** and **absorb switch-in reads / game**: per **decided** game, among games
-  where the ability is on the team (moveset abilities when captured, else protocol-detected presence).
-  An absorb read on the switch-in turn also counts as an immunity switch-in (it is both).
+  where the ability is on the team. Intimidate uses moveset abilities when captured, else the
+  protocol-presence fallback (accurate for it); absorb requires exact moveset abilities and drops
+  pre-capture checkpoints. An absorb read on the switch-in turn also counts as an immunity switch-in.
 - **avg toxic stage**: mean peak badly-poison counter per episode; an episode ends on switch-out
   (counter resets in gen3), cure, faint, or game end.
 - **boom blocks**: enemy Explosion/Self-Destruct the bot neutralized (Protect that turn / an up

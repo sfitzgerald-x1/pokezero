@@ -548,15 +548,20 @@ class GameParse:
         # already-statused mon (approximated: the incoming mon has a status when a status move targets it)
 
 
-def ability_present(g, gp, seat, abilities, activation_key):
+def ability_present(g, gp, seat, abilities, activation_key, require_exact=False):
     """Is one of `abilities` on this seat's team? Exact when the eval captured per-mon abilities on
-    the movesets; on older data (species+moves only) fall back to whether the ability fired at all —
-    which slightly under-counts presence (an absorber never hit by its type stays hidden), inflating
-    the rate a touch. Re-eval'd data with ability capture gates exactly."""
+    the movesets (recent checkpoints). On older captures (species+moves only) we either fall back to
+    whether the ability fired at all, or — when `require_exact` — report absent so the metric comes
+    out None and the old checkpoint is dropped from the report rather than shown wrong.
+
+    The fallback under-counts presence: an ability is only 'seen' when the opponent triggers it. For
+    Intimidate that's nearly every time it switches in, so fallback ≈ exact and it's kept. For the
+    absorb abilities it fires only when hit by the matching type (rare) — a ~7x under-count that
+    badly inflates the rate — so absorb requires exact gating and its pre-capture points are dropped."""
     mons = g.get("movesets", {}).get(seat, [])
     if any("ability" in m for m in mons):
         return any(mid(m.get("ability", "")) in abilities for m in mons)
-    return gp.ev[seat][activation_key] > 0
+    return False if require_exact else gp.ev[seat][activation_key] > 0
 
 
 def extract(files, lineage=None, milestone=None):
@@ -679,7 +684,9 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, {INTIMIDATE}, "intimidate_activation"):
                     intim_present += 1
                     intim_activations += gp.ev[seat]["intimidate_activation"]
-                if ability_present(g, gp, seat, ABSORB_ABILITIES, "absorb_activation"):
+                # absorb requires exact ability gating (fallback badly inflates it), so pre-capture
+                # checkpoints report absorb_present=0 -> rate None -> dropped from the report.
+                if ability_present(g, gp, seat, ABSORB_ABILITIES, "absorb_activation", require_exact=True):
                     absorb_present += 1
                     absorb_switchins += gp.ev[seat]["absorb_switchin"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
