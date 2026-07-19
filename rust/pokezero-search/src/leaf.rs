@@ -1374,6 +1374,7 @@ mod tests {
         let root = LeafMeta {
             toxic: [0, 4],
             stint: [0, 0],
+            ..Default::default()
         };
         let meta = evolve_leaf_meta(
             &root,
@@ -1398,6 +1399,7 @@ mod tests {
         let root = LeafMeta {
             toxic: [0, 9],
             stint: [0, 0],
+            ..Default::default()
         };
         let meta = evolve_leaf_meta(
             &root,
@@ -1419,6 +1421,7 @@ mod tests {
         let root = LeafMeta {
             toxic: [0, 0],
             stint: [3, 5],
+            ..Default::default()
         };
         let meta = evolve_leaf_meta(
             &root,
