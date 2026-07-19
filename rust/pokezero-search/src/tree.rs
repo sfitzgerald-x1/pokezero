@@ -96,6 +96,14 @@ pub(crate) struct ChanceBranch {
     pub pending_row: Option<usize>,
     /// Child decision node (arena index), created lazily on first descent.
     pub child: Option<usize>,
+    /// Model policy priors for the ACTING seat's options at this branch's
+    /// child decision node: (acting side is side one, per-option prior in the
+    /// child node's own option order, masked-renormalized). Written by the
+    /// encoded model core from the branch's own leaf observation; `None`
+    /// keeps the uniform priors of `make_stats` (existing cores unchanged).
+    /// Applied when the child decision node is created — priors reweight
+    /// exploration only, never values.
+    pub child_self_priors: Option<(bool, Vec<f32>)>,
 }
 
 impl ChanceBranch {
@@ -233,6 +241,12 @@ pub(crate) struct BranchSeam<'a> {
     /// instruction→event mapper re-generates with the same flag).
     #[allow(dead_code)]
     pub branch_on_damage: bool,
+    /// Decision depth of the EXPANDING node; this branch's child decision
+    /// node (if it ever grows) sits at `depth + 1`. Lets the prior consumer
+    /// skip action-map work for branches that can never grow a child
+    /// (`depth + 1 >= max_depth`).
+    #[allow(dead_code)]
+    pub depth: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +364,15 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                     Some(child) => child,
                     None => {
                         let child = new_decision_node(tree, state, depth + 1);
+                        // Model priors for the acting seat, when the encoded
+                        // core priced this branch's observation (uniform
+                        // otherwise — including a same-round pending eval,
+                        // which the core re-applies after its batch returns).
+                        if let Some((side_one, priors)) =
+                            tree.chances[chance_idx].branches[k].child_self_priors.clone()
+                        {
+                            apply_self_priors(&mut tree.decisions[child], side_one, &priors);
+                        }
                         tree.chances[chance_idx].branches[k].child = Some(child);
                         child
                     }
@@ -375,6 +398,26 @@ fn unapply_path(tree: &Tree, state: &mut State, path: &[PathStep]) {
             state.reverse_instructions(&tree.chances[step.chance].branches[k].instructions);
         }
     }
+}
+
+/// Overwrite one side's PUCT priors with model priors (the prior term the
+/// selection formula already carries; `make_stats` seeds it uniform). Returns
+/// false — leaving the node's uniform priors intact — when the prior vector
+/// does not align with the node's option count (callers count mismatches;
+/// values are never touched, priors reweight exploration only).
+pub(crate) fn apply_self_priors(node: &mut DecisionNode, side_one: bool, priors: &[f32]) -> bool {
+    let stats = if side_one {
+        &mut node.s1_stats
+    } else {
+        &mut node.s2_stats
+    };
+    if stats.len() != priors.len() {
+        return false;
+    }
+    for (stat, prior) in stats.iter_mut().zip(priors) {
+        stat.prior = *prior;
+    }
+    true
 }
 
 fn new_decision_node(tree: &mut Tree, state: &State, depth: u8) -> usize {
@@ -445,6 +488,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             chance: chance_idx,
             branch_index: 0,
             branch_on_damage,
+            depth,
         };
         let (value_sum, visits, terminal, pending_row) =
             price_outcome(outcome, state, counters, price, &seam);
@@ -457,6 +501,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
             no_expand: true,
             pending_row,
             child: None,
+            child_self_priors: None,
         });
     } else {
         let total: f32 = generated.iter().map(|b| b.percentage).sum();
@@ -478,6 +523,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                 chance: chance_idx,
                 branch_index,
                 branch_on_damage,
+                depth,
             };
             let (value_sum, visits, terminal, pending_row) =
                 price_outcome(outcome, state, counters, price, &seam);
@@ -491,6 +537,7 @@ fn expand_edge<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                 no_expand: false,
                 pending_row,
                 child: None,
+                child_self_priors: None,
             });
         }
     }
@@ -973,6 +1020,84 @@ mod tests {
         // Visit conservation, as in the one-ply report contract.
         let visits: u32 = root.s1_stats.iter().map(|s| s.visits).sum();
         assert_eq!(visits, 2_000);
+    }
+
+    /// Model priors reweight EXPLORATION only, never values: on the analytic
+    /// fixture, skewing the root priors hard toward toxic moves visits toward
+    /// it but leaves both arms' Q at their exact analytic values — the
+    /// guaranteed seismic-toss KO still reads exactly 1.0.
+    #[test]
+    fn priors_reweight_exploration_not_values() {
+        fn run_with_priors(skew: bool) -> (u32, u32, f32, f32) {
+            let mut state = parse_state(ANALYTIC_TOXIC.trim()).expect("fixture parses");
+            let cfg = MultiPlyConfig {
+                max_depth: 1,
+                c_puct: 1.4,
+                deep_ko_split: true,
+            };
+            let mut tree = Tree::from_root(&state).expect("root builds");
+            let toxic = tree.decisions[0]
+                .s1_stats
+                .iter()
+                .position(|s| s.display == "toxic")
+                .expect("toxic arm");
+            let toss = tree.decisions[0]
+                .s1_stats
+                .iter()
+                .position(|s| s.display == "seismictoss")
+                .expect("seismictoss arm");
+            if skew {
+                let mut priors = vec![0.0f32; tree.decisions[0].s1_stats.len()];
+                priors[toxic] = 0.99;
+                priors[toss] = 0.01;
+                assert!(apply_self_priors(&mut tree.decisions[0], true, &priors));
+                // Length mismatch must refuse and leave priors untouched.
+                assert!(!apply_self_priors(&mut tree.decisions[0], true, &[1.0]));
+            }
+            let mut counters = SearchCounters::default();
+            let mut rng = StdRng::seed_from_u64(0);
+            let evaluator = HpFractionEval;
+            for _ in 0..400 {
+                let traversal = traverse(
+                    &mut tree,
+                    &mut state,
+                    &mut rng,
+                    &cfg,
+                    &mut counters,
+                    &mut |leaf: &State, _seam: &BranchSeam| LeafPrice::Ready(evaluator.eval(leaf)),
+                );
+                finalize(&mut tree, &traversal, &[]);
+            }
+            let root = &tree.decisions[0];
+            (
+                root.s1_stats[toxic].visits,
+                root.s1_stats[toss].visits,
+                root.s1_stats[toxic].mean(),
+                root.s1_stats[toss].mean(),
+            )
+        }
+        let (toxic_uniform, _, q_toxic_uniform, q_toss_uniform) = run_with_priors(false);
+        let (toxic_skewed, toss_skewed, q_toxic_skewed, q_toss_skewed) = run_with_priors(true);
+        // Values: exact under both prior settings.
+        let hit = 0.5 + 0.5 * (1.0 - 94.0 / 100.0_f32);
+        let expected_toxic = 0.85 * hit + 0.15 * 0.5;
+        for (q_toxic, q_toss) in [
+            (q_toxic_uniform, q_toss_uniform),
+            (q_toxic_skewed, q_toss_skewed),
+        ] {
+            assert!(
+                (q_toxic - expected_toxic).abs() < 1e-4,
+                "toxic Q {q_toxic} != analytic expectation {expected_toxic}"
+            );
+            assert!((q_toss - 1.0).abs() < 1e-6, "seismictoss Q {q_toss} != 1.0");
+        }
+        // Exploration: the high-prior arm collects strictly more visits than
+        // under uniform priors; the guaranteed KO still wins the argmax.
+        assert!(
+            toxic_skewed > toxic_uniform,
+            "prior skew must raise toxic visits ({toxic_skewed} <= {toxic_uniform})"
+        );
+        assert!(toss_skewed > toxic_skewed, "argmax must stay on the KO");
     }
 
     /// Terminal branches never grow children and keep their exact value.

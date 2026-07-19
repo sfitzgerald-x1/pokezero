@@ -267,14 +267,39 @@ at the intended ≤8192-sim budgets; revisit before very large searches.
 
 ## Remaining before the 200-seed paired FoulPlay read
 
-1. **Prior/action mapping** (track D residue): map policy-head priors onto
-   engine `MoveChoice`s at decision nodes (the encoder now produces the
-   observation and the legal mask; priors are still uniform in-tree).
-2. **`search.py` integration**: swap the branch simulator behind the
-   existing search-policy interface (root belief worlds → per-world
-   `LeafEncoder` + root fold export) and aggregate across worlds at the root.
-3. **Root fold export at live decision boundaries**: production recomputes
-   the fold per observe; the live client needs the incremental fold state
-   handed to the crate (the corpus proves the payload codec both ways).
-4. Re-price batch size / virtual-loss settings under real observation costs
-   (keep batch ≪ sims; docs/crate_search_design.md review caveats).
+Items 1–3 LANDED 2026-07-19 (the priors + EngineMctsPolicy integration PR):
+
+1. ~~Prior/action mapping~~ — self-side model priors in selection
+   (docs/crate_search_design.md "Model priors"; mapping asserted against
+   recorded request masks over both corpora, `scripts/prior_mapping_assert.py`).
+2. ~~Search-policy integration~~ — `EngineMctsPolicy(leaf_eval="model")`
+   runs the full in-crate pipeline per belief world
+   (`search_batched_multi_encoded` + root aggregation + the existing
+   fallback taxonomy; `src/pokezero/engine_search.py`). The HpFraction POC
+   path stays the default until the paired read.
+3. ~~Live root fold export~~ — the policy maintains a per-battle
+   `transitions_fold.FoldState` advanced incrementally over each decision's
+   new public lines, handed to the crate via the payload codec
+   (`--fold-cross-check` batch-refold differential stayed 0-mismatch on the
+   15-game bench).
+
+Still owed before / alongside the paired read:
+
+1. **The paired read itself** (200 seeds, both arms, the standard harness).
+2. Re-price batch size / virtual-loss settings under real observation costs
+   (keep batch ≪ sims; docs/crate_search_design.md review caveats), and the
+   encode-path optimization headroom above if wall-clock parity at fixed
+   budget matters.
+3. **Opponent-side priors** — spec'd, deliberately not built
+   (docs/crate_search_design.md "Opponent priors: follow-up spec").
+4. **Tier-2 annotation overlay at live boundaries** — the live fold is
+   UNANNOTATED (tracker conclusions are env-side, as-of-first-assessment;
+   trackers are inactive in the bench env configuration, where the fold
+   surface is therefore byte-faithful). Envs with active trackers need an
+   env→policy overlay surface before model-mode search sees Tier-2 cells.
+5. **Cosmetic-forme naming at world boundaries** — `party_species` now
+   carries the sampled team's own ids (request/protocol convention;
+   the seed-7001 Unown repro), and choice mapping tolerates the engine's
+   collapsed display ids. A REVEALED opponent cosmetic forme still fails
+   world construction closed (`public_species_not_in_world`) — counted,
+   never silent.

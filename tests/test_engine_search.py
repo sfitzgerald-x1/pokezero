@@ -71,6 +71,19 @@ class ChoiceMappingTests(unittest.TestCase):
     def test_no_mappable_choice_returns_none(self) -> None:
         self.assertIsNone(self.policy._map_choices(self.context, {"surf": 1.0}))
 
+    def test_cosmetic_forme_switch_maps_canonically(self) -> None:
+        # The engine displays the collapsed base id ("switch unown") while the
+        # request candidate carries the lettered forme ("Unown-C") — the
+        # seed-7001 bench repro's mapping half.
+        candidates = _candidates() + [
+            {"action_index": 6, "kind": "switch", "legal": True, "pokemon": {"species": "Unown-C"}},
+        ]
+        mask = (True, True, False, False, True, False, True, False, False)
+        context = _FakeContext(_FakeObservation(mask, candidates))
+        mapped = self.policy._map_choices(context, {"switch unown": 1.0})
+        self.assertEqual(mapped, 6)
+        self.assertEqual(dict(self.policy.stats.unmapped_choices), {})
+
 
 class OwnSideSelectionTests(unittest.TestCase):
     """The policy must read ITS OWN seat's visit distribution (p2 included)."""
@@ -222,6 +235,142 @@ class RechargeSignalTests(unittest.TestCase):
             "|move|p2a: Slaking|Body Slam|p1a: Blissey",
         ])
         self.assertEqual(self._slots(context, rounds), ())
+
+
+class ModelConfigValidationTests(unittest.TestCase):
+    def test_model_mode_requires_artifacts(self) -> None:
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="model")
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="model", model_path="x.pt")  # tables missing
+
+    def test_unknown_leaf_eval_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="foulplay")
+
+    def test_batch_must_not_exceed_sims(self) -> None:
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(
+                leaf_eval="model",
+                model_path="x.pt",
+                tables_path="t.json",
+                search_sims=8,
+                search_batch=16,
+            )
+
+    def test_missing_model_artifact_fails_at_init(self) -> None:
+        with self.assertRaises(ValueError):
+            EngineMctsPolicy(
+                dex=None,
+                set_source=None,
+                module=object(),
+                config=EngineMctsConfig(
+                    leaf_eval="model",
+                    model_path="/nonexistent/model_ts.pt",
+                    tables_path="/nonexistent/tables.json",
+                ),
+            )
+
+
+class _FakeEvent:
+    def __init__(self, raw_line):
+        self.raw_line = raw_line
+
+
+class _FakeReplay:
+    def __init__(self, lines):
+        self.public_events = tuple(_FakeEvent(line) for line in lines)
+        self.turn_number = 1
+
+
+class _FakePublicState:
+    def __init__(self, lines):
+        self.replay = _FakeReplay(lines)
+
+
+class LiveFoldAdvanceTests(unittest.TestCase):
+    """The incremental per-battle root fold (ledger: live root-fold export)."""
+
+    LEAD = [
+        "|switch|p1a: Rattata|Rattata, L88|100/100",
+        "|switch|p2a: Chansey|Chansey, L80|100/100",
+        "|turn|1",
+    ]
+    ROUND2 = [
+        "|move|p1a: Rattata|Tackle|p2a: Chansey",
+        "|-damage|p2a: Chansey|468/641",
+        "|upkeep",
+        "|turn|2",
+    ]
+
+    def _context(self, lines, battle_id="fold-test", round_index=0):
+        context = _FakeContext(
+            _FakeObservation((True,) * 9, _candidates()),
+            public_state=_FakePublicState(lines),
+        )
+        context.battle_id = battle_id
+        context.decision_round_index = round_index
+        return context
+
+    def test_incremental_advance_consumes_only_new_lines(self) -> None:
+        policy = _policy()
+        fold = policy._advance_live_fold(self._context(self.LEAD))
+        self.assertIsNotNone(fold)
+        self.assertEqual(policy.stats.fold_advanced_lines, len(self.LEAD))
+        lead_total = fold.products().transition_token_total
+        # Second decision: only the four new lines fold (not a whole-log refold).
+        fold2 = policy._advance_live_fold(
+            self._context(self.LEAD + self.ROUND2, round_index=1)
+        )
+        self.assertIs(fold2, fold)  # same per-battle state, advanced in place
+        self.assertEqual(
+            policy.stats.fold_advanced_lines, len(self.LEAD) + len(self.ROUND2)
+        )
+        # Exactly one new token: the tackle (lead lines fold only once).
+        self.assertEqual(fold2.products().transition_token_total, lead_total + 1)
+
+    def test_rewound_stream_breaks_the_fold_loudly(self) -> None:
+        policy = _policy()
+        self.assertIsNotNone(policy._advance_live_fold(self._context(self.LEAD)))
+        import warnings as _warnings
+
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            result = policy._advance_live_fold(
+                self._context(self.LEAD[:1], round_index=1)
+            )
+        self.assertIsNone(result)
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
+        )
+        # Broken stays broken for the battle (no silent resync).
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            self.assertIsNone(
+                policy._advance_live_fold(
+                    self._context(self.LEAD + self.ROUND2, round_index=2)
+                )
+            )
+
+    def test_new_battle_resets_fold_state(self) -> None:
+        policy = _policy()
+        policy._advance_live_fold(self._context(self.LEAD, battle_id="battle-a"))
+        fold_b = policy._advance_live_fold(
+            self._context(self.LEAD, battle_id="battle-b")
+        )
+        self.assertIsNotNone(fold_b)
+        self.assertEqual(
+            [key[0] for key in policy._live_folds], ["battle-b"]
+        )  # battle-a state dropped
+
+    def test_perspective_follows_the_acting_seat(self) -> None:
+        policy = _policy()
+        context = self._context(self.LEAD + self.ROUND2)
+        context.player_id = "p2"
+        fold = policy._advance_live_fold(context)
+        self.assertEqual(fold.perspective_slot, "p2")
 
 
 class FallbackAlertTests(unittest.TestCase):

@@ -1138,6 +1138,122 @@ impl LeafContext {
         let products = fold.products();
         encode_row_value(&self.tables, &row, Some(&products))
     }
+
+    /// True when the acting seat is engine side one.
+    pub(crate) fn self_is_side_one(&self) -> bool {
+        self.self_is_p1
+    }
+
+    /// Map each of the acting seat's engine options to its action index in
+    /// the observation's action block (schema v1: `layout_action_count`
+    /// actions), or `None` when the option has no legal action-block slot.
+    ///
+    /// The correspondence is DERIVED from `action_surface` — the exact
+    /// candidate/legal-mask builder the leaf encoder writes — never
+    /// re-implemented: move options match the candidate at their engine move
+    /// slot, switch options match the switch candidate whose (evolved) team
+    /// position carries their species, and a recharge-shape `None` option
+    /// matches the production "recharge" pseudo-move at action index 0.
+    /// `options` must be the option list of the DECISION NODE this map is for
+    /// (`root_get_all_options` at the root, `get_all_options` at interior
+    /// nodes — same state, same order).
+    pub(crate) fn self_action_map(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+    ) -> PyResult<Vec<Option<usize>>> {
+        let meta = meta.unwrap_or(&self.root_meta);
+        let self_side = side_ref_for(state, self.self_is_p1);
+        let self_engine = self.engine_side_index(true);
+        let force_switch_shape =
+            self_side.force_switch || self_side.get_active_immutable().hp <= 0;
+        let recharging = self_side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::MUSTRECHARGE);
+        // The (evolved) self-team display order with active flags — the same
+        // derivation leaf_row_inputs writes into the md team before
+        // action_surface reads it back.
+        let order: &[String] = self_order.unwrap_or(&self.root_self_order);
+        let active_party = active_index_usize(self_side);
+        let team_flags: Vec<(String, bool)> = order
+            .iter()
+            .map(|key| {
+                (
+                    key.clone(),
+                    self.party_index(self_engine, key) == Some(active_party),
+                )
+            })
+            .collect();
+        let (candidates, _) = self.action_surface(
+            self_side,
+            self_engine,
+            options,
+            &team_flags,
+            force_switch_shape,
+            meta.fresh_active[self_engine],
+        )?;
+        let candidates = candidates.as_array().expect("action_surface returns an array");
+        let legal_action_index = |predicate: &dyn Fn(&Map<String, Value>) -> bool| {
+            candidates.iter().find_map(|candidate| {
+                let obj = candidate.as_object()?;
+                if !obj.get("legal").and_then(Value::as_bool).unwrap_or(false) {
+                    return None;
+                }
+                if predicate(obj) {
+                    obj.get("action_index").and_then(Value::as_u64).map(|v| v as usize)
+                } else {
+                    None
+                }
+            })
+        };
+        let mut map: Vec<Option<usize>> = Vec::with_capacity(options.len());
+        for option in options {
+            let index = match option {
+                MoveChoice::Move(engine_index) => {
+                    let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
+                    if recharging && !force_switch_shape {
+                        None // recharge shape offers no real move candidates
+                    } else {
+                        legal_action_index(&|obj| {
+                            obj.get("kind").and_then(Value::as_str) == Some("move")
+                                && obj.get("move_slot").and_then(Value::as_u64)
+                                    == Some(slot as u64 + 1)
+                        })
+                    }
+                }
+                MoveChoice::Switch(party) => {
+                    let party = party.serialize().parse::<usize>().unwrap_or(usize::MAX);
+                    match self.species_keys[self_engine].get(party) {
+                        None => None,
+                        Some(key) => legal_action_index(&|obj| {
+                            obj.get("kind").and_then(Value::as_str) == Some("switch")
+                                && obj
+                                    .get("team_index")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|team_index| team_flags.get(team_index as usize))
+                                    .map(|(candidate_key, _)| candidate_key == key)
+                                    .unwrap_or(false)
+                        }),
+                    }
+                }
+                MoveChoice::None => {
+                    if recharging && !force_switch_shape {
+                        // Production recharge request: one legal PP-less
+                        // "recharge" pseudo-move at action index 0.
+                        legal_action_index(&|obj| {
+                            obj.get("move_id").and_then(Value::as_str) == Some("recharge")
+                        })
+                    } else {
+                        None
+                    }
+                }
+            };
+            map.push(index);
+        }
+        Ok(map)
+    }
 }
 
 /// Apply the self side's switch/drag lines to a display order: each switch
@@ -1300,6 +1416,46 @@ impl PyLeafEncoder {
             meta.as_ref(),
         )?;
         encoded_to_dict(py, &encoded)
+    }
+
+    /// The acting seat's option→action-index correspondence at a state: one
+    /// `(display, action_index_or_None)` pair per engine option, in the
+    /// engine's own option order (`root_get_all_options` when `root` is set —
+    /// force-trapped / slow-uturn aware — else `get_all_options`). This is
+    /// the exact map the model-prior wiring uses; the mapping-assertion test
+    /// checks it against recorded request masks.
+    #[pyo3(signature = (state_str, lines = None, root = false))]
+    fn self_action_map(
+        &self,
+        state_str: &str,
+        lines: Option<Vec<String>>,
+        root: bool,
+    ) -> PyResult<Vec<(String, Option<usize>)>> {
+        let state = parse_state(state_str)?;
+        let (order, meta) = self.branch_context(lines.as_deref());
+        let (s1_options, s2_options) = if root {
+            state.root_get_all_options()
+        } else {
+            state.get_all_options()
+        };
+        let options = if self.ctx.self_is_side_one() {
+            s1_options
+        } else {
+            s2_options
+        };
+        let side = if self.ctx.self_is_side_one() {
+            &state.side_one
+        } else {
+            &state.side_two
+        };
+        let map = self
+            .ctx
+            .self_action_map(&state, &options, order.as_deref(), meta.as_ref())?;
+        Ok(options
+            .iter()
+            .zip(map)
+            .map(|(choice, index)| (crate::move_display(side, choice), index))
+            .collect())
     }
 
     /// The rewritten row-inputs JSON for a leaf state (divergence debugging:

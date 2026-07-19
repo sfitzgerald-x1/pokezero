@@ -31,12 +31,13 @@ use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
 
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+use poke_engine::engine::state::MoveChoice;
 use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::tree::{
-    finalize, multiply_report_json, traverse, BranchSeam, LeafPrice, MultiPlyConfig,
-    MultiPlyOutcome, SearchCounters, Traversal, Tree,
+    apply_self_priors, finalize, multiply_report_json, traverse, BranchSeam, LeafPrice,
+    MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -616,6 +617,51 @@ struct BranchFold {
     meta: crate::leaf::LeafMeta,
 }
 
+/// Gather a leaf's action-block priors onto the acting seat's option list.
+///
+/// `priors_row` is one row of the UNMASKED softmax; the gathered subset is
+/// renormalized over the mapped options — mathematically identical to the
+/// masked softmax restricted to those actions (exp(l_i)/Σ_mapped exp(l_j)).
+/// Returns `None` — leaving the node uniform — when any option lacks an
+/// action-block slot (the whole node falls back rather than zeroing arms the
+/// model cannot see) or the mapped mass underflows.
+fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
+    if map.is_empty() {
+        return None;
+    }
+    let mut gathered = Vec::with_capacity(map.len());
+    let mut sum = 0.0f32;
+    for entry in map {
+        let index = (*entry)?;
+        let prior = *priors_row.get(index)?;
+        sum += prior;
+        gathered.push(prior);
+    }
+    if sum <= 1e-8 {
+        return None;
+    }
+    for prior in &mut gathered {
+        *prior /= sum;
+    }
+    Some(gathered)
+}
+
+/// The acting seat's option list at a decision node, mirroring
+/// `new_decision_node`'s defensive empty-side handling so prior vectors align
+/// with the node's own arm order.
+fn self_options_at(state: &State, self_side_one: bool) -> Vec<MoveChoice> {
+    let (s1_options, s2_options) = state.get_all_options();
+    let mut options = if self_side_one { s1_options } else { s2_options };
+    if options.is_empty() {
+        options.push(MoveChoice::None);
+    }
+    options
+}
+
+fn is_single_none(options: &[MoveChoice]) -> bool {
+    options.len() == 1 && matches!(options[0], MoveChoice::None)
+}
+
 /// Multi-ply batched search where every model row is a REAL leaf observation:
 /// each priced branch renders its instruction list as protocol lines
 /// (`events::render_branch_events`), advances a CLONE of its parent's fold
@@ -624,6 +670,17 @@ struct BranchFold {
 /// world-constant carry + fold products). Fold states chain through the tree
 /// via the `BranchSeam` parent key, so depth-k leaves carry the full
 /// root-prefix + k simulated plies of history.
+///
+/// With `model_priors` set (the default), the ACTING seat's decision arms use
+/// the model's policy priors instead of uniform: the root node from one extra
+/// forward on the root observation, each interior node from the priors of the
+/// branch observation it grows under (mapped option-by-option via
+/// `LeafContext::self_action_map`, the leaf encoder's own action-block
+/// correspondence). The OPPONENT side stays uniform in this integration —
+/// opponent-perspective observations from a determinized world need a belief
+/// design decision first (see docs/crate_search_design.md, "Model priors").
+/// Priors reweight exploration only; values and the exact-expectation backup
+/// are untouched.
 #[allow(clippy::too_many_arguments)]
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
     state_str: &str,
@@ -631,6 +688,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     batch_size: usize,
     max_depth: u8,
     deep_ko_split: bool,
+    model_priors: bool,
     leaf_ctx: &crate::leaf::LeafContext,
     event_ctx: &crate::events::EventContext,
     root_fold: &crate::fold::FoldStateInner,
@@ -658,11 +716,44 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
     let root_turn = event_ctx.turn;
+    let self_side_one = leaf_ctx.self_is_side_one();
+    // Prior wiring telemetry: nodes whose acting-side priors came from the
+    // model vs fallbacks to uniform (unmapped option / underflow / mismatch).
+    let mut prior_branches = 0usize;
+    let mut prior_fallbacks = 0usize;
+    let mut root_priors: Option<Vec<f32>> = None;
+    if model_priors {
+        let root_options = if self_side_one {
+            tree.decisions[0].s1_options.clone()
+        } else {
+            tree.decisions[0].s2_options.clone()
+        };
+        if !is_single_none(&root_options) {
+            // One extra forward on the ROOT observation prices the root
+            // node's priors (the root is never a chance-branch leaf).
+            let encoded = leaf_ctx.encode_leaf(&state, root_fold, root_turn, None, None)?;
+            let batch = ObsBatch::from_encoded(spec, std::slice::from_ref(&encoded))?;
+            let output = evaluator.eval_batch(&batch, None)?;
+            model_evals += 1;
+            let map = leaf_ctx.self_action_map(&state, &root_options, None, None)?;
+            match gather_self_priors(&output.priors[..output.action_count], &map) {
+                Some(priors)
+                    if apply_self_priors(&mut tree.decisions[0], self_side_one, &priors) =>
+                {
+                    root_priors = Some(priors);
+                }
+                _ => prior_fallbacks += 1,
+            }
+        }
+    }
     let start = Instant::now();
     while completed < iterations {
         let traversal_budget = batch_size.min(iterations - completed);
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
+        // Per-round prior work: (branch key, batch row, option→action map)
+        // for every priced branch whose child decision node can exist.
+        let mut pending_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> = Vec::new();
         let mut leaf_error: Option<PyErr> = None;
         while traversals.len() < traversal_budget && pending.len() < batch_size {
             let traversal = traverse(
@@ -742,6 +833,31 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             return LeafPrice::Ready(0.5);
                         }
                     };
+                    let row = pending.len();
+                    // Prior map for this branch's future child decision node
+                    // — only where a child can exist (depth cap) and the
+                    // acting seat has a real choice.
+                    if model_priors && seam.depth + 1 < cfg.max_depth {
+                        let options = self_options_at(leaf, self_side_one);
+                        if !is_single_none(&options) {
+                            match leaf_ctx.self_action_map(
+                                leaf,
+                                &options,
+                                Some(&self_order),
+                                Some(&meta),
+                            ) {
+                                Ok(map) => pending_maps.push((
+                                    (seam.chance, seam.branch_index),
+                                    row,
+                                    map,
+                                )),
+                                Err(error) => {
+                                    leaf_error = Some(error);
+                                    return LeafPrice::Ready(0.5);
+                                }
+                            }
+                        }
+                    }
                     fold_by_branch.insert(
                         (seam.chance, seam.branch_index),
                         BranchFold {
@@ -751,7 +867,6 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             meta,
                         },
                     );
-                    let row = pending.len();
                     pending.push(encoded);
                     LeafPrice::Deferred(row)
                 },
@@ -767,6 +882,36 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             let batch = ObsBatch::from_encoded(spec, &pending)?;
             let output = evaluator.eval_batch(&batch, None)?;
             model_evals += pending.len();
+            // Resolve this round's prior maps against the batch's policy
+            // rows: store on the branch (consumed at child creation) and
+            // re-apply onto a child that was already created THIS round
+            // (batch > 1 can descend a sibling before its priors resolved).
+            for (key, row, map) in &pending_maps {
+                let base = row * output.action_count;
+                let priors =
+                    gather_self_priors(&output.priors[base..base + output.action_count], map);
+                match priors {
+                    Some(priors) => {
+                        let child = tree.chances[key.0].branches[key.1].child;
+                        let applied = match child {
+                            Some(child) => apply_self_priors(
+                                &mut tree.decisions[child],
+                                self_side_one,
+                                &priors,
+                            ),
+                            None => true,
+                        };
+                        tree.chances[key.0].branches[key.1].child_self_priors =
+                            Some((self_side_one, priors));
+                        if applied {
+                            prior_branches += 1;
+                        } else {
+                            prior_fallbacks += 1;
+                        }
+                    }
+                    None => prior_fallbacks += 1,
+                }
+            }
             output.values01
         };
         for traversal in &traversals {
@@ -781,14 +926,30 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         counters,
         elapsed_s,
     };
+    let root_priors_json = match &root_priors {
+        None => "null".to_string(),
+        Some(priors) => format!(
+            "[{}]",
+            priors
+                .iter()
+                .map(|p| format!("{p:.6}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
-         \"lossy_renders\":{},\"branch_folds\":{}",
+         \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
+         \"prior_fallbacks\":{},\"root_priors\":{}",
         batch_size,
         rounds,
         model_evals,
         lossy_renders,
-        fold_by_branch.len()
+        fold_by_branch.len(),
+        model_priors,
+        prior_branches,
+        prior_fallbacks,
+        root_priors_json
     );
     Ok(multiply_report_json(
         &outcome,
@@ -1103,9 +1264,13 @@ impl NativeLeafModel {
     /// `root_inputs_json` is the root decision's sanctioned input surface,
     /// `ctx_json` the event context (`{"p1": [...], "p2": [...], "turn": N,
     /// "hp_percent": [...]}` — species in engine party order), `root_fold`
-    /// the root fold state. Returns the search report as JSON (with
-    /// `encoder: "native_leaf"` + lossy-render accounting). Runs with the
-    /// GIL released.
+    /// the root fold state. With `model_priors` (default) the ACTING seat's
+    /// decision arms use the model's masked policy priors (root: one extra
+    /// forward on the root observation; interior nodes: the priors of the
+    /// branch observation they grow under); the opponent side stays uniform.
+    /// Returns the search report as JSON (with `encoder: "native_leaf"`,
+    /// lossy-render accounting, and `root_priors`/`prior_branches`/
+    /// `prior_fallbacks` telemetry). Runs with the GIL released.
     #[pyo3(signature = (
         state_str,
         iterations,
@@ -1118,6 +1283,7 @@ impl NativeLeafModel {
         c_puct = 1.4,
         seed = 0,
         deep_ko_split = true,
+        model_priors = true,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1134,6 +1300,7 @@ impl NativeLeafModel {
         c_puct: f32,
         seed: u64,
         deep_ko_split: bool,
+        model_priors: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1162,6 +1329,7 @@ impl NativeLeafModel {
                 batch_size,
                 max_depth,
                 deep_ko_split,
+                model_priors,
                 &leaf_ctx,
                 &event_ctx,
                 &fold,

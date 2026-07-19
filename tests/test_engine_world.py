@@ -327,7 +327,12 @@ class BattleSpecConstructionTests(unittest.TestCase):
         )
         world = battle_spec_from_payload(payload, override, dex=unown_dex)
         self.assertEqual(world.spec.side_two.pokemon[0].id, "unown")
-        self.assertEqual(world.party_species["p2"], ("unown",))
+        # party_species keeps the sampled team's OWN id (protocol/request
+        # convention) — only the ENGINE-facing spec id collapses. The leaf
+        # path's ctx contract needs the request-convention key ("unownc"),
+        # and the self_world_mismatch guard compares request ids against
+        # exactly this surface (seed-7001 bench repro).
+        self.assertEqual(world.party_species["p2"], ("unownc",))
 
     def test_substitute_supported_only_with_approximation_flag(self) -> None:
         payload = _payload(self.dex)

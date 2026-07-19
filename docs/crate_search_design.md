@@ -183,8 +183,10 @@ Readings:
 - **Leaf pricing** stays behind `LeafEval` (sequential) / `BatchLeafEval`
   (batched, `model` feature); `HpFractionEval` for correctness gates, the
   TorchScript evaluator compiles and runs against the identical tree core
-  (`search_batched_multi`). Priors remain uniform until the action-index →
-  `MoveChoice` mapping lands (encoder stream).
+  (`search_batched_multi`). Model priors on the acting seat's decision arms
+  landed on the ENCODED path only (`search_batched_multi_encoded`; see
+  "Model priors" below); the template-stub paths keep uniform priors — a
+  constant-template observation carries no per-node action information.
 - **Per-outcome fold-state advance + native leaf encode (LANDED)**: the
   instruction→event mapping (`src/events.rs`) renders each branch's engine
   instruction list as protocol lines, the Rust `FoldState` advances a clone
@@ -350,6 +352,73 @@ delta (the never-mis-attribute invariant holds universally).
    so ladder-rooted leaf fractions land on the /100 grid the root fold
    consumed. Grid distinction pinned by
    `tests/test_leaf_encoder.py::HpPercentGridTest`.
+
+## Model priors (self side; landed 2026-07-19)
+
+`search_batched_multi_encoded` (the encoded path only) wires the model's
+policy head into PUCT selection for the ACTING seat. The PUCT formula always
+carried a prior term (`MoveStats.prior`, uniform since the one-ply core);
+this stream replaces the uniform values with model priors — priors reweight
+EXPLORATION only, values and the exact-expectation backup are untouched
+(pinned by tree.rs `priors_reweight_exploration_not_values`: the guaranteed
+seismic-toss KO still reads exactly 1.0 under a hard prior skew, and the
+analytic toxic expectation is unchanged to 1e-4).
+
+- **Root node**: one extra forward on the ROOT observation
+  (`LeafContext::encode_leaf` at depth 0 — the root-parity-proven surface)
+  prices the root's priors before the loop (`root_priors` in the report).
+- **Interior nodes**: every priced branch's eval row already carries policy
+  logits; the branch stores its child's priors
+  (`ChanceBranch::child_self_priors`), applied when the child decision node
+  is created (or re-applied post-round when batch > 1 created the child
+  before its eval resolved).
+- **Index mapping**: `LeafContext::self_action_map` maps each engine option
+  to its action-block index, DERIVED from `action_surface` (the exact
+  candidate/legal-mask builder the encoder writes) — moves by engine slot,
+  switches through the evolved-team canonical switch map, the recharge
+  pseudo-move at action 0. Gates: `tests/test_prior_action_mapping.py`
+  (committed sample) and `scripts/prior_mapping_assert.py` — over golden-v2
+  + scenarios, every driven row (1015 + 235) maps injectively and lands
+  exactly on the recorded request mask's legal set; the root surface
+  (`root_get_all_options`) was never narrower than the mask on either
+  corpus.
+- **Prior math**: the eval computes the UNMASKED softmax; the gathered
+  mapped subset is renormalized — mathematically identical to the masked
+  softmax restricted to those actions. A node with any unmapped option
+  falls back to uniform WHOLE (never zeroing arms the model cannot see);
+  fallbacks are counted (`prior_fallbacks`), never silent.
+- **Opponent side stays uniform** (this integration): see the follow-up
+  spec below. `model_priors=false` is the A/B kill switch.
+
+### Opponent priors: follow-up spec (deliberately not built)
+
+The symmetric move — opponent-side priors from an opponent-perspective
+observation — is CONSTRUCTIBLE from the determinized world (the engine state
+carries both sides; a second `LeafContext` with `showdown_slot` flipped
+would encode the opponent's view), but its BELIEF surfaces need a design
+decision before it is honest:
+
+1. **The opponent's belief columns are not the sampled world's facts.** Our
+   observation's W-columns encode OUR uncertainty about THEM. An
+   opponent-perspective observation needs THEIR uncertainty about US — a
+   surface production only builds for the seat it serves. Feeding the
+   determinized world's exact assignments as the opponent's "belief" would
+   present certainty the real opponent never has (the model was trained
+   under seat-realistic uncertainty; this is a train/serve distribution
+   decision, not a plumbing one).
+2. **The opponent's ledger/tendency history is seat-relative.** The fold is
+   per-perspective; an opponent-perspective leaf needs the opponent's fold
+   chain (constructible from the same public lines, doubling fold state per
+   search) plus their toxic/stint/sleep metadata — mechanical but not free.
+3. **Decoupled-PUCT asymmetry is a measured question.** Self-priors-only
+   biases exploration asymmetrically; whether opponent priors add strength
+   at fixed wall-clock (each expansion would need a SECOND encode+eval per
+   branch, roughly doubling leaf cost) is a paired read on its own.
+
+Decision owed: opponent belief surface semantics (seat-realistic
+approximation vs omniscient-determinized), then wire through a second
+`LeafContext` + fold chain per world. Until then the opponent side explores
+uniformly — exactly the vendored engine MCTS's regime.
 
 ## Review caveats (PR #721, non-blocking)
 

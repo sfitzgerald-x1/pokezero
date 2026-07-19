@@ -163,8 +163,22 @@ D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); encoder hand-off (track B) LANDED via the
-leaf path above; remaining = prior/action mapping + `search.py` integration
-+ live root-fold export.
+leaf path above; **INTEGRATION LANDED (2026-07-19)** — self-side model
+priors in PUCT selection (mapping asserted against recorded request masks:
+1015 + 235 driven corpus rows exact, `scripts/prior_mapping_assert.py`;
+priors reweight exploration never values, cargo-tested), the live
+incremental root fold in `EngineMctsPolicy` (per-battle
+`transitions_fold.FoldState`, advanced over each decision's new lines;
+batch-refold cross-check flag stayed 0-mismatch), and the config-gated full
+pipeline `EngineMctsConfig(leaf_eval="model")` — per belief world
+`search_batched_multi_encoded` with the real fold + TorchScript eval, root
+aggregation across worlds, the full fallback taxonomy live (15-game bench,
+seeds 7000-7014, fallback 0.0% with --fail-on-fallback; real
+emeta-v2-2-lr3m-belief FINAL checkpoint artifact, throughput/mechanics only
+— NO strength claim). Remaining = the 200-seed paired read + follow-ups
+(opponent priors spec'd in docs/crate_search_design.md; Tier-2 overlay at
+live boundaries; batch/virtual-loss re-pricing under real observation
+costs — see docs/leaf_observation_column_map.md "Remaining").
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep
