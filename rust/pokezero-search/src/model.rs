@@ -31,7 +31,12 @@ use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
 
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+use poke_engine::state::State;
 
+use crate::tree::{
+    finalize, multiply_report_json, traverse, LeafPrice, MultiPlyConfig, MultiPlyOutcome,
+    SearchCounters, Traversal, Tree,
+};
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
 /// Observation tensor shape (v2.2 export contract; see export_manifest.json).
@@ -442,6 +447,118 @@ fn batched_search_core<E: BatchLeafEval>(
 }
 
 // ---------------------------------------------------------------------------
+// Batched MULTI-PLY search with model leaf pricing (virtual-loss batching
+// through chance nodes)
+// ---------------------------------------------------------------------------
+
+/// Multi-ply virtual-loss batched search core (tree mechanics in `tree.rs`).
+///
+/// Batching-through-chance design (documented choice): traversal resolves a
+/// chance node by WEIGHTED SAMPLING over the engine's exact branch
+/// probabilities; backup resolves it by EXACT EXPECTATION over the current
+/// branch means. All model rows come from EXPANSIONS: expanding a joint edge
+/// prices every enumerated outcome (terminal branches exactly, the rest as
+/// deferred batch rows), so the edge's first backed-up value is already the
+/// exact expectation over model values. Virtual loss (provisional side-one
+/// loss on decision arms, provisional visit on traversed branches, deferred
+/// rows carried via `ChanceBranch::pending_row`) keeps a round's selections
+/// diverse; `finalize` replaces every provisional in collection order.
+///
+/// A round collects traversals until either `batch_size` traversals or
+/// `batch_size` pending rows accumulate (an expansion never splits across
+/// rounds, so the final expansion may overshoot the row budget by its branch
+/// count); the observation batch is then sized to the exact pending-row
+/// count. Rows are template-stub encoded — the Rust encoder (track B) will
+/// replace the row write with a real per-leaf encode at the same seam.
+#[allow(clippy::too_many_arguments)]
+fn multiply_batched_core<E: BatchLeafEval>(
+    state_str: &str,
+    iterations: usize,
+    batch_size: usize,
+    max_depth: u8,
+    deep_ko_split: bool,
+    template: &ObsBatch,
+    evaluator: &E,
+    spec: &ObsSpec,
+    c_puct: f32,
+    seed: u64,
+) -> PyResult<String> {
+    let mut state = parse_state(state_str)?;
+    if state.battle_is_over() != 0.0 {
+        return Err(PyValueError::new_err("battle is already over at the root"));
+    }
+    let cfg = MultiPlyConfig {
+        max_depth,
+        c_puct,
+        deep_ko_split,
+    };
+    let mut tree = Tree::from_root(&state)?;
+    let mut counters = SearchCounters::default();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut completed = 0usize;
+    let mut rounds = 0usize;
+    let mut model_evals = 0usize;
+    let start = Instant::now();
+    while completed < iterations {
+        let traversal_budget = batch_size.min(iterations - completed);
+        let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
+        let mut pending_rows = 0usize;
+        while traversals.len() < traversal_budget && pending_rows < batch_size {
+            let traversal = traverse(
+                &mut tree,
+                &mut state,
+                &mut rng,
+                &cfg,
+                &mut counters,
+                &mut |_leaf: &State| {
+                    // Template-stub encode happens after collection (content
+                    // is state-independent until the track-B encoder lands);
+                    // this closure only claims the batch row.
+                    let row = pending_rows;
+                    pending_rows += 1;
+                    LeafPrice::Deferred(row)
+                },
+            );
+            traversals.push(traversal);
+        }
+        let row_values = if pending_rows > 0 {
+            let mut batch = ObsBatch::zeros(spec, pending_rows as i64);
+            for row in 0..pending_rows {
+                batch.write_row(row as i64, template);
+            }
+            let output = evaluator.eval_batch(&batch, None)?;
+            model_evals += pending_rows;
+            output.values01
+        } else {
+            Vec::new()
+        };
+        for traversal in &traversals {
+            finalize(&mut tree, traversal, &row_values);
+        }
+        completed += traversals.len();
+        rounds += 1;
+    }
+    let elapsed_s = start.elapsed().as_secs_f64();
+    let outcome = MultiPlyOutcome {
+        tree,
+        counters,
+        elapsed_s,
+    };
+    let extra = format!(
+        "\"batch_size\":{},\"rounds\":{},\"model_evals\":{}",
+        batch_size, rounds, model_evals
+    );
+    Ok(multiply_report_json(
+        &outcome,
+        iterations,
+        &cfg,
+        seed,
+        "torchscript",
+        &extra,
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Python surface
 // ---------------------------------------------------------------------------
 
@@ -657,6 +774,76 @@ impl NativeLeafModel {
                 state_str,
                 iterations,
                 batch_size,
+                &template,
+                &self.evaluator,
+                &spec,
+                c_puct,
+                seed,
+            )
+        })
+    }
+
+    /// Model-in-the-loop MULTI-PLY batched search (decision/chance tree with
+    /// exact-expectation backup; see `multiply_batched_core` for the
+    /// batching-through-chance design). The template observation stands in
+    /// for per-leaf encoding until the Rust encoder (track B) plugs in.
+    /// Returns the search report as JSON. Runs with the GIL released.
+    #[pyo3(signature = (
+        state_str,
+        iterations,
+        batch_size,
+        categorical_ids,
+        numeric_features,
+        token_type_ids,
+        attention_mask,
+        history_mask,
+        max_depth = 2,
+        c_puct = 1.4,
+        seed = 0,
+        deep_ko_split = true,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn search_batched_multi(
+        &self,
+        py: Python<'_>,
+        state_str: &str,
+        iterations: usize,
+        batch_size: usize,
+        categorical_ids: Vec<i64>,
+        numeric_features: Vec<f32>,
+        token_type_ids: Vec<i64>,
+        attention_mask: Vec<bool>,
+        history_mask: Vec<bool>,
+        max_depth: u8,
+        c_puct: f32,
+        seed: u64,
+        deep_ko_split: bool,
+    ) -> PyResult<String> {
+        if iterations == 0 || batch_size == 0 {
+            return Err(PyValueError::new_err(
+                "iterations and batch_size must be > 0",
+            ));
+        }
+        if max_depth == 0 || max_depth > 32 {
+            return Err(PyValueError::new_err("max_depth must be in 1..=32"));
+        }
+        py.detach(|| {
+            let spec = self.evaluator.spec();
+            let template = ObsBatch::from_flat(
+                &spec,
+                1,
+                &categorical_ids,
+                &numeric_features,
+                &token_type_ids,
+                &attention_mask,
+                &history_mask,
+            )?;
+            multiply_batched_core(
+                state_str,
+                iterations,
+                batch_size,
+                max_depth,
+                deep_ko_split,
                 &template,
                 &self.evaluator,
                 &spec,

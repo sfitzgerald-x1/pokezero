@@ -319,5 +319,105 @@ class BatchedModelSearchTest(unittest.TestCase):
             self.native.search_batched(self.state_str, 0, 8, *self.template)
 
 
+@unittest.skipUnless(_crate_has_model, "pokezero_search built without the model feature")
+@unittest.skipIf(torch is None, "requires torch")
+class MultiPlyBatchedModelSearchTest(unittest.TestCase):
+    """Mechanics smoke for the MULTI-PLY virtual-loss batched search
+    (`search_batched_multi`): decision/chance tree with exact-expectation
+    backup, model rows collected at expansions (see
+    docs/crate_search_design.md). Correctness of the tree core itself is
+    gated in tests/test_multiply_chance_search.py and the crate's cargo
+    tests; this class covers the batched model surface.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.export = _load_export_module()
+        cls.config = _tiny_config()
+        from pokezero.neural_policy import EntityTokenTransformerPolicy
+
+        torch.manual_seed(47)
+        model = EntityTokenTransformerPolicy(cls.config).eval()
+        shim = cls.export.build_exportable_module(model)
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.ts_path = Path(cls.tmpdir.name) / "tiny_ts.pt"
+        cls.export.export_torchscript(
+            shim, cls.export.make_random_inputs(cls.config, cls.export.TRACE_BATCH, seed=7), cls.ts_path
+        )
+        cls.native = pokezero_search.NativeLeafModel(
+            str(cls.ts_path),
+            device="cpu",
+            window=cls.config.window_size,
+            tokens=cls.config.token_count,
+            categorical_features=cls.config.categorical_feature_count,
+            numeric_features=cls.config.numeric_feature_count,
+        )
+        cls.template = _flatten_inputs(cls.export.make_random_inputs(cls.config, 1, seed=808))
+        try:
+            from pokezero.poke_engine_adapter import (
+                build_poke_engine_state,
+                minimal_gen3_fixture,
+            )
+
+            cls.state_str = build_poke_engine_state(minimal_gen3_fixture()).to_string()
+        except Exception as exc:  # engine binding missing/broken
+            cls.state_str = None
+            cls.fixture_error = exc
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmpdir.cleanup()
+
+    def setUp(self) -> None:
+        if self.state_str is None:
+            self.skipTest(f"poke_engine fixture unavailable: {self.fixture_error}")
+
+    def _search(self, iterations: int, batch_size: int, *, max_depth: int = 3, seed: int = 0) -> dict:
+        report = self.native.search_batched_multi(
+            self.state_str, iterations, batch_size, *self.template,
+            max_depth=max_depth, seed=seed,
+        )
+        return json.loads(report)
+
+    def test_visit_conservation_and_shape(self) -> None:
+        iterations, batch_size = 96, 16
+        report = self._search(iterations, batch_size)
+        self.assertEqual(report["iterations"], iterations)
+        self.assertEqual(report["search"], "multi_ply")
+        self.assertEqual(report["evaluator"], "torchscript")
+        self.assertEqual(report["batch_size"], batch_size)
+        # Expansions price every enumerated outcome, so model evals track
+        # leaf_evals (chance-branch leaves), not iterations.
+        self.assertEqual(report["model_evals"], report["leaf_evals"])
+        for side in ("side_one", "side_two"):
+            visits = sum(entry["visits"] for entry in report[side])
+            self.assertEqual(visits, iterations, f"{side} visit conservation")
+            for entry in report[side]:
+                self.assertGreaterEqual(entry["q"], 0.0)
+                self.assertLessEqual(entry["q"], 1.0)
+
+    def test_seed_determinism(self) -> None:
+        first = self._search(64, 8, seed=9)
+        second = self._search(64, 8, seed=9)
+        self.assertEqual(first["side_one"], second["side_one"])
+        self.assertEqual(first["side_two"], second["side_two"])
+        self.assertEqual(first["chance_nodes"], second["chance_nodes"])
+
+    def test_depth_grows_tree(self) -> None:
+        shallow = self._search(128, 8, max_depth=1)
+        self.assertEqual(shallow["decision_nodes"], 1)
+        deep = self._search(128, 8, max_depth=3)
+        self.assertGreater(deep["decision_nodes"], 1)
+        self.assertLess(deep["max_depth_reached"], 3)
+
+    def test_rejects_bad_arguments(self) -> None:
+        with self.assertRaises(ValueError):
+            self.native.search_batched_multi(self.state_str, 0, 8, *self.template)
+        with self.assertRaises(ValueError):
+            self.native.search_batched_multi(
+                self.state_str, 8, 8, *self.template, max_depth=0
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
