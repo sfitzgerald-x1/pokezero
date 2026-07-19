@@ -1731,6 +1731,24 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             "branch_belief_overlay_projection_seconds",
         ):
             self.assertGreaterEqual(after_fused_branch[key] - before_fused_branch[key], 0.0)
+        nested_state_normalization_seconds = sum(
+            after_fused_branch[key] - before_fused_branch[key]
+            for key in (
+                "branch_observation_incremental_sync_seconds",
+                "branch_observation_replay_snapshot_seconds",
+                "branch_observation_player_state_normalization_seconds",
+                "branch_observation_state_annotation_seconds",
+            )
+        )
+        parent_state_normalization_seconds = (
+            after_fused_branch["branch_observation_state_normalization_seconds"]
+            - before_fused_branch["branch_observation_state_normalization_seconds"]
+        )
+        # The outer observation timer must contain every nested attribution timer.
+        self.assertGreaterEqual(
+            parent_state_normalization_seconds + 1e-9,
+            nested_state_normalization_seconds,
+        )
 
     def test_search_snapshot_fast_path_reuses_choices_and_limits_zero_rollout_view(self) -> None:
         config = integration_config()
