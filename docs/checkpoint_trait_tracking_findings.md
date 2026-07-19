@@ -30,12 +30,12 @@ Lineages are resolved from run-directory names by pattern (`trait_inventory.py`)
 continuation legs automatically; run names drift as new legs are added, so the inventory is re-run
 each refresh and G0 is re-checked — it passes, and the tracked lineages resolve cleanly.
 
-**Data.** 95 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
-5000 at 500k) — **89 checkpoints**, following the active lineages to their current frontiers:
-m50-ep7 100k→3300k (33 pts), v22-lr3m →3000k (30), l200-ep7-wu75 →2600k (26). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
+**Data.** 105 metric sets. Self-play at every 100k milestone per lineage (2000 games/milestone,
+5000 at 500k) — **99 checkpoints**, following the active lineages to their current frontiers:
+m50-ep7 100k→3800k (38 pts), l200-ep7-wu75 →3100k (31), v22-lr3m →3000k (30). Foul-play (~950–1000 games, FoulPlay search at 1000 ms/move) at 500k and a frontier
 per lineage — 6 checkpoints. **Foul-play was not re-run for the latest refreshes, so its
 checkpoints trail the self-play frontiers badly** (m50-ep7 foul-play is @1000k while self-play now
-reaches 3300k); the foul-play panel and the trait↔win-rate correlations describe those specific
+reaches 3800k); the foul-play panel and the trait↔win-rate correlations describe those specific
 older checkpoints, not the current frontier. Self-play and foul-play are kept separate and never
 merged. The observation unit is the behavioral-seat-game (self-play has two behavioral seats,
 foul-play one), so rates are comparable across the two.
