@@ -183,28 +183,39 @@ classifying it.
    V2 PIMC contract requires. This is a correctness repair, not a claimed
    speedup; batching or otherwise accelerating the required retained worlds is
    the next throughput target.
-   **Cross-world initial-leaf batching (V2 implementation complete; runtime
-   validation pending):** eligible fixed-visit, zero-rollout searches now
-   prepare every retained shared belief world, issue one transformer-value batch
-   over all of their independent mandatory root leaves, then continue each
-   world's adaptive visits sequentially. The batch preserves sampled-world
-   aggregation and never applies to time-budgeted or leaf-rollout search, whose
-   semantics would otherwise change. A fresh mechanics/telemetry probe must
-   verify the lower forward-call count and unchanged P-1 checksum before this is
-   treated as a W5 throughput result.
-   A one-round-trip retained-snapshot branch candidate is merged behind the
-   belief-sampled bridge-handle guard; direct materialization remains the
-   correct path but is no longer the primary throughput lever.
-2. **Tier 2 — direct state construction (implemented; validation in
-   progress):** `prepare_direct_materialization_prefix` and
+   **Bounded telemetry (2026-07-18):** the CPU-only extra-120 read completed
+   with `prefix_replay_count = 0`, 132/132 direct materializations in the W2
+   mechanics game, and one fallback across the companion 61-decision W1
+   diagnostic (1.6%, `illegal_action_for_current_request`). The W2 game itself
+   had two non-search decisions out of 35; these are branch-legality outcomes,
+   not replay or direct-materialization failures. This validates Tier 2's
+   primary path and preserves the P-1 gate, but it is not a strength result.
+   Cross-world initial-leaf batching also executed: it saved 995 neural-forward
+   calls out of 16,868 value evaluations (5.9%). Adaptive revisits remain
+   sequential, so that reduction alone does not settle the wall-clock problem.
+   The resulting decision wall was 14.69s mean / 18.13s p95, still a bounded
+   mechanics read rather than a ladder budget claim.
+
+   **Attributed next target (2026-07-18):** raw residual is now only 0.02s per
+   decision. Within the 7.78s branch-step wall, post-branch result projection
+   costs 3.69s and action-choice encoding costs 2.69s; bridge round trips cost
+   1.00s, local restore 0.38s, and branch-internal residual is 0.02s. The next
+   V2 change therefore caches legal action-to-Showdown-choice translations per
+   retained belief-sampled snapshot and emits only the searched player's
+   post-branch observation for zero-rollout leaves. It must retain full
+   observations for rollout tails, fall back to normal legality validation for
+   stale inputs, and re-run this same bounded telemetry before any throughput
+   claim.
+2. **Tier 2 — direct state construction (implemented and primary-path
+   validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
    belief-sampled world and construct the public branch point from teams, HP,
    statuses, boosts, side conditions, and field state without replaying the
    recorded protocol prefix. Unsupported public effects fail closed rather
-   than approximating simulator state. The strict W5 runner verifies that the
-   direct path is exercised and that prefix replay is zero, but the fresh
-   telemetry probe must still establish coverage, fallback behavior, and the
-   remaining wall-clock cost before Tier 2 is treated as validated.
+   than approximating simulator state. The strict W5 runner and bounded
+   telemetry now establish direct-path coverage, zero prefix replay, fallback
+   behavior, and remaining wall-clock cost. Branch-legality fallout remains a
+   W1 concern rather than a direct-construction validation failure.
 3. **Correctness constraint:** never serialize the live battle — only
    determinized worlds built from public information. The P-1 anti-leakage
    checksum gate must pass unchanged on the new path.
@@ -220,9 +231,9 @@ classifying it.
    redesign loop.
 
 Deferred: tree reuse, early termination, vectorized stepping, and the multi-ply
-question — all get re-priced on the fast path once the batched-leaf validation
-has a durable result. Success remains **more winrate at fixed wall-clock**,
-not more visits.
+question — all get re-priced after the cached-choice/single-view probe has a
+durable result. Success remains **more winrate at fixed wall-clock**, not more
+visits.
 
 ## Order and cost
 
