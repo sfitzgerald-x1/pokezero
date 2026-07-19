@@ -78,8 +78,19 @@ below), not inherited as an assumption.
    the normalized values the observation exposes), plus any other running
    state. Rationale: at search time the root's tokens already exist (real
    boundary); every branch shares the root prefix and appends only its own
-   simulated events. Nothing in production ever folds a full game stream
-   from scratch. NO FREEZING of history-derived columns at search leaves:
+   simulated events. IMPORTANT scoping correction (review-verified):
+   production today RECOMPUTES the full fold on every observe — both the
+   online client and the self-play observe path call
+   `extract_transitions_and_tendencies` over the whole public log; no
+   persistent transition/tendency fold state exists anywhere. The fold
+   state must therefore be BUILT (refactor `_fold_replay` into an
+   incremental accumulator) and its validity rests on the fold being
+   deterministic and PREFIX-CLOSED — an unproven property the prerequisite
+   probe below must establish before the schema lands. Known closure
+   risks the probe must clear: `_flag_pursuit_intercepts` is a global
+   post-pass over all windows, and `opportunity_turns` is a whole-game
+   set. The refactor + closure proof are the two hardest parts of track B.
+   NO FREEZING of history-derived columns at search leaves:
    a leaf whose transition tokens show simulated turns that its tendency
    columns ignore is internally inconsistent — an out-of-distribution input
    the model never saw in training (owner decision; early-game tendency
@@ -107,7 +118,7 @@ gen3 accuracy. If it fails badly, A and B pivot before they are deep. (One
 gen3 bug is already known and patched locally: Rest/Sleep Talk PP
 underflow.)
 
-**Status ledger (2026-07-18 EOD):** A COMPLETE (world constructor + four
+**Status ledger (2026-07-18 EOD):** A COMPLETE (world constructor + the
 edge-case waves — Transform, Shedinja HP, recharge, Trick, Truant, Encore,
 Baton Pass boundary; engine-search fallback 0.0% with three-tier loud
 alerting; see docs/belief_edge_case_matrix.md). C COMPLETE for waves 1-2
@@ -125,8 +136,12 @@ on, and "exact" cannot be verified by reading code — only against a
 reference. The corpus is that reference: a few thousand decision points from
 real games storing (a) the position in poke-engine representation (input to
 the new encoder) and (b) the observation tensor the production encoder
-emitted for that position (golden output). Track B is done when every
-stored tensor is reproduced bit-for-bit.
+emitted for that position (golden output). Definition of done (split per
+the schema-v2 decision below): BOUNDARY cells (tokens 0-22) — every stored
+tensor reproduced bit-for-bit from the single-row surface (met, PR #710);
+HISTORY cells (transition tokens 23-150, tendency aggregates) — the
+fold-state ADVANCE check passes row-pair by row-pair (single-row
+reproduction is provably impossible for these; PR #710's phase-1 finding).
 
 It guards against the failure mode that never crashes: encoding drift.
 A transition token ordered differently, an HP fraction scaled off a
@@ -200,7 +215,7 @@ regardless. The endgame is therefore NOT an upstream fork but our own
   (TorchScript via tch-rs or ONNX Runtime; the model is a plain
   transformer encoder and exports cleanly; fp16/int8 buys 2–4×);
 - implements the v2.2 encoder ONCE, in Rust, exposed to Python via PyO3 so
-  the golden corpus validates it bit-exactly — this becomes track B's
+  the golden corpus validates it (boundary cells bit-exactly per row; history cells via the advance check) — this becomes track B's
   deliverable, replacing a Python encoder that would need a Rust rewrite.
 
 **Search-tree contract (owner-aligned 2026-07-18).** The value head
@@ -209,8 +224,9 @@ policy maximizes plain expected value — no risk adjustment is ever correct
 on top of it. Variance is handled structurally, in three places:
 
 1. **Chance nodes are explicit and exact.** `generate_instructions` returns
-   the enumerated branch distribution with exact probabilities (2-8
-   branches/joint action). Decision nodes run PUCT over our actions; each
+   the enumerated branch distribution with exact probabilities (typically
+   a handful of branches per joint action; speed-tie x crit x secondary
+   tails can exceed that - unmeasured, hence the cutoff below). Decision nodes run PUCT over our actions; each
    joint-action edge resolves by exact expectation over the enumerated
    branches, not sampling — strictly lower estimator variance at equal
    budget on small supports. Sampling only past a depth/branch-product
