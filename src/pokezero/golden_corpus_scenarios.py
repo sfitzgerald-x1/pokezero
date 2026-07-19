@@ -33,7 +33,9 @@ from .golden_corpus import (
     _true_teams_from_bridge_snapshot,
     write_golden_corpus,
 )
+from .golden_corpus_fold import FoldSurfaceRecorder, build_fold_rows
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .showdown_fixture import FixturePokemon, pack_team
@@ -200,6 +202,7 @@ def play_scenario_games(
 
     config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
     env = LocalShowdownEnv(config)
+    turn_merged_active = config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
     games: list[GoldenGame] = []
     try:
         belief_hash = env.belief_set_source_hash
@@ -209,9 +212,11 @@ def play_scenario_games(
             env.reset_with_start_override(seed=spec.seed, start_override=override)
             true_teams = _true_teams_from_bridge_snapshot(env.snapshot().bridge_snapshot)
             captures: list[tuple[PolicyContext, PolicyDecision]] = []
+            recorder = FoldSurfaceRecorder(env)
 
             def _sink(context: PolicyContext, decision: PolicyDecision) -> None:
                 captures.append((context, decision))
+                recorder.record(context.player_id)
 
             policies = {
                 "p1": _CapturingPolicy(ScriptedPreferencePolicy(spec.p1_prefs), _sink),
@@ -233,6 +238,11 @@ def play_scenario_games(
                 _decision_row_from_context(context, decision, battle_seed=spec.seed)
                 for context, decision in captures
             )
+            fold_rows = build_fold_rows(
+                replays=[context.public_materialization_state.replay for context, _ in captures],
+                surfaces=recorder.surfaces,
+                turn_merged_active=turn_merged_active,
+            )
             record = GoldenGameRecord(
                 battle_seed=spec.seed,
                 battle_id=battle_id,
@@ -245,7 +255,7 @@ def play_scenario_games(
                     "capped": result.terminal.capped,
                 },
             )
-            games.append(GoldenGame(record=record, rows=rows))
+            games.append(GoldenGame(record=record, rows=rows, fold_rows=fold_rows))
     finally:
         env.close()
     return games, belief_hash
@@ -354,9 +364,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate the edge-case scenario corpus")
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--belief-set-source",
+        choices=("env", "on", "off"),
+        default="env",
+        help="Candidate-set belief source: pin on/off, or defer to POKEZERO_BELIEF_SET_SOURCE (default).",
+    )
     args = parser.parse_args(argv)
-    manifest = generate_scenario_corpus(out_dir=Path(args.out), showdown_root=args.showdown_root)
-    print(f"scenario corpus written: {manifest.get('row_count', '?')} rows -> {args.out}")
+    belief_set_source = {"env": None, "on": True, "off": False}[args.belief_set_source]
+    manifest = generate_scenario_corpus(
+        out_dir=Path(args.out),
+        showdown_root=args.showdown_root,
+        belief_set_source=belief_set_source,
+    )
+    counts = manifest.get("counts", {})
+    print(
+        f"scenario corpus written: {counts.get('decisions', '?')} rows "
+        f"({counts.get('fold_rows', 0)} fold rows) -> {args.out}"
+    )
     return 0
 
 

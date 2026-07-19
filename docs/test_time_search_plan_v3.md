@@ -124,8 +124,13 @@ Baton Pass boundary; engine-search fallback 0.0% with three-tier loud
 alerting; see docs/belief_edge_case_matrix.md). C COMPLETE for waves 1-2
 (one-turn 15/15 on the patched build; multi-turn 6/6; tier-2 real-game
 sweep still owes the per-source matcher). B: boundary tokens 0-22 bit-exact
-in Rust (PR #710); remaining = schema v2 + the fold-state advance + the
-instruction->event mapping. D: crate model integration
+in Rust (PR #710); fold-state advance built + closure-proven
+(`transitions_fold.py`, PR #718); schema v2 COMPLETE — corpus regenerated
+with per-row fold state + event slices + overlays, row-pair advance
+validation green over every boundary of the random battery AND the full
+scenario suite (`scripts/validate_corpus_v2.py`, backend seam ready for the
+Rust advance; see docs/golden_corpus_notes.md "Corpus v2"); remaining = the
+Rust advance() port + the instruction->event mapping. D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); remaining = encoder hand-off (track B) +

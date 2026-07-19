@@ -27,6 +27,7 @@
   },
   "counts": {
     "decisions": 5,
+    "fold_rows": 5,
     "games": 1
   },
   "files": {
@@ -34,11 +35,16 @@
       "bytes": 6661,
       "sha256": "5ec0a0aa8849c9d5fee6c9ac24545869d904d6d979e1c0d1bd90ffcda44e7823"
     },
+    "fold.jsonl.gz": {
+      "bytes": 3405,
+      "sha256": "ff79b379f41f384364760ea78974b4ffdc9d7ee9126f41594fe9a14b214ba34f",
+      "uncompressed_bytes": 51562
+    },
     "rows.jsonl": {
       "bytes": 101570,
-      "sha256": "12cf400addab1f790d515eaa7ddadc124e1d3d1b0426d69e64f9308aa8fc5645"
+      "sha256": "703a9ebf7160c62f8ac09ac7b1b02ef453b510d6d81ee41f5dcd68f9275d40ad"
     }
   },
-  "schema_sha256": "42723ed94c8573ff146ad743195f0d349cfa047ec5c09904dd333d058eea8e9e",
-  "schema_version": "pokezero.golden-encoder-corpus.v1"
+  "schema_sha256": "879230ebe3c45556aaae820a17fd0c5da10207d69e3322f75f8cf27d9bb564f1",
+  "schema_version": "pokezero.golden-encoder-corpus.v2"
 }

@@ -235,6 +235,7 @@ class GoldenCorpusCommittedSampleTest(unittest.TestCase):
 
         self.assertEqual(verification.games, 1)
         self.assertEqual(verification.decisions, 5)
+        self.assertEqual(verification.fold_rows, 5)  # schema v2: fold surface present
         self.assertEqual(verification.array_shapes["categorical_ids"], (151, 51))
         self.assertEqual(verification.array_shapes["numeric_features"], (151, 155))
         self.assertEqual(verification.array_shapes["token_type_ids"], (151,))
@@ -270,12 +271,35 @@ class GoldenCorpusLiveSmokeTest(unittest.TestCase):
             )
 
             self.assertEqual(manifest["schema_version"], GOLDEN_CORPUS_SCHEMA_VERSION)
-            for filename in (GOLDEN_ROWS_FILENAME, GOLDEN_ARRAYS_FILENAME, GOLDEN_MANIFEST_FILENAME):
+            from pokezero.golden_corpus import FOLD_ROWS_FILENAME
+
+            for filename in (
+                GOLDEN_ROWS_FILENAME,
+                GOLDEN_ARRAYS_FILENAME,
+                GOLDEN_MANIFEST_FILENAME,
+                FOLD_ROWS_FILENAME,
+            ):
                 self.assertTrue((out_dir / filename).exists(), filename)
 
             verification = verify_golden_corpus(out_dir)
             self.assertEqual(verification.games, 1)
             self.assertGreater(verification.decisions, 0)
+            self.assertEqual(verification.fold_rows, verification.decisions)
+
+            # Schema v2 end to end: every generated fold chain must satisfy the
+            # row-pair advance contract through the reference backend.
+            from pokezero.golden_corpus_fold import (
+                PythonReferenceFoldBackend,
+                validate_fold_chains,
+            )
+
+            report = validate_fold_chains(
+                out_dir,
+                PythonReferenceFoldBackend(),
+                expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION,
+            )
+            self.assertTrue(report.ok, report.mismatches)
+            self.assertEqual(report.rows_validated, verification.decisions)
             self.assertEqual(verification.array_shapes["categorical_ids"], (151, 51))
             self.assertEqual(verification.array_shapes["numeric_features"], (151, 155))
             self.assertEqual(verification.array_shapes["legal_action_mask"], (ACTION_COUNT,))
