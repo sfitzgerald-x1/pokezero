@@ -1266,6 +1266,55 @@ class LiveTrackerTest(unittest.TestCase):
         self.assertEqual(tracker.cb_bits, dict(batch.cb_bits))
         self.assertTrue(tracker.cb_bits.get("p2:snorlax"))
 
+    def test_clone_isolates_nonempty_annotation_state(self) -> None:
+        from pokezero.belief import PublicBattleBeliefEngine
+
+        lines = self._multi_turn_lines()
+        tracker = Tier2LiveTracker(
+            perspective_slot="p1",
+            own_team=_OWN_TEAM,
+            dex=_DEX,
+            whitelist=_WHITELIST,
+        )
+        engine = PublicBattleBeliefEngine(
+            format_id="gen3randombattle",
+            set_source=FakeSource({"snorlax": _SNORLAX_VARIANTS}),
+        )
+        fed = 0
+        for boundary in self._turn_boundaries(lines):
+            replay = parse_showdown_replay(lines[:boundary])
+            while fed < len(replay.public_events):
+                engine.ingest_event(replay.public_events[fed])
+                fed += 1
+            tracker.annotate(
+                replay,
+                extract_transition_tokens(replay, perspective_slot="p1"),
+                engine,
+            )
+
+        self.assertTrue(tracker._residuals)
+        self.assertTrue(tracker._cb_turns)
+        self.assertTrue(tracker._cb_bit_indices)
+        original_residuals = dict(tracker._residuals)
+        original_cb_turns = {key: list(turns) for key, turns in tracker._cb_turns.items()}
+        original_non_ko = set(tracker._cb_non_ko)
+        original_bit_indices = set(tracker._cb_bit_indices)
+        original_boosts = {side: dict(boosts) for side, boosts in tracker._fold.boosts.items()}
+
+        cloned = tracker.clone()
+        attacker_key = next(iter(cloned._cb_turns))
+        cloned._residuals[-1] = 1.0
+        cloned._cb_turns[attacker_key].append(99)
+        cloned._cb_non_ko.add("p2:clone-only")
+        cloned._cb_bit_indices.add(999)
+        cloned._fold.boosts["p1"]["atk"] = 6
+
+        self.assertEqual(tracker._residuals, original_residuals)
+        self.assertEqual(tracker._cb_turns, original_cb_turns)
+        self.assertEqual(tracker._cb_non_ko, original_non_ko)
+        self.assertEqual(tracker._cb_bit_indices, original_bit_indices)
+        self.assertEqual(tracker._fold.boosts, original_boosts)
+
     def test_annotate_rejects_misaligned_tokens(self) -> None:
         from pokezero.belief import PublicBattleBeliefEngine
 

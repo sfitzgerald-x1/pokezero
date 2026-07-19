@@ -322,6 +322,31 @@ class _IncrementalContextFold:
         self.token_line_indices: list[int] = []
         self._processed = 0
 
+    def clone(self) -> "_IncrementalContextFold":
+        """Return an independent continuation state without re-folding its prefix.
+
+        ``StrikeContext`` instances are immutable after construction, so the clone can
+        safely share them. Mutable accumulator containers must be copied because a
+        search branch can process a different protocol suffix from the same snapshot.
+        """
+
+        cloned = _IncrementalContextFold.__new__(_IncrementalContextFold)
+        cloned.occupant = dict(self.occupant)
+        cloned.status = dict(self.status)
+        cloned.boosts = {side: dict(boosts) for side, boosts in self.boosts.items()}
+        cloned.pending_bp = dict(self.pending_bp)
+        cloned.flash_fire = dict(self.flash_fire)
+        cloned.transformed = dict(self.transformed)
+        cloned.type_changed = dict(self.type_changed)
+        cloned.ability_overridden = dict(self.ability_overridden)
+        cloned.item_mutated = set(self.item_mutated)
+        cloned.hp = dict(self.hp)
+        cloned.side_counts = {side: dict(counts) for side, counts in self.side_counts.items()}
+        cloned.contexts = dict(self.contexts)
+        cloned.token_line_indices = list(self.token_line_indices)
+        cloned._processed = self._processed
+        return cloned
+
     def process(self, raw_lines: Sequence[str]) -> None:
         """Fold any not-yet-seen suffix of ``raw_lines`` (lines are processed once)."""
         for index in range(self._processed, len(raw_lines)):
@@ -1157,6 +1182,30 @@ class Tier2LiveTracker:
         self._cb_turns: dict[str, list[int]] = {}
         self._cb_non_ko: set[str] = set()
         self._cb_bit_indices: set[int] = set()
+
+    def clone(self) -> "Tier2LiveTracker":
+        """Clone the incremental state for one independent search branch.
+
+        The dex, whitelist, and stat-cache values are read-only after creation. The
+        branch-specific fold and inference ledgers are copied so sibling branches
+        cannot influence one another's residual or Choice Band conclusions.
+        """
+
+        cloned = Tier2LiveTracker.__new__(Tier2LiveTracker)
+        cloned._perspective = self._perspective
+        cloned._opponent = self._opponent
+        cloned._own_by_species = self._own_by_species
+        cloned._dex = self._dex
+        cloned._whitelist = self._whitelist
+        cloned._config = self._config
+        cloned._fold = self._fold.clone()
+        cloned._stats_cache = dict(self._stats_cache)
+        cloned._assessed_until = self._assessed_until
+        cloned._residuals = dict(self._residuals)
+        cloned._cb_turns = {key: list(turns) for key, turns in self._cb_turns.items()}
+        cloned._cb_non_ko = set(self._cb_non_ko)
+        cloned._cb_bit_indices = set(self._cb_bit_indices)
+        return cloned
 
     @property
     def cb_bits(self) -> dict[str, bool]:

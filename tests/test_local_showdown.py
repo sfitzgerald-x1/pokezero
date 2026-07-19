@@ -1793,6 +1793,172 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(set(result.observations), {"p1"})
         self.assertEqual(result.requested_players, ("p1", "p2"))
 
+    def test_search_snapshot_restores_independent_annotation_trackers(self) -> None:
+        config = integration_config()
+        assert config is not None
+        config = replace(
+            config,
+            set_belief_source=True,
+            feature_masks=ObservationFeatureMasks(tier2_investment=True),
+        )
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Tauros",
+                            ability="Intimidate",
+                            moves=("Double-Edge", "Earthquake"),
+                            level=76,
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Snorlax",
+                            ability="Immunity",
+                            moves=("Body Slam", "Earthquake"),
+                            level=71,
+                        ),
+                    )
+                ),
+            },
+            # The custom-game shell makes the sampled-world snapshot controllable;
+            # the observation format keeps the source-backed Gen 3 set universe
+            # active for the annotation evidence this regression exercises.
+            observation_format_id="gen3randombattle",
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=23, start_override=start_override)
+            # Build a real annotation prefix before capturing the search snapshot.
+            # Tauros/Snorlax are source-backed sets, and this turn yields a residual
+            # for each perspective plus one assessed investment strike per tracker.
+            env.step({"p1": 0, "p2": 0})
+            snapshot = env.snapshot_for_search()
+            annotation_cache = snapshot.search_annotation_cache
+            self.assertIsNotNone(annotation_cache)
+            assert annotation_cache is not None
+            self.assertEqual(set(annotation_cache.tier2_trackers), {"p1", "p2"})
+            self.assertEqual(set(annotation_cache.investment_trackers), {"p1", "p2"})
+            self.assertTrue(
+                all(tracker._residuals for tracker in annotation_cache.tier2_trackers.values())
+            )
+            self.assertTrue(
+                all(tracker._state.strikes for tracker in annotation_cache.investment_trackers.values())
+            )
+
+            def tracker_state(
+                tier2_trackers: Mapping[str, Any], investment_trackers: Mapping[str, Any]
+            ) -> tuple[dict[str, tuple[object, ...]], dict[str, tuple[object, ...]]]:
+                return (
+                    {
+                        player: (
+                            tracker._fold._processed,
+                            tracker._assessed_until,
+                            dict(tracker._residuals),
+                            {key: tuple(turns) for key, turns in tracker._cb_turns.items()},
+                            set(tracker._cb_non_ko),
+                            set(tracker._cb_bit_indices),
+                        )
+                        for player, tracker in tier2_trackers.items()
+                    },
+                    {
+                        player: (
+                            tracker._fold._processed,
+                            tracker._assessed_until,
+                            tuple(tracker._state.strikes),
+                            dict(tracker._state.token_codes),
+                            {
+                                key: (
+                                    list(ledger.hp.pins),
+                                    ledger.hp.blocked,
+                                    ledger.hp.concluded_value,
+                                    ledger.hp.concluded_class,
+                                    ledger.hp.concluded_turns,
+                                    {
+                                        stat: (
+                                            list(axis.pins),
+                                            axis.blocked,
+                                            axis.concluded_value,
+                                            axis.concluded_class,
+                                            axis.concluded_turns,
+                                        )
+                                        for stat, axis in ledger.defense.items()
+                                    },
+                                )
+                                for key, ledger in tracker._state.ledgers.items()
+                            },
+                        )
+                        for player, tracker in investment_trackers.items()
+                    },
+                )
+
+            prefix_state = tracker_state(
+                annotation_cache.tier2_trackers,
+                annotation_cache.investment_trackers,
+            )
+
+            # Branch A grows both trackers beyond the non-empty prefix.
+            first_result = env.step_from_search_snapshot(snapshot, {"p1": 1, "p2": 1})
+            self.assertIsNot(env._tier2_trackers["p1"], annotation_cache.tier2_trackers["p1"])
+            self.assertIsNot(
+                env._investment_trackers["p1"], annotation_cache.investment_trackers["p1"]
+            )
+            self.assertGreater(
+                env._tier2_trackers["p1"]._fold._processed,
+                annotation_cache.tier2_trackers["p1"]._fold._processed,
+            )
+            self.assertGreater(
+                len(env._tier2_trackers["p1"]._residuals),
+                len(annotation_cache.tier2_trackers["p1"]._residuals),
+            )
+            self.assertGreater(
+                len(env._investment_trackers["p1"]._state.strikes),
+                len(annotation_cache.investment_trackers["p1"]._state.strikes),
+            )
+            self.assertEqual(
+                tracker_state(
+                    annotation_cache.tier2_trackers,
+                    annotation_cache.investment_trackers,
+                ),
+                prefix_state,
+            )
+
+            env.restore_search_snapshot(snapshot)
+            self.assertIsNot(env._tier2_trackers["p1"], annotation_cache.tier2_trackers["p1"])
+            self.assertIsNot(
+                env._investment_trackers["p1"], annotation_cache.investment_trackers["p1"]
+            )
+            self.assertEqual(
+                env._tier2_trackers["p1"]._assessed_until,
+                annotation_cache.tier2_trackers["p1"]._assessed_until,
+            )
+            self.assertEqual(
+                env._investment_trackers["p1"]._assessed_until,
+                annotation_cache.investment_trackers["p1"]._assessed_until,
+            )
+            self.assertEqual(
+                tracker_state(env._tier2_trackers, env._investment_trackers),
+                prefix_state,
+            )
+
+            # Branch B takes a distinct suffix; it must also leave the captured
+            # prefix unmodified. Replaying branch A then proves one sibling cannot
+            # leak its annotation state into another.
+            env.step_from_search_snapshot(snapshot, {"p1": 1, "p2": 0})
+            self.assertEqual(
+                tracker_state(
+                    annotation_cache.tier2_trackers,
+                    annotation_cache.investment_trackers,
+                ),
+                prefix_state,
+            )
+            replayed_result = env.step_from_search_snapshot(snapshot, {"p1": 1, "p2": 1})
+
+        self.assertEqual(first_result.observations, replayed_result.observations)
+
     def test_root_puct_bridge_timing_tracks_completed_search_commands(self) -> None:
         config = integration_config()
         assert config is not None

@@ -205,6 +205,15 @@ class _AxisLedger:
     concluded_class: Optional[str] = None
     concluded_turns: tuple[int, ...] = ()
 
+    def clone(self) -> "_AxisLedger":
+        return _AxisLedger(
+            pins=list(self.pins),
+            blocked=self.blocked,
+            concluded_value=self.concluded_value,
+            concluded_class=self.concluded_class,
+            concluded_turns=self.concluded_turns,
+        )
+
     def observe(
         self,
         *,
@@ -243,6 +252,12 @@ class _DefenderLedger:
 
     def defense_axis(self, stat_key: str) -> _AxisLedger:
         return self.defense.setdefault(stat_key, _AxisLedger())
+
+    def clone(self) -> "_DefenderLedger":
+        return _DefenderLedger(
+            hp=self.hp.clone(),
+            defense={stat: axis.clone() for stat, axis in self.defense.items()},
+        )
 
     def conclusion(self, defender_key: str) -> InvestmentConclusion:
         defense_values = {
@@ -551,6 +566,13 @@ class _InferenceState:
     strikes: list[DefenderStrikeAssessment] = field(default_factory=list)
     token_codes: dict[int, float] = field(default_factory=dict)
 
+    def clone(self) -> "_InferenceState":
+        return _InferenceState(
+            ledgers={key: ledger.clone() for key, ledger in self.ledgers.items()},
+            strikes=list(self.strikes),
+            token_codes=dict(self.token_codes),
+        )
+
     def ledger(self, defender_key: str) -> _DefenderLedger:
         return self.ledgers.setdefault(defender_key, _DefenderLedger())
 
@@ -740,6 +762,22 @@ class InvestmentLiveTracker:
         self._state = _InferenceState()
         self._defender_levels: dict[str, int] = {}
         self._assessed_until = 0
+
+    def clone(self) -> "InvestmentLiveTracker":
+        """Clone accumulated public evidence for one independent search branch."""
+
+        cloned = InvestmentLiveTracker.__new__(InvestmentLiveTracker)
+        cloned._perspective = self._perspective
+        cloned._opponent = self._opponent
+        cloned._own_by_species = self._own_by_species
+        cloned._dex = self._dex
+        cloned._config = self._config
+        cloned._fold = self._fold.clone()
+        cloned._spread_cache = dict(self._spread_cache)
+        cloned._state = self._state.clone()
+        cloned._defender_levels = dict(self._defender_levels)
+        cloned._assessed_until = self._assessed_until
+        return cloned
 
     @property
     def token_codes(self) -> dict[int, float]:

@@ -577,6 +577,48 @@ class LiveTrackerTest(unittest.TestCase):
         )
         self.assertEqual(tracker.conclusions["p2:slowbro"].hp_class, "trimmed")
 
+    def test_clone_isolates_nonempty_inference_state(self) -> None:
+        damage = 130
+        lines = _leads(_TRIMMED_HP)
+        lines += _strike_lines(damage, turn=1, max_hp=_TRIMMED_HP)
+        lines += _strike_lines(damage, turn=2, max_hp=_TRIMMED_HP, prior_hp=_TRIMMED_HP - damage)
+
+        source = FakeSource({"slowbro": [_VARIANT_TRIMMED, _VARIANT_FULL]})
+        engine = PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=source)
+        tracker = InvestmentLiveTracker(
+            perspective_slot="p1",
+            own_team=_OWN_TEAM,
+            dex=_DEX,
+        )
+        fed = 0
+        for upto in (5, 10, len(lines)):
+            replay = parse_showdown_replay(lines[:upto])
+            while fed < len(replay.public_events):
+                engine.ingest_event(replay.public_events[fed])
+                fed += 1
+            tracker.observe(replay, extract_transition_tokens(replay, perspective_slot="p1"), engine)
+
+        self.assertTrue(tracker._state.ledgers)
+        self.assertTrue(tracker._state.token_codes)
+        original_codes = dict(tracker._state.token_codes)
+        original_strikes = list(tracker._state.strikes)
+        original_levels = dict(tracker._defender_levels)
+        defender_key = next(iter(tracker._state.ledgers))
+        original_hp_pins = list(tracker._state.ledgers[defender_key].hp.pins)
+
+        cloned = tracker.clone()
+        cloned._state.token_codes[-1] = -1.0
+        cloned._state.strikes.pop()
+        cloned._state.ledgers[defender_key].hp.pins.append((99, 999, "clone-only"))
+        cloned._defender_levels["p2:clone-only"] = 1
+        cloned._fold.boosts["p1"]["atk"] = 6
+
+        self.assertEqual(tracker._state.token_codes, original_codes)
+        self.assertEqual(tracker._state.strikes, original_strikes)
+        self.assertEqual(tracker._defender_levels, original_levels)
+        self.assertEqual(tracker._state.ledgers[defender_key].hp.pins, original_hp_pins)
+        self.assertNotIn("atk", tracker._fold.boosts["p1"])
+
 
 if __name__ == "__main__":
     unittest.main()
