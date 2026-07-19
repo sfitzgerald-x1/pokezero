@@ -55,14 +55,14 @@ const FOLD_PRODUCTS_SCHEMA: &str = "pokezero.fold-products.v1";
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
+pub(crate) enum Kind {
     Move,
     Switch,
     Cant,
 }
 
 impl Kind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Kind::Move => "move",
             Kind::Switch => "switch",
@@ -88,7 +88,7 @@ impl Kind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Outcome {
+pub(crate) enum Outcome {
     Absorbed,
     Immune,
     Blocked,
@@ -110,7 +110,7 @@ impl Outcome {
             Outcome::Normal => 9,
         }
     }
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Outcome::Absorbed => "absorbed",
             Outcome::Immune => "immune",
@@ -140,7 +140,7 @@ impl Outcome {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SideEffect {
+pub(crate) enum SideEffect {
     Charging,
     Drain,
     HazardSet,
@@ -166,7 +166,7 @@ impl SideEffect {
             SideEffect::None_ => 99,
         }
     }
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             SideEffect::Charging => "charging",
             SideEffect::Drain => "drain",
@@ -198,7 +198,7 @@ impl SideEffect {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Effectiveness {
+pub(crate) enum Effectiveness {
     Neutral,
     Super,
     Resisted,
@@ -206,7 +206,7 @@ enum Effectiveness {
 }
 
 impl Effectiveness {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Effectiveness::Neutral => "neutral",
             Effectiveness::Super => "super",
@@ -238,7 +238,7 @@ enum SwitchReason {
 }
 
 impl SwitchReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             SwitchReason::Lead => "lead",
             SwitchReason::Voluntary => "voluntary",
@@ -262,7 +262,7 @@ impl SwitchReason {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Status {
+pub(crate) enum Status {
     Action,
     Negated,
     Pending,
@@ -270,7 +270,7 @@ enum Status {
 }
 
 impl Status {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Status::Action => "action",
             Status::Negated => "negated",
@@ -294,7 +294,7 @@ impl Status {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Phase {
+pub(crate) enum Phase {
     Turn,
     Lead,
     Replacement,
@@ -302,7 +302,7 @@ enum Phase {
 }
 
 impl Phase {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Phase::Turn => "turn",
             Phase::Lead => "lead",
@@ -328,7 +328,7 @@ enum RepPos {
 }
 
 impl RepPos {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RepPos::First => "first",
             RepPos::Second => "second",
@@ -351,7 +351,7 @@ impl RepPos {
 // Sides ("p1"/"p2" as 0/1 internally; strings at every payload boundary)
 // ---------------------------------------------------------------------------
 
-fn side_str(side: u8) -> &'static str {
+pub(crate) fn side_str(side: u8) -> &'static str {
     if side == 0 {
         "p1"
     } else {
@@ -707,32 +707,32 @@ impl Window {
 }
 
 #[derive(Clone, Debug)]
-struct TransitionToken {
-    turn: i64,
-    actor_slot: u8,
-    actor_species: String,
-    kind: Kind,
-    action: String,
-    called: bool,
-    transformed: bool,
-    damage_fraction: f64,
-    damage_outcome: Outcome,
-    crit: bool,
-    miss: bool,
-    ko: bool,
-    pursuit_intercept: bool,
-    n_hits: i64,
-    effectiveness: Effectiveness,
-    side_effect: SideEffect,
-    self_hp_cost: f64,
-    own_spikes_layers: i64,
-    opp_spikes_layers: i64,
-    weather: Option<String>,
-    defender_species: Option<String>,
-    residual: Option<f64>,
-    residual_valid: bool,
-    cb_bit: bool,
-    investment: f64,
+pub(crate) struct TransitionToken {
+    pub(crate) turn: i64,
+    pub(crate) actor_slot: u8,
+    pub(crate) actor_species: String,
+    pub(crate) kind: Kind,
+    pub(crate) action: String,
+    pub(crate) called: bool,
+    pub(crate) transformed: bool,
+    pub(crate) damage_fraction: f64,
+    pub(crate) damage_outcome: Outcome,
+    pub(crate) crit: bool,
+    pub(crate) miss: bool,
+    pub(crate) ko: bool,
+    pub(crate) pursuit_intercept: bool,
+    pub(crate) n_hits: i64,
+    pub(crate) effectiveness: Effectiveness,
+    pub(crate) side_effect: SideEffect,
+    pub(crate) self_hp_cost: f64,
+    pub(crate) own_spikes_layers: i64,
+    pub(crate) opp_spikes_layers: i64,
+    pub(crate) weather: Option<String>,
+    pub(crate) defender_species: Option<String>,
+    pub(crate) residual: Option<f64>,
+    pub(crate) residual_valid: bool,
+    pub(crate) cb_bit: bool,
+    pub(crate) investment: f64,
 }
 
 /// `transitions_fold._token_from_window`.
@@ -771,31 +771,31 @@ fn token_from_window(window: &Window) -> TransitionToken {
 }
 
 #[derive(Clone, Debug)]
-struct SubBlock {
-    status: Status,
-    actor_slot: u8,
-    actor_species: String,
-    kind: Option<Kind>, // None serializes as "" (NEGATED/PENDING/ABSENT defaults)
-    action: String,
-    called: bool,
-    transformed: bool,
-    damage_fraction: f64,
-    self_hp_cost: f64,
-    damage_outcome: Outcome,
-    crit: bool,
-    miss: bool,
-    ko: bool,
-    pursuit_intercept: bool,
-    n_hits: i64,
-    effectiveness: Effectiveness,
-    side_effect: SideEffect,
-    defender_species: Option<String>,
-    cant_reason: Option<String>,
-    baton_pass_species: Option<String>,
-    residual: Option<f64>,
-    residual_valid: bool,
-    cb_bit: bool,
-    investment: f64,
+pub(crate) struct SubBlock {
+    pub(crate) status: Status,
+    pub(crate) actor_slot: u8,
+    pub(crate) actor_species: String,
+    pub(crate) kind: Option<Kind>, // None serializes as "" (NEGATED/PENDING/ABSENT defaults)
+    pub(crate) action: String,
+    pub(crate) called: bool,
+    pub(crate) transformed: bool,
+    pub(crate) damage_fraction: f64,
+    pub(crate) self_hp_cost: f64,
+    pub(crate) damage_outcome: Outcome,
+    pub(crate) crit: bool,
+    pub(crate) miss: bool,
+    pub(crate) ko: bool,
+    pub(crate) pursuit_intercept: bool,
+    pub(crate) n_hits: i64,
+    pub(crate) effectiveness: Effectiveness,
+    pub(crate) side_effect: SideEffect,
+    pub(crate) defender_species: Option<String>,
+    pub(crate) cant_reason: Option<String>,
+    pub(crate) baton_pass_species: Option<String>,
+    pub(crate) residual: Option<f64>,
+    pub(crate) residual_valid: bool,
+    pub(crate) cb_bit: bool,
+    pub(crate) investment: f64,
 }
 
 impl SubBlock {
@@ -830,14 +830,14 @@ impl SubBlock {
 }
 
 #[derive(Clone, Debug)]
-struct MergedToken {
-    turn: i64,
-    phase: Phase,
-    first: SubBlock,
-    second: SubBlock,
-    own_spikes_layers: i64,
-    opp_spikes_layers: i64,
-    weather: Option<String>,
+pub(crate) struct MergedToken {
+    pub(crate) turn: i64,
+    pub(crate) phase: Phase,
+    pub(crate) first: SubBlock,
+    pub(crate) second: SubBlock,
+    pub(crate) own_spikes_layers: i64,
+    pub(crate) opp_spikes_layers: i64,
+    pub(crate) weather: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1308,7 +1308,7 @@ impl FoldStateInner {
 
     // ------------------------------------------------------------------ advance
 
-    fn advance_in_place(&mut self, raw_lines: &[String]) -> PyResult<()> {
+    pub(crate) fn advance_in_place(&mut self, raw_lines: &[String]) -> PyResult<()> {
         for raw_line in raw_lines {
             let parts: Vec<&str> = raw_line.split('|').collect();
             let event_type = *parts.get(1).unwrap_or(&"");
@@ -2068,7 +2068,7 @@ impl FoldStateInner {
 
     // ------------------------------------------------------------------ products
 
-    fn products(&self) -> ProductsData {
+    pub(crate) fn products(&self) -> ProductsData {
         let mut virtual_windows: Vec<&Window> = self.pending_windows.iter().collect();
         let mut virtual_token: Option<TransitionToken> = None;
         if let Some(window) = &self.current_window {
@@ -2210,34 +2210,34 @@ impl FoldStateInner {
     }
 }
 
-struct MonTendencyData {
-    slot: u8,
-    species: String,
-    switched_out_before_attacking: i64,
-    stayed_and_attacked: i64,
-    turns_active: i64,
+pub(crate) struct MonTendencyData {
+    pub(crate) slot: u8,
+    pub(crate) species: String,
+    pub(crate) switched_out_before_attacking: i64,
+    pub(crate) stayed_and_attacked: i64,
+    pub(crate) turns_active: i64,
 }
 
-struct TendencyStatsData {
-    perspective_slot: u8,
-    opponent_slot: u8,
-    opponent_switch_count: i64,
-    opponent_decision_opportunities: i64,
-    opponent_mon_tendencies: Vec<MonTendencyData>,
-    opponent_weather_reveals: Vec<(String, bool)>,
-    blocked_on_our_attack_count: i64,
-    pursuit_intercept_predict_count: i64,
-    my_switch_turn_count: i64,
+pub(crate) struct TendencyStatsData {
+    pub(crate) perspective_slot: u8,
+    pub(crate) opponent_slot: u8,
+    pub(crate) opponent_switch_count: i64,
+    pub(crate) opponent_decision_opportunities: i64,
+    pub(crate) opponent_mon_tendencies: Vec<MonTendencyData>,
+    pub(crate) opponent_weather_reveals: Vec<(String, bool)>,
+    pub(crate) blocked_on_our_attack_count: i64,
+    pub(crate) pursuit_intercept_predict_count: i64,
+    pub(crate) my_switch_turn_count: i64,
 }
 
-struct ProductsData {
-    transition_tokens: Vec<TransitionToken>,
-    transition_token_total: i64,
-    turn_merged_tokens: Vec<MergedToken>,
-    turn_merged_total: i64,
-    tendency_stats: TendencyStatsData,
-    cb_pinned_species: Vec<String>,
-    investment_pinned: Vec<(String, f64)>,
+pub(crate) struct ProductsData {
+    pub(crate) transition_tokens: Vec<TransitionToken>,
+    pub(crate) transition_token_total: i64,
+    pub(crate) turn_merged_tokens: Vec<MergedToken>,
+    pub(crate) turn_merged_total: i64,
+    pub(crate) tendency_stats: TendencyStatsData,
+    pub(crate) cb_pinned_species: Vec<String>,
+    pub(crate) investment_pinned: Vec<(String, f64)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2695,7 +2695,7 @@ impl FoldStateInner {
     }
 
     /// `FoldState.from_payload`.
-    fn from_payload(payload: &Bound<'_, PyAny>) -> PyResult<FoldStateInner> {
+    pub(crate) fn from_payload(payload: &Bound<'_, PyAny>) -> PyResult<FoldStateInner> {
         let schema = py_get(payload, "schema")?;
         if !schema
             .extract::<String>()
@@ -2999,6 +2999,14 @@ fn annotation_values_from_py(values: &Bound<'_, PyAny>) -> PyResult<AnnotationVa
 #[pyclass(name = "FoldState", module = "pokezero_search")]
 pub struct PyFoldState {
     inner: FoldStateInner,
+}
+
+impl PyFoldState {
+    /// Crate-internal access to the fold state (native product consumption by
+    /// the in-crate encoder; no Python-object materialization).
+    pub(crate) fn inner(&self) -> &FoldStateInner {
+        &self.inner
+    }
 }
 
 #[pymethods]

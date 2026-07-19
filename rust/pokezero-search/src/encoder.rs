@@ -144,8 +144,12 @@ struct Layout {
     base_stat_slots: Vec<(String, usize)>,
     actual_stat_slots: Vec<(String, usize)>,
     timed_condition_slots: Vec<(String, usize, usize)>,
+    weather_reveal_order: Vec<String>,
     stats_block: bool,
     exact_state: bool,
+    transition_token_budget: usize,
+    tier2_residuals: bool,
+    tier2_investment: bool,
 }
 
 impl Layout {
@@ -294,8 +298,12 @@ impl Tables {
                     }
                 })
                 .collect(),
+            weather_reveal_order: string_list(get(constants, "weather_reveal_order")),
             stats_block: as_bool(get(masks, "stats_block")),
             exact_state: as_bool(get(masks, "exact_state")),
+            transition_token_budget: as_i64(get(masks, "transition_token_budget")).max(0) as usize,
+            tier2_residuals: as_bool(get(masks, "tier2_residuals")),
+            tier2_investment: as_bool(get(masks, "tier2_investment")),
         };
         if layout.token_count == 0 || layout.categorical_width == 0 || layout.numeric_width == 0 {
             return Err(err("tables layout census is incomplete"));
@@ -601,8 +609,25 @@ impl<'a> MonToken<'a> {
 
 pub fn encode_row(tables: &Tables, row_json: &str) -> PyResult<EncodedArrays> {
     let row: Value = serde_json::from_str(row_json).map_err(|e| err(format!("row JSON: {e}")))?;
-    let md = get(&row, "observation_metadata");
-    let pm = get(&row, "public_materialization");
+    encode_row_value(tables, &row, None)
+}
+
+fn transition_row_count(layout: &Layout) -> PyResult<usize> {
+    Ok(layout.token_count - layout.offset("transition")?)
+}
+
+/// Encode one row-inputs value, optionally consuming fold PRODUCTS natively
+/// (in-crate; no Python payload crossing) for the history-derived cells:
+/// turn-merged transition rows 23..=150, the stats-token tendency counters,
+/// the per-opponent-mon tendency triple, the pinned Tier-2 conclusions, and
+/// the transition extent of the attention mask.
+pub(crate) fn encode_row_value(
+    tables: &Tables,
+    row: &Value,
+    products: Option<&crate::fold::ProductsData>,
+) -> PyResult<EncodedArrays> {
+    let md = get(row, "observation_metadata");
+    let pm = get(row, "public_materialization");
     if !md.is_object() || !pm.is_object() {
         return Err(err(
             "row inputs must carry observation_metadata and public_materialization objects",
@@ -650,10 +675,12 @@ pub fn encode_row(tables: &Tables, row_json: &str) -> PyResult<EncodedArrays> {
         };
     }
 
-    // --- attention mask. Transition extent: the stored per-row surface has no
-    // event stream, so the merged-token count is not derivable — rows stay
-    // masked (the documented stored-surface ceiling, matching the Python
-    // reference backend fed the same inputs). ---
+    // --- attention mask. Transition extent: without fold products the stored
+    // per-row surface has no event stream, so the merged-token count is not
+    // derivable — rows stay masked (the documented stored-surface ceiling,
+    // matching the Python reference backend fed the same inputs). With fold
+    // products the extent is the filled turn-merged row count, exactly the
+    // production `_attention_mask` computation. ---
     let mut attention = vec![0u8; layout.token_count];
     attention[field_offset] = 1;
     for slot in 0..(opponent_offset - self_offset) {
@@ -667,6 +694,17 @@ pub fn encode_row(tables: &Tables, row_json: &str) -> PyResult<EncodedArrays> {
     }
     for index in stats_offset..transition_offset {
         attention[index] = layout.stats_block as u8;
+    }
+    if let Some(products) = products {
+        let transition_count = layout.token_count - transition_offset;
+        let filled = products
+            .turn_merged_tokens
+            .len()
+            .min(layout.transition_token_budget)
+            .min(transition_count);
+        for index in 0..transition_count {
+            attention[transition_offset + index] = (index < filled) as u8;
+        }
     }
 
     let mut grid = Grid::new(tables);
@@ -699,11 +737,15 @@ pub fn encode_row(tables: &Tables, row_json: &str) -> PyResult<EncodedArrays> {
         action_offset,
         &legal,
     )?;
-    // Stats token: role + presence. The tendency counters are history-derived
-    // (not reconstructable from the stored surface) and stay zero.
+    // Stats token: role + presence. The tendency counters are history-derived:
+    // zero without fold products (the stored-surface ceiling), real when the
+    // fold state is supplied.
     if layout.stats_block {
         grid.set_cat(stats_offset, layout.cat_col("CATEGORY_ROLE")?, "stats");
         grid.set_num(stats_offset, layout.num_col("NUMERIC_PRESENT")?, 1.0);
+    }
+    if let Some(products) = products {
+        write_history_cells(tables, &mut grid, products, md, &opponent_mons)?;
     }
 
     let (categorical, numeric) = grid.finish();
@@ -1884,6 +1926,469 @@ fn encode_action_tokens(
 }
 
 // ---------------------------------------------------------------------------
+// History-derived cells from fold PRODUCTS (native in-crate consumption)
+// ---------------------------------------------------------------------------
+
+use crate::fold::{Kind as FoldKind, ProductsData, Status as FoldStatus, SubBlock};
+
+fn fold_kind_str(kind: Option<FoldKind>) -> &'static str {
+    kind.map(FoldKind::as_str).unwrap_or("")
+}
+
+/// `showdown._tm_first_action_label`.
+fn tm_first_action_label(kind: Option<FoldKind>, action: &str) -> String {
+    match kind {
+        Some(FoldKind::Move) => format!("move:{action}"),
+        Some(FoldKind::Switch) => format!("species:{action}"),
+        _ => format!("cant:{action}"),
+    }
+}
+
+/// `showdown._tm_second_action_label`.
+fn tm_second_action_label(kind: Option<FoldKind>, action: &str) -> String {
+    match kind {
+        Some(FoldKind::Move) => format!("tt2_move:{action}"),
+        Some(FoldKind::Switch) => format!("tt2_species:{action}"),
+        _ => format!("tt2_cant:{action}"),
+    }
+}
+
+fn opt_str_nonempty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|s| !s.is_empty())
+}
+
+/// Every history-derived observation cell, written from the fold products —
+/// the native mirror of `_encode_turn_merged_transition_tokens` (rows
+/// 23..=150), `_encode_stats_token` (token 22), `_encode_mon_tendency` +
+/// the pinned Tier-2 conclusions (opponent-team tokens).
+fn write_history_cells(
+    tables: &Tables,
+    grid: &mut Grid,
+    products: &ProductsData,
+    md: &Value,
+    opponent_mons: &[MonToken],
+) -> PyResult<()> {
+    let layout = &tables.layout;
+    let self_slot = str_or_empty(get(md, "showdown_slot"));
+    let turn_number = as_i64(get(md, "turn_number"));
+    write_turn_merged_rows(tables, grid, products, &self_slot, turn_number)?;
+    if layout.stats_block {
+        write_stats_token(tables, grid, products)?;
+    }
+    write_opponent_mon_history(tables, grid, products, opponent_mons)?;
+    Ok(())
+}
+
+/// `showdown._encode_turn_merged_transition_tokens` from fold products.
+fn write_turn_merged_rows(
+    tables: &Tables,
+    grid: &mut Grid,
+    products: &ProductsData,
+    self_slot: &str,
+    turn_number: i64,
+) -> PyResult<()> {
+    let layout = &tables.layout;
+    let transition_offset = layout.offset("transition")?;
+    let transition_count = transition_row_count(layout)?;
+    let budget = layout.transition_token_budget.min(transition_count);
+    let tokens = &products.turn_merged_tokens;
+    let start = tokens.len().saturating_sub(budget);
+    let stat_divisor = layout.stat_count_divisor;
+
+    for (index, token) in tokens[start..].iter().enumerate() {
+        let row = transition_offset + index;
+        let first = &token.first;
+        let actor_role = if crate::fold::side_str(first.actor_slot) == self_slot {
+            "self"
+        } else {
+            "opponent"
+        };
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_PRIMARY")?,
+            format!("species:{}", first.actor_species),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_SECONDARY")?,
+            tm_first_action_label(first.kind, &first.action),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_ROLE")?,
+            format!("transition:{actor_role}"),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_SLOT")?,
+            format!("tt_phase:{}", token.phase.as_str()),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_TM_FIRST_KIND")?,
+            format!("tt_kind:{}", fold_kind_str(first.kind)),
+        );
+        if first.kind == Some(FoldKind::Move) {
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TYPE_1")?,
+                format!("tt_outcome:{}", first.damage_outcome.as_str()),
+            );
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TYPE_2")?,
+                format!("tt_effectiveness:{}", first.effectiveness.as_str()),
+            );
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_MOVE_CATEGORY")?,
+                format!("tt_side_effect:{}", first.side_effect.as_str()),
+            );
+            if let Some(defender) = opt_str_nonempty(&first.defender_species) {
+                grid.set_cat(
+                    row,
+                    layout.cat_col("CATEGORY_MOVE_PRIORITY")?,
+                    format!("species:{defender}"),
+                );
+            }
+        }
+        if let Some(weather) = opt_str_nonempty(&token.weather) {
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_MOVE_EFFECT")?,
+                format!("weather:{weather}"),
+            );
+        }
+        if let Some(cant) = opt_str_nonempty(&first.cant_reason) {
+            grid.set_cat(row, layout.cat_col("CATEGORY_TM_FIRST_CANT")?, format!("cant:{cant}"));
+        }
+        if let Some(bp) = opt_str_nonempty(&first.baton_pass_species) {
+            grid.set_cat(row, layout.cat_col("CATEGORY_TM_FIRST_BP")?, format!("species:{bp}"));
+        }
+        grid.set_num(row, layout.num_col("NUMERIC_PRESENT")?, 1.0);
+        write_sub_block_numerics(tables, grid, row, first, SubBlockColumns::FIRST)?;
+        if token.own_spikes_layers != 0 {
+            grid.set_num(
+                row,
+                layout.num_col("NUMERIC_TT_OWN_SPIKES")?,
+                (token.own_spikes_layers as f64 / 3.0).min(1.0),
+            );
+        }
+        if token.opp_spikes_layers != 0 {
+            grid.set_num(
+                row,
+                layout.num_col("NUMERIC_TT_OPP_SPIKES")?,
+                (token.opp_spikes_layers as f64 / 3.0).min(1.0),
+            );
+        }
+        grid.set_num(
+            row,
+            layout.num_col("NUMERIC_TT_ABS_TURN")?,
+            (token.turn as f64 / 1000.0).min(1.0),
+        );
+        let turns_ago = (turn_number - token.turn).max(0);
+        grid.set_num(
+            row,
+            layout.num_col("NUMERIC_TT_TURNS_AGO")?,
+            (turns_ago as f64 / stat_divisor).min(1.0),
+        );
+
+        let second = &token.second;
+        if second.status != FoldStatus::Action {
+            // NEGATED vs ABSENT: categorical status + the consumed mon's
+            // identity when the fold knows it; all TM2 numerics stay 0.0.
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_KIND")?,
+                format!("tt2_status:{}", second.status.as_str()),
+            );
+            if !second.actor_species.is_empty() {
+                grid.set_cat(
+                    row,
+                    layout.cat_col("CATEGORY_TM_SECOND_SPECIES")?,
+                    format!("tt2_species:{}", second.actor_species),
+                );
+            }
+            continue;
+        }
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_TM_SECOND_KIND")?,
+            format!("tt2_kind:{}", fold_kind_str(second.kind)),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_TM_SECOND_SPECIES")?,
+            format!("tt2_species:{}", second.actor_species),
+        );
+        grid.set_cat(
+            row,
+            layout.cat_col("CATEGORY_TM_SECOND_ACTION")?,
+            tm_second_action_label(second.kind, &second.action),
+        );
+        if second.kind == Some(FoldKind::Move) {
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_OUTCOME")?,
+                format!("tt2_outcome:{}", second.damage_outcome.as_str()),
+            );
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_EFFECTIVENESS")?,
+                format!("tt2_effectiveness:{}", second.effectiveness.as_str()),
+            );
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_SIDE_EFFECT")?,
+                format!("tt2_side_effect:{}", second.side_effect.as_str()),
+            );
+            if let Some(defender) = opt_str_nonempty(&second.defender_species) {
+                grid.set_cat(
+                    row,
+                    layout.cat_col("CATEGORY_TM_SECOND_DEFENDER")?,
+                    format!("tt2_species:{defender}"),
+                );
+            }
+        }
+        if let Some(cant) = opt_str_nonempty(&second.cant_reason) {
+            grid.set_cat(row, layout.cat_col("CATEGORY_TM_SECOND_CANT")?, format!("tt2_cant:{cant}"));
+        }
+        if let Some(bp) = opt_str_nonempty(&second.baton_pass_species) {
+            grid.set_cat(row, layout.cat_col("CATEGORY_TM_SECOND_BP")?, format!("tt2_species:{bp}"));
+        }
+        grid.set_num(row, layout.num_col("NUMERIC_TM2_PRESENT")?, 1.0);
+        write_sub_block_numerics(tables, grid, row, second, SubBlockColumns::SECOND)?;
+    }
+    Ok(())
+}
+
+/// Numeric column names for the first vs second sub-block of a turn-merged row.
+struct SubBlockColumns {
+    damage_fraction: &'static str,
+    n_hits: &'static str,
+    called: &'static str,
+    transformed: &'static str,
+    crit: &'static str,
+    miss: &'static str,
+    ko: &'static str,
+    pursuit_intercept: &'static str,
+    residual: &'static str,
+    residual_valid: &'static str,
+    cb_bit: &'static str,
+    investment: &'static str,
+    self_hp_cost: &'static str,
+}
+
+impl SubBlockColumns {
+    const FIRST: SubBlockColumns = SubBlockColumns {
+        damage_fraction: "NUMERIC_TT_DAMAGE_FRACTION",
+        n_hits: "NUMERIC_TT_N_HITS",
+        called: "NUMERIC_TT_CALLED",
+        transformed: "NUMERIC_TT_TRANSFORMED",
+        crit: "NUMERIC_TT_CRIT",
+        miss: "NUMERIC_TT_MISS",
+        ko: "NUMERIC_TT_KO",
+        pursuit_intercept: "NUMERIC_TT_PURSUIT_INTERCEPT",
+        residual: "NUMERIC_TT_RESIDUAL",
+        residual_valid: "NUMERIC_TT_RESIDUAL_VALID",
+        cb_bit: "NUMERIC_TT_CB_BIT",
+        investment: "NUMERIC_TT_INVESTMENT_BIT",
+        self_hp_cost: "NUMERIC_TT_SELF_HP_COST",
+    };
+    const SECOND: SubBlockColumns = SubBlockColumns {
+        damage_fraction: "NUMERIC_TM2_DAMAGE_FRACTION",
+        n_hits: "NUMERIC_TM2_N_HITS",
+        called: "NUMERIC_TM2_CALLED",
+        transformed: "NUMERIC_TM2_TRANSFORMED",
+        crit: "NUMERIC_TM2_CRIT",
+        miss: "NUMERIC_TM2_MISS",
+        ko: "NUMERIC_TM2_KO",
+        pursuit_intercept: "NUMERIC_TM2_PURSUIT_INTERCEPT",
+        residual: "NUMERIC_TM2_RESIDUAL",
+        residual_valid: "NUMERIC_TM2_RESIDUAL_VALID",
+        cb_bit: "NUMERIC_TM2_CB_BIT",
+        investment: "NUMERIC_TM2_INVESTMENT",
+        self_hp_cost: "NUMERIC_TM2_SELF_HP_COST",
+    };
+}
+
+/// The shared numeric sub-block writes of the turn-merged encoder (identical
+/// structure for the first and second sub-blocks, differing only in columns).
+fn write_sub_block_numerics(
+    tables: &Tables,
+    grid: &mut Grid,
+    row: usize,
+    sub: &SubBlock,
+    columns: SubBlockColumns,
+) -> PyResult<()> {
+    let layout = &tables.layout;
+    if sub.damage_fraction != 0.0 {
+        grid.set_num(
+            row,
+            layout.num_col(columns.damage_fraction)?,
+            sub.damage_fraction.min(1.0),
+        );
+    }
+    if sub.kind == Some(FoldKind::Move) {
+        grid.set_num(row, layout.num_col(columns.n_hits)?, (sub.n_hits as f64 / 5.0).min(1.0));
+    }
+    for (column, flag) in [
+        (columns.called, sub.called),
+        (columns.transformed, sub.transformed),
+        (columns.crit, sub.crit),
+        (columns.miss, sub.miss),
+        (columns.ko, sub.ko),
+        (columns.pursuit_intercept, sub.pursuit_intercept),
+    ] {
+        if flag {
+            grid.set_num(row, layout.num_col(column)?, 1.0);
+        }
+    }
+    if layout.tier2_residuals && sub.residual_valid {
+        if let Some(residual) = sub.residual {
+            grid.set_num(row, layout.num_col(columns.residual)?, residual.clamp(-1.0, 1.0));
+            grid.set_num(row, layout.num_col(columns.residual_valid)?, 1.0);
+        }
+    }
+    if layout.tier2_residuals && sub.cb_bit {
+        grid.set_num(row, layout.num_col(columns.cb_bit)?, 1.0);
+    }
+    if layout.tier2_residuals && layout.tier2_investment && sub.investment != 0.0 {
+        grid.set_num(
+            row,
+            layout.num_col(columns.investment)?,
+            sub.investment.clamp(-1.0, 1.0),
+        );
+    }
+    if sub.self_hp_cost != 0.0 {
+        grid.set_num(
+            row,
+            layout.num_col(columns.self_hp_cost)?,
+            sub.self_hp_cost.min(1.0),
+        );
+    }
+    Ok(())
+}
+
+/// `showdown._encode_stats_token` from fold products (counts /64 + the
+/// opponent weather-reveal pairs).
+fn write_stats_token(tables: &Tables, grid: &mut Grid, products: &ProductsData) -> PyResult<()> {
+    let layout = &tables.layout;
+    let stats_offset = layout.offset("stats")?;
+    let stats = &products.tendency_stats;
+    for (column, count) in [
+        ("NUMERIC_STAT_OPP_SWITCH_COUNT", stats.opponent_switch_count),
+        (
+            "NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES",
+            stats.opponent_decision_opportunities,
+        ),
+        (
+            "NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK",
+            stats.blocked_on_our_attack_count,
+        ),
+        (
+            "NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT",
+            stats.pursuit_intercept_predict_count,
+        ),
+        ("NUMERIC_STAT_MY_SWITCH_TURNS", stats.my_switch_turn_count),
+    ] {
+        if count != 0 {
+            grid.set_num(
+                stats_offset,
+                layout.num_col(column)?,
+                (count as f64 / layout.stat_count_divisor).min(1.0),
+            );
+        }
+    }
+    let reveal_offset = layout.num_col("NUMERIC_STAT_WEATHER_REVEAL_OFFSET")?;
+    for (index, weather) in layout.weather_reveal_order.iter().enumerate() {
+        let Some((_, from_ability)) = stats
+            .opponent_weather_reveals
+            .iter()
+            .find(|(id, _)| id == weather)
+        else {
+            continue;
+        };
+        grid.set_num(stats_offset, reveal_offset + 2 * index, 1.0);
+        if *from_ability {
+            grid.set_num(stats_offset, reveal_offset + 2 * index + 1, 1.0);
+        }
+    }
+    Ok(())
+}
+
+/// Per-opponent-mon history columns: the tendency triple
+/// (`_encode_mon_tendency`, gated on the stats block like production) and the
+/// pinned Tier-2 conclusions (CB + investment, mask-gated like production).
+fn write_opponent_mon_history(
+    tables: &Tables,
+    grid: &mut Grid,
+    products: &ProductsData,
+    opponent_mons: &[MonToken],
+) -> PyResult<()> {
+    let layout = &tables.layout;
+    let opponent_offset = layout.offset("opponent_pokemon")?;
+    let action_offset = layout.offset("action_candidates")?;
+    let limit = action_offset - opponent_offset;
+    let cb_pinned: Vec<String> = products
+        .cb_pinned_species
+        .iter()
+        .map(|s| normalize_identifier(s))
+        .collect();
+    for (slot, mon) in opponent_mons.iter().take(limit).enumerate() {
+        let token = opponent_offset + slot;
+        let species_key = normalize_identifier(&mon.species());
+        if layout.stats_block {
+            // Production keys a dict by normalized species (later entries win),
+            // hence the reverse find.
+            if let Some(tendency) = products
+                .tendency_stats
+                .opponent_mon_tendencies
+                .iter()
+                .rev()
+                .find(|t| normalize_identifier(&t.species) == species_key)
+            {
+                for (column, count) in [
+                    (
+                        "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+                        tendency.switched_out_before_attacking,
+                    ),
+                    ("NUMERIC_MON_STAYED_AND_ATTACKED", tendency.stayed_and_attacked),
+                    ("NUMERIC_MON_TURNS_ACTIVE_TOTAL", tendency.turns_active),
+                ] {
+                    if count != 0 {
+                        grid.set_num(
+                            token,
+                            layout.num_col(column)?,
+                            (count as f64 / layout.stat_count_divisor).min(1.0),
+                        );
+                    }
+                }
+            }
+        }
+        if layout.tier2_residuals && cb_pinned.iter().any(|s| *s == species_key) {
+            grid.set_num(token, layout.num_col("NUMERIC_TIER2_CB_PINNED")?, 1.0);
+        }
+        if layout.tier2_residuals && layout.tier2_investment {
+            if let Some((_, code)) = products
+                .investment_pinned
+                .iter()
+                .find(|(species, _)| normalize_identifier(species) == species_key)
+            {
+                if *code != 0.0 {
+                    grid.set_num(
+                        token,
+                        layout.num_col("NUMERIC_TIER2_INVESTMENT_PINNED")?,
+                        code.clamp(-1.0, 1.0),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // PyO3 surface
 // ---------------------------------------------------------------------------
 
@@ -1911,6 +2416,16 @@ fn bytes_from_i16(py: Python<'_>, values: &[i16]) -> Py<PyBytes> {
     PyBytes::new(py, &buffer).into()
 }
 
+fn encoded_to_dict(py: Python<'_>, encoded: &EncodedArrays) -> PyResult<Py<PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("categorical_ids", bytes_from_i32(py, &encoded.categorical))?;
+    out.set_item("numeric_features", bytes_from_f64(py, &encoded.numeric))?;
+    out.set_item("token_type_ids", bytes_from_i16(py, &encoded.token_types))?;
+    out.set_item("attention_mask", PyBytes::new(py, &encoded.attention))?;
+    out.set_item("legal_action_mask", PyBytes::new(py, &encoded.legal))?;
+    Ok(out.into())
+}
+
 /// Encode one golden-corpus decision row. `row_inputs_json` is the sanctioned
 /// input surface (see `scripts/golden_encoder_backends.row_inputs_from_decision_row`);
 /// `tables_json` is the artifact from `scripts/export_encoder_tables.py`.
@@ -1924,11 +2439,46 @@ pub fn encode_decision(
 ) -> PyResult<Py<PyDict>> {
     let tables = Tables::from_json(tables_json)?;
     let encoded = encode_row(&tables, row_inputs_json)?;
-    let out = PyDict::new(py);
-    out.set_item("categorical_ids", bytes_from_i32(py, &encoded.categorical))?;
-    out.set_item("numeric_features", bytes_from_f64(py, &encoded.numeric))?;
-    out.set_item("token_type_ids", bytes_from_i16(py, &encoded.token_types))?;
-    out.set_item("attention_mask", PyBytes::new(py, &encoded.attention))?;
-    out.set_item("legal_action_mask", PyBytes::new(py, &encoded.legal))?;
-    Ok(out.into())
+    encoded_to_dict(py, &encoded)
+}
+
+/// Persistent encoder handle: parses the tables artifact ONCE and serves
+/// per-row encodes, with or without a fold state. `encode_with_fold` consumes
+/// the fold's products natively in-crate (no `products_payload` Python
+/// crossing) — transition rows 23..=150, tendency/stats counters, pinned
+/// Tier-2 conclusions, and the transition attention extent become real.
+#[pyclass(name = "NativeEncoder", module = "pokezero_search")]
+pub struct NativeEncoder {
+    tables: Tables,
+}
+
+#[pymethods]
+impl NativeEncoder {
+    #[new]
+    fn new(tables_json: &str) -> PyResult<Self> {
+        Ok(NativeEncoder {
+            tables: Tables::from_json(tables_json)?,
+        })
+    }
+
+    /// Boundary-surface encode (identical to `encode_decision`).
+    fn encode(&self, py: Python<'_>, row_inputs_json: &str) -> PyResult<Py<PyDict>> {
+        let encoded = encode_row(&self.tables, row_inputs_json)?;
+        encoded_to_dict(py, &encoded)
+    }
+
+    /// Full-surface encode: boundary cells from the row inputs + history cells
+    /// from `fold`'s products (native consumption).
+    fn encode_with_fold(
+        &self,
+        py: Python<'_>,
+        row_inputs_json: &str,
+        fold: &crate::fold::PyFoldState,
+    ) -> PyResult<Py<PyDict>> {
+        let row: Value =
+            serde_json::from_str(row_inputs_json).map_err(|e| err(format!("row JSON: {e}")))?;
+        let products = fold.inner().products();
+        let encoded = encode_row_value(&self.tables, &row, Some(&products))?;
+        encoded_to_dict(py, &encoded)
+    }
 }

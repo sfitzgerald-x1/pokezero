@@ -348,6 +348,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
     m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    m.add_class::<encoder::NativeEncoder>()?;
     m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
