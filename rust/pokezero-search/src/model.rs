@@ -31,6 +31,7 @@ use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
 
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::tree::{
@@ -179,6 +180,40 @@ impl ObsBatch {
             attention_mask: self.attention_mask.narrow(0, 0, n),
             history_mask: self.history_mask.narrow(0, 0, n),
         }
+    }
+
+    /// Build a batch from REAL encoded leaf observations (the track-B leaf
+    /// encoder's output; window is 1 on the v2.2 contract, history all-true).
+    fn from_encoded(spec: &ObsSpec, rows: &[crate::encoder::EncodedArrays]) -> PyResult<ObsBatch> {
+        let n = rows.len();
+        let (cat_len, num_len, tok_len, _attn_len, hist_len) = spec.per_row();
+        let mut categorical: Vec<i64> = Vec::with_capacity(n * cat_len);
+        let mut numeric: Vec<f32> = Vec::with_capacity(n * num_len);
+        let mut token_types: Vec<i64> = Vec::with_capacity(n * tok_len);
+        let mut attention: Vec<bool> = Vec::with_capacity(n * tok_len);
+        let history: Vec<bool> = vec![true; n * hist_len];
+        for row in rows {
+            if row.categorical.len() != cat_len || row.numeric.len() != num_len {
+                return Err(PyValueError::new_err(format!(
+                    "encoded leaf shape mismatch: got {}x cat / {}x num, spec wants {cat_len}/{num_len}",
+                    row.categorical.len(),
+                    row.numeric.len()
+                )));
+            }
+            categorical.extend(row.categorical.iter().map(|v| *v as i64));
+            numeric.extend(row.numeric.iter().map(|v| *v as f32));
+            token_types.extend(row.token_types.iter().map(|v| *v as i64));
+            attention.extend(row.attention.iter().map(|v| *v != 0));
+        }
+        ObsBatch::from_flat(
+            spec,
+            n as i64,
+            &categorical,
+            &numeric,
+            &token_types,
+            &attention,
+            &history,
+        )
     }
 }
 
@@ -564,6 +599,172 @@ fn multiply_batched_core<E: BatchLeafEval>(
 }
 
 // ---------------------------------------------------------------------------
+// Batched MULTI-PLY search with REAL leaf observations (the capstone loop:
+// root state -> tree -> branch -> synthesized events -> fold advance ->
+// native encode -> batched model eval -> exact-expectation backup)
+// ---------------------------------------------------------------------------
+
+/// Per-branch leaf record: the branch's advanced fold state and battle turn.
+struct BranchFold {
+    fold: crate::fold::FoldStateInner,
+    turn: i64,
+}
+
+/// Multi-ply batched search where every model row is a REAL leaf observation:
+/// each priced branch renders its instruction list as protocol lines
+/// (`events::render_branch_events`), advances a CLONE of its parent's fold
+/// state over them (per-outcome history — the crit branch's history shows the
+/// crit), and encodes the leaf natively (engine-state recompute +
+/// world-constant carry + fold products). Fold states chain through the tree
+/// via the `BranchSeam` parent key, so depth-k leaves carry the full
+/// root-prefix + k simulated plies of history.
+#[allow(clippy::too_many_arguments)]
+fn multiply_batched_encoded_core<E: BatchLeafEval>(
+    state_str: &str,
+    iterations: usize,
+    batch_size: usize,
+    max_depth: u8,
+    deep_ko_split: bool,
+    leaf_ctx: &crate::leaf::LeafContext,
+    event_ctx: &crate::events::EventContext,
+    root_fold: &crate::fold::FoldStateInner,
+    evaluator: &E,
+    spec: &ObsSpec,
+    c_puct: f32,
+    seed: u64,
+) -> PyResult<String> {
+    let mut state = parse_state(state_str)?;
+    if state.battle_is_over() != 0.0 {
+        return Err(PyValueError::new_err("battle is already over at the root"));
+    }
+    let cfg = MultiPlyConfig {
+        max_depth,
+        c_puct,
+        deep_ko_split,
+    };
+    let mut tree = Tree::from_root(&state)?;
+    let mut counters = SearchCounters::default();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut completed = 0usize;
+    let mut rounds = 0usize;
+    let mut model_evals = 0usize;
+    let mut lossy_renders = 0usize;
+    let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
+        std::collections::HashMap::new();
+    let root_turn = event_ctx.turn;
+    let start = Instant::now();
+    while completed < iterations {
+        let traversal_budget = batch_size.min(iterations - completed);
+        let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
+        let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
+        let mut leaf_error: Option<PyErr> = None;
+        while traversals.len() < traversal_budget && pending.len() < batch_size {
+            let traversal = traverse(
+                &mut tree,
+                &mut state,
+                &mut rng,
+                &cfg,
+                &mut counters,
+                &mut |leaf: &State, seam: &BranchSeam| {
+                    if leaf_error.is_some() {
+                        return LeafPrice::Ready(0.5);
+                    }
+                    // Parent fold prefix: the root fold for root edges, the
+                    // ancestor branch's advanced fold otherwise.
+                    let (mut fold, mut turn) = match seam.parent {
+                        None => (root_fold.clone(), root_turn),
+                        Some(key) => match fold_by_branch.get(&key) {
+                            Some(rec) => (rec.fold.clone(), rec.turn),
+                            None => {
+                                leaf_error = Some(PyValueError::new_err(
+                                    "parent branch fold missing (traversal order violated)",
+                                ));
+                                return LeafPrice::Ready(0.5);
+                            }
+                        },
+                    };
+                    // The mapper wants the PRE-branch state: rewind a clone.
+                    let mut pre = leaf.clone();
+                    let instructions: Vec<Instruction> = seam.instructions.to_vec();
+                    pre.reverse_instructions(&instructions);
+                    let mut ctx = event_ctx.clone();
+                    ctx.turn = turn;
+                    let rendered = crate::events::render_branch_events(
+                        &mut pre,
+                        seam.s1,
+                        seam.s2,
+                        seam.instructions,
+                        seam.branch_on_damage,
+                        &ctx,
+                    );
+                    if !rendered.lossy.is_empty() {
+                        lossy_renders += 1;
+                    }
+                    if let Err(error) = fold.advance_in_place(&rendered.lines) {
+                        leaf_error = Some(error);
+                        return LeafPrice::Ready(0.5);
+                    }
+                    if rendered.turn_completed {
+                        turn += 1;
+                    }
+                    let encoded = match leaf_ctx.encode_leaf(leaf, &fold, turn) {
+                        Ok(encoded) => encoded,
+                        Err(error) => {
+                            leaf_error = Some(error);
+                            return LeafPrice::Ready(0.5);
+                        }
+                    };
+                    fold_by_branch.insert((seam.chance, seam.branch_index), BranchFold { fold, turn });
+                    let row = pending.len();
+                    pending.push(encoded);
+                    LeafPrice::Deferred(row)
+                },
+            );
+            traversals.push(traversal);
+        }
+        if let Some(error) = leaf_error {
+            return Err(error);
+        }
+        let row_values = if pending.is_empty() {
+            Vec::new()
+        } else {
+            let batch = ObsBatch::from_encoded(spec, &pending)?;
+            let output = evaluator.eval_batch(&batch, None)?;
+            model_evals += pending.len();
+            output.values01
+        };
+        for traversal in &traversals {
+            finalize(&mut tree, traversal, &row_values);
+        }
+        completed += traversals.len();
+        rounds += 1;
+    }
+    let elapsed_s = start.elapsed().as_secs_f64();
+    let outcome = MultiPlyOutcome {
+        tree,
+        counters,
+        elapsed_s,
+    };
+    let extra = format!(
+        "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
+         \"lossy_renders\":{},\"branch_folds\":{}",
+        batch_size,
+        rounds,
+        model_evals,
+        lossy_renders,
+        fold_by_branch.len()
+    );
+    Ok(multiply_report_json(
+        &outcome,
+        iterations,
+        &cfg,
+        seed,
+        "torchscript",
+        &extra,
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Python surface
 // ---------------------------------------------------------------------------
 
@@ -850,6 +1051,84 @@ impl NativeLeafModel {
                 max_depth,
                 deep_ko_split,
                 &template,
+                &self.evaluator,
+                &spec,
+                c_puct,
+                seed,
+            )
+        })
+    }
+
+    /// Model-in-the-loop MULTI-PLY batched search with REAL leaf
+    /// observations (the engine-swap capstone loop): every model row is the
+    /// branch's own evolved observation — synthesized events, per-outcome
+    /// fold advance, native encode — instead of the template stub.
+    ///
+    /// `root_inputs_json` is the root decision's sanctioned input surface,
+    /// `ctx_json` the event context (`{"p1": [...], "p2": [...], "turn": N,
+    /// "hp_percent": [...]}` — species in engine party order), `root_fold`
+    /// the root fold state. Returns the search report as JSON (with
+    /// `encoder: "native_leaf"` + lossy-render accounting). Runs with the
+    /// GIL released.
+    #[pyo3(signature = (
+        state_str,
+        iterations,
+        batch_size,
+        tables_json,
+        root_inputs_json,
+        ctx_json,
+        root_fold,
+        max_depth = 2,
+        c_puct = 1.4,
+        seed = 0,
+        deep_ko_split = true,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn search_batched_multi_encoded(
+        &self,
+        py: Python<'_>,
+        state_str: &str,
+        iterations: usize,
+        batch_size: usize,
+        tables_json: &str,
+        root_inputs_json: &str,
+        ctx_json: &str,
+        root_fold: PyRef<'_, crate::fold::PyFoldState>,
+        max_depth: u8,
+        c_puct: f32,
+        seed: u64,
+        deep_ko_split: bool,
+    ) -> PyResult<String> {
+        if iterations == 0 || batch_size == 0 {
+            return Err(PyValueError::new_err(
+                "iterations and batch_size must be > 0",
+            ));
+        }
+        if max_depth == 0 || max_depth > 32 {
+            return Err(PyValueError::new_err("max_depth must be in 1..=32"));
+        }
+        let root_state = parse_state(state_str)?;
+        let leaf_ctx = crate::leaf::LeafContext::new(
+            tables_json,
+            root_inputs_json,
+            ctx_json,
+            &root_state,
+        )?;
+        let event_ctx = crate::events::EventContext::from_json(ctx_json)
+            .map_err(PyValueError::new_err)?;
+        let fold = root_fold.inner().clone();
+        drop(root_fold);
+        py.detach(|| {
+            let spec = self.evaluator.spec();
+            multiply_batched_encoded_core(
+                state_str,
+                iterations,
+                batch_size,
+                max_depth,
+                deep_ko_split,
+                &leaf_ctx,
+                &event_ctx,
+                &fold,
                 &self.evaluator,
                 &spec,
                 c_puct,

@@ -76,6 +76,13 @@ pub struct EventContext {
     pub species: [Vec<String>; 2],
     /// The fold's current turn number at the decision boundary.
     pub turn: i64,
+    /// Sides whose HP lines render on the /100 base (Showdown HP Percentage
+    /// Mod — what a live-ladder stream shows for the OPPONENT side). The
+    /// local harness's omniscient stream reports exact HP for both sides, so
+    /// the default is exact everywhere; set the opponent side when the root
+    /// fold was built from a ladder (player-view) stream so leaf-synthesized
+    /// fractions land on the same /100 grid the root fold consumed.
+    pub hp_percent: [bool; 2],
 }
 
 impl EventContext {
@@ -94,7 +101,21 @@ impl EventContext {
             .get("turn")
             .and_then(|v| v.as_i64())
             .ok_or("ctx json: missing integer turn")?;
-        Ok(EventContext { species, turn })
+        let mut hp_percent = [false, false];
+        if let Some(sides) = value.get("hp_percent").and_then(|v| v.as_array()) {
+            for entry in sides {
+                match entry.as_str() {
+                    Some("p1") => hp_percent[0] = true,
+                    Some("p2") => hp_percent[1] = true,
+                    other => return Err(format!("ctx json: bad hp_percent entry {other:?}")),
+                }
+            }
+        }
+        Ok(EventContext {
+            species,
+            turn,
+            hp_percent,
+        })
     }
 
     fn display(&self, side: SideReference, index: PokemonIndex) -> String {
@@ -389,13 +410,17 @@ fn segment(
 struct Sim<'a> {
     state: &'a mut State,
     applied: Vec<Instruction>,
+    /// Per-side /100 HP rendering (live-ladder streams show opponent HP under
+    /// the HP Percentage Mod; the local harness's omniscient stream is exact).
+    hp_percent: [bool; 2],
 }
 
 impl<'a> Sim<'a> {
-    fn new(state: &'a mut State) -> Sim<'a> {
+    fn new(state: &'a mut State, hp_percent: [bool; 2]) -> Sim<'a> {
         Sim {
             state,
             applied: Vec::new(),
+            hp_percent,
         }
     }
 
@@ -416,16 +441,28 @@ impl<'a> Sim<'a> {
     fn hp_condition(&self, side: SideReference) -> String {
         let (hp, maxhp) = self.active_hp(side);
         if hp <= 0 {
-            "0 fnt".to_string()
-        } else {
-            format!("{hp}/{maxhp}")
+            return "0 fnt".to_string();
         }
+        if self.hp_percent[side_usize(side)] && maxhp > 0 {
+            return hp_percent_condition(hp, maxhp);
+        }
+        format!("{hp}/{maxhp}")
     }
 
     fn finish(self) {
         // Restore the caller's state exactly (reverse in reverse order).
         self.state.reverse_instructions(&self.applied);
     }
+}
+
+/// Showdown's HP Percentage Mod rendering (sim/pokemon.ts `getHealth`):
+/// `ceil(100 * hp / maxhp)`, with 100 shown as 99 while hp < maxhp.
+fn hp_percent_condition(hp: i16, maxhp: i16) -> String {
+    let mut pct = (100 * hp as i32 + maxhp as i32 - 1) / maxhp as i32;
+    if pct == 100 && hp < maxhp {
+        pct = 99;
+    }
+    format!("{pct}/100")
 }
 
 fn other_side(side: SideReference) -> SideReference {
@@ -638,7 +675,7 @@ pub fn render_branch_events(
             // state-tracking lines we can attribute without phases (hp only),
             // and mark the branch lossy so callers can count it.
             out.lossy.push("segmentation_failed".to_string());
-            let mut sim = Sim::new(state);
+            let mut sim = Sim::new(state, ctx.hp_percent);
             for ins in instructions {
                 render_residual_instruction(&mut sim, ins, ctx, &mut out, true);
             }
@@ -662,7 +699,7 @@ pub fn render_branch_events(
         SideReference::SideTwo => (s2_move, s1_move),
     };
 
-    let mut sim = Sim::new(state);
+    let mut sim = Sim::new(state, ctx.hp_percent);
     render_action_phase(
         &mut sim,
         seg.first,
@@ -2229,6 +2266,7 @@ mod tests {
         EventContext {
             species: [vec!["Charmander".to_string()], vec!["Squirtle".to_string()]],
             turn: 4,
+            hp_percent: [false, false],
         }
     }
 
@@ -2276,5 +2314,64 @@ mod tests {
         }
         // State restored exactly.
         assert_eq!(before, state.serialize());
+    }
+
+    /// The /100 base reconciliation (ladder streams): the exact Showdown HP
+    /// Percentage Mod formula, including both special cases.
+    #[test]
+    fn hp_percent_condition_matches_showdown() {
+        // ceil rounding: 1/335 -> 1%, never 0 while alive.
+        assert_eq!(hp_percent_condition(1, 335), "1/100");
+        // near-full clamps to 99 while hp < maxhp (pokemon.ts getHealth).
+        assert_eq!(hp_percent_condition(334, 335), "99/100");
+        assert_eq!(hp_percent_condition(335, 335), "100/100");
+        assert_eq!(hp_percent_condition(148, 196), "76/100");
+        assert_eq!(hp_percent_condition(100, 100), "100/100");
+        assert_eq!(hp_percent_condition(99, 100), "99/100");
+    }
+
+    /// With `hp_percent` set for side two, every rendered HP condition about
+    /// side two's mons lands on the /100 grid — the same grid a ladder root
+    /// fold consumed — while side one keeps the exact base. The fixture's
+    /// side-two mon is rescaled to 335 max HP so the two bases are visibly
+    /// different strings.
+    #[test]
+    fn renders_side_two_on_percent_base() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let active = state.side_two.active_index;
+        state.side_two.pokemon[active].hp = 335;
+        state.side_two.pokemon[active].maxhp = 335;
+        let s1 = MoveChoice::from_string("tackle", &state.side_one).unwrap();
+        let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
+        let mut ctx = ctx();
+        ctx.hp_percent = [false, true];
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        let mut saw_p2_damage = false;
+        for branch in &branches {
+            let rendered = render_branch_events(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+                &ctx,
+            );
+            for line in &rendered.lines {
+                if !line.starts_with("|-damage|") && !line.starts_with("|-heal|") {
+                    continue;
+                }
+                let ident = line.split('|').nth(2).unwrap_or("");
+                let hp = line.split('|').nth(3).unwrap_or("");
+                if hp == "0 fnt" || !ident.starts_with("p2a:") {
+                    continue;
+                }
+                saw_p2_damage = true;
+                let (cur, base) = hp.split_once('/').expect("condition has a base");
+                assert_eq!(base, "100", "side-two condition {hp} not /100 in {line}");
+                let pct: i32 = cur.parse().expect("percent parses");
+                assert!((1..=99).contains(&pct), "damaged percent {pct} in {line}");
+            }
+        }
+        assert!(saw_p2_damage, "fixture must produce side-two damage lines");
     }
 }
