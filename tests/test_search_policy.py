@@ -4110,6 +4110,53 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 root_time_budget_seconds=0.0,
             )
 
+    def test_root_puct_policy_rejects_adaptive_value_batching_without_batch_evaluator(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires value_batch_fn"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                batch_adaptive_root_values=True,
+            )
+
+    def test_root_puct_policy_rejects_adaptive_value_batching_with_leaf_rollouts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "zero leaf rollout"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                value_batch_fn=lambda histories: tuple(0.0 for _history in histories),
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                leaf_rollout_decision_rounds=1,
+                leaf_rollout_policy_factory=lambda: FixedPolicy(0, policy_id="leaf"),
+                batch_adaptive_root_values=True,
+            )
+
+    def test_root_puct_policy_rejects_adaptive_value_batching_with_time_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "visit budget, not a time budget"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                value_batch_fn=lambda histories: tuple(0.0 for _history in histories),
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_time_budget_seconds=0.1,
+                batch_adaptive_root_values=True,
+            )
+
+    def test_root_puct_policy_rejects_adaptive_value_batching_without_visit_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root visit budget or selector"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                value_batch_fn=lambda histories: tuple(0.0 for _history in histories),
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_visit_budget=None,
+                batch_adaptive_root_values=True,
+            )
+
     def test_root_puct_policy_rejects_invalid_root_prior_temperature(self) -> None:
         with self.assertRaisesRegex(ValueError, "root_prior_temperature"):
             RootPUCTSearchPolicy(

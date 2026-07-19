@@ -925,6 +925,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--batch-adaptive-root-values",
+        action="store_true",
+        help=(
+            "Also batch one already-selected adaptive leaf across independent belief worlds. "
+            "Requires --batch-initial-root-values, a non-time visit budget, and zero rollout tails."
+        ),
+    )
+    root_puct_play.add_argument(
         "--root-time-budget-ms",
         type=int,
         default=None,
@@ -3954,6 +3962,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "--root-opponent-action-policy checkpoint."
         )
     root_visit_budget_selector = _root_visit_budget_selector(args)
+    if args.batch_adaptive_root_values and not args.batch_initial_root_values:
+        raise ValueError("--batch-adaptive-root-values requires --batch-initial-root-values.")
+    if args.batch_adaptive_root_values and args.root_time_budget_ms is not None:
+        raise ValueError("--batch-adaptive-root-values cannot be combined with --root-time-budget-ms.")
     if args.root_time_budget_ms is not None:
         if args.root_time_budget_ms <= 0:
             raise ValueError("root time budget must be positive when set.")
@@ -3989,6 +4001,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         "hidden" if rollout_config.hide_opponent_legal_action_masks else "privileged"
     )
     leaf_rollout_rounds_values = _root_puct_leaf_rollout_rounds_values(args)
+    if args.batch_adaptive_root_values and any(rounds != 0 for rounds in leaf_rollout_rounds_values):
+        raise ValueError("--batch-adaptive-root-values requires zero leaf rollout rounds.")
     tag_leaf_policy_ids = args.leaf_rollout_rounds_sweep is not None
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     value_checkpoint = args.value_checkpoint or args.checkpoint
@@ -4057,6 +4071,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "root_visit_budget": None if args.root_time_budget_ms is not None else args.root_visit_budget,
             "root_extra_visits": args.root_extra_visits,
             "batch_initial_root_values": bool(getattr(args, "batch_initial_root_values", False)),
+            "batch_adaptive_root_values": bool(getattr(args, "batch_adaptive_root_values", False)),
             "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
             "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
             "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
@@ -4216,6 +4231,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             rollout_config=rollout_config,
             value_fn=value_fn,
             value_batch_fn=value_batch_fn if getattr(args, "batch_initial_root_values", False) else None,
+            batch_adaptive_root_values=bool(getattr(args, "batch_adaptive_root_values", False)),
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,

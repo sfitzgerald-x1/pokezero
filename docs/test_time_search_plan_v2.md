@@ -196,16 +196,29 @@ classifying it.
    The resulting decision wall was 14.69s mean / 18.13s p95, still a bounded
    mechanics read rather than a ladder budget claim.
 
-   **Attributed next target (2026-07-18):** raw residual is now only 0.02s per
-   decision. Within the 7.78s branch-step wall, post-branch result projection
-   costs 3.69s and action-choice encoding costs 2.69s; bridge round trips cost
-   1.00s, local restore 0.38s, and branch-internal residual is 0.02s. The next
-   V2 change therefore caches legal action-to-Showdown-choice translations per
-   retained belief-sampled snapshot and emits only the searched player's
-   post-branch observation for zero-rollout leaves. It must retain full
-   observations for rollout tails, fall back to normal legality validation for
-   stale inputs, and re-run this same bounded telemetry before any throughput
-   claim.
+   **Cached-choice/single-view telemetry (2026-07-19):** the follow-up
+   CPU-only extra-120 mechanics smoke completed with 124/124 direct
+   materializations, zero prefix replays, zero fallbacks, and 31 searched
+   decisions. Its decision wall was 11.69s mean / 14.39s p95, down from the
+   preceding 14.69s / 18.13s bounded read. Snapshot-local legal
+   action-to-Showdown-choice translations reduced action-choice encoding from
+   the prior 2.69s per decision to 0.005s. Emitting only the searched player's
+   branch observation retains full observations for rollout tails and falls
+   back to normal legality validation for stale inputs. The remaining dominant
+   measured stages are value evaluation (6.18s per decision) and post-branch
+   result projection (3.53s); bridge round trips are 1.00s, local restore is
+   0.36s, and raw residual is 0.01s per decision. This is a throughput
+   diagnostic, not a strength result.
+
+   **Next target — adaptive cross-world value batches (implemented; validation
+   pending):** keep each retained belief world's PUCT accumulator independent,
+   select at most one adaptive visit per world, batch only those already
+   selected non-terminal leaves, then back up each result before that world's
+   next selection. The mechanism is opt-in (`--batch-adaptive-root-values`),
+   requires the existing initial-leaf batch, non-time visit budgets, and zero
+   rollout tails. It must reproduce scalar per-world candidates, visit counts,
+   and selected actions exactly, then pass the same 1–2 game P-1 smoke and
+   bounded telemetry probe before any throughput claim.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
@@ -231,9 +244,8 @@ classifying it.
    redesign loop.
 
 Deferred: tree reuse, early termination, vectorized stepping, and the multi-ply
-question — all get re-priced after the cached-choice/single-view probe has a
-durable result. Success remains **more winrate at fixed wall-clock**, not more
-visits.
+question — all get re-priced after the adaptive-batching probe has a durable
+result. Success remains **more winrate at fixed wall-clock**, not more visits.
 
 ## Order and cost
 
