@@ -667,6 +667,39 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
 
+    def test_old_data_drops_absorb_but_keeps_intimidate_fallback(self):
+        # Movesets WITHOUT ability info (pre-capture data): absorb requires exact gating, so it is
+        # dropped (rate None); intimidate keeps the protocol-presence fallback (it fired), so it
+        # still reports. Both a Volt Absorb read and an Intimidate activation occur.
+        movesets = {"p1": [{"species": "Gyarados", "moves": ["Earthquake", "Hidden Power"]},
+                           {"species": "Jolteon", "moves": ["Thunderbolt", "Substitute"]}],
+                    "p2": [{"species": "Zapdos", "moves": ["Thunderbolt", "Roar"]}]}
+        protocol = [
+            "|turn|1",
+            "|switch|p1a: Gyarados|Gyarados, M|300/300",
+            "|-ability|p1a: Gyarados|Intimidate|boost",
+            "|-unboost|p2a: Zapdos|atk|1",
+            "|turn|2",
+            "|switch|p1a: Jolteon|Jolteon, F|260/260",
+            "|move|p2a: Zapdos|Thunderbolt|p1a: Jolteon",
+            "|-immune|p1a: Jolteon|[from] ability: Volt Absorb",
+            "|turn|3",
+            "|faint|p2a: Zapdos",
+            "|win|Bot p1",
+        ]
+        game = {"seed": 1, "opponent": "self", "winner": "p1", "turn_count": 3, "capped": False,
+                "protocol": protocol, "movesets": movesets, "pp_track": []}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                f.write(json.dumps(game) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["absorb_present_seat_games"], 0)              # dropped: no ability info
+        self.assertIsNone(m["absorb_switchins_per_game"])
+        self.assertGreaterEqual(m["intimidate_present_seat_games"], 1)  # kept: fallback (it fired)
+        self.assertIsNotNone(m["intimidate_activations_per_game"])
+
     def test_spikes_avg_max_layers_gated_on_carrier(self):
         # p1 carries Spikes and stacks 3 layers; p2 does not carry it. Only p1's team is a "present"
         # seat-game, and its peak is 3, so the average is 3.0 over 1 present seat-game.
