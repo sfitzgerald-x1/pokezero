@@ -1063,7 +1063,7 @@ class _RootPUCTSearchTimingAccumulator:
         self.value_evaluation_count += count
 
     def add_adaptive_value_batch(self, *, batch_size: int) -> None:
-        """Record one adaptive leaf evaluated in a shared cross-world wave."""
+        """Record one adaptive leaf, noting when its evaluation shared a cross-world wave."""
 
         if batch_size <= 0:
             raise ValueError("adaptive value batch size must be positive.")
