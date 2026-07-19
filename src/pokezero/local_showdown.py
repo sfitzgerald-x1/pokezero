@@ -287,6 +287,14 @@ class LocalShowdownEnv:
         # state normalization, feature encoding, or belief-overlay work.
         self._root_puct_branch_observation_state_normalization_seconds = 0.0
         self._root_puct_branch_observation_state_normalization_count = 0
+        self._root_puct_branch_observation_incremental_sync_seconds = 0.0
+        self._root_puct_branch_observation_incremental_sync_count = 0
+        self._root_puct_branch_observation_replay_snapshot_seconds = 0.0
+        self._root_puct_branch_observation_replay_snapshot_count = 0
+        self._root_puct_branch_observation_player_state_normalization_seconds = 0.0
+        self._root_puct_branch_observation_player_state_normalization_count = 0
+        self._root_puct_branch_observation_state_annotation_seconds = 0.0
+        self._root_puct_branch_observation_state_annotation_count = 0
         self._root_puct_branch_observation_encoding_seconds = 0.0
         self._root_puct_branch_observation_encoding_count = 0
         self._root_puct_branch_belief_overlay_projection_seconds = 0.0
@@ -429,7 +437,9 @@ class LocalShowdownEnv:
     ) -> PokeZeroObservationV0:
         state_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
-            state = self._state_for_player(player)
+            state = self._state_for_player(
+                player, root_puct_branch_observation=root_puct_branch_observation
+            )
         finally:
             if state_started_at is not None:
                 self._root_puct_branch_observation_state_normalization_seconds += max(
@@ -1140,6 +1150,30 @@ class LocalShowdownEnv:
             "branch_observation_state_normalization_count": (
                 self._root_puct_branch_observation_state_normalization_count
             ),
+            "branch_observation_incremental_sync_seconds": (
+                self._root_puct_branch_observation_incremental_sync_seconds
+            ),
+            "branch_observation_incremental_sync_count": (
+                self._root_puct_branch_observation_incremental_sync_count
+            ),
+            "branch_observation_replay_snapshot_seconds": (
+                self._root_puct_branch_observation_replay_snapshot_seconds
+            ),
+            "branch_observation_replay_snapshot_count": (
+                self._root_puct_branch_observation_replay_snapshot_count
+            ),
+            "branch_observation_player_state_normalization_seconds": (
+                self._root_puct_branch_observation_player_state_normalization_seconds
+            ),
+            "branch_observation_player_state_normalization_count": (
+                self._root_puct_branch_observation_player_state_normalization_count
+            ),
+            "branch_observation_state_annotation_seconds": (
+                self._root_puct_branch_observation_state_annotation_seconds
+            ),
+            "branch_observation_state_annotation_count": (
+                self._root_puct_branch_observation_state_annotation_count
+            ),
             "branch_observation_encoding_seconds": self._root_puct_branch_observation_encoding_seconds,
             "branch_observation_encoding_count": self._root_puct_branch_observation_encoding_count,
             "branch_belief_overlay_projection_seconds": (
@@ -1313,57 +1347,95 @@ class LocalShowdownEnv:
                 self._belief_engine.ingest_event(event)
             self._belief_fed_count = len(events)
 
-    def _state_for_player(self, player: PlayerId) -> PlayerRelativeBattleState:
+    def _state_for_player(
+        self,
+        player: PlayerId,
+        *,
+        root_puct_branch_observation: bool = False,
+    ) -> PlayerRelativeBattleState:
         if player not in PLAYER_IDS:
             raise ValueError(f"player must be one of {', '.join(PLAYER_IDS)}; got {player!r}.")
-        self._sync_incremental_state()
-        replay = self._parser.snapshot()
+        sync_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            self._sync_incremental_state()
+        finally:
+            if sync_started_at is not None:
+                self._root_puct_branch_observation_incremental_sync_seconds += max(
+                    0.0, time.perf_counter() - sync_started_at
+                )
+                self._root_puct_branch_observation_incremental_sync_count += 1
+
+        snapshot_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            replay = self._parser.snapshot()
+        finally:
+            if snapshot_started_at is not None:
+                self._root_puct_branch_observation_replay_snapshot_seconds += max(
+                    0.0, time.perf_counter() - snapshot_started_at
+                )
+                self._root_puct_branch_observation_replay_snapshot_count += 1
         # v2.2 (turn-merged) specs need the merged stream populated alongside the
         # per-action one (which stays the Tier-2 annotation substrate + pinned-bit source).
         turn_merged = (
             self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
         )
-        state = normalize_for_player(
-            replay,
-            player_id=player,
-            configured_showdown_slot=player,
-            format_id=self._observation_format_id,
-            belief_engine=self._belief_engine,
-            include_turn_merged=turn_merged,
-        )
-        tracker = self._tier2_tracker_for(player)
-        if tracker is not None:
-            state = replace(
-                state,
-                transition_tokens=tracker.annotate(
-                    replay, state.transition_tokens, self._belief_engine
-                ),
+        normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            state = normalize_for_player(
+                replay,
+                player_id=player,
+                configured_showdown_slot=player,
+                format_id=self._observation_format_id,
+                belief_engine=self._belief_engine,
+                include_turn_merged=turn_merged,
             )
-        investment_tracker = self._investment_tracker_for(player)
-        if investment_tracker is not None:
-            codes = investment_tracker.observe(
-                replay, state.transition_tokens, self._belief_engine
-            )
-            if codes:
+        finally:
+            if normalize_started_at is not None:
+                self._root_puct_branch_observation_player_state_normalization_seconds += max(
+                    0.0, time.perf_counter() - normalize_started_at
+                )
+                self._root_puct_branch_observation_player_state_normalization_count += 1
+        annotation_started_at = time.perf_counter() if root_puct_branch_observation else None
+        try:
+            tracker = self._tier2_tracker_for(player)
+            if tracker is not None:
                 state = replace(
                     state,
-                    transition_tokens=tuple(
-                        replace(token, investment=codes[index]) if index in codes else token
-                        for index, token in enumerate(state.transition_tokens)
+                    transition_tokens=tracker.annotate(
+                        replay, state.transition_tokens, self._belief_engine
                     ),
                 )
-        # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
-        # investment codes) onto the merged sub-blocks; the per-action stream stays
-        # the annotation substrate and the per-mon pinned-surface derivation source.
-        if turn_merged and (tracker is not None or investment_tracker is not None):
-            from .turn_merged import annotate_turn_merged_tokens
+            investment_tracker = self._investment_tracker_for(player)
+            if investment_tracker is not None:
+                codes = investment_tracker.observe(
+                    replay, state.transition_tokens, self._belief_engine
+                )
+                if codes:
+                    state = replace(
+                        state,
+                        transition_tokens=tuple(
+                            replace(token, investment=codes[index]) if index in codes else token
+                            for index, token in enumerate(state.transition_tokens)
+                        ),
+                    )
+            # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
+            # investment codes) onto the merged sub-blocks; the per-action stream stays
+            # the annotation substrate and the per-mon pinned-surface derivation source.
+            if turn_merged and (tracker is not None or investment_tracker is not None):
+                from .turn_merged import annotate_turn_merged_tokens
 
-            state = replace(
-                state,
-                turn_merged_tokens=annotate_turn_merged_tokens(
-                    state.turn_merged_tokens, state.transition_tokens
-                ),
-            )
+                state = replace(
+                    state,
+                    turn_merged_tokens=annotate_turn_merged_tokens(
+                        state.turn_merged_tokens, state.transition_tokens
+                    ),
+                )
+        finally:
+            if annotation_started_at is not None:
+                self._root_puct_branch_observation_state_annotation_seconds += max(
+                    0.0, time.perf_counter() - annotation_started_at
+                )
+                self._root_puct_branch_observation_state_annotation_count += 1
         return state
 
     def tier2_residuals_active(self) -> bool:

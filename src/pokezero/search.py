@@ -57,6 +57,10 @@ _BRANCH_STEP_TIMING_SECONDS = (
 )
 _BRANCH_STEP_TIMING_OPTIONAL_SECONDS = (
     "branch_observation_state_normalization_seconds",
+    "branch_observation_incremental_sync_seconds",
+    "branch_observation_replay_snapshot_seconds",
+    "branch_observation_player_state_normalization_seconds",
+    "branch_observation_state_annotation_seconds",
     "branch_observation_encoding_seconds",
     "branch_belief_overlay_projection_seconds",
 )
@@ -70,6 +74,10 @@ _BRANCH_STEP_TIMING_COUNTS = (
 )
 _BRANCH_STEP_TIMING_OPTIONAL_COUNTS = (
     "branch_observation_state_normalization_count",
+    "branch_observation_incremental_sync_count",
+    "branch_observation_replay_snapshot_count",
+    "branch_observation_player_state_normalization_count",
+    "branch_observation_state_annotation_count",
     "branch_observation_encoding_count",
     "branch_belief_overlay_projection_count",
 )
@@ -166,6 +174,16 @@ class RootPUCTSearchTiming:
     # alter the additive branch wall-clock accounting.
     branch_observation_state_normalization_seconds: float = 0.0
     branch_observation_state_normalization_count: int = 0
+    # State normalization is the dominant W5 observation slice. Its nested
+    # fields partition the work without changing normalization behavior.
+    branch_observation_incremental_sync_seconds: float = 0.0
+    branch_observation_incremental_sync_count: int = 0
+    branch_observation_replay_snapshot_seconds: float = 0.0
+    branch_observation_replay_snapshot_count: int = 0
+    branch_observation_player_state_normalization_seconds: float = 0.0
+    branch_observation_player_state_normalization_count: int = 0
+    branch_observation_state_annotation_seconds: float = 0.0
+    branch_observation_state_annotation_count: int = 0
     branch_observation_encoding_seconds: float = 0.0
     branch_observation_encoding_count: int = 0
     branch_belief_overlay_projection_seconds: float = 0.0
@@ -382,6 +400,22 @@ class RootPUCTSearchTiming:
     @property
     def branch_observation_unattributed_seconds(self) -> float:
         return max(0.0, self.branch_observation_raw_unattributed_seconds)
+
+    @property
+    def branch_observation_state_normalization_raw_unattributed_seconds(self) -> float:
+        """Return state-normalization work outside its measured sub-stages."""
+
+        return (
+            self.branch_observation_state_normalization_seconds
+            - self.branch_observation_incremental_sync_seconds
+            - self.branch_observation_replay_snapshot_seconds
+            - self.branch_observation_player_state_normalization_seconds
+            - self.branch_observation_state_annotation_seconds
+        )
+
+    @property
+    def branch_observation_state_normalization_unattributed_seconds(self) -> float:
+        return max(0.0, self.branch_observation_state_normalization_raw_unattributed_seconds)
 
     def with_opponent_scenario_planning(self, elapsed_seconds: float) -> "RootPUCTSearchTiming":
         return replace(
@@ -638,6 +672,14 @@ class RootPUCTSearchTiming:
         branch_observation_projection_count: int = 0,
         branch_observation_state_normalization_seconds: float = 0.0,
         branch_observation_state_normalization_count: int = 0,
+        branch_observation_incremental_sync_seconds: float = 0.0,
+        branch_observation_incremental_sync_count: int = 0,
+        branch_observation_replay_snapshot_seconds: float = 0.0,
+        branch_observation_replay_snapshot_count: int = 0,
+        branch_observation_player_state_normalization_seconds: float = 0.0,
+        branch_observation_player_state_normalization_count: int = 0,
+        branch_observation_state_annotation_seconds: float = 0.0,
+        branch_observation_state_annotation_count: int = 0,
         branch_observation_encoding_seconds: float = 0.0,
         branch_observation_encoding_count: int = 0,
         branch_belief_overlay_projection_seconds: float = 0.0,
@@ -690,6 +732,38 @@ class RootPUCTSearchTiming:
             branch_observation_state_normalization_count=(
                 self.branch_observation_state_normalization_count
                 + branch_observation_state_normalization_count
+            ),
+            branch_observation_incremental_sync_seconds=(
+                self.branch_observation_incremental_sync_seconds
+                + branch_observation_incremental_sync_seconds
+            ),
+            branch_observation_incremental_sync_count=(
+                self.branch_observation_incremental_sync_count
+                + branch_observation_incremental_sync_count
+            ),
+            branch_observation_replay_snapshot_seconds=(
+                self.branch_observation_replay_snapshot_seconds
+                + branch_observation_replay_snapshot_seconds
+            ),
+            branch_observation_replay_snapshot_count=(
+                self.branch_observation_replay_snapshot_count
+                + branch_observation_replay_snapshot_count
+            ),
+            branch_observation_player_state_normalization_seconds=(
+                self.branch_observation_player_state_normalization_seconds
+                + branch_observation_player_state_normalization_seconds
+            ),
+            branch_observation_player_state_normalization_count=(
+                self.branch_observation_player_state_normalization_count
+                + branch_observation_player_state_normalization_count
+            ),
+            branch_observation_state_annotation_seconds=(
+                self.branch_observation_state_annotation_seconds
+                + branch_observation_state_annotation_seconds
+            ),
+            branch_observation_state_annotation_count=(
+                self.branch_observation_state_annotation_count
+                + branch_observation_state_annotation_count
             ),
             branch_observation_encoding_seconds=(
                 self.branch_observation_encoding_seconds + branch_observation_encoding_seconds
@@ -760,6 +834,30 @@ class RootPUCTSearchTiming:
             ),
             branch_observation_state_normalization_count=sum(
                 timing.branch_observation_state_normalization_count for timing in timings
+            ),
+            branch_observation_incremental_sync_seconds=sum(
+                timing.branch_observation_incremental_sync_seconds for timing in timings
+            ),
+            branch_observation_incremental_sync_count=sum(
+                timing.branch_observation_incremental_sync_count for timing in timings
+            ),
+            branch_observation_replay_snapshot_seconds=sum(
+                timing.branch_observation_replay_snapshot_seconds for timing in timings
+            ),
+            branch_observation_replay_snapshot_count=sum(
+                timing.branch_observation_replay_snapshot_count for timing in timings
+            ),
+            branch_observation_player_state_normalization_seconds=sum(
+                timing.branch_observation_player_state_normalization_seconds for timing in timings
+            ),
+            branch_observation_player_state_normalization_count=sum(
+                timing.branch_observation_player_state_normalization_count for timing in timings
+            ),
+            branch_observation_state_annotation_seconds=sum(
+                timing.branch_observation_state_annotation_seconds for timing in timings
+            ),
+            branch_observation_state_annotation_count=sum(
+                timing.branch_observation_state_annotation_count for timing in timings
             ),
             branch_observation_encoding_seconds=sum(
                 timing.branch_observation_encoding_seconds for timing in timings
@@ -960,6 +1058,30 @@ class RootPUCTSearchTiming:
             "branch_observation_state_normalization_count": (
                 self.branch_observation_state_normalization_count
             ),
+            "branch_observation_incremental_sync_seconds": (
+                self.branch_observation_incremental_sync_seconds
+            ),
+            "branch_observation_incremental_sync_count": (
+                self.branch_observation_incremental_sync_count
+            ),
+            "branch_observation_replay_snapshot_seconds": (
+                self.branch_observation_replay_snapshot_seconds
+            ),
+            "branch_observation_replay_snapshot_count": (
+                self.branch_observation_replay_snapshot_count
+            ),
+            "branch_observation_player_state_normalization_seconds": (
+                self.branch_observation_player_state_normalization_seconds
+            ),
+            "branch_observation_player_state_normalization_count": (
+                self.branch_observation_player_state_normalization_count
+            ),
+            "branch_observation_state_annotation_seconds": (
+                self.branch_observation_state_annotation_seconds
+            ),
+            "branch_observation_state_annotation_count": (
+                self.branch_observation_state_annotation_count
+            ),
             "branch_observation_encoding_seconds": self.branch_observation_encoding_seconds,
             "branch_observation_encoding_count": self.branch_observation_encoding_count,
             "branch_belief_overlay_projection_seconds": (
@@ -972,6 +1094,12 @@ class RootPUCTSearchTiming:
                 self.branch_observation_raw_unattributed_seconds
             ),
             "branch_observation_unattributed_seconds": self.branch_observation_unattributed_seconds,
+            "branch_observation_state_normalization_raw_unattributed_seconds": (
+                self.branch_observation_state_normalization_raw_unattributed_seconds
+            ),
+            "branch_observation_state_normalization_unattributed_seconds": (
+                self.branch_observation_state_normalization_unattributed_seconds
+            ),
             "branch_projection_raw_unattributed_seconds": (
                 self.branch_projection_raw_unattributed_seconds
             ),
@@ -1091,6 +1219,14 @@ class _RootPUCTSearchTimingAccumulator:
     branch_observation_projection_count: int = 0
     branch_observation_state_normalization_seconds: float = 0.0
     branch_observation_state_normalization_count: int = 0
+    branch_observation_incremental_sync_seconds: float = 0.0
+    branch_observation_incremental_sync_count: int = 0
+    branch_observation_replay_snapshot_seconds: float = 0.0
+    branch_observation_replay_snapshot_count: int = 0
+    branch_observation_player_state_normalization_seconds: float = 0.0
+    branch_observation_player_state_normalization_count: int = 0
+    branch_observation_state_annotation_seconds: float = 0.0
+    branch_observation_state_annotation_count: int = 0
     branch_observation_encoding_seconds: float = 0.0
     branch_observation_encoding_count: int = 0
     branch_belief_overlay_projection_seconds: float = 0.0
@@ -1156,6 +1292,30 @@ class _RootPUCTSearchTimingAccumulator:
         )
         self.branch_observation_state_normalization_count += int(
             timing.get("branch_observation_state_normalization_count", 0)
+        )
+        self.branch_observation_incremental_sync_seconds += float(
+            timing.get("branch_observation_incremental_sync_seconds", 0.0)
+        )
+        self.branch_observation_incremental_sync_count += int(
+            timing.get("branch_observation_incremental_sync_count", 0)
+        )
+        self.branch_observation_replay_snapshot_seconds += float(
+            timing.get("branch_observation_replay_snapshot_seconds", 0.0)
+        )
+        self.branch_observation_replay_snapshot_count += int(
+            timing.get("branch_observation_replay_snapshot_count", 0)
+        )
+        self.branch_observation_player_state_normalization_seconds += float(
+            timing.get("branch_observation_player_state_normalization_seconds", 0.0)
+        )
+        self.branch_observation_player_state_normalization_count += int(
+            timing.get("branch_observation_player_state_normalization_count", 0)
+        )
+        self.branch_observation_state_annotation_seconds += float(
+            timing.get("branch_observation_state_annotation_seconds", 0.0)
+        )
+        self.branch_observation_state_annotation_count += int(
+            timing.get("branch_observation_state_annotation_count", 0)
         )
         self.branch_observation_encoding_seconds += float(
             timing.get("branch_observation_encoding_seconds", 0.0)
@@ -1265,6 +1425,26 @@ class _RootPUCTSearchTimingAccumulator:
             ),
             branch_observation_state_normalization_count=(
                 self.branch_observation_state_normalization_count
+            ),
+            branch_observation_incremental_sync_seconds=(
+                self.branch_observation_incremental_sync_seconds
+            ),
+            branch_observation_incremental_sync_count=self.branch_observation_incremental_sync_count,
+            branch_observation_replay_snapshot_seconds=(
+                self.branch_observation_replay_snapshot_seconds
+            ),
+            branch_observation_replay_snapshot_count=self.branch_observation_replay_snapshot_count,
+            branch_observation_player_state_normalization_seconds=(
+                self.branch_observation_player_state_normalization_seconds
+            ),
+            branch_observation_player_state_normalization_count=(
+                self.branch_observation_player_state_normalization_count
+            ),
+            branch_observation_state_annotation_seconds=(
+                self.branch_observation_state_annotation_seconds
+            ),
+            branch_observation_state_annotation_count=(
+                self.branch_observation_state_annotation_count
             ),
             branch_observation_encoding_seconds=self.branch_observation_encoding_seconds,
             branch_observation_encoding_count=self.branch_observation_encoding_count,
