@@ -52,6 +52,11 @@ first 64 golden-corpus-v2 rows, both devices):
 | emeta final | 0.0 (bit-exact) | min -0.331, max 0.901, std 0.263, 64/64 unique | rows sum to 1.000000, illegal mass exactly 0 |
 | m50 latest | 0.0 (bit-exact) | min -0.696, max 0.892, std 0.319, 64/64 unique | rows sum to 1.000000, illegal mass exactly 0 |
 
+(Provenance note: the 64-row battery is the full regenerated golden-corpus-v2
+random battery — regenerate per docs/golden_corpus_notes.md to reproduce; the
+committed 5-row sample gives the same parity/illegal-mass results but value-std
+at n=5 is not comparable to the n=64 figures above.)
+
 ## Throughput grid (Part 3) — `scripts/bench_model_eval.py`
 
 Method: fp32 cells are the TorchScript runtime (what the crate runs via
@@ -219,7 +224,11 @@ At search batch sizes that respect batch<<sims (batch <= sims/4 per
 and the knee means 16-64 is where you'd actually sit), sims/s ==
 forward-only evals/s to first order (engine-side loop cost is 3-4 orders
 below the forward; engine-terminal leaves only make these numbers
-conservative). Projection per 1024-sim decision:
+conservative). CAVEAT: these are forward-only UPPER BOUNDS, not end-to-end
+guarantees — the crate's tch-rs loop measured 415-579 sims/s at batch 256 on
+MPS (shape-churn overhead; the pad-to-batch fix above is what closes that
+gap and must be applied crate-side before quoting these numbers for search).
+Projection per 1024-sim decision:
 
 | model | device/dtype | batch | evals/s (~sims/s) | s per 1024-sim decision | decisions/min |
 |---|---|---|---|---|---|
