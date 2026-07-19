@@ -128,6 +128,45 @@ Encoder-gate regression (unchanged golden surface, proven at scale):
 EXACT** over all 1028 golden-v2 rows AND all 290 scenario rows (rust vs
 python-reference, every array byte-for-byte).
 
+### Rust backend (the advance() port, validated 2026-07-18)
+
+`pokezero_search.FoldState` (rust/pokezero-search `src/fold.rs`) is the Rust
+port of `pokezero.transitions_fold.FoldState` — event-line fold, windows,
+turn-merge (incl. lead pass, cold pairs, Pursuit continuation, RestTalk/Baton
+Pass collapse), tendency counters with the opportunity dedupe scalar, mon
+counters, last-2-turn maps, pursuit ring buffer, Tier-2 annotation overlay +
+pinned reductions (investment clamp included), production tail bounds, and the
+full `pokezero.fold-state.v1` payload codec. It returns NATIVE Python objects
+from `to_payload()` / `products_payload()` so the harness's canonical
+`json.dumps` defines the compared bytes (float canonicalization never happens
+in Rust). Backend adapter: `scripts/golden_fold_backends.py` (`rust`, plus
+`compare-backends` — rust and python-reference side by side with JSON-path
+divergence locators, the port's debugging loop).
+
+    PYTHONPATH=src python scripts/validate_corpus_v2.py \
+        --corpus corpus/golden-v2 --corpus corpus/golden-v2-scenarios \
+        --backend rust --verify-corpus
+
+Results (2026-07-18, this machine): golden-v2 **1028/1028 boundaries
+byte-exact** (20 chain starts + 1008 row pairs, state + products, 2.1s);
+golden-v2-scenarios **290/290 byte-exact** (0.2s); `compare-backends` prints
+zero divergences over both corpora. `RustCommittedSampleFoldChainTest`
+(`tests/test_golden_corpus_fold.py`) row-pair-validates the committed 5-row
+sample through the rust backend on every test run (skip-if-absent on the
+wheel, like the encoder gate). Rebuild the wheel with
+`scripts/build_search_crate_model.sh` (keeps the `model` feature) or plain
+`maturin build --release` from rust/pokezero-search.
+
+Perf (`scripts/bench_fold_advance.py`, golden-v2's 1028 real boundary cases,
+mean slice 9.6 lines, best of 5 passes): rust `clone_state()+advance_in_place`
+**9.8µs/boundary (~102k boundaries/s)** vs the Python reference's pure
+`advance()` at 91.7µs (~11k/s) — **9.3x** on the per-chance-outcome unit the
+search-tree contract multiplies. Materializing the boundary products as
+Python objects (`products_payload()`, +107µs) is deliberately excluded from
+that headline: it is a harness/boundary-crossing artifact (the ~20k-object
+payload graph), not part of the in-search path, where the in-crate encoder
+will consume fold products natively.
+
 ### Determinism
 
 Two back-to-back single-game regenerations (seed 1000) produce byte-identical

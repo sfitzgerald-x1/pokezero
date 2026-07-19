@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -48,6 +49,18 @@ from pokezero.transitions_fold import FoldState
 
 TESTS_DATA_DIR = Path(__file__).parent / "data"
 COMMITTED_SAMPLE_DIR = TESTS_DATA_DIR / "golden_corpus_sample"
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+
+
+def _rust_fold_available() -> bool:
+    """True when the installed pokezero_search wheel carries the fold port
+    (skip-if-absent, like the encoder gate in test_validate_rust_encoder)."""
+
+    try:
+        import pokezero_search
+    except (ImportError, OSError):  # pragma: no cover - environment guard
+        return False
+    return hasattr(pokezero_search, "FoldState")
 
 # A small two-boundary protocol log: the lead slice (what both seats' chains
 # see at their first decision) and one played turn (the second decision's
@@ -313,6 +326,30 @@ class CommittedSampleFoldChainTest(unittest.TestCase):
         report = validate_fold_chains(
             COMMITTED_SAMPLE_DIR,
             PythonReferenceFoldBackend(),
+            expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION,
+        )
+        self.assertTrue(report.ok, report.mismatches)
+        self.assertEqual(report.rows_validated, 5)
+        self.assertEqual(report.chains, 2)
+        self.assertGreater(report.pair_validations, 0)
+
+
+@unittest.skipIf(not _rust_fold_available(), "pokezero_search.FoldState not installed")
+class RustCommittedSampleFoldChainTest(unittest.TestCase):
+    """The Rust advance() port (rust/pokezero-search src/fold.rs) must keep
+    reproducing the committed sample's recorded production fold states and
+    products byte-exactly — the no-Showdown regression net for the native
+    backend, gated on the wheel being importable."""
+
+    def test_committed_sample_chains_validate_rust(self) -> None:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        try:
+            from golden_fold_backends import RustFoldBackend
+        finally:
+            sys.path.remove(str(SCRIPTS_DIR))
+        report = validate_fold_chains(
+            COMMITTED_SAMPLE_DIR,
+            RustFoldBackend(),
             expected_schema_version=GOLDEN_CORPUS_SCHEMA_VERSION,
         )
         self.assertTrue(report.ok, report.mismatches)
