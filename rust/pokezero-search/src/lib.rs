@@ -8,6 +8,8 @@
 //! TorchScript/ONNX per docs/test_time_search_plan_v3.md) plugs in later.
 //! Search quality is explicitly NOT the goal of this skeleton.
 
+pub mod encoder;
+
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -336,5 +338,6 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_FEATURES", "gen3 (residual-order patched)")?;
     m.add_function(wrap_pyfunction!(bench_apply_reverse, m)?)?;
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
+    m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
     Ok(())
 }
