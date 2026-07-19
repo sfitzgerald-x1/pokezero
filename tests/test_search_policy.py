@@ -436,13 +436,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             rollout_config=RolloutConfig(max_decision_rounds=3),
             value_fn=lambda history: 0.0,
             prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
-            checkpoint_path="/shared/scott-experiment/policy.pt",
+            checkpoint_path="/models/example-policy.pt",
             weights_sha256="a" * 64,
         )
 
         provenance = benchmark_policy_provenance(policy)
 
-        self.assertEqual(provenance["checkpoint_path"], "/shared/scott-experiment/policy.pt")
+        self.assertEqual(provenance["checkpoint_path"], "/models/example-policy.pt")
         self.assertEqual(provenance["weights_sha256"], "a" * 64)
         self.assertEqual(provenance["policy_class"], "RootPUCTSearchPolicy")
 
