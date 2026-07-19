@@ -212,11 +212,13 @@ def _eager_reference(shim: Any, inputs: tuple[Any, ...]) -> tuple[Any, ...]:
         return tuple(tensor.detach().cpu().numpy() for tensor in shim(*inputs))
 
 
-def validate_torchscript(shim: Any, traced: Any, config: Any, *, seed: int, batch_size: int) -> dict[str, float]:
+def validate_torchscript(
+    shim: Any, traced: Any, config: Any, *, seed: int, batch_size: int, device: str = "cpu"
+) -> dict[str, float]:
     torch, _ = _require_torch_nn()
     diffs: dict[str, float] = {}
     for batch in (batch_size, 1):
-        inputs = make_random_inputs(config, batch, seed=seed + batch)
+        inputs = make_random_inputs(config, batch, seed=seed + batch, device=device)
         reference = _eager_reference(shim, inputs)
         with torch.no_grad():
             produced = tuple(tensor.detach().cpu().numpy() for tensor in traced(*inputs))
@@ -264,6 +266,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE, help="Max abs diff allowed on policy logits + value.")
     parser.add_argument("--seed", type=int, default=20260718, help="Base RNG seed for trace/validation inputs.")
     parser.add_argument("--onnx-exporter", choices=("auto", "dynamo", "legacy"), default="auto")
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "mps", "cuda"),
+        default="cpu",
+        help="Trace/validate TorchScript on this device. Traces bake device constants "
+        "(docs/model_export_findings.md), so each target device needs its own artifact: "
+        "cpu -> model_ts.pt, mps -> model_ts_mps.pt, cuda -> model_ts_cuda.pt. "
+        "ONNX export stays CPU-only.",
+    )
     args = parser.parse_args(argv)
 
     formats = [item.strip() for item in args.formats.split(",") if item.strip()]
@@ -271,11 +282,22 @@ def main(argv: list[str] | None = None) -> int:
     if unknown or not formats:
         parser.error(f"--formats must be a non-empty subset of ts,onnx (got {args.formats!r}).")
 
+    import torch as _torch
+
+    if args.device == "mps" and not _torch.backends.mps.is_available():
+        parser.error("--device mps requested but MPS is unavailable.")
+    if args.device == "cuda" and not _torch.cuda.is_available():
+        parser.error("--device cuda requested but CUDA is unavailable.")
+    if args.device != "cpu" and "onnx" in formats:
+        parser.error("ONNX export is CPU-only; use --formats ts with --device mps/cuda.")
+
     from pokezero.neural_policy import load_transformer_checkpoint
 
     model, result = load_transformer_checkpoint(args.checkpoint, map_location="cpu")
     config = result.model_config
     model.eval()
+    if args.device != "cpu":
+        model = model.to(args.device)
     shim = build_exportable_module(model)
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     print(f"Loaded checkpoint: {parameter_count / 1e6:.1f}M params, d={config.embedding_dim}, "
@@ -283,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    example_inputs = make_random_inputs(config, TRACE_BATCH, seed=args.seed)
+    example_inputs = make_random_inputs(config, TRACE_BATCH, seed=args.seed, device=args.device)
 
     manifest: dict[str, Any] = {
         "checkpoint": str(Path(args.checkpoint).resolve()),
@@ -298,17 +320,21 @@ def main(argv: list[str] | None = None) -> int:
             "history_mask": ["batch", config.window_size],
         },
         "tolerance": args.tolerance,
+        "device": args.device,
         "formats": {},
     }
 
     failures: list[str] = []
     if "ts" in formats:
-        ts_path = out_dir / "model_ts.pt"
+        ts_name = "model_ts.pt" if args.device == "cpu" else f"model_ts_{args.device}.pt"
+        ts_path = out_dir / ts_name
         traced = export_torchscript(shim, example_inputs, ts_path)
-        entry: dict[str, Any] = {"path": str(ts_path)}
-        print(f"TorchScript written: {ts_path}")
+        entry: dict[str, Any] = {"path": str(ts_path), "device": args.device}
+        print(f"TorchScript written ({args.device}): {ts_path}")
         if args.validate:
-            diffs = validate_torchscript(shim, traced, config, seed=args.seed + 1, batch_size=args.validate_batch)
+            diffs = validate_torchscript(
+                shim, traced, config, seed=args.seed + 1, batch_size=args.validate_batch, device=args.device
+            )
             worst, passed = _parity_verdict(diffs, args.tolerance)
             entry.update({"parity": diffs, "parity_max_abs_diff": worst, "parity_pass": passed})
             print(f"TorchScript parity max abs diff (policy+value): {worst:.3e} -> {'PASS' if passed else 'FAIL'}")
@@ -330,7 +356,8 @@ def main(argv: list[str] | None = None) -> int:
                 failures.append(f"onnx parity {worst:.3e} > {args.tolerance}")
         manifest["formats"]["onnx"] = entry
 
-    manifest_path = out_dir / "export_manifest.json"
+    manifest_name = "export_manifest.json" if args.device == "cpu" else f"export_manifest_{args.device}.json"
+    manifest_path = out_dir / manifest_name
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Manifest written: {manifest_path}")
 
