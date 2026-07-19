@@ -159,6 +159,27 @@ class CrateTorchScriptParityTest(unittest.TestCase):
         # Illegal actions carry exactly zero prior mass.
         self.assertEqual(crate_priors[~legal].abs().max().item(), 0.0)
 
+    def test_all_illegal_mask_row_errors_instead_of_nan(self) -> None:
+        """A mask row with zero legal actions must error, never emit NaN priors.
+
+        Dormant today (search passes no mask), but the guard must hold before
+        priors are wired into selection: softmax over an all-(-inf) row is NaN.
+        """
+        batch = 3
+        inputs = self.export.make_random_inputs(self.config, batch, seed=707)
+        loaded = torch.jit.load(str(self.ts_path))
+        with torch.no_grad():
+            py_logits, _, _ = loaded(*inputs)
+        action_count = int(py_logits.shape[-1])
+        legal = torch.ones((batch, action_count), dtype=torch.bool)
+        legal[1, :] = False  # row 1 fully illegal
+        with self.assertRaises(ValueError) as ctx:
+            self.native.eval_obs_flat(
+                batch, *_flatten_inputs(inputs), legal_mask=legal.flatten().tolist()
+            )
+        self.assertIn("row 1", str(ctx.exception))
+        self.assertIn("zero legal actions", str(ctx.exception))
+
     def test_full_size_artifact_parity_when_present(self) -> None:
         """Same gate against the real-size exported artifact, if one exists."""
         ts_path = REPO / "exports" / "model_ts.pt"
@@ -279,12 +300,19 @@ class BatchedModelSearchTest(unittest.TestCase):
         self.assertEqual(first["side_one"], second["side_one"])
         self.assertEqual(first["side_two"], second["side_two"])
 
-    def test_batch_one_matches_sequential_regime(self) -> None:
-        # batch=1 is sequential PUCT with a model leaf: the virtual loss is
-        # applied and immediately replaced within the same round.
+    def test_batch_one_runs_one_leaf_per_round(self) -> None:
+        # batch=1 is the sequential regime BY CONSTRUCTION: each round's
+        # single virtual loss is replaced by its real value before the next
+        # selection, so no selection ever observes provisional stats. This
+        # test asserts the per-round mechanics (one leaf per round, every sim
+        # priced exactly once); it does NOT compare visit distributions
+        # against an independent sequential implementation — none exists in
+        # the crate (the batched core at batch=1 IS the sequential path).
         report = self._search(32, 1)
         self.assertEqual(report["rounds"], 32)
         self.assertEqual(report["model_evals"] + report["terminal_leaves"], 32)
+        for side in ("side_one", "side_two"):
+            self.assertEqual(sum(e["visits"] for e in report[side]), 32)
 
     def test_rejects_zero_iterations(self) -> None:
         with self.assertRaises(ValueError):

@@ -277,7 +277,23 @@ impl BatchLeafEval for TorchScriptLeafEval {
             .ok_or_else(|| PyValueError::new_err("policy_logits has no dimensions"))?
             as usize;
         let masked = match legal_mask {
-            Some(mask) => policy_logits.masked_fill(&mask.logical_not(), f64::NEG_INFINITY),
+            Some(mask) => {
+                // Fail loudly on a fully-illegal row: softmax over all -inf
+                // is NaN, and a row with zero legal actions is a caller bug
+                // (real decisions always offer at least one legal action).
+                // Erroring — not a uniform fallback — keeps a broken mask
+                // construction from silently shaping priors once priors are
+                // wired into selection.
+                let rows_with_legal = mask.any_dim(-1, false);
+                if rows_with_legal.all().int64_value(&[]) == 0 {
+                    let row = rows_with_legal.logical_not().nonzero().int64_value(&[0, 0]);
+                    return Err(PyValueError::new_err(format!(
+                        "legal_mask row {row} has zero legal actions; priors would be NaN \
+                         (fix the caller's mask construction)"
+                    )));
+                }
+                policy_logits.masked_fill(&mask.logical_not(), f64::NEG_INFINITY)
+            }
             None => policy_logits.shallow_clone(),
         };
         let priors = masked.softmax(-1, Kind::Float);
@@ -309,8 +325,10 @@ impl BatchLeafEval for TorchScriptLeafEval {
 /// selection well-defined. Fidelity cost: one round of `batch` selections
 /// explores wider than `batch` sequential PUCT steps — at `batch >=
 /// iterations` the search degrades toward a uniform sweep. Keep `batch <<
-/// iterations` (the bench sweeps the tradeoff; batch <= iterations/4 tracked
-/// sequential visit distributions closely in smoke runs).
+/// iterations` (the bench sweeps the throughput side of the tradeoff).
+/// `batch = 1` is the sequential regime BY CONSTRUCTION: each round's single
+/// virtual loss is replaced by its real value before the next selection, so
+/// no selection ever observes provisional stats.
 #[allow(clippy::too_many_arguments)]
 fn batched_search_core<E: BatchLeafEval>(
     state_str: &str,

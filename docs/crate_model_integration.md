@@ -95,8 +95,12 @@ selections explores wider than `batch` sequential PUCT steps (the loss only
 discourages, never forbids, re-selection). At `batch >= sims` the search
 degrades toward a prior-weighted sweep. Keep `batch <= sims/4`; the tables
 below show the throughput knee sits at batch 16–64 anyway, so nothing is
-paid for staying there. `batch=1` reproduces the sequential regime exactly
-(gate-tested).
+paid for staying there. `batch=1` is the sequential regime by construction
+— each round's single virtual loss is replaced by its real value before the
+next selection, so no selection ever observes provisional stats. The gate
+asserts the per-round mechanics and seed determinism at batch=1; it does
+NOT compare visit distributions against an independent sequential
+implementation (none exists — the batched core at batch=1 IS that path).
 
 Two scoping facts, stated plainly:
 
@@ -118,7 +122,10 @@ Apple M5 Max laptop, minimal 1v1 gen3 fixture (`poke_engine_adapter`),
 Python-side sequential loop this replaces. Caveat: on this near-terminal
 fixture ~30–35% of leaves resolve engine-terminal (no forward), which
 flatters sims/s relative to a midgame state by roughly that fraction;
-forward-only columns give the pure model ceiling.
+forward-only columns give the pure model ceiling. Column label, precisely:
+"model-priced sims/s" = ALL sims per wall second — model-forwarded leaves
+AND free engine-terminal ones (the per-cell `model_evals`/`terminal` split
+is printed by the bench script).
 
 ### CPU (`exports/model_ts.pt`)
 
