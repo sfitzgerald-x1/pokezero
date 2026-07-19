@@ -228,6 +228,13 @@ classifying it.
    that the largest remaining nested branch stage is result projection (3.57s),
    so the next image splits player-view construction from the remainder before
    optimizing either.
+   **Projection split (2026-07-19):** that follow-up completed with zero prefix
+   replays. Player-view construction consumed 2.61s per decision while only
+   0.004s remained outside it, so observation work is 99.9% of the measured
+   result-projection stage. The next bounded mechanics image splits that work
+   into state normalization, feature encoding, and belief-overlay projection;
+   do not revisit replay or bridge transport until that split identifies the
+   dominant substage.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
