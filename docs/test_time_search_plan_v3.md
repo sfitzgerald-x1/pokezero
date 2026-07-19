@@ -129,8 +129,16 @@ in Rust (PR #710); fold-state advance built + closure-proven
 with per-row fold state + event slices + overlays, row-pair advance
 validation green over every boundary of the random battery AND the full
 scenario suite (`scripts/validate_corpus_v2.py`, backend seam ready for the
-Rust advance; see docs/golden_corpus_notes.md "Corpus v2"); remaining = the
-Rust advance() port + the instruction->event mapping. D: crate model integration
+Rust advance; see docs/golden_corpus_notes.md "Corpus v2"); **Rust advance()
+VALIDATED** — `pokezero_search.FoldState` (rust/pokezero-search `src/fold.rs`)
+passes the row-pair harness byte-exact over ALL boundaries of both corpora
+(golden-v2 1028/1028, golden-v2-scenarios 290/290; state + products; the
+`--backend compare-backends` rust-vs-python diff shows zero divergences), with
+the committed-sample chain test as the permanent no-Showdown gate; per-boundary
+clone+advance is ~9.8µs vs the Python reference's ~92µs (~9x; see
+docs/golden_corpus_notes.md "Rust backend"); remaining = the
+instruction->event mapping + native consumption of fold products by the
+in-crate encoder (tokens 23-150). D: crate model integration
 LANDED (tch-rs behind the `model` feature, TorchScriptLeafEval, virtual-loss
 batched leaf eval, bit-exact parity gate, CPU+MPS benches — see
 docs/crate_model_integration.md); remaining = encoder hand-off (track B) +

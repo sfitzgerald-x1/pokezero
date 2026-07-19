@@ -9,6 +9,7 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod encoder;
+pub mod fold;
 #[cfg(feature = "model")]
 pub mod model;
 pub mod tree;
@@ -345,6 +346,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
     m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
     Ok(())
