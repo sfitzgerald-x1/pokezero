@@ -3722,6 +3722,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "root_visit_budget": 17,
             "root_extra_visits": None,
             "batch_initial_root_values": False,
+            "batch_adaptive_root_values": False,
             "adaptive_root_contested_extra_visits": 120,
             "adaptive_root_uncontested_extra_visits": 0,
             "adaptive_root_policy_entropy_threshold": 0.7,
@@ -3782,6 +3783,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIsNone(args.adaptive_root_policy_entropy_threshold)
         self.assertIsNone(args.adaptive_root_value_margin_threshold)
         self.assertFalse(args.batch_initial_root_values)
+        self.assertFalse(args.batch_adaptive_root_values)
         self.assertIsNone(args.progress_interval_games)
         self.assertIsNone(args.progress_interval_decisions)
 
@@ -3796,6 +3798,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         )
 
         self.assertTrue(args.batch_initial_root_values)
+
+    def test_neural_cli_root_puct_play_benchmark_accepts_adaptive_value_batching(self) -> None:
+        args = build_neural_arg_parser().parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+                "--batch-initial-root-values",
+                "--batch-adaptive-root-values",
+            ]
+        )
+
+        self.assertTrue(args.batch_initial_root_values)
+        self.assertTrue(args.batch_adaptive_root_values)
 
     def test_root_puct_decision_progress_wraps_contextual_policy_without_changing_decision(self) -> None:
         emitted: list[_RootPuctDecisionProgress] = []
@@ -4399,6 +4415,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             "root_visit_budget": 16,
             "root_extra_visits": 24,
             "batch_initial_root_values": False,
+            "batch_adaptive_root_values": False,
             "adaptive_root_contested_extra_visits": None,
             "adaptive_root_uncontested_extra_visits": 0,
             "adaptive_root_policy_entropy_threshold": None,

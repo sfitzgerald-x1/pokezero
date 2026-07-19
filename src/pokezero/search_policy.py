@@ -490,10 +490,12 @@ class RootPUCTSearchPolicy:
     # Its counters are cumulative across decisions; ``select_action_with_context``
     # records only the local delta in RootPUCTSearchTiming.
     neural_timing_snapshot: NeuralTimingSnapshot | None = None
-    # Optional exact batch evaluator for the mandatory independent root sweep.
-    # Keep this new field last so existing positional construction keeps its
-    # historical argument layout. Adaptive PUCT revisits remain scalar.
+    # Optional exact batch evaluator for independent sampled-world root leaves.
+    # Keep these new fields last so existing positional construction keeps its
+    # historical argument layout. Adaptive batching remains opt-in because it
+    # changes the evaluator schedule, though not any per-world PUCT trajectory.
     value_batch_fn: ObservationValueBatchFunction | None = None
+    batch_adaptive_root_values: bool = False
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
@@ -516,6 +518,20 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_visit_budget_selector must be callable when set.")
         if self.value_batch_fn is not None and not callable(self.value_batch_fn):
             raise ValueError("value_batch_fn must be callable when set.")
+        if not isinstance(self.batch_adaptive_root_values, bool):
+            raise ValueError("batch_adaptive_root_values must be a bool.")
+        if self.batch_adaptive_root_values and self.value_batch_fn is None:
+            raise ValueError("batch_adaptive_root_values requires value_batch_fn.")
+        if self.batch_adaptive_root_values and self.leaf_rollout_decision_rounds:
+            raise ValueError("batch_adaptive_root_values requires zero leaf rollout decision rounds.")
+        if self.batch_adaptive_root_values and self.root_time_budget_seconds is not None:
+            raise ValueError("batch_adaptive_root_values requires a visit budget, not a time budget.")
+        if (
+            self.batch_adaptive_root_values
+            and self.root_visit_budget is None
+            and self.root_visit_budget_selector is None
+        ):
+            raise ValueError("batch_adaptive_root_values requires a root visit budget or selector.")
         if self.neural_timing_snapshot is not None and not callable(self.neural_timing_snapshot):
             raise ValueError("neural_timing_snapshot must be callable when set.")
         if self.root_time_budget_seconds is not None and (
@@ -929,6 +945,7 @@ class RootPUCTSearchPolicy:
                                 budget_action_priors=base_priors,
                                 expected_current_observation=context.observation,
                                 replay_hp_fraction_tolerance=self.start_override_hp_fraction_tolerance,
+                                batch_adaptive_values=self.batch_adaptive_root_values,
                             )
                         except Exception:
                             puct_search_elapsed_seconds = _timing_perf_counter() - puct_search_started_at

@@ -1869,15 +1869,18 @@ def puct_branch_search_group(
     budget_action_priors: ActionPriorVector | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
+    batch_adaptive_values: bool = False,
 ) -> tuple[PUCTBranchSearchResult, ...]:
-    """Batch mandatory root leaves across independent sampled worlds.
+    """Batch root value leaves across independent sampled worlds.
 
     Each request still constructs, validates, and searches its own determinized
-    world. Only the initial, independent value leaves share one evaluator call.
-    Adaptive visits remain sequential after their own backups, so this cannot
-    alter PUCT selection semantics. Time-budgeted and leaf-rollout searches are
-    intentionally excluded because grouping either would change their budget or
-    continuation semantics.
+    world. Mandatory leaves always share one evaluator call. When explicitly
+    enabled, adaptive visits advance in lockstep across worlds: each world
+    selects one visit from its own backed-up accumulator, then all independent
+    leaves in that wave share one evaluator call before the next selection.
+    This preserves every per-world PUCT trajectory. Time-budgeted and
+    leaf-rollout searches are intentionally excluded because grouping either
+    would change their budget or continuation semantics.
     """
 
     if not requests:
@@ -1990,6 +1993,22 @@ def puct_branch_search_group(
             )
         )
     assert value_offset == len(batch_values)
+
+    if batch_adaptive_values:
+        return _finish_puct_branch_search_group_batched_adaptive(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            action_priors=action_priors,
+            cpuct=cpuct,
+            root_visit_budget=root_visit_budget,
+            budget_action_priors=budget_action_priors,
+            expected_current_observation=expected_current_observation,
+            replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+            value_batch_fn=value_batch_fn,
+            completed_value_searches=completed_value_searches,
+        )
 
     results: list[PUCTBranchSearchResult] = []
     for request, value_search, restorable_prefix, timing, initial_elapsed_seconds in completed_value_searches:
@@ -2218,6 +2237,287 @@ def _finish_puct_branch_search(
             if initial_elapsed_seconds is None
             else initial_elapsed_seconds + (_timing_perf_counter() - adaptive_started_at)
         ),
+    )
+
+
+@dataclass
+class _BatchedAdaptivePUCTState:
+    """One independent root accumulator advanced by cross-world value waves."""
+
+    request: PUCTBranchSearchRequest
+    value_search: ValueBranchSearchResult
+    restorable_prefix: _RestorablePrefix | None
+    timing: _RootPUCTSearchTimingAccumulator
+    initial_elapsed_seconds: float
+    accumulators: dict[int, _PUCTRootAccumulator]
+    prefix_history: tuple[PokeZeroObservationV0, ...]
+    visit_budget: int | None
+    visit_budget_context: RootPUCTVisitBudgetContext | None
+    adaptive_elapsed_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class _PendingAdaptivePUCTValue:
+    """One selected adaptive visit whose leaf can share a value-model batch."""
+
+    state: _BatchedAdaptivePUCTState
+    action_index: int
+    branch: ReplayBranchResult
+    post_branch_history: tuple[PokeZeroObservationV0, ...]
+
+
+def _finish_puct_branch_search_group_batched_adaptive(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    action_priors: ActionPriorVector,
+    cpuct: float,
+    root_visit_budget: int | None,
+    budget_action_priors: ActionPriorVector | None,
+    expected_current_observation: PokeZeroObservationV0 | None,
+    replay_hp_fraction_tolerance: float,
+    value_batch_fn: ObservationValueBatchFunction,
+    completed_value_searches: Sequence[
+        tuple[
+            PUCTBranchSearchRequest,
+            ValueBranchSearchResult,
+            _RestorablePrefix | None,
+            _RootPUCTSearchTimingAccumulator,
+            float,
+        ]
+    ],
+) -> tuple[PUCTBranchSearchResult, ...]:
+    """Advance independent roots one visit at a time, batching only ready leaves.
+
+    A PUCT selection depends on its own prior backup, not another sampled
+    world's backup. Advancing each root once per wave therefore keeps the same
+    action sequence as scalar execution while allowing the resulting leaves to
+    share the exact value evaluator.
+    """
+
+    states: list[_BatchedAdaptivePUCTState] = []
+    for request, value_search, restorable_prefix, timing, initial_elapsed_seconds in completed_value_searches:
+        root_setup_started_at = _timing_perf_counter()
+        legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
+        if (
+            request.root_visit_budget_resolver is None
+            and root_visit_budget is not None
+            and root_visit_budget < len(legal_action_indices)
+        ):
+            raise ValueError("root_visit_budget must be at least the number of legal root actions.")
+        normalized_priors = _normalized_legal_priors(
+            action_priors,
+            legal_action_indices=legal_action_indices,
+        )
+        budget_priors = (
+            normalized_priors
+            if budget_action_priors is None
+            else _normalized_legal_priors(budget_action_priors, legal_action_indices=legal_action_indices)
+        )
+        visit_budget_context = (
+            RootPUCTVisitBudgetContext(
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                opponent_actions=dict(request.opponent_actions),
+                configured_root_visit_budget=root_visit_budget,
+                action_priors=tuple((action, budget_priors[action]) for action in legal_action_indices),
+                initial_values=tuple(
+                    (candidate.action_index, candidate.value) for candidate in value_search.candidates
+                ),
+            )
+            if request.root_visit_budget_resolver is not None
+            else None
+        )
+        visit_budget = root_visit_budget
+        if request.root_visit_budget_resolver is not None:
+            assert visit_budget_context is not None
+            visit_budget = _resolve_root_visit_budget(
+                request.root_visit_budget_resolver(visit_budget_context),
+                legal_action_count=len(legal_action_indices),
+            )
+        accumulators = {
+            candidate.action_index: _PUCTRootAccumulator(
+                value_candidate=candidate,
+                prior=normalized_priors[candidate.action_index],
+                visits=1,
+                total_value=candidate.value,
+            )
+            for candidate in value_search.candidates
+        }
+        prefix_history = player_observation_history(
+            trajectory,
+            player_id=player_id,
+            through_decision_round=prefix_decision_round_count,
+        )
+        timing.add_root_search_setup(_timing_perf_counter() - root_setup_started_at)
+        states.append(
+            _BatchedAdaptivePUCTState(
+                request=request,
+                value_search=value_search,
+                restorable_prefix=restorable_prefix,
+                timing=timing,
+                initial_elapsed_seconds=initial_elapsed_seconds,
+                accumulators=accumulators,
+                prefix_history=prefix_history,
+                visit_budget=visit_budget,
+                visit_budget_context=visit_budget_context,
+            )
+        )
+
+    while True:
+        pending_values: list[_PendingAdaptivePUCTValue] = []
+        advanced = False
+        for state in states:
+            current_visits = sum(accumulator.visits for accumulator in state.accumulators.values())
+            if state.visit_budget is None or current_visits >= state.visit_budget:
+                continue
+            advanced = True
+            adaptive_started_at = _timing_perf_counter()
+            branch_evaluation_before = state.timing.branch_evaluation_seconds
+            bridge_timing_before = _bridge_timing_snapshot(env)
+            action_index = _select_root_accumulator(
+                tuple(state.accumulators.values()),
+                cpuct=cpuct,
+            ).action_index
+            branch = _branch_from_replay_prefix(
+                env=env,
+                trajectory=trajectory,
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                branch_actions={**dict(state.request.opponent_actions), player_id: action_index},
+                start_override=state.request.start_override,
+                expected_current_observation=expected_current_observation,
+                restorable_prefix=state.restorable_prefix,
+                replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+                observation_player_id=player_id,
+                timing=state.timing,
+            )
+            bridge_timing = _bridge_timing_delta(bridge_timing_before, _bridge_timing_snapshot(env))
+            if bridge_timing is not None:
+                state.timing.add_bridge_subtiming(bridge_timing)
+            if branch.step_result.terminal is None:
+                pending_values.append(
+                    _PendingAdaptivePUCTValue(
+                        state=state,
+                        action_index=action_index,
+                        branch=branch,
+                        post_branch_history=_post_branch_history(
+                            env=env,
+                            player_id=player_id,
+                            prefix_history=state.prefix_history,
+                            branch=branch,
+                            timing=state.timing,
+                        ),
+                    )
+                )
+            else:
+                _record_batched_adaptive_candidate(
+                    state,
+                    action_index=action_index,
+                    value_candidate=ValueBranchSearchCandidate(
+                        action_index=action_index,
+                        value=terminal_value_for_player(branch.step_result.terminal, player_id=player_id),
+                        terminal=branch.step_result.terminal,
+                        branch=branch,
+                        evaluated_history_length=len(state.prefix_history),
+                        leaf_evaluation="terminal",
+                        leaf_rollout_decision_round_count=0,
+                    ),
+                )
+            elapsed_seconds = _timing_perf_counter() - adaptive_started_at
+            state.adaptive_elapsed_seconds += elapsed_seconds
+            state.timing.add_root_adaptive_visit_orchestration(
+                max(0.0, elapsed_seconds - (state.timing.branch_evaluation_seconds - branch_evaluation_before))
+            )
+        if not advanced:
+            break
+        if not pending_values:
+            continue
+        batch_started_at = _timing_perf_counter()
+        batch_values = tuple(
+            _finite_value(value) for value in value_batch_fn(
+                tuple(pending.post_branch_history for pending in pending_values)
+            )
+        )
+        batch_elapsed_seconds = _timing_perf_counter() - batch_started_at
+        if len(batch_values) != len(pending_values):
+            raise ValueError("value batch evaluation returned a different number of values than input histories.")
+        per_leaf_seconds = batch_elapsed_seconds / len(pending_values)
+        for pending, value in zip(pending_values, batch_values, strict=True):
+            pending.state.timing.add_value_evaluation(per_leaf_seconds)
+            pending.state.adaptive_elapsed_seconds += per_leaf_seconds
+            _record_batched_adaptive_candidate(
+                pending.state,
+                action_index=pending.action_index,
+                value_candidate=ValueBranchSearchCandidate(
+                    action_index=pending.action_index,
+                    value=value,
+                    terminal=None,
+                    branch=pending.branch,
+                    evaluated_history_length=len(pending.post_branch_history),
+                    leaf_evaluation="value_fn",
+                    leaf_rollout_decision_round_count=0,
+                ),
+            )
+
+    results: list[PUCTBranchSearchResult] = []
+    for state in states:
+        finalization_started_at = _timing_perf_counter()
+        total_visits = sum(accumulator.visits for accumulator in state.accumulators.values())
+        sqrt_total = math.sqrt(total_visits)
+        candidates = tuple(
+            _puct_candidate(
+                value_candidate=accumulator.value_candidate,
+                prior=accumulator.prior,
+                cpuct=cpuct,
+                sqrt_total_visits=sqrt_total,
+                visits=accumulator.visits,
+                total_value=accumulator.total_value,
+            )
+            for accumulator in state.accumulators.values()
+        )
+        finalization_seconds = _timing_perf_counter() - finalization_started_at
+        state.timing.add_root_search_finalization(finalization_seconds)
+        results.append(
+            PUCTBranchSearchResult(
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                opponent_actions=dict(state.request.opponent_actions),
+                cpuct=cpuct,
+                total_visits=total_visits,
+                candidates=candidates,
+                value_search=state.value_search,
+                root_visit_budget=state.visit_budget,
+                configured_root_visit_budget=root_visit_budget,
+                visit_budget_context=state.visit_budget_context,
+                root_time_budget_seconds=None,
+                time_budget_exhausted=False,
+                timing=state.timing.finish(
+                    state.initial_elapsed_seconds
+                    + state.adaptive_elapsed_seconds
+                    + finalization_seconds
+                ),
+            )
+        )
+    return tuple(results)
+
+
+def _record_batched_adaptive_candidate(
+    state: _BatchedAdaptivePUCTState,
+    *,
+    action_index: int,
+    value_candidate: ValueBranchSearchCandidate,
+) -> None:
+    """Back up one completed adaptive visit into its own sampled-world root."""
+
+    accumulator = state.accumulators[action_index]
+    state.accumulators[action_index] = replace(
+        accumulator,
+        value_candidate=value_candidate,
+        visits=accumulator.visits + 1,
+        total_value=accumulator.total_value + value_candidate.value,
     )
 
 

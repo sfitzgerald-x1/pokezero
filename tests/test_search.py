@@ -852,6 +852,131 @@ class FlatBranchSearchTest(unittest.TestCase):
             10,
         )
 
+    def test_puct_branch_search_group_batches_adaptive_leaves_without_changing_world_results(self) -> None:
+        trajectory = BattleTrajectory(battle_id="batch-adaptive-worlds", format_id="gen3randombattle", seed=78)
+        batch_histories = []
+
+        def batch_values(histories):
+            batch_histories.append(histories)
+            return tuple(float(_only_legal_action(history[-1])) for history in histories)
+
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+        }
+        reference = tuple(
+            puct_branch_search(
+                env=TimedSnapshotValueBranchEnv(),
+                opponent_actions=opponent_actions,
+                value_fn=lambda history: float(_only_legal_action(history[-1])),
+                **common_kwargs,
+            )
+            for opponent_actions in ({"p2": 0}, {"p2": 1})
+        )
+
+        results = puct_branch_search_group(
+            env=TimedSnapshotValueBranchEnv(),
+            requests=(
+                PUCTBranchSearchRequest(opponent_actions={"p2": 0}),
+                PUCTBranchSearchRequest(opponent_actions={"p2": 1}),
+            ),
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("all leaves must batch")),
+            value_batch_fn=batch_values,
+            batch_adaptive_values=True,
+            **common_kwargs,
+        )
+
+        # Two mandatory leaves per world, then one adaptive leaf per world for
+        # each of the three PUCT waves. Each root is still updated before its
+        # next selection, so the scalar and batched candidates must agree.
+        self.assertEqual([len(histories) for histories in batch_histories], [4, 2, 2, 2])
+        self.assertEqual(
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in results
+            ],
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates],
+                )
+                for result in reference
+            ],
+        )
+        self.assertEqual(sum(result.timing.value_evaluation_count for result in results), 10)
+
+    def test_puct_branch_search_group_batches_adaptive_leaves_with_per_world_budgets(self) -> None:
+        trajectory = BattleTrajectory(battle_id="batch-adaptive-budgets", format_id="gen3randombattle", seed=79)
+        batch_histories = []
+
+        def batch_values(histories):
+            batch_histories.append(histories)
+            return tuple(float(_only_legal_action(history[-1])) for history in histories)
+
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+        }
+        requests = (
+            PUCTBranchSearchRequest(
+                opponent_actions={"p2": 0},
+                root_visit_budget_resolver=lambda _context: 4,
+            ),
+            PUCTBranchSearchRequest(
+                opponent_actions={"p2": 1},
+                root_visit_budget_resolver=lambda _context: 5,
+            ),
+        )
+        reference = tuple(
+            puct_branch_search(
+                env=TimedSnapshotValueBranchEnv(),
+                opponent_actions=request.opponent_actions,
+                root_visit_budget_resolver=request.root_visit_budget_resolver,
+                value_fn=lambda history: float(_only_legal_action(history[-1])),
+                **common_kwargs,
+            )
+            for request in requests
+        )
+
+        results = puct_branch_search_group(
+            env=TimedSnapshotValueBranchEnv(),
+            requests=requests,
+            value_fn=lambda _history: (_ for _ in ()).throw(AssertionError("all leaves must batch")),
+            value_batch_fn=batch_values,
+            batch_adaptive_values=True,
+            **common_kwargs,
+        )
+
+        # The four-visit world retires after its second adaptive wave; the
+        # five-visit world then contributes the final one-leaf batch alone.
+        self.assertEqual([len(histories) for histories in batch_histories], [4, 2, 2, 1])
+        self.assertEqual([result.total_visits for result in results], [4, 5])
+        self.assertEqual(
+            [
+                [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates]
+                for result in results
+            ],
+            [
+                [(candidate.action_index, candidate.value, candidate.visits, candidate.total_value) for candidate in result.candidates]
+                for result in reference
+            ],
+        )
+
     def test_puct_branch_search_group_rejects_leaf_rollouts(self) -> None:
         with self.assertRaisesRegex(ValueError, "zero leaf rollout"):
             puct_branch_search_group(
