@@ -91,6 +91,12 @@ ALLOW_NUMERIC: set[int] = {
     # ---- spec v2 allowances (verified against the 12-seed sweep; everything else covers). ----
     48, 49, 50, 51, 52, 53, 54, 55,  # timed screen/Safeguard/Mist counters — situational
                                      # (same mechanic class as 24/25: no setters in SEEDS)
+    85,          # OPP_MOVE_PP[9] — situational opponent revealed-move-PP slot (a REVEALED move
+                 # landing at sorted belief-move-bucket depth 9). Same class as 87..89 below: the
+                 # #746 absorb fix tightened the mispinned attacker's possible_moves, shifting the
+                 # sorted-bucket alignment so no revealed move lands at depth 9 across the 12
+                 # coverage seeds. The slot is byte-identically wired (observation/transitions
+                 # unchanged) and still fires at broader seed counts / in real training.
     87, 88, 89,  # OPP_MOVE_PP[11..13] — situational (needs 12+ occupied belief-move buckets
                  # with a REVEALED move that deep in the sorted order)
     90, 91,      # OPP_MOVE_PP[14..15] — structural (mirrors BELIEF_MOVE[14..15]: 16 buckets,
@@ -110,6 +116,9 @@ ALLOW_NUMERIC: set[int] = {
                  # mask (default off until v2.1 training adopts the column)
     # ---- spec v2.1 allowances (12-seed sweep: validity bits 0..10 and SUB_HP_FRACTION
     # all cover; the deep buckets mirror the OPP_MOVE_PP allowances exactly). ----
+    130,            # OPP_MOVE_PP_VALID[9] — situational validity twin of 85 (mirrors it exactly:
+                    # revealed move at sorted bucket depth 9; freed by the #746 absorb fix's
+                    # tighter possible_moves, still covered at broader seed counts)
     132, 133, 134,  # OPP_MOVE_PP_VALID[11..13] — situational (mirrors 87..89: needs a
                     # REVEALED move that deep in the sorted bucket order)
     135, 136,       # OPP_MOVE_PP_VALID[14..15] — structural (mirrors 90..91: 16 buckets,

@@ -350,6 +350,12 @@ class PublicBattleBeliefEngine:
         # chipped only during residuals gives no Leftovers evidence (its slot ran at full HP).
         self._leftovers_healed_this_turn: set[str] = set()
         self._berry_ate_this_turn: set[str] = set()
+        # Belief keys whose Shed Skin ``-activate`` fired this turn. A Shed Skin
+        # carrier that Rests can proc its 33% cure on the first upkeep and wake in
+        # exactly 1 turn — indistinguishable by sleep-count from an Early Bird
+        # Rest wake — so this set suppresses the false Early Bird pin (Fix C). The
+        # ``-activate`` precedes its ``-curestatus`` in the same residual phase.
+        self._shed_skin_activated_this_turn: set[str] = set()
         self._hp_after_actions: dict[str, Optional[float]] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
         self._pending_mudshot: Optional[dict[str, Any]] = None
@@ -531,8 +537,12 @@ class PublicBattleBeliefEngine:
             if belief is not None:
                 if belief.status == "slp" and belief.rest_sleep and belief.sleep_turns == 1:
                     # Rest sleeps exactly 2 turns in gen 3; a 1-turn Rest wake is deterministic
-                    # Early Bird identification (5 reachable carriers).
-                    if not belief.revealed_ability:
+                    # Early Bird identification (5 reachable carriers) — EXCEPT a Shed Skin
+                    # carrier that Rests and procs its 33% cure on the first upkeep also wakes in
+                    # 1 turn. That mon's Shed Skin ``-activate`` fired this turn (recorded above),
+                    # so it is not Early Bird — suppress the false pin (Fix C).
+                    shed_skin_wake = belief.key in self._shed_skin_activated_this_turn
+                    if not belief.revealed_ability and not shed_skin_wake:
                         belief = self._replace_belief(
                             belief,
                             revealed_ability="Early Bird",
@@ -603,6 +613,7 @@ class PublicBattleBeliefEngine:
             self._resolve_pending_mudshot()
             self._leftovers_healed_this_turn = set()
             self._berry_ate_this_turn = set()
+            self._shed_skin_activated_this_turn = set()
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
@@ -766,6 +777,7 @@ class PublicBattleBeliefEngine:
         twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
+        twin._shed_skin_activated_this_turn = set(self._shed_skin_activated_this_turn)
         twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
         return twin
 
@@ -1063,7 +1075,13 @@ class PublicBattleBeliefEngine:
         if not ability_slot or not ability_name:
             return
         belief = self._target_belief(ability_slot, ability_ident)
-        if belief is None or _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
+        if belief is None:
+            return
+        if event_type == "-activate" and _normalize_identifier(ability_name) == "shedskin":
+            # Record the proc for the Early Bird Rest-wake guard (Fix C), before
+            # the already-confirmed early return below so it fires on every proc.
+            self._shed_skin_activated_this_turn.add(belief.key)
+        if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
         if belief.revealed_ability:
             # A gen3 mon has exactly one ability, so a second, DIFFERENT claim
@@ -1402,6 +1420,19 @@ def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[s
         # is the mon on the line, which the event parser surfaces as
         # ``actor_ident`` (``-start`` is outside its target-ident group).
         return actor_ident or target_ident, primary.split(":", 1)[1].strip()
+    if event_type == "-activate" and primary and primary.strip().lower().startswith("ability:"):
+        # ``|-activate|<holder>|ability: X`` — Shed Skin's ONLY public tell
+        # (abilities.ts shedskin onResidual: ``add('-activate', pokemon,
+        # 'ability: Shed Skin')``), plus Synchronize/Own Tempo/Limber/etc. The
+        # mon on the line is ALWAYS the holder (parts[2]); for the few shapes
+        # that also carry ``[of] <other>`` — Forewarn's warn-target, Commander's
+        # ally — that ``[of]`` names a different mon, never the holder, so it is
+        # deliberately ignored here. ``-activate`` sits inside the parser's
+        # target-ident group, so the holder arrives as ``target_ident``. Guarded
+        # to ``ability:``-bearing lines only, so item/move/Substitute ``-activate``
+        # shapes never reach this. Goes through the ``_record_raw_ability_reveal``
+        # guard, so it cannot overwrite an authoritative earlier ``-ability`` pin.
+        return target_ident or actor_ident, primary.split(":", 1)[1].strip()
     ability_match = re.search(r"\[from\] ability: ([^|\]]+)", raw_line)
     if not ability_match:
         return None, None

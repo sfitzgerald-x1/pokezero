@@ -383,6 +383,79 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIsNone(dodrio.status)
         self.assertEqual(dodrio.revealed_ability, "Early Bird")
 
+    def test_shed_skin_activate_confirms_ability(self) -> None:
+        # ``|-activate|<holder>|ability: Shed Skin`` is Shed Skin's ONLY public tell
+        # (abilities.ts shedskin onResidual). It must confirm the ability on the
+        # holder — and precisely: the paralyzing opponent is never tagged with it.
+        engine = self.engine_from([
+            "|switch|p1a: Jirachi|Jirachi, L84|300/300",
+            "|switch|p2a: Dragonair|Dragonair, L84|280/280",
+            "|turn|1",
+            "|move|p1a: Jirachi|Thunder Wave|p2a: Dragonair",
+            "|-status|p2a: Dragonair|par",
+            "|turn|2",
+            "|-activate|p2a: Dragonair|ability: Shed Skin",
+            "|-curestatus|p2a: Dragonair|par|[msg]",
+            "|upkeep",
+        ])
+        dragonair = self.opponent(engine, "Dragonair")
+        self.assertEqual(dragonair.revealed_ability, "Shed Skin")
+        jirachi = [b for b in engine.snapshot().sides["p1"] if b.species == "Jirachi"][0]
+        self.assertNotEqual(jirachi.revealed_ability, "Shed Skin")
+
+    def test_shed_skin_activate_does_not_overwrite_prior_ability_pin(self) -> None:
+        # The -activate confirmation rides the same guarded path as the other tag
+        # pins, so an authoritative earlier ``-ability`` reveal is never overwritten
+        # (a mon has one ability; keep the first, protocol-named confirmation).
+        engine = self.engine_from([
+            "|switch|p2a: Dragonair|Dragonair, L84|280/280",
+            "|-ability|p2a: Dragonair|Marvel Scale",
+            "|turn|1",
+            "|-activate|p2a: Dragonair|ability: Shed Skin",
+            "|-curestatus|p2a: Dragonair|par|[msg]",
+        ])
+        dragonair = self.opponent(engine, "Dragonair")
+        self.assertEqual(dragonair.revealed_ability, "Marvel Scale")
+
+    def test_shed_skin_rest_wake_not_pinned_early_bird(self) -> None:
+        # A Shed Skin carrier that Rests can proc its 33% cure on the first upkeep and
+        # wake in exactly 1 turn — the same sleep-count as an Early Bird Rest wake.
+        # It must be identified as Shed Skin, NOT false-pinned Early Bird (Fix C). The
+        # -activate / -curestatus ordering mirrors a real gen3 capture (seed 90004).
+        engine = self.engine_from([
+            "|switch|p1a: Jirachi|Jirachi, L84|300/300",
+            "|switch|p2a: Dragonair|Dragonair, L84|280/280",
+            "|turn|1",
+            "|move|p2a: Dragonair|Rest|p2a: Dragonair",
+            "|-status|p2a: Dragonair|slp|[from] move: Rest",
+            "|turn|2",
+            "|cant|p2a: Dragonair|slp",
+            "|-activate|p2a: Dragonair|ability: Shed Skin",
+            "|-curestatus|p2a: Dragonair|slp|[msg]",
+            "|upkeep",
+        ])
+        dragonair = self.opponent(engine, "Dragonair")
+        self.assertIsNone(dragonair.status)
+        self.assertEqual(dragonair.revealed_ability, "Shed Skin")
+        self.assertNotEqual(dragonair.revealed_ability, "Early Bird")
+
+    def test_genuine_early_bird_rest_wake_still_pins_without_shed_skin(self) -> None:
+        # Guard direction check: an identical 1-turn Rest wake with NO Shed Skin
+        # -activate this turn still pins Early Bird (the guard does not over-suppress).
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Dodrio|Dodrio, L80|300/300",
+            "|turn|1",
+            "|move|p2a: Dodrio|Rest|p2a: Dodrio",
+            "|-status|p2a: Dodrio|slp|[from] move: Rest",
+            "|turn|2",
+            "|cant|p2a: Dodrio|slp",
+            "|-curestatus|p2a: Dodrio|slp|[msg]",
+            "|upkeep",
+        ])
+        dodrio = self.opponent(engine, "Dodrio")
+        self.assertEqual(dodrio.revealed_ability, "Early Bird")
+
     def test_sleep_clause_holder_is_live(self) -> None:
         engine = self.engine_from([
             "|switch|p1a: Breloom|Breloom, L80|300/300",
