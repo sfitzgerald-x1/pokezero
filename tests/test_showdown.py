@@ -452,6 +452,110 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(eat_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:salacberry"))
         self.assertEqual(eat_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)  # eaten item still pins the set
 
+    def test_self_known_item_and_ability_reach_the_self_observation_token(self) -> None:
+        # Regression (training-data-corruption guard, self-side twin of the opponent item path above):
+        # our OWN current item + ability are request-known ground truth, but the self mon carries no
+        # belief entry, so before the fix the self-token item/ability buckets encoded NOTHING —
+        # changing p1's item (Choice Band <-> Leftovers) or ability (Immunity <-> Thick Fat) left the
+        # entire self token byte-identical, blinding the policy to its own item/ability on every
+        # decision (high incidence). The encoder now populates the self fact buckets straight from the
+        # request-known current fields (candidate.item / candidate.ability) with zero uncertainty. This
+        # is the INVERSE of that reproduction: the self token must now VARY with item and with ability.
+        from pokezero.showdown import (
+            CATEGORY_BELIEF_ABILITY_OFFSET,
+            CATEGORY_BELIEF_ITEM_OFFSET,
+            NUMERIC_ACTIVE,
+            NUMERIC_POSSIBLE_ABILITY_COUNT,
+            NUMERIC_POSSIBLE_ITEM_COUNT,
+            NUMERIC_PRESENT,
+            NUMERIC_REVEALED_ABILITY,
+            NUMERIC_REVEALED_ITEM,
+        )
+
+        vocab = build_category_vocabulary(
+            [
+                "request_kind:move", "stats", "transition:self", "transition:opponent",
+                "species:Snorlax", "species:Charizard",
+                "belief:possible_item:choiceband", "belief:possible_item:leftovers",
+                "belief:possible_ability:immunity", "belief:possible_ability:thickfat",
+            ]
+        )
+
+        def self_active_token(item, ability):
+            # ``item=None`` models a request whose active mon currently holds nothing — the
+            # Showdown request empties the item field after Knock Off / Trick / a consumed berry,
+            # so this is the self-side "not-currently-held" surface.
+            request = {
+                "active": [{"moves": [{"id": "bodyslam", "move": "Body Slam"}]}],
+                "side": {
+                    "id": "p1",
+                    "name": "Us",
+                    "pokemon": [
+                        {
+                            "ident": "p1a: Snorlax",
+                            "details": "Snorlax, L78",
+                            "condition": "100/100",
+                            "active": True,
+                            "ability": ability,
+                            "item": item or "",
+                            "moves": ["bodyslam"],
+                            "stats": {"atk": 200, "def": 180, "spa": 140, "spd": 200, "spe": 60},
+                        }
+                    ],
+                },
+            }
+            lines = [
+                "|player|p1|Us|",
+                "|player|p2|Them|",
+                "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+                "|switch|p2a: Charizard|Charizard, L78|100/100",
+                "|request|" + json.dumps(request),
+                "|turn|1",
+            ]
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(
+                state, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC
+            )
+            idx = next(
+                FIELD_TOKEN_COUNT + i
+                for i in range(SELF_POKEMON_TOKEN_COUNT)
+                if obs.numeric_features[FIELD_TOKEN_COUNT + i][NUMERIC_ACTIVE] == 1.0
+                and obs.numeric_features[FIELD_TOKEN_COUNT + i][NUMERIC_PRESENT] == 1.0
+            )
+            return obs.numeric_features[idx], obs.categorical_ids[idx]
+
+        # A known item + ability reach the self token with zero uncertainty (singleton bucket).
+        cb_num, cb_cat = self_active_token("Choice Band", "Immunity")
+        self.assertEqual(cb_num[NUMERIC_REVEALED_ITEM], 1.0)
+        self.assertEqual(cb_num[NUMERIC_REVEALED_ABILITY], 1.0)
+        self.assertEqual(cb_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)
+        self.assertEqual(cb_num[NUMERIC_POSSIBLE_ABILITY_COUNT], 1.0)
+        self.assertEqual(cb_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:choiceband"))
+        self.assertEqual(cb_cat[CATEGORY_BELIEF_ABILITY_OFFSET], vocab.encode("belief:possible_ability:immunity"))
+
+        # Inverse of the reproduction: changing ONLY the item moves the item bucket, leaves ability.
+        lf_num, lf_cat = self_active_token("Leftovers", "Immunity")
+        self.assertEqual(lf_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:leftovers"))
+        self.assertNotEqual(cb_cat[CATEGORY_BELIEF_ITEM_OFFSET], lf_cat[CATEGORY_BELIEF_ITEM_OFFSET])
+        self.assertEqual(cb_cat[CATEGORY_BELIEF_ABILITY_OFFSET], lf_cat[CATEGORY_BELIEF_ABILITY_OFFSET])
+
+        # Changing ONLY the ability moves the ability bucket, leaves the item.
+        tf_num, tf_cat = self_active_token("Choice Band", "Thick Fat")
+        self.assertEqual(tf_cat[CATEGORY_BELIEF_ABILITY_OFFSET], vocab.encode("belief:possible_ability:thickfat"))
+        self.assertNotEqual(cb_cat[CATEGORY_BELIEF_ABILITY_OFFSET], tf_cat[CATEGORY_BELIEF_ABILITY_OFFSET])
+        self.assertEqual(cb_cat[CATEGORY_BELIEF_ITEM_OFFSET], tf_cat[CATEGORY_BELIEF_ITEM_OFFSET])
+
+        # Ground truth: a self mon whose request shows no held item (Knock Off / consumed berry)
+        # encodes not-currently-held — current-held column and count go to 0 and the item bucket is
+        # empty — while the still-known ability stays encoded.
+        ko_num, ko_cat = self_active_token(None, "Immunity")
+        self.assertEqual(ko_num[NUMERIC_REVEALED_ITEM], 0.0)
+        self.assertEqual(ko_num[NUMERIC_POSSIBLE_ITEM_COUNT], 0.0)
+        self.assertEqual(ko_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode(""))
+        self.assertEqual(ko_num[NUMERIC_REVEALED_ABILITY], 1.0)
+        self.assertEqual(ko_cat[CATEGORY_BELIEF_ABILITY_OFFSET], vocab.encode("belief:possible_ability:immunity"))
+
     def test_self_move_mechanics_id_resolves_hidden_power_variant(self) -> None:
         # Fix 1 unit: the SELF action token must encode Hidden Power's TRUE type/base power, not the
         # generic "hiddenpower" family placeholder (Normal, base power 0). Resolution prefers the

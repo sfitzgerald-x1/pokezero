@@ -2463,6 +2463,25 @@ def _encode_pokemon_tokens(
         possible_abilities = belief.possible_abilities if belief is not None else ()
         possible_items = belief.possible_items if belief is not None else ()
         possible_moves = belief.possible_moves if belief is not None else ()
+        # Own mons carry no belief entry (they are fully known by design), so the belief-derived
+        # reveals above are empty and the self-token item/ability buckets would encode nothing —
+        # the policy could not condition on its OWN current item or ability. Populate them straight
+        # from ``candidate``, which holds the request's CURRENT-held item + current ability (this is
+        # exactly how self stats/details already flow — direct from the request row, not through the
+        # belief engine). Zero uncertainty: the singleton collapses possible_items/possible_abilities
+        # to the known value (NUMERIC_UNCERTAINTY is already forced to 0.0 for self above). CURRENT-
+        # held semantics are honored for free: ``candidate.item`` is empty once the request shows the
+        # mon holding nothing (Knock Off / Trick / consumed berry / White Herb), so a stripped mon
+        # encodes not-currently-held (revealed_item -> None -> NUMERIC_REVEALED_ITEM 0.0, empty
+        # bucket). ``item_removed`` stays False because the removal already surfaced as an empty
+        # item — the opponent-side ever-revealed/current-held split does not apply to the self side,
+        # where the request never names a parted-with item. Nothing not request-known is exposed.
+        if role == "self":
+            revealed_ability = candidate.ability or None
+            revealed_item = candidate.item or None
+            possible_abilities = (revealed_ability,) if revealed_ability else ()
+            possible_items = (revealed_item,) if revealed_item else ()
+            item_removed = False
         ability_feature_values = _known_or_possible_values(revealed_ability, possible_abilities)
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
