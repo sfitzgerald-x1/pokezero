@@ -45,6 +45,7 @@ from .observation import (
     SELF_POKEMON_TOKEN_COUNT,
     opponent_showdown_slot,
 )
+from .randbat import canonical_gen3_randbat_species_id
 
 # Belief-fact columns are sized to the Gen 3 closed universe's max distinct values per species
 # (measured from the randbat set universe): at most 2 abilities, 5 items, 14 possible moves. The
@@ -2146,11 +2147,35 @@ def _encode_active_volatiles(cat_row: list[str], volatiles: Sequence[str]) -> No
         cat_row[column] = f"volatile:{_normalize_identifier(name)}"
 
 
+def _species_info_base_fallback(dex: "ShowdownDex | None", species: str | None):
+    """dex.species_info with a cosmetic-forme fallback to the base species.
+
+    gen3 randbats emit Unown as lettered cosmetic formes (Unown-C, Unown-Z,
+    Unown-Exclamation, ...) that are NOT separate Pokedex entries, so the direct dex
+    lookup misses and the mon encodes with blank types + zero base stats. When the
+    direct lookup misses, retry with the canonical base-species id
+    (``canonical_gen3_randbat_species_id`` from randbat.py — the same collapse the
+    world/belief path uses). That function only collapses genuine Unown cosmetic
+    suffixes; real distinct dex formes (Deoxys-Attack/Defense/Speed, Castform,
+    Nidoran-F/M, ...) resolve on the direct lookup and never reach the fallback, so
+    they are left untouched.
+    """
+    if dex is None or not species:
+        return None
+    info = dex.species_info(species)
+    if info is not None:
+        return info
+    canonical = canonical_gen3_randbat_species_id(species)
+    if canonical and canonical != species:
+        return dex.species_info(canonical)
+    return None
+
+
 def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", species: str | None) -> None:
     """Set the two type slots for a Pokemon token from the dex (no-op without a dex)."""
     if dex is None or not species:
         return
-    info = dex.species_info(species)
+    info = _species_info_base_fallback(dex, species)
     if info is None:
         return
     if len(info.types) >= 1:
@@ -2160,14 +2185,22 @@ def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", s
 
 
 def _level_from_details(details: str | None) -> int | None:
-    """Extract the level from a details string like 'Charizard, L83, M' (None if absent)."""
+    """Extract the level from a details string like 'Charizard, L83, M'.
+
+    Showdown OMITS the level token from a Pokemon's details string when — and only
+    when — the level is exactly 100 (vendored ``sim/pokemon.ts::getUpdatedDetails``:
+    ``name + (level === 100 ? '' : `, L${level}`)``; the ``, L<level>`` token is
+    present for every level != 100 and absent only at 100). So a details string that
+    carries a species name but no ``L`` token means level 100, not "unknown". Returns
+    None only when there is no details string at all (genuinely no level information).
+    """
     if not details:
         return None
     for part in details.split(","):
         token = part.strip()
         if token.startswith("L") and token[1:].isdigit():
             return int(token[1:])
-    return None
+    return 100
 
 
 _BASE_STAT_SLOTS = (
@@ -2202,7 +2235,7 @@ def _encode_pokemon_stats(
         _set_numeric(num_row, NUMERIC_LEVEL, min(1.0, level / 100.0))
     if dex is None or not species:
         return
-    info = dex.species_info(species)
+    info = _species_info_base_fallback(dex, species)
     if info is None:
         return
     for stat_key, slot in _BASE_STAT_SLOTS:
@@ -2604,11 +2637,15 @@ def _encode_expected_stats(
             transform_target=transform_target,
         )
         return
+    # Belt-and-suspenders: a missing level means L100 (see _level_from_details). The root
+    # fix already returns 100 for a token-less details string; treating a None level as 100
+    # here also covers any other caller that passes details=None for a level-100 mon, rather
+    # than silently zeroing this otherwise-deterministic block.
     level = _level_from_details(details)
     if level is None:
-        return
-    battle_info = dex.species_info(battle_species)
-    hp_info = dex.species_info(base_species)
+        level = 100
+    battle_info = _species_info_base_fallback(dex, battle_species)
+    hp_info = _species_info_base_fallback(dex, base_species)
     if battle_info is None or hp_info is None:
         return
     base = battle_info.base_stats
