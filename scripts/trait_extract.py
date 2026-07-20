@@ -74,6 +74,10 @@ INTIMIDATE = mid("Intimidate")
 # absorb abilities that negate an incoming move AND heal (Volt/Water Absorb) or boost (Flash Fire).
 ABSORB_ABILITIES = {mid("Volt Absorb"), mid("Water Absorb"), mid("Flash Fire")}
 PROTECT_MOVES = {mid("Protect"), mid("Detect")}  # the boom-blocking protection moves (not Endure)
+# v3-only traits (gen3 randbats runs Sleep Clause Mod; see docs/observation_v3_spec.md, PR #779).
+AROMATHERAPY = {mid("Aromatherapy"), mid("Heal Bell")}  # party-wide status cure (identical twins)
+NATURAL_CURE = mid("Natural Cure")   # ability: cures the mon's status on switch-out
+STRUGGLE = mid("Struggle")
 
 
 def reversal_bp(cur, mx):
@@ -202,9 +206,20 @@ class GameParse:
         self.seed = {"p1": None, "p2": None}  # turns a leech-seeded mon has stayed active (None if unseeded)
         self._switchin_seats = set()          # seats that switched in this turn (absorb-read window)
         self._boom_target = None              # seat a resolving enemy boom targets, awaiting immunity
+        # v3-only trackers
+        self.slept_by = {"p1": set(), "p2": set()}  # opp species this seat move-slept (Sleep Clause set)
+        self._move_in_flight = None            # seat whose move is resolving, for -fail attribution
+        self._nc_switchin = set()              # seats that switched a Natural Cure mon in this turn
 
     def carriers(self, seat, move_id):
         return sum(1 for m in self.movesets.get(seat, []) if move_id in {mid(x) for x in m["moves"]})
+
+    def ability_of(self, seat, species):
+        """The captured ability of `species` on this seat's team (v3 movesets), else '' (older data)."""
+        for m in self.movesets.get(seat, []):
+            if m.get("species") == species:
+                return mid(m.get("ability", ""))
+        return ""
 
     def walk(self, protocol):
         for line in protocol:
@@ -246,6 +261,9 @@ class GameParse:
                     # a badly-poisoned mon coming (back) in restarts its toxic counter at 0 (gen3)
                     self.tox[seat] = 0 if status_token(a[2] if len(a) > 2 else None) == "tox" else None
                     self._switchin_seats.add(seat)  # absorb-ability reads credited on the switch-in turn
+                    if self.ability_of(seat, sp) == NATURAL_CURE:
+                        self._nc_switchin.add(seat)  # a Natural Cure mon came in — a status it eats cures free
+                    self._move_in_flight = None      # a switch ends any prior move's -fail window
                     # a switch-in may materialize immunity to the opponent's move this turn
                     self._pending_switch_immunity = (seat, sp)
             elif tag == "move":
@@ -269,6 +287,7 @@ class GameParse:
                     elif move not in NONZERO_PRIORITY:
                         self.turn_neutral.append(seat)      # a priority-0 move: usable for speed inference
                     self._classify_move(seat, move, a)
+                    self._move_in_flight = seat         # a -fail before the next action = this move failed
             elif tag == "cant":
                 # e.g. |cant|p1a: X|Focus Punch  (disrupted) — record attempt+disruption
                 seat = seat_of(a[0])
@@ -301,14 +320,29 @@ class GameParse:
                         from_rest = any("move: rest" in str(x).lower() for x in a[2:]) or \
                             (self.last_move[seat] == REST and sp == self.active[seat])
                         (self.rest_sleep[seat].add if from_rest else self.rest_sleep[seat].discard)(sp)
+                        if sp not in self.rest_sleep[seat]:
+                            # move-induced sleep (not Rest): the inducer's Sleep-Clause bit turns on
+                            self.slept_by[OTHER_SEAT[seat]].add(sp)
             elif tag == "-curestatus":
                 seat = seat_of(a[0])
                 if seat:
                     sp = species_of(a[0])
                     self.status[seat].pop(sp, None)
                     self.rest_sleep[seat].discard(sp)
+                    if len(a) > 1 and a[1] == "slp":
+                        self.slept_by[OTHER_SEAT[seat]].discard(sp)  # sleeper woke -> clause bit may clear
                     if len(a) > 1 and a[1] == "tox":
                         self._end_tox(seat)  # cured (Rest/heal bell/natural cure): episode ends
+            elif tag == "-cureteam":
+                # Aromatherapy cures the whole party in one line (no per-mon -curestatus) — clear the
+                # tracked status and the opponent's Sleep-Clause bits for our now-awake slots.
+                seat = seat_of(a[0])
+                if seat:
+                    for sp, st in list(self.status[seat].items()):
+                        if st == "slp":
+                            self.slept_by[OTHER_SEAT[seat]].discard(sp)
+                    self.status[seat] = {}
+                    self.rest_sleep[seat] = set()
             elif tag == "-start":
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == SUBSTITUTE:
@@ -382,12 +416,21 @@ class GameParse:
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == INTIMIDATE:
                     self.ev[seat]["intimidate_activation"] += 1
+            elif tag == "-fail":
+                # a move that failed within its action window -> the move in flight failed. Switch-window
+                # fails (blocked switch-in Intimidate, etc.) are excluded: a switch clears _move_in_flight.
+                if self._move_in_flight is not None:
+                    self.ev[self._move_in_flight]["move_failed"] += 1
+                    self._move_in_flight = None
             elif tag == "faint":
                 seat = seat_of(a[0])
                 if seat:
                     self.pending_faint[seat] = True
                     self._end_tox(seat)   # a mon that fainted while toxiced reached its peak stage
                     self._end_seed(seat)  # a mon that fainted while seeded closes its turns-in count
+                    self.slept_by[OTHER_SEAT[seat]].discard(species_of(a[0]))  # fainted sleeper clears clause
+                    self.status[seat].pop(species_of(a[0]), None)  # a fainted mon carries no status
+                    self.rest_sleep[seat].discard(species_of(a[0]))
                     # a priority move that just landed (no other move since) took this KO
                     if self._pri_ko_seat is not None and seat == OTHER_SEAT[self._pri_ko_seat]:
                         self.ev[self._pri_ko_seat]["cat_priority_ko"] += 1
@@ -406,6 +449,8 @@ class GameParse:
                 self.protected = {"p1": False, "p2": False}
                 self._switchin_seats = set()
                 self._boom_target = None
+                self._nc_switchin = set()
+                self._move_in_flight = None
         # game over: flush any Belly-Drum windows still open (drummer survived to the end) and any
         # toxic episode a still-active mon was in (its peak stage is whatever it reached at game end).
         for s in ("p1", "p2"):
@@ -506,6 +551,22 @@ class GameParse:
             E["cat_para"] += 1
         if move in SLEEP_MOVES:
             E["cat_sleep"] += 1
+            # Sleep Clause: if this seat already move-slept an opponent, its sleep-clause bit is on and
+            # this click is wasted (the move will fail). Reproduces the v3 encoder's sleep_clause_blocks_self.
+            if self.slept_by[seat]:
+                E["sleep_clause_active"] += 1
+        if move in STATUS_MOVES and opp in self._nc_switchin:
+            # opponent threw a status move at a Natural Cure mon we brought in this turn — it eats the
+            # status "for free" (cured on its eventual switch-out).
+            self.ev[opp]["nc_switchin_on_status"] += 1
+        if move in AROMATHERAPY:
+            E["cat_aromatherapy"] += 1
+            # mons this cure clears = the statused party mons right now. Aromatherapy emits a single
+            # -cureteam (no per-mon lines) and Heal Bell's per-mon lines are [silent] with no move tag,
+            # so count from tracked status at use time rather than from the cure lines.
+            E["aroma_cured"] += sum(1 for s in self.status[seat].values() if s)
+        if move == STRUGGLE:
+            E["cat_struggle"] += 1       # out of PP on everything (should be very rare)
         if move == YAWN:
             E["cat_yawn"] += 1
         if move == WILL_O_WISP:
@@ -609,6 +670,7 @@ def extract(files, lineage=None, milestone=None):
     intim_present = 0; intim_activations = 0
     absorb_present = 0; absorb_switchins = 0
     spikes_present = 0; spikes_max_sum = 0   # avg peak Spikes layers, over games the seat carries Spikes
+    nc_present = 0; nc_switchins = 0         # (v3) Natural-Cure-mon switch-ins onto a status move / game
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -619,7 +681,7 @@ def extract(files, lineage=None, milestone=None):
     CATS = {"cat_stat_boost","cat_heal","cat_wish","cat_rest","cat_weather_sun","cat_weather_rain",
             "cat_phaze","cat_spikes","cat_rapidspin_total","cat_toxic","cat_para","cat_sleep","cat_yawn",
             "cat_burn","cat_status_move","cat_knockoff","cat_reversal","cat_bellydrum",
-            "cat_priority","cat_destinybond",
+            "cat_priority","cat_destinybond","cat_aromatherapy",
             "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse"}
     CAT_MOVE = {"cat_stat_boost":STAT_BOOST,"cat_heal":HEAL_NON_REST,"cat_wish":{WISH},"cat_rest":{REST},
         "cat_weather_sun":{k for k,v in WEATHER_PRIMARY.items() if v=="sun"},
@@ -630,7 +692,7 @@ def extract(files, lineage=None, milestone=None):
         "cat_batonpass":{BATON_PASS},"cat_substitute":{SUBSTITUTE},"cat_leechseed":{LEECH_SEED},
         "cat_solarbeam":{SOLAR_BEAM},"cat_curse":{CURSE},"cat_knockoff":{KNOCK_OFF},
         "cat_reversal":REVERSAL_MOVES,"cat_bellydrum":{BELLY_DRUM},
-        "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND}}
+        "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY}
 
     for g in games:
         gp = GameParse(g.get("movesets", {}))
@@ -674,7 +736,10 @@ def extract(files, lineage=None, milestone=None):
                           "cat_destinybond","destinybond_success",
                           # toxic-stage / leech-seed episodes and enemy-boom blocking
                           "tox_stage_sum","tox_episodes","seed_turns_sum","seed_episodes",
-                          "boom_faced","boom_block"):
+                          "boom_faced","boom_block",
+                          # v3-only: sleep-clause, move failures, Aromatherapy cures, Struggle
+                          "cat_sleep","sleep_clause_active","move_failed",
+                          "cat_aromatherapy","aroma_cured","cat_struggle"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -689,6 +754,11 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, ABSORB_ABILITIES, "absorb_activation", require_exact=True):
                     absorb_present += 1
                     absorb_switchins += gp.ev[seat]["absorb_switchin"]
+                # (v3) Natural-Cure-mon switch-ins onto a status move / game, over games where a Natural
+                # Cure mon is on the team. Requires exact abilities (v3 captures them).
+                if ability_present(g, gp, seat, {NATURAL_CURE}, None, require_exact=True):
+                    nc_present += 1
+                    nc_switchins += gp.ev[seat]["nc_switchin_on_status"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -822,6 +892,28 @@ def extract(files, lineage=None, milestone=None):
         # Rising toward 3 = the policy learns to fully stack the hazard rather than lay one and move on.
         "spikes_present_seat_games": spikes_present,
         "spikes_avg_max_layers": (round(spikes_max_sum / spikes_present, 3) if spikes_present else None),
+        # ---- v3-only traits (gen3 Sleep Clause; see docs/observation_v3_spec.md) ----
+        # Sleep: total sleep-move clicks and the fraction thrown while this seat's Sleep-Clause bit is
+        # already set (a wasted click the clause blocks). Rate ~0 = the policy doesn't redundantly sleep.
+        "sleep_uses": cat_extra["cat_sleep"],
+        "sleep_clause_active_uses": cat_extra["sleep_clause_active"],
+        "sleep_clause_active_rate": (round(cat_extra["sleep_clause_active"] / cat_extra["cat_sleep"], 4)
+                                     if cat_extra["cat_sleep"] else None),
+        # Move-failure rate: moves that hit a -fail within their action window / all moves.
+        "move_fail_rate": (round(cat_extra["move_failed"] / total_moves, 4) if total_moves else None),
+        "moves_failed": cat_extra["move_failed"],
+        # Aromatherapy / Heal Bell: usage is in move_categories; here the payoff — avg statused mons
+        # cured per use.
+        "aromatherapy_uses": cat_extra["cat_aromatherapy"],
+        "aromatherapy_avg_cured": (round(cat_extra["aroma_cured"] / cat_extra["cat_aromatherapy"], 3)
+                                   if cat_extra["cat_aromatherapy"] else None),
+        # Natural Cure: switch-ins of a Natural Cure mon onto an incoming status move, per game, over
+        # games where a Natural Cure mon is on the team (exact ability gating — v3 captures abilities).
+        "nc_present_seat_games": nc_present,
+        "nc_switchin_on_status_per_game": (round(nc_switchins / nc_present, 4) if nc_present else None),
+        # Struggle: total occurrences (should be very rare — everything out of PP).
+        "struggle_uses": cat_extra["cat_struggle"],
+        "struggle_per_game": round(cat_extra["cat_struggle"] / (n or 1), 5),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],

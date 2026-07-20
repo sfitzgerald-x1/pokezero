@@ -469,6 +469,106 @@ class MoveClassification(unittest.TestCase):
         self.assertEqual(gp.ev["p1"]["cat_weather_rain"], 1)  # only the move is counted
 
 
+class V3Traits(unittest.TestCase):
+    def test_sleep_clause_active_on_redundant_sleep(self):
+        # p1 move-sleeps p2's Gengar; while it's asleep, p1 clicks another sleep move — the Sleep
+        # Clause bit is set, so that click is wasted. Rest self-sleep does NOT set the clause.
+        gp = parse([
+            "|switch|p2a: Gengar|Gengar|260/260",
+            "|turn|1",
+            "|move|p1a: Snorlax|Rest|p1a: Snorlax",           # self-sleep via Rest -> not a clause set
+            "|-status|p1a: Snorlax|slp|[from] move: Rest",
+            "|turn|2",
+            "|move|p1a: Snorlax|Spore|p2a: Gengar",           # clause not yet set -> not wasted
+            "|-status|p2a: Gengar|slp",
+            "|turn|3",
+            "|move|p1a: Snorlax|Sleep Powder|p2a: Blissey",   # clause active -> wasted click
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_sleep"], 2)                   # Spore + Sleep Powder (Rest isn't a sleep move)
+        self.assertEqual(e["sleep_clause_active"], 1)         # only the Sleep Powder was clause-active
+
+    def test_sleep_clause_clears_when_sleeper_wakes(self):
+        gp = parse([
+            "|switch|p2a: Gengar|Gengar|260/260",
+            "|turn|1",
+            "|move|p1a: X|Spore|p2a: Gengar",
+            "|-status|p2a: Gengar|slp",
+            "|turn|2",
+            "|-curestatus|p2a: Gengar|slp",                   # woke up -> clause clears for p1
+            "|move|p1a: X|Hypnosis|p2a: Blissey",             # clause not active
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_sleep"], 2)
+        self.assertEqual(gp.ev["p1"]["sleep_clause_active"], 0)
+
+    def test_move_fail_excludes_switch_in_fails(self):
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: X|Spore|p2a: Y",
+            "|-fail|p2a: Y",                                  # the move failed
+            "|turn|2",
+            "|switch|p1a: Z|Z, M|300/300",
+            "|-fail|p1a: Z",                                  # blocked switch-in Intimidate -> not a move fail
+            "|move|p2a: Y|Tackle|p1a: Z",                     # succeeds
+        ])
+        self.assertEqual(gp.ev["p1"]["move_failed"], 1)       # only the Spore
+        self.assertEqual(gp.ev["p2"]["move_failed"], 0)
+
+    def test_aromatherapy_counts_statused_party_mons(self):
+        # Aromatherapy emits a single -cureteam (no per-mon lines); count the statused party mons at
+        # use time. Only this seat's own team counts (not the opponent's statused mon).
+        gp = parse([
+            "|turn|1",
+            "|-status|p1a: Blissey|par",       # active, statused
+            "|-status|p1: Skarmory|tox",       # benched party mon, statused earlier
+            "|-status|p2a: Gengar|tox",        # opponent — must NOT count
+            "|turn|2",
+            "|move|p1a: Blissey|Aromatherapy|p1a: Blissey",
+            "|-cureteam|p1a: Blissey|[from] move: Aromatherapy",
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_aromatherapy"], 1)
+        self.assertEqual(e["aroma_cured"], 2)   # Blissey (par) + Skarmory (tox)
+        self.assertEqual(gp.status["p1"], {})   # -cureteam cleared the tracked status
+
+    def test_heal_bell_counts_at_use_time(self):
+        # Heal Bell's per-mon cures are [silent] with no move tag; the count is taken at use time.
+        gp = parse([
+            "|turn|1",
+            "|-status|p1a: Chimecho|par",
+            "|-status|p1: Kingdra|par",
+            "|turn|2",
+            "|move|p1a: Chimecho|Heal Bell|p1a: Chimecho",
+            "|-activate|p1a: Chimecho|move: Heal Bell",
+            "|-curestatus|p1a: Chimecho|par|[silent]",
+            "|-curestatus|p1: Kingdra|par|[silent]",
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_aromatherapy"], 1)
+        self.assertEqual(e["aroma_cured"], 2)
+
+    def test_natural_cure_switchin_on_status_move(self):
+        ms = {"p1": [{"species": "Blissey", "moves": ["Softboiled"], "ability": "Natural Cure"}],
+              "p2": [{"species": "Gengar", "moves": ["Thunder Wave"], "ability": "Levitate"}]}
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Blissey|Blissey, F|360/360",        # NC mon switches in
+            "|move|p2a: Gengar|Thunder Wave|p1a: Blissey",    # opp status move -> the read
+        ], movesets=ms)
+        self.assertEqual(gp.ev["p1"]["nc_switchin_on_status"], 1)
+        # a non-NC switch-in should NOT count
+        ms2 = {"p1": [{"species": "Snorlax", "moves": ["Body Slam"], "ability": "Immunity"}], "p2": ms["p2"]}
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+            "|move|p2a: Gengar|Thunder Wave|p1a: Snorlax",
+        ], movesets=ms2)
+        self.assertEqual(gp2.ev["p1"]["nc_switchin_on_status"], 0)
+
+    def test_struggle_counted(self):
+        gp = parse(["|turn|1", "|move|p1a: X|Struggle|p2a: Y"])
+        self.assertEqual(gp.ev["p1"]["cat_struggle"], 1)
+
+
 class SwitchBehavior(unittest.TestCase):
     def test_immunity_switchin_same_turn_only(self):
         # p1 switches Gengar in; p2's Earthquake that turn is immune -> counts once.
