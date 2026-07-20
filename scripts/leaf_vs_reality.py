@@ -30,9 +30,15 @@ Classification discipline (every family counted, none averaged away):
 - ``epistemic``  — belief facts + opponent-team membership: row n+1 saw new
                    REVEALS; the leaf path root-freezes the epistemic surface
                    per world BY DESIGN (column map);
-- ``engine_pp_model`` — PP columns: the engine only emits DecrementPP when
-                   pp < 10 (generate_instructions.rs), so PP-derived cells
-                   are effectively root-frozen above PP 10 (column map F3);
+- ``engine_pp_model`` — PP columns diverging within the SAME revealed set:
+                   residual PP-count mismatches after the line-replay fix
+                   (LeafMeta::move_charges replays the parser's charging
+                   rules; the engine's own DecrementPP only fires below
+                   10 PP — column map F3). A PP/validity cell whose bucket
+                   VALIDITY bit also flipped is the root-frozen revealed
+                   set / bucket composition meeting new reveals and counts
+                   as ``epistemic``; transform-tagged PP cells count as
+                   ``engine_model`` (copied 5-PP instance moves);
 - ``engine_roll`` — damage-roll collapse envelopes: HP fractions, substitute
                    breaks, pinch-berry thresholds (fidelity class b);
 - ``engine_model`` — tagged vendored-engine deviations (Transform empty
@@ -151,7 +157,12 @@ def offset_column_names(tables: Mapping[str, Any]) -> dict[str, dict[int, str]]:
 
 
 def classify(
-    array: str, block: str, column: str, opp_membership: bool, tags: set[str]
+    array: str,
+    block: str,
+    column: str,
+    opp_membership: bool,
+    tags: set[str],
+    reveal_pp: bool = False,
 ) -> str:
     if block == "transition" or column.startswith(
         ("NUMERIC_STAT_", "NUMERIC_MON_", "NUMERIC_TIER2_")
@@ -161,8 +172,13 @@ def classify(
         return "epistemic"
     if column.startswith(EPISTEMIC_PREFIXES):
         return "epistemic"
-    if column.startswith(PP_COLUMNS):
-        return "engine_pp_model"
+    if reveal_pp:
+        # The bucket's VALIDITY bit or MOVE-identity cell flipped alongside:
+        # the divergence is the ROOT-FROZEN revealed-move set / bucket
+        # composition meeting row n+1's new reveals (epistemic by design),
+        # not a PP-count error — only same-revealed-set same-bucket PP
+        # mismatches are the engine_pp class.
+        return "epistemic"
     if "curestatus" in tags and column == "CATEGORY_SECONDARY" and block in (
         "self_team",
         "opponent_team",
@@ -179,8 +195,20 @@ def classify(
         # Recharge: the engine consumes the recharge one ply early on
         # faint-replacement plies (documented deviation). Encore: the engine
         # does not apply the Encore volatile from a branch (root encore
-        # states fail-close as encore_move_unknown).
+        # states fail-close as encore_move_unknown). Checked BEFORE the PP
+        # class: each of these corrupts the whole action/PP surface (copied
+        # 5-PP instance moves, the recharge pseudo-request, a Baton-Passed
+        # saved move that never resolves engine-side), so tagged PP cells are
+        # the engine-model deviation, not PP-tracking errors.
         return "engine_model"
+    if "merged_outcome" in tags and column.startswith(PP_COLUMNS):
+        # The PARSER charges PP for a |move| line reality replaced with
+        # |cant| (or vice versa) — the merged no-op outcome ambiguity
+        # (insufficiency #1), not a PP-tracking error. Scoped to PP columns
+        # only: other cells on such boundaries keep their own classes.
+        return "engine_model"
+    if column.startswith(PP_COLUMNS):
+        return "engine_pp_model"
     if column in TIMED_COLUMNS:
         return "engine_model"
     if column in ("NUMERIC_HP_FRACTION", "NUMERIC_SUB_HP_FRACTION"):
@@ -451,6 +479,20 @@ def drive_pair(
         for line in (row_next.get("event_slice") or ())
     ):
         tags.add("curestatus")
+    # Merged no-op outcome ambiguity (insufficiency #1): the engine merges a
+    # fully-paralyzed turn, a missed move, and a failed move into ONE branch
+    # when the deltas coincide; the renderer picks the dominant-mass cause,
+    # and when reality took the minority outcome the |cant| structure differs
+    # — the PARSER charges PP for a |move| line the reality stream replaced
+    # with |cant| (or vice versa). Detected by comparing per-actor |cant|
+    # counts between the synthesized lines and reality's slice.
+    def cant_counts(lines) -> Counter:
+        return Counter(
+            line.split("|")[2] for line in lines if str(line).startswith("|cant|")
+        )
+
+    if cant_counts(synthesized) != cant_counts(row_next.get("event_slice") or ()):
+        tags.add("merged_outcome")
     # A recharge request at the target boundary: the engine consumes the
     # recharge one ply early on faint-replacement plies (documented engine
     # deviation, docs/crate_search_design.md fidelity findings), so recharge
@@ -482,6 +524,14 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
     vocab_inv = {v: k for k, v in tables["vocab"]["index"].items()}
     present_column = tables["layout"]["numeric_columns"]["NUMERIC_PRESENT"]
     opp_start, opp_stop = 7, 13
+    # Opponent PP bucket geometry (reveal-vs-count discrimination): a PP or
+    # validity cell whose bucket's VALIDITY bit also flipped diverges because
+    # of the root-frozen revealed set / bucket composition (epistemic), not a
+    # PP count.
+    num_cols = tables["layout"]["numeric_columns"]
+    move_bucket_width = int(tables["layout"]["belief_buckets"]["move"])
+    pp_base = num_cols.get("NUMERIC_OPP_MOVE_PP_OFFSET")
+    pp_valid_base = num_cols.get("NUMERIC_OPP_MOVE_PP_VALID_OFFSET")
 
     counts: Counter[str] = Counter()
     class_rows: Counter[str] = Counter()
@@ -525,6 +575,31 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                 for token in range(opp_start, opp_stop)
                 if got_numeric[token, present_column] != want_numeric[token, present_column]
             }
+            reveal_buckets: set[tuple[int, int]] = set()
+            want_cat = numpy.ascontiguousarray(
+                golden_row.arrays.categorical_ids, dtype="<i4"
+            )
+            got_cat = numpy.frombuffer(buffers["categorical_ids"], dtype="<i4").reshape(
+                want_cat.shape
+            )
+            move_cat_base = tables["layout"]["categorical_columns"].get(
+                "CATEGORY_BELIEF_MOVE_OFFSET"
+            )
+            for token in range(opp_start, opp_stop):
+                for k in range(move_bucket_width):
+                    valid_flip = pp_valid_base is not None and (
+                        got_numeric[token, pp_valid_base + k]
+                        != want_numeric[token, pp_valid_base + k]
+                    )
+                    # The bucket holds a DIFFERENT move (candidate-set
+                    # recomposition between the root-frozen belief and row
+                    # n+1's): PP cells then compare across different moves.
+                    bucket_flip = move_cat_base is not None and (
+                        got_cat[token, move_cat_base + k]
+                        != want_cat[token, move_cat_base + k]
+                    )
+                    if valid_flip or bucket_flip:
+                        reveal_buckets.add((token, k))
 
             row_classes: set[str] = set()
             row_families: set[tuple[str, str, str, str]] = set()
@@ -559,8 +634,26 @@ def run_corpus(corpus_dir: Path, tables_json: str, tables: Mapping[str, Any]) ->
                             # dependent (approximate sub health + collapsed
                             # rolls decide whether a hit breaks it).
                             klass = "engine_roll"
+                    reveal_pp = bool(
+                        name == "numeric_features"
+                        and token in range(opp_start, opp_stop)
+                        and (
+                            (
+                                pp_base is not None
+                                and pp_base <= column < pp_base + move_bucket_width
+                                and (token, column - pp_base) in reveal_buckets
+                            )
+                            or (
+                                pp_valid_base is not None
+                                and pp_valid_base <= column < pp_valid_base + move_bucket_width
+                                and (token, column - pp_valid_base) in reveal_buckets
+                            )
+                        )
+                    )
                     if klass is None:
-                        klass = classify(name, block, colname, opp_membership, tags)
+                        klass = classify(
+                            name, block, colname, opp_membership, tags, reveal_pp
+                        )
                     family = (klass, name, block, colname)
                     row_classes.add(klass)
                     row_families.add(family)

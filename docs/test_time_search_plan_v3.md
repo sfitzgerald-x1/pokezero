@@ -191,10 +191,10 @@ build/seeds in either arm — a world-construction finding, not a search
 regression (follow-up below). Argmax sanity vs hp_fraction: 10 decisions,
 6/10 agree (agreement not expected — different leaf evals), 0 illegal.
 Remaining = the 200-seed paired read + follow-ups
-(opponent priors spec'd in docs/crate_search_design.md; Tier-2 overlay at
-live boundaries; batch/virtual-loss re-pricing under real observation
-costs — see docs/leaf_observation_column_map.md "Remaining"; the
-determinized-world fallback walls below).
+(opponent priors spec'd in docs/crate_search_design.md; batch/virtual-loss
+re-pricing under real observation costs — see
+docs/leaf_observation_column_map.md "Remaining"; the determinized-world
+fallback walls below).
 **Knock-Off removal recovery LANDED (2026-07-19 EOD)** — belief_view
 gained the removal/swap distinction the blocked-slot comment enumerated:
 `item_removed` marks a mon whose held item was publicly STRIPPED (Knock
@@ -226,6 +226,16 @@ the CURRENT item is publicly revealed by the |-item| line, so worlds
 could substitute it instead of failing closed (all 48/60 of 7013);
 (2) request-state flags (7010); (3) seeding the publicly-derivable
 flashfire/confusion volatiles (same shape as Truant/MUSTRECHARGE).
+ENCODING-FIDELITY CLOSURE (2026-07-19): the Tier-2 overlay at live
+boundaries LANDED (`EngineMctsPolicy(annotation_source=...)`; the
+strengthened `--fold-cross-check` binds the live fold's ANNOTATED products
+against the env's own encoder surfaces — 242/242 clean over a 10-game
+Tier-2-ACTIVE model-mode bench with 69 tracker conclusions applied), PP
+line-replay closed review F3 (leaf_vs_reality engine_pp 663+173 → 0+0),
+in-branch screen set-turns + measured fail-form renders + Ghost-Curse
+placement + Flash Fire first-activation `-start` landed; the accepted
+residual classes are enumerated in docs/leaf_observation_column_map.md
+"Accepted encoding divergences (by design)" — the eval go/no-go ledger.
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep

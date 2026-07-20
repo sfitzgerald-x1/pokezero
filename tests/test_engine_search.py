@@ -7,6 +7,7 @@ import random
 import sys
 import unittest
 from collections import Counter
+from dataclasses import replace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -429,6 +430,242 @@ class LiveFoldAdvanceTests(unittest.TestCase):
         context.player_id = "p2"
         fold = policy._advance_live_fold(context)
         self.assertEqual(fold.perspective_slot, "p2")
+
+
+class _FakeAnnotationToken:
+    def __init__(self, residual=None, residual_valid=False, cb_bit=False, investment=0.0):
+        self.residual = residual
+        self.residual_valid = residual_valid
+        self.cb_bit = cb_bit
+        self.investment = investment
+
+
+class _FakeAnnotationState:
+    def __init__(self, tokens):
+        self.transition_tokens = tuple(tokens)
+
+
+class _FakeAnnotationSource:
+    """EnvTier2AnnotationSource-shaped stub over a fixed annotated stream."""
+
+    def __init__(self, tokens, active=True):
+        self._state = _FakeAnnotationState(tokens)
+        self._active = active
+        self.overlay_calls = 0
+
+    def active(self):
+        return self._active
+
+    def boundary_state(self, player_id):
+        return self._state
+
+    def overlay_for(self, player_id):
+        self.overlay_calls += 1
+        return {
+            index: (t.residual, t.residual_valid, t.cb_bit, t.investment)
+            for index, t in enumerate(self._state.transition_tokens)
+            if t.residual is not None or t.residual_valid or t.cb_bit or t.investment
+        }
+
+
+class Tier2OverlayTests(unittest.TestCase):
+    """The live fold must carry the env trackers' Tier-2 conclusions
+    (annotated products at search leaves == what the env encodes)."""
+
+    LEAD = LiveFoldAdvanceTests.LEAD
+    ROUND2 = LiveFoldAdvanceTests.ROUND2
+    _context = LiveFoldAdvanceTests._context
+
+    def _annotated_policy(self, tokens, active=True):
+        source = _FakeAnnotationSource(tokens, active=active)
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=object(),
+            config=EngineMctsConfig(), annotation_source=source,
+        )
+        return policy, source
+
+    def test_overlay_applies_to_the_live_fold(self) -> None:
+        # Boundary 1: two unannotated lead tokens. Boundary 2: the tackle
+        # token (index 2), which the env tracker assessed with a residual —
+        # the per-boundary arrival shape of real tracker conclusions.
+        policy, source = self._annotated_policy(
+            [_FakeAnnotationToken(), _FakeAnnotationToken()]
+        )
+        policy._advance_live_fold(self._context(self.LEAD))
+        self.assertEqual(policy.stats.fold_annotations_applied, 0)
+        source._state = _FakeAnnotationState(
+            [
+                _FakeAnnotationToken(),
+                _FakeAnnotationToken(),
+                _FakeAnnotationToken(residual=0.25, residual_valid=True),
+            ]
+        )
+        fold = policy._advance_live_fold(
+            self._context(self.LEAD + self.ROUND2, round_index=1)
+        )
+        self.assertIsNotNone(fold)
+        self.assertEqual(policy.stats.fold_annotations_applied, 1)
+        annotated = fold.products().transition_tokens[2]
+        self.assertEqual(annotated.residual, 0.25)
+        self.assertTrue(annotated.residual_valid)
+        # Re-application at the next boundary is an idempotent equality check.
+        policy._advance_live_fold(
+            self._context(self.LEAD + self.ROUND2, round_index=2)
+        )
+        self.assertEqual(policy.stats.fold_annotations_applied, 1)
+
+    def test_inactive_source_applies_nothing(self) -> None:
+        tokens = [_FakeAnnotationToken(residual=0.5, residual_valid=True)]
+        policy, source = self._annotated_policy(tokens, active=False)
+        fold = policy._advance_live_fold(self._context(self.LEAD))
+        self.assertIsNotNone(fold)
+        self.assertEqual(source.overlay_calls, 0)
+        self.assertEqual(policy.stats.fold_annotations_applied, 0)
+
+    def test_changed_conclusion_breaks_the_fold_loudly(self) -> None:
+        # Tracker conclusions are per-index immutable; a changed value is a
+        # regression and must fail closed, not silently re-annotate.
+        tokens = [
+            _FakeAnnotationToken(residual=0.25, residual_valid=True),
+            _FakeAnnotationToken(),
+        ]
+        policy, source = self._annotated_policy(tokens)
+        self.assertIsNotNone(policy._advance_live_fold(self._context(self.LEAD)))
+        self.assertEqual(policy.stats.fold_annotations_applied, 1)
+        source._state.transition_tokens[0].residual = 0.75  # mutate in place
+        import warnings as _warnings
+
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            result = policy._advance_live_fold(
+                self._context(self.LEAD + self.ROUND2, round_index=1)
+            )
+        self.assertIsNone(result)
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
+        )
+
+    def test_stale_annotation_breaks_the_fold_loudly(self) -> None:
+        policy, source = self._annotated_policy([])
+        # A delayed tracker conclusion outside the fold's identifiable tail
+        # must fail closed before it can be applied to the wrong token.
+        source.overlay_for = lambda _player_id: {-1: (0.25, True, False, 0.0)}
+        import warnings as _warnings
+
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            result = policy._advance_live_fold(self._context(self.LEAD))
+        self.assertIsNone(result)
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
+        )
+
+    def test_cross_check_binds_against_env_surfaces(self) -> None:
+        # With an active source, the cross-check reference is the env's own
+        # encoder state (production binding): a reference whose surfaces ARE
+        # the fold's products passes; a corrupted stream fails loudly.
+        policy, source = self._annotated_policy([])
+        context = self._context(self.LEAD)
+        fold = policy._advance_live_fold(context)
+        products = fold.products()
+
+        class _Perspective:
+            showdown_slot = "p1"
+            opponent_showdown_slot = "p2"
+
+        class _BoundState:
+            transition_tokens = tuple(products.transition_tokens)
+            turn_merged_tokens = tuple(products.turn_merged_tokens)
+            tendency_stats = products.tendency_stats
+            perspective = _Perspective()
+
+        source._state = _BoundState()
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True):
+            _warnings.simplefilter("always")
+            policy._fold_cross_check(
+                context, fold, context.public_materialization_state.replay
+            )
+        self.assertEqual(policy.stats.fold_cross_check_failures, 0)
+        # Corrupt the reference stream: the mismatch must be loud.
+        source._state.transition_tokens = tuple(products.transition_tokens[:-1])
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            policy._fold_cross_check(
+                context, fold, context.public_materialization_state.replay
+            )
+        self.assertEqual(policy.stats.fold_cross_check_failures, 1)
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
+        )
+
+    def test_cross_check_binds_tier2_pins_against_env_surfaces(self) -> None:
+        def check_pin(player_id, annotate):
+            policy, source = self._annotated_policy([])
+            context = self._context(self.LEAD + self.ROUND2)
+            context.player_id = player_id
+            initial = policy._advance_live_fold(context)
+            self.assertIsNotNone(initial)
+            annotated_tokens = tuple(annotate(token) for token in initial.products().transition_tokens)
+            source._state = _FakeAnnotationState(annotated_tokens)
+            refreshed = self._context(self.LEAD + self.ROUND2, round_index=1)
+            refreshed.player_id = player_id
+            fold = policy._advance_live_fold(refreshed)
+            self.assertIsNotNone(fold)
+            products = fold.products()
+            perspective = type(
+                "Perspective",
+                (),
+                {
+                    "showdown_slot": player_id,
+                    "opponent_showdown_slot": "p2" if player_id == "p1" else "p1",
+                },
+            )()
+            bound_state = type("BoundState", (), {})()
+            bound_state.transition_tokens = annotated_tokens
+            bound_state.turn_merged_tokens = tuple(products.turn_merged_tokens)
+            bound_state.tendency_stats = products.tendency_stats
+            bound_state.perspective = perspective
+            source._state = bound_state
+            import warnings as _warnings
+
+            with _warnings.catch_warnings(record=True):
+                _warnings.simplefilter("always")
+                policy._fold_cross_check(
+                    refreshed, fold, refreshed.public_materialization_state.replay
+                )
+            self.assertEqual(policy.stats.fold_cross_check_failures, 0)
+            return products
+
+        cb_products = check_pin(
+            "p2",
+            lambda token: replace(
+                token,
+                cb_bit=token.kind == "move" and token.actor_slot == "p1",
+            ),
+        )
+        self.assertTrue(cb_products.cb_pinned_species)
+        investment_products = check_pin(
+            "p1",
+            lambda token: replace(
+                token,
+                investment=(
+                    0.5
+                    if token.kind == "move"
+                    and token.actor_slot == "p1"
+                    and token.defender_species
+                    else 0.0
+                ),
+            ),
+        )
+        self.assertTrue(investment_products.investment_pinned)
 
 
 class FallbackAlertTests(unittest.TestCase):

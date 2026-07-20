@@ -1305,6 +1305,7 @@ fn render_move_phase(
         !s.get_active_immutable()
             .has_type(&poke_engine::state::PokemonType::GHOST)
     };
+    let ghost_curse = choice.move_id == Choices::CURSE && !non_ghost_curse;
     let self_target = choice.target == MoveTarget::User || non_ghost_curse;
     // A status-inflicting move against an already-statused defender cannot
     // work; the engine merges its no-op "hit" branch with the miss branch,
@@ -1350,6 +1351,21 @@ fn render_move_phase(
     // boost lines).
     let capped_boost_move =
         self_target && !has_any_effect && choice.boost.is_some() && choice.category == MoveCategory::Status;
+    // A pure side-condition move whose condition is at CAP (spikes: 3
+    // layers; screens/safeguard/mist: 1) fails with the real protocol's
+    // blank-target form: `|move|..|Spikes||[still]` + `|-fail|user`
+    // (corpus-measured).
+    let side_condition_fail = !has_any_effect
+        && choice.category == MoveCategory::Status
+        && choice.status.is_none()
+        && choice.side_condition.as_ref().map_or(false, |sc| {
+            let target_side = match sc.target {
+                MoveTarget::User => side,
+                MoveTarget::Opponent => defender,
+            };
+            let cap = if sc.condition == PokemonSideCondition::Spikes { 3 } else { 1 };
+            side_condition_value(sim.state, target_side, sc.condition) >= cap
+        });
     // Full paralysis: the engine merges the 25% fully-paralyzed branch with
     // any same-delta branch (notably the miss branch). When the empty delta
     // is not deterministically explained and the move WOULD have acted, the
@@ -1363,13 +1379,6 @@ fn render_move_phase(
         s.get_active_immutable().status == PokemonStatus::PARALYZE
     };
     if attacker_paralyzed && !has_any_effect && called_tag.is_none() {
-        let side_condition_already_up = choice.side_condition.as_ref().map_or(false, |sc| {
-            let target_side = match sc.target {
-                MoveTarget::User => side,
-                MoveTarget::Opponent => defender,
-            };
-            side_condition_value(sim.state, target_side, sc.condition) > 0
-        });
         let deterministic_noop = (defender_protected && choice.flags.protect)
             || (is_damaging && effectiveness == 0.0)
             || (is_damaging && absorb.is_some())
@@ -1377,7 +1386,7 @@ fn render_move_phase(
             || status_fail
             || status_type_immune
             || capped_boost_move
-            || side_condition_already_up;
+            || side_condition_fail;
         let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
         let move_could_act = is_damaging
             || choice.status.is_some()
@@ -1393,13 +1402,21 @@ fn render_move_phase(
 
     // Caller-invoked moves (Sleep Talk) render their explicit target even on
     // failure (measured; the [still] blanking does not apply to them).
+    //
+    // Corpus-measured fail forms (leaf_vs_reality PP follow-up, 2026-07-19):
+    // an ALREADY-STATUSED status fail keeps the explicit target
+    // (`|move|p1a: Piloswine|Toxic|p2a: Deoxys` + `|-fail|p2a: Deoxys|tox`) —
+    // the pre-fix blank+[still] form dropped the target, breaking BOTH the
+    // fold's defender_species and the parser's foe-targeted Pressure PP
+    // double-charge; a side-condition-at-cap fail uses the blank form
+    // (`|move|p2a: Deoxys|Spikes||[still]` + `|-fail|p2a: Deoxys`).
     let mut move_line = if self_target {
         if has_any_effect || capped_boost_move || called_tag.is_some() {
             format!("|move|{attacker_ident}|{move_name}|{attacker_ident}")
         } else {
             format!("|move|{attacker_ident}|{move_name}||[still]")
         }
-    } else if status_fail && called_tag.is_none() {
+    } else if side_condition_fail && called_tag.is_none() {
         format!("|move|{attacker_ident}|{move_name}||[still]")
     } else {
         format!("|move|{attacker_ident}|{move_name}|{defender_ident}")
@@ -1442,6 +1459,48 @@ fn render_move_phase(
         move_line.push_str("|[miss]");
     }
     out.lines.push(move_line);
+
+    // Ghost-typed Curse (live-game protocol probe, 2026-07-19): the real
+    // protocol starts the curse on the TARGET and charges the user a bare
+    // self |-damage| HP cut:
+    //     |move|p1a: Gengar|Curse|p2a: Blissey
+    //     |-start|p2a: Blissey|Curse|[of] p1a: Gengar
+    //     |-damage|p1a: Gengar|114/227
+    // The gen3 engine has NO Ghost split — it applies the base Curse
+    // choice's delta (user stat boosts, user volatile, no HP cut, no
+    // residual). Render the real-protocol |-start| marker (fold-ignored),
+    // suppress the spurious |-boost| lines below (reality never shows them),
+    // and flag the branch lossy: the true self-cost is not derivable from
+    // the engine delta and is knowingly missing (engine-model deviation,
+    // never silently mis-attributed).
+    if ghost_curse && has_any_effect {
+        out.lines.push(format!(
+            "|-start|{defender_ident}|Curse|[of] {attacker_ident}"
+        ));
+        out.lossy.push("ghost_curse_engine_model".to_string());
+    }
+
+    // Real fail lines (fold-ignored; kept for line-stream fidelity with the
+    // measured protocol shapes above).
+    if called_tag.is_none() {
+        if status_fail {
+            let code = {
+                let d = match defender {
+                    SideReference::SideOne => &sim.state.side_one,
+                    SideReference::SideTwo => &sim.state.side_two,
+                };
+                status_code(d.get_active_immutable().status)
+            };
+            match code {
+                Some(code) => out
+                    .lines
+                    .push(format!("|-fail|{defender_ident}|{code}")),
+                None => out.lines.push(format!("|-fail|{defender_ident}")),
+            }
+        } else if side_condition_fail {
+            out.lines.push(format!("|-fail|{attacker_ident}"));
+        }
+    }
 
     if missed {
         out.lines
@@ -1733,6 +1792,13 @@ fn render_move_phase(
             }
             Instruction::Boost(boost) => {
                 sim.apply(ins);
+                if ghost_curse {
+                    // Engine-model artifact: the gen3 engine applies the
+                    // non-Ghost stats-up delta for a Ghost curser; the real
+                    // protocol shows no boost lines (see the ghost_curse
+                    // block above — branch already flagged lossy).
+                    continue;
+                }
                 out.lines.push(render_boost_line(
                     ctx,
                     sim,
@@ -1764,6 +1830,17 @@ fn render_move_phase(
                         "|-prepare|{target_ident}|{}",
                         move_display(charge_move)
                     ));
+                }
+                if apply.volatile_status == PokemonVolatileStatus::FLASHFIRE {
+                    // Flash Fire FIRST activation: the real protocol's
+                    // boost-state form (live capture: `|-start|p2a: Houndoom|
+                    // ability: Flash Fire`) — an ABSORB SIGNATURE the fold
+                    // consumes (`_is_absorb_start`), so omitting it would
+                    // leave a bare |move| line and lose the Absorbed outcome.
+                    // (Repeat activations are an empty delta and render
+                    // `|-immune|..|[from] ability: Flash Fire` upstream.)
+                    out.lines
+                        .push(format!("|-start|{target_ident}|ability: Flash Fire"));
                 }
                 // Substitute/Protect/Leech Seed/Encore/confusion starts render
                 // as |-start|/|-singleturn| in the real protocol — all
@@ -2314,6 +2391,140 @@ mod tests {
         }
         // State restored exactly.
         assert_eq!(before, state.serialize());
+    }
+
+    /// Ghost-typed Curse (live-game protocol probe, 2026-07-19): the real
+    /// protocol targets the opponent, starts the curse on the TARGET, and
+    /// never shows boost lines. The gen3 engine applies the non-Ghost
+    /// stats-up delta instead — the renderer emits the real-protocol shape,
+    /// suppresses the spurious boosts, and flags the branch lossy (the true
+    /// self-HP cut is not derivable from the engine delta).
+    #[test]
+    fn ghost_curse_renders_target_start_and_no_boosts() {
+        let fixture = MINIMAL.trim().replace("FIRE", "GHOST").replace("EMBER", "CURSE");
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        let s1 = MoveChoice::from_string("curse", &state.side_one).unwrap();
+        let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        assert!(!branches.is_empty());
+        for branch in &branches {
+            let rendered = render_branch_events(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+                &ctx(),
+            );
+            let text = rendered.lines.join("\n");
+            assert!(
+                text.contains("|move|p1a: Charmander|curse|p2a: Squirtle"),
+                "{text}"
+            );
+            assert!(
+                text.contains("|-start|p2a: Squirtle|Curse|[of] p1a: Charmander"),
+                "{text}"
+            );
+            assert!(!text.contains("|-boost|p1a: Charmander"), "{text}");
+            assert!(!text.contains("|-unboost|p1a: Charmander"), "{text}");
+            assert!(
+                rendered
+                    .lossy
+                    .iter()
+                    .any(|tag| tag == "ghost_curse_engine_model"),
+                "ghost curse must be flagged lossy: {:?}",
+                rendered.lossy
+            );
+        }
+    }
+
+    /// Non-Ghost Curse keeps the corpus-measured self-target render with the
+    /// real boost lines (regression guard for the Ghost gate).
+    #[test]
+    fn non_ghost_curse_renders_self_target_boosts() {
+        let fixture = MINIMAL.trim().replace("EMBER", "CURSE");
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        let s1 = MoveChoice::from_string("curse", &state.side_one).unwrap();
+        let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        assert!(!branches.is_empty());
+        for branch in &branches {
+            let rendered = render_branch_events(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+                &ctx(),
+            );
+            let text = rendered.lines.join("\n");
+            assert!(
+                text.contains("|move|p1a: Charmander|curse|p1a: Charmander"),
+                "{text}"
+            );
+            assert!(text.contains("|-boost|p1a: Charmander|atk|1"), "{text}");
+            assert!(
+                !rendered.lossy.iter().any(|t| t.contains("curse")),
+                "{:?}",
+                rendered.lossy
+            );
+        }
+    }
+
+    /// Flash Fire FIRST activation (absorb-class audit): the engine's delta
+    /// is ApplyVolatileStatus(FLASHFIRE) on the defender; the real protocol's
+    /// shape is the boost-state form `|-start|p2a: Houndoom|ability: Flash
+    /// Fire` (live capture, absorb-audit probe 3) — an absorb SIGNATURE the
+    /// fold consumes. A bare |move| render would lose the Absorbed outcome.
+    #[test]
+    fn flash_fire_first_activation_renders_absorb_start() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let active = state.side_two.active_index;
+        state.side_two.pokemon[active].ability = Abilities::FLASHFIRE;
+        let s1 = MoveChoice::from_string("ember", &state.side_one).unwrap();
+        let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        assert!(!branches.is_empty());
+        let mut checked = 0;
+        for branch in &branches {
+            let applies_flashfire = branch.instruction_list.iter().any(|ins| {
+                matches!(
+                    ins,
+                    Instruction::ApplyVolatileStatus(apply)
+                        if apply.volatile_status == PokemonVolatileStatus::FLASHFIRE
+                )
+            });
+            if !applies_flashfire {
+                continue;
+            }
+            let rendered = render_branch_events(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+                &ctx(),
+            );
+            let text = rendered.lines.join("\n");
+            assert!(
+                text.contains("|-start|p2a: Squirtle|ability: Flash Fire"),
+                "{text}"
+            );
+            // Through the fold: the -start form is the absorb signature —
+            // the attacker's move token must read Absorbed, not a bare move.
+            let mut fold = crate::fold::FoldStateInner::initial(0, 128, 512);
+            fold.advance_in_place(&rendered.lines)
+                .expect("fold advances over the rendered lines");
+            let products = fold.products();
+            let ember = products
+                .transition_tokens
+                .iter()
+                .find(|token| token.action == "ember")
+                .expect("ember token present");
+            assert_eq!(ember.damage_outcome, crate::fold::Outcome::Absorbed);
+            checked += 1;
+        }
+        assert!(checked > 0, "no branch applied the FLASHFIRE volatile");
     }
 
     /// The /100 base reconciliation (ladder streams): the exact Showdown HP

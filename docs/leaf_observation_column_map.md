@@ -1,6 +1,9 @@
 # Leaf observation column source map (engine-swap capstone)
 
-Status: 2026-07-19, post adversarial review (PR #730 fixes F1-F5 landed).
+Status: 2026-07-19, post adversarial review (PR #730 fixes F1-F5 landed) +
+the encoding-fidelity closure (PP line-replay, in-branch screen set-turns,
+Ghost-Curse placement, Tier-2 live overlay — see "Accepted encoding
+divergences" below for the eval go/no-go ledger).
 The contract for real per-outcome model observations at search leaves (plan
 v3 "Integration endgame"; owner-decided architecture).
 Implementation: `rust/pokezero-search/src/leaf.rs` (`LeafEncoder`),
@@ -79,7 +82,7 @@ world-constant, **C** = static contract (layout constants, invariant).
 | `NUMERIC_{SELF,OPP}_FUTURE_SIGHT` (:1592,:1631) | E | engine `side.future_sight.0` |
 | `NUMERIC_{SELF,OPP}_SLEEP_CLAUSE` | E-delta | ledger HOLDER semantics: engages on a new non-Rest sleeper on the side's OPPONENT, releases when that sleeper leaves play, else root value |
 | `NUMERIC_WEATHER_TURNS`, `NUMERIC_WEATHER_PERMANENT` (:1127) | E+turn | permanent (engine −1) pinned at 5; same-as-root weather ticks by the PARSER formula (root remaining − completed simulated turns — the engine decrements per EOT run, incl. turn-less faint plies); weather set in-branch uses the engine counter (set-ply granularity, documented) |
-| timed side-condition turns (`_timed_condition_turns` :1143) | E | ACTIVE counts from engine `side_conditions`; SET TURNS root-frozen — remaining = duration − (leaf turn − set turn) keeps ticking through simulated turns. A screen SET inside a branch has no set-turn (duration column stays 0 for it) — documented approximation; gen3 randbats has no screens in the pool |
+| timed side-condition turns (`_timed_condition_turns` :1143) | E (line-driven) | ACTIVE counts from engine `side_conditions`; ROOT-set conditions keep their recorded set turn (remaining = duration − (leaf turn − set turn) keeps ticking through simulated turns); conditions SET or ENDED in-branch replay the parser's own bookkeeping (`_update_timed_side_conditions` :909-922) via `LeafMeta::side_condition_sets` — a `\|-sidestart\|` records root turn + completed `\|turn\|` lines at that point, a `\|-sideend\|` pops the entry (closure of the former "no set-turn" approximation; scenario-gated by screens_jirachi) |
 | `NUMERIC_{SELF,OPP}_WISH_PENDING` (:1155) | E | engine `side.wish.0 != 0` |
 
 ### Tokens 1–6 self team / 7–12 opponent team (`_encode_pokemon_tokens` :2192)
@@ -91,14 +94,14 @@ world-constant, **C** = static contract (layout constants, invariant).
 | `condition` → `NUMERIC_HP_FRACTION`, `NUMERIC_LEGAL` (fainted), status categorical (:3125) | E (evolve-on-change) | engine (hp, maxhp, status) when moved since root, else the root parser/ledger string byte-frozen; a mon FAINTING in-branch drops its actual-HP stat entry (requests report "0 fnt" with no max HP — `_max_hp_from_condition`) while its five request stats remain |
 | `NUMERIC_ACTIVE` | E | engine `active_index` (a fainted, not-yet-replaced active stays marked active — request semantics) |
 | boosts (`_encode_active_boosts` :2065) | E | engine side boost fields (atk/def/spa/spd/spe/accuracy/evasion) |
-| volatiles (`_encode_active_volatiles` :2075) | E | engine volatile bitset filtered/mapped to `TRACKED_VOLATILES` ids (leaf.rs `VOLATILE_MAP`); engine-only mechanics volatiles dropped; CURSE Ghost-gated (review F5: the gen3 engine applies the base Curse choice's USER volatile with no Ghost split — the spurious non-Ghost volatile is dropped; Ghost-curse TARGET placement stays an engine-model deviation) |
+| volatiles (`_encode_active_volatiles` :2075) | E | engine volatile bitset filtered/mapped to `TRACKED_VOLATILES` ids (leaf.rs `VOLATILE_MAP`); engine-only mechanics volatiles dropped; CURSE Ghost-gated AND target-placed (review F5 + live-protocol probe 2026-07-19: the gen3 engine applies the base Curse choice's USER volatile with no Ghost split — the spurious non-Ghost volatile is dropped, and a Ghost curser's volatile is mapped onto the CURSED TARGET's tracked list, where the real protocol starts it; the volatile's engine LIFETIME still follows the curser's switch-outs — residual engine-model deviation) |
 | `NUMERIC_TOXIC_STAGE` (:1613) | E (line-driven) | **review F1**: the parser stage is |turn|-line-driven (set 1 on `-status tox`, +1 per `|turn|` cap 15, reset on switch, cleared on curestatus — Rest's status REPLACEMENT keeps it), replayed by `LeafMeta`; a state-side guard clears only full cures the mapper cannot render (engine active alive at status NONE). The pre-fix engine-counter arithmetic was 1 low on fresh applies and 1 high on re-applies (arr69/arr82) — both repro shapes unit-tested, the differential's toxic family is zero |
 | belief facts: possible abilities/items/moves, revealed flags+counts, `candidate_set_count`, `NUMERIC_UNCERTAINTY`, `candidate_variants` → expected-stat ranges (:2492) | **W** | root, byte-frozen (epistemic); the SELF ledger is NOT epistemic — a first-time-active self mon (e.g. the replacement after a faint) gets a synthesized minimal entry, matching production's ledger growth |
 | exact-state ledger: `NUMERIC_SLEEP_TURNS`, `NUMERIC_REST_SLEEP`, `NUMERIC_WAKE_KNOWN` (:2348) | E (line-driven) | `sleep_turns` = observed `|cant …|slp` lines since the `|-status|slp`, per MON (belief.py:91 semantics; a sleeper that faints after its cants keeps them); `rest_sleep` from engine rest counters; `WAKE_KNOWN` derives from W ability facts |
 | `NUMERIC_TURNS_ACTIVE` (:2348) | E (line-driven) | **review F4 fixed**: the ledger's per-stint counter (reset on switch-in — Showdown `activeTurns = 0` — +1 per `|turn|`) is replayed by `LeafMeta` stints. Pre-fix it was root-frozen, stale by exactly the completed-turn count on ~85-95% of multi-turn leaves (self 724 + opp 588 boundary hits in the reviewer's differential); post-fix the family is zero |
 | `NUMERIC_TRAPPER_ALIVE` | W+E | ability certainty is W; alive/active bits are E |
-| `NUMERIC_SUB_HP_FRACTION` (:2472) | E | engine SUBSTITUTE volatile + the production maxhp/4 approximation (the model was trained on the approximation, not the engine's true `substitute_health`); whether a hit BREAKS the sub is roll-envelope + sub-health-approximation dependent |
-| opponent revealed-move PP fractions + validity (:2421) | W + E-delta (**effectively root-frozen above PP 10**) | revealed set is W; `move_uses` = root uses + engine PP consumed since root — **review F3 correction: the engine only emits `DecrementPP` when pp < 10 (generate_instructions.rs:2207 optimization), so PP-derived cells (opponent move_uses AND the self action-token `NUMERIC_MOVE_PP_FRACTION`) do NOT track in-branch consumption above PP 10: exact below 10, root-frozen at/above. Differential measurement: 478/775 driven golden-v2 boundaries show a PP-family divergence one boundary ahead (the dominant expected class)** |
+| `NUMERIC_SUB_HP_FRACTION` (:2472) | E | engine SUBSTITUTE volatile + production's presence-plus-INITIAL-size formula (`_substitute_hp_fraction` :2472-2485: floor(maxhp/4)/maxhp self, 0.25 opponent — "chip against the sub is not protocol-derivable, so the value is presence + initial size, not a running ledger"). PROBED 2026-07-19: the engine DOES track real per-side `substitute_health` (state.rs:1059; decremented exactly on sub hits, generate_instructions.rs:980-1005) — deliberately NOT consumed: production itself writes initial size only and the model was trained on that surface, so a live-sub-HP cell would diverge from both. Whether a hit BREAKS the sub stays roll-envelope + world-side sub-health-approximation dependent |
+| opponent revealed-move PP fractions + validity (:2421) | W + E (line-driven) | revealed set is W; `move_uses` = root ledger uses + the branch's LINE-REPLAYED charges (**review F3 CLOSED 2026-07-19**: the engine only emits `DecrementPP` when pp < 10 — the vendored gen3 `generate_instructions.rs` "only decrement pp if the move is at 10 or less" optimization, :1622-1643 — so engine PP deltas are root-frozen above 10. `LeafMeta::move_charges` replays the PARSER's charging rules over the synthesized `\|move\|` lines instead — belief.py `_charge_move_use` :796-814 + the ingestion exemptions :431-445: called moves charge the caller only, `[from]lockedmove` continuations and Struggle charge nothing, Pressure on the OPPOSING active doubles foe-targeted charges (world abilities; gen 3 announces Pressure on entry so world truth == the ledger's revealed-ability rule). Post-fix the differential's engine_pp class is ZERO on both corpora — residual PP divergences are reveal/bucket-composition-driven (epistemic) or ride tagged engine-model boundaries) |
 | tendency triple `NUMERIC_MON_*` (:2643) | **F** | fold products `opponent_mon_tendencies` |
 | pinned Tier-2 `NUMERIC_TIER2_CB_PINNED` / `_INVESTMENT_PINNED` (:1233–1269, :2334) | **F** | fold products `cb_pinned_species` / `investment_pinned` (running state, truncation-robust) |
 
@@ -106,7 +109,7 @@ world-constant, **C** = static contract (layout constants, invariant).
 
 | surface | class | leaf source |
 |---|---|---|
-| move ids, mechanics, PP fractions | E | engine active's move surface (engine slot order = sampled = request order, root-parity-proven; hidden power renders as plain `hiddenpower`); PP from engine (but see the F3 pp≥10 freeze above), maxpp from dex; a recharging active (MUSTRECHARGE) presents the production request shape: one legal PP-less `recharge` pseudo-move, switching disallowed |
+| move ids, mechanics, PP fractions | E (line-driven PP) | engine active's move surface (engine slot order = sampled = request order, root-parity-proven; hidden power renders as plain `hiddenpower`); PP = base − `LeafMeta::move_charges` (the F3 line-replay above; the request follows the same deduction rules). Base: the ROOT ACTIVE's engine PP (request-seeded, exact); a mon benched at the root uses maxpp − the SELF belief-ledger's `move_uses` (the cached request-history PP the world seeds benched mons with is stale by their last stint's FINAL action — requests are pre-action). maxpp from dex; a recharging active (MUSTRECHARGE) presents the production request shape: one legal PP-less `recharge` pseudo-move, switching disallowed |
 | disabled / `NUMERIC_ACTIVE` | E (line-guarded) | engine `Move.disabled`, EXCEPT a fresh switch-in (line-tracked: switched and no `|move|` since): choice locks reset on switch but the world seeds benched mons with their last stint's cached disabled bits and the engine never re-enables them on a branch switch (`use_last_used_move` is off in constructed worlds) — Choice-Band-Nidoking repro |
 | legal bits + switch candidates | E | the engine's OWN option surface (`get_all_options`) mapped through the canonical switch map over the EVOLVED team ordering; fresh switch-ins bypass the stale-lock option restriction (pp>0 ⇒ legal) |
 | `legal_action_mask` (:3227) | E | same. **Honest history (review item 3a): at depth 0 the engine option surface reproduced every recorded request mask (root-parity), but PRE-FIX the mask did NOT reproduce reality at switch-reached leaves — the self-team permutation put switch bits on wrong indices (~26% of boundaries) and stale choice locks killed move bits on fresh switch-ins. POST-FIX the differential's mask families are zero outside the documented engine-model tags (transform/recharge/encore/baton-pass)** |
@@ -137,9 +140,11 @@ turn-merged rows). `history_mask`: C (window 1).
   sees the synthesized switch), but no opponent-team token materializes for
   it — materializing one would present the sampled world as revealed fact.
   Its within-branch state (hp/status) rides the history tokens only.
-- **In-branch Transform / newly-set screens' timers** inherit the engine's
-  model limits (world construction fail-closes on the corresponding ROOT
-  states; see `belief_edge_case_matrix`).
+- **In-branch Transform** inherits the engine's model limits (world
+  construction fail-closes on the corresponding ROOT states; see
+  `belief_edge_case_matrix`). Newly-set screens' timers are no longer on
+  this list — in-branch set turns replay the parser's bookkeeping (the
+  timed-condition row above).
 
 ## Root-parity gate results (2026-07-19, the decisive validation)
 
@@ -172,26 +177,37 @@ the synthesized lines, `encode_leaf`, byte-diff against ROW N+1's golden
 arrays. This is the only gate that fires evolve-on-change, the line/delta
 families, and per-branch recompute (all root values at depth 0).
 
-Results after the F1-F5 fix wave (exit gates on the defect classes):
+Results after the F1-F5 fix wave AND the encoding-fidelity closure
+(PP line-replay + in-branch screen set-turns + fail-form renders + Curse
+placement, 2026-07-19; exit gates on the defect classes):
 
 | corpus | boundaries | driven | exact | divergent | **state** | **turn** | fold | epistemic | engine_pp | engine_roll | engine_model | ledger_skew |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| golden-v2 | 1008 | 771 | 78 | 693 | **0** | **0** | 440 | 322 | 663 | 313 | 9 | 1 |
-| golden-v2-scenarios | 270 | 183 | 9 | 174 | **0** | **0** | 108 | 49 | 173 | 97 | 16 | 0 |
+| golden-v2 (post-#730) | 1008 | 771 | 78 | 693 | **0** | **0** | 440 | 322 | 663 | 313 | 9 | 1 |
+| golden-v2 (closure) | 1008 | 771 | **220** | 551 | **0** | **0** | 440 | 322 | **0** | 313 | 33 | 1 |
+| golden-v2-scenarios (post-#730) | 270 | 183 | 9 | 174 | **0** | **0** | 108 | 49 | 173 | 97 | 16 | 0 |
+| golden-v2-scenarios (closure) | 270 | 183 | **53** | 130 | **0** | **0** | 108 | 49 | **0** | 97 | 5 | 0 |
 
 (Class columns count divergent boundaries touching that class; a boundary
 can carry several. Skips mirror the fidelity gate: world fail-closed 13/52,
 no_branch_match 224/28 — dominated by roll-collapse outcomes reality didn't
-take — plus 7 action_unmapped scenario rows.)
+take — plus 7 action_unmapped scenario rows. The closure's engine_model
+delta on golden-v2 (9→33) is the honest REALLOCATION of PP cells that ride
+tagged engine-model boundaries — Baton-Passed saved moves, early-consumed
+recharges, merged-outcome minority branches — previously miscounted under
+engine_pp; the class discipline in `scripts/leaf_vs_reality.py` documents
+each rule.)
 
 Every non-defect class is documented above: `fold` inherits the fidelity
 gate's (b)/(c) classes; `epistemic` is the root-frozen belief surface
-meeting row n+1's new reveals (by design); `engine_pp_model` is the F3
-pp≥10 freeze; `engine_roll` is the damage-roll collapse envelope (HP
-fractions, sub breaks, pinch-berry thresholds); `engine_model` is the
-tagged vendored-engine deviations (Transform empty delta, Encore volatile
-not applied, recharge consumed a ply early, Baton-Passed saved moves never
-resolving, in-branch screen set-turns); `ledger_skew` is the recorded
+meeting row n+1's new reveals — including opponent-PP bucket cells whose
+validity bit or bucket move-identity flipped with the reveal (by design);
+`engine_pp_model` is same-revealed-set PP-count divergence and is now ZERO;
+`engine_roll` is the damage-roll collapse envelope (HP fractions, sub
+breaks, pinch-berry thresholds); `engine_model` is the tagged
+vendored-engine deviations (Transform empty delta, Encore volatile not
+applied, recharge consumed a ply early, Baton-Passed saved moves never
+resolving, merged no-op outcome ambiguity); `ledger_skew` is the recorded
 production inconsistency (ledger condition strings keep stale status
 suffixes through cures — the same class root-parity documents at ~1%).
 
@@ -201,6 +217,31 @@ turns_active 724+588 hits (F4), plus stale choice locks, sleep-clause side
 inversion, faint-ply weather/toxic escalation, per-mon sleep counts, fainted
 actual-HP stats, and self-ledger growth — all found by this differential,
 none visible to the depth-0 gate.
+
+## Accepted encoding divergences (by design)
+
+The go/no-go ledger for starting evals: after the encoding-fidelity closure,
+these are the ONLY classes that remain non-zero in `leaf_vs_reality`, each
+accepted with a reason — none is an encoder defect, and the defect classes
+(`state`, `turn`) are pinned at ZERO by the gate's exit code.
+
+| class | golden-v2 | scenarios | why it is accepted |
+|---|---|---|---|
+| `fold` | 440 | 108 | The transition/tendency history inherits the fidelity gate's documented equivalence classes: collapsed damage-roll floats inside the engine's envelope and merged no-op branches. The fold itself is byte-exact over all 1318 corpus rows (`validate_rust_encoder --backend rust-fold`); the divergence is the determinized branch's chance semantics, not the fold. |
+| `epistemic` | 322 | 49 | Owner-decided architecture: belief facts (revealed sets, candidate buckets, expected stats, opponent-team membership) are per-world constants FROZEN at the root. Row n+1 saw new reveals the leaf must not anticipate — materializing them would present the sampled world as revealed fact. |
+| `engine_pp_model` | **0** | **0** | CLOSED by the PP line-replay (this change). |
+| `engine_roll` | 313 | 97 | Determinized chance semantics: the engine prices one representative damage roll (0.925·max collapse); reality rolled elsewhere in the envelope. HP fractions, substitute survival, and pinch-berry thresholds ride the roll. Exact-expectation backup prices the enumerated distribution — per-branch observations legitimately differ from the one trajectory reality took. |
+| `engine_model` | 33 | 5 | Tagged vendored-engine deviations, each with a fail-closed or counted guard: Transform's empty delta (roots fail closed), Encore volatile not applied (roots fail closed), recharge consumed one ply early on faint-replacement plies, Baton-Passed saved moves never resolving, merged full-para/miss/fail outcomes (engine `combine_duplicate_instructions` — the renderer picks the dominant-mass cause), Ghost-curse boost delta + volatile lifetime (rendered real-shape, flagged `lossy`, scenario-gated). |
+| `ledger_skew` | 1 | 0 | Recorded production inconsistency reproduced as recorded: the belief ledger's condition string keeps a stale status suffix through a cure (Refresh/Heal Bell) — root-parity documents the same ~1% class on recorded rows. |
+| long-game Tier-2 overlay capacity | n/a | n/a | `FoldState` retains a 512-action tail. If a cumulative tracker annotation arrives only after its token has aged out of both fold representations, the live fold fails closed for the rest of that battle instead of applying it to an ambiguous token. This is the same bounded-history contract as corpus folding; it is a visible fallback, not silent encoding drift. |
+
+Epistemic freeze and roll collapse are structural (the belief architecture
+and the engine's chance model); `engine_model` is bounded by the vendored
+engine's API and every member is tagged, counted, and — where it can corrupt
+a search — failed closed at world construction. None of these classes can
+silently grow: the differential's exit code gates `state`/`turn` at zero,
+and every class reallocation requires a documented rule in
+`scripts/leaf_vs_reality.py::classify`.
 
 ## /100 opponent-HP base decision (forward caveat #2, resolved)
 
@@ -293,11 +334,17 @@ Still owed before / alongside the paired read:
    budget matters.
 3. **Opponent-side priors** — spec'd, deliberately not built
    (docs/crate_search_design.md "Opponent priors: follow-up spec").
-4. **Tier-2 annotation overlay at live boundaries** — the live fold is
-   UNANNOTATED (tracker conclusions are env-side, as-of-first-assessment;
-   trackers are inactive in the bench env configuration, where the fold
-   surface is therefore byte-faithful). Envs with active trackers need an
-   env→policy overlay surface before model-mode search sees Tier-2 cells.
+4. ~~Tier-2 annotation overlay at live boundaries~~ — LANDED 2026-07-19:
+   `EngineMctsPolicy(annotation_source=EnvTier2AnnotationSource(env))`
+   applies the env trackers' conclusions to the live fold at every boundary
+   (`engine_search._apply_tier2_overlay`; per-index immutability enforced,
+   fail-closed on any overlay the fold can no longer identify). NOTE the
+   pre-fix bench claim was wrong for model mode: `set_belief_source=True` +
+   the default `tier2_residuals` mask means the bench env's trackers ARE
+   active — the closure's strengthened `--fold-cross-check` binds the live
+   fold's ANNOTATED products against the env's own encoder surfaces
+   (corpus generation's production-binding assertion, run live, pinned
+   surfaces included).
 5. **Cosmetic-forme naming at world boundaries** — `party_species` now
    carries the sampled team's own ids (request/protocol convention;
    the seed-7001 Unown repro), and choice mapping tolerates the engine's
