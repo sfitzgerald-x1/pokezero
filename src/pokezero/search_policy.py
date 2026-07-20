@@ -499,6 +499,7 @@ class RootPUCTSearchPolicy:
     # PUCT state and advances it in scalar order.
     value_batch_fn: ObservationValueBatchFunction | None = None
     batch_adaptive_root_values: bool = False
+    reuse_adaptive_root_branches: bool = False
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value", "visits"}:
@@ -523,6 +524,10 @@ class RootPUCTSearchPolicy:
             raise ValueError("value_batch_fn must be callable when set.")
         if not isinstance(self.batch_adaptive_root_values, bool):
             raise ValueError("batch_adaptive_root_values must be a bool.")
+        if not isinstance(self.reuse_adaptive_root_branches, bool):
+            raise ValueError("reuse_adaptive_root_branches must be a bool.")
+        if self.reuse_adaptive_root_branches and not self.batch_adaptive_root_values:
+            raise ValueError("reuse_adaptive_root_branches requires batch_adaptive_root_values.")
         if self.batch_adaptive_root_values and self.value_batch_fn is None:
             raise ValueError("batch_adaptive_root_values requires value_batch_fn.")
         if self.batch_adaptive_root_values and self.leaf_rollout_decision_rounds:
@@ -949,6 +954,7 @@ class RootPUCTSearchPolicy:
                                 expected_current_observation=context.observation,
                                 replay_hp_fraction_tolerance=self.start_override_hp_fraction_tolerance,
                                 batch_adaptive_values=self.batch_adaptive_root_values,
+                                reuse_adaptive_root_branches=self.reuse_adaptive_root_branches,
                             )
                         except Exception:
                             puct_search_elapsed_seconds = _timing_perf_counter() - puct_search_started_at
