@@ -80,6 +80,34 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         # The Baton Pass boundary must search straight through.
         self.assertEqual(report["baton_pass_boundary"]["fallback_decisions"], 0)
 
+    def test_item_state_scenarios_search_instead_of_failing_closed(self) -> None:
+        # The Trick-swap current-item override + berry-consumption clearing:
+        # decisions after a public exchange/eat must SEARCH — the pre-fix
+        # behavior walled every remaining decision of the battle with
+        # public_effect_blocked (48/60 of the seed-7013 bench fallbacks).
+        from pokezero.golden_corpus_scenarios import run_scenario_fallback_sweep
+
+        specs = {s.name: s for s in scenario_specs()}
+        chosen = [specs["trick_swap_exchange"], specs["trick_berry_pinch"], specs["berry_eat_chesto"]]
+        report = run_scenario_fallback_sweep(
+            showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+            specs=chosen,
+        )
+        for name, stats in report.items():
+            self.assertEqual(stats["fallback_decisions"], 0, (name, stats["world_failure_reasons"]))
+            self.assertGreater(stats["searched_decisions"], 0, name)
+            self.assertEqual(sum(stats["unmapped_choices"].values()), 0, name)
+            # Zero item walls: nothing may fail closed on a tricked/eaten item.
+            self.assertFalse(
+                any("public_effect_blocked" in reason for reason in stats["world_failure_reasons"]),
+                (name, stats["world_failure_reasons"]),
+            )
+        # The scripted p2 Trick guarantees the override fires on both seats.
+        self.assertGreater(report["trick_berry_pinch"]["item_override_decisions"], 0)
+        # The Chesto-Rest eat guarantees the consumption-removal fires.
+        self.assertGreater(report["berry_eat_chesto"]["removed_item_decisions"], 0)
+
     def test_scenario_corpus_generates_and_verifies(self) -> None:
         from pokezero.golden_corpus import verify_golden_corpus
         from pokezero.golden_corpus_scenarios import generate_scenario_corpus, scenario_specs as _specs

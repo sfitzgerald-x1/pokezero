@@ -99,12 +99,23 @@ class RevealedPokemonBelief:
     ruled_out_items: tuple[str, ...] = ()
     item_mutated: bool = False
     # Removal vs swap, the distinction ``item_mutated`` alone cannot carry: True while the
-    # mon's CURRENT public item state is "holds nothing" because the last mutation stripped
-    # it (Knock Off, or a Trick that took the item and returned none). A removal is exactly
-    # representable in a determinized world (clear the sampled item); a live swap is not
-    # (the current holder carries an item that is not the sampled assignment), so consumers
-    # keep swaps (``item_mutated`` and not ``item_removed``) fail-closed.
+    # mon's CURRENT public item state is "holds nothing" — the last mutation stripped it
+    # (Knock Off, or a Trick that took the item and returned none) OR the mon publicly
+    # consumed it (a berry ``[eat]``, White Herb, ...; consumption does NOT set
+    # ``item_mutated``: the consumed item still identifies the original assignment).
+    # "Holds nothing" is exactly representable in a determinized world (clear the sampled
+    # item); consumers treat any ``item_removed`` mon that way regardless of mutation.
     item_removed: bool = False
+    # The mon's CURRENT held item as positively named by the protocol line that PUT it
+    # there — gen3: Trick's ``|-item|SLOT|ITEM|[from] move: Trick`` announcement (probed
+    # verbatim; the holder is the line's own target). Set ONLY by that audited surface,
+    # cleared by any subsequent ``-enditem`` on the mon. While ``item_mutated`` is True
+    # and ``item_removed`` is False, a non-None value lets determinized worlds substitute
+    # the revealed current item instead of failing closed; None in that state means the
+    # current item is NOT protocol-confirmed (unexpected mutation source) — fail closed.
+    # NOTE: do not read ``revealed_item`` for this purpose — its post-mutation semantics
+    # are surface-dependent (a Knock Off ``-enditem`` leaves it naming the REMOVED item).
+    current_public_item: Optional[str] = None
     # Natural Cure detection: status carried out on switch + the side's cure-all (Heal Bell /
     # Aromatherapy) counter at exit; a clean re-entry with an unchanged counter confirms.
     status_on_exit: Optional[str] = None
@@ -142,6 +153,7 @@ class RevealedPokemonBelief:
             "ruled_out_items": list(self.ruled_out_items),
             "item_mutated": self.item_mutated,
             "item_removed": self.item_removed,
+            "current_public_item": self.current_public_item,
         }
 
 
@@ -624,11 +636,25 @@ class PublicBattleBeliefEngine:
                         ),
                     ),
                 }
-                if raw_line and "move: Trick" in raw_line:
+                if raw_line and "[from] move: Trick" in raw_line:
                     changes["item_mutated"] = True
                     # The mon RECEIVED an item: whatever its removal history, it
                     # now publicly holds one that is not the sampled assignment.
                     changes["item_removed"] = False
+                    # Trick's -item line names the CURRENT item on its own target
+                    # (probed verbatim both directions) — the audited surface the
+                    # world-construction override consumes.
+                    changes["current_public_item"] = str(primary)
+                elif raw_line and "[from] move:" in raw_line:
+                    # Hardening (PR #741 review): an -item line from an UNAUDITED
+                    # move source (a pool change to Thief/Covet, Recycle, ...)
+                    # also mutates the held item, but its exact semantics are not
+                    # modeled here — mark the mutation WITHOUT a confirmed current
+                    # item so world construction fails closed instead of silently
+                    # treating it as a plain reveal of the original assignment.
+                    changes["item_mutated"] = True
+                    changes["item_removed"] = False
+                    changes["current_public_item"] = None
                 self._replace_belief(belief, **changes)
 
     def _record_item_reveal(self, event: Any) -> None:
@@ -667,12 +693,35 @@ class PublicBattleBeliefEngine:
         if event_type == "-enditem":
             if "[eat]" in raw_line:
                 self._berry_ate_this_turn.add(belief.key)
-            if "move: Knock Off" in raw_line or "move: Trick" in raw_line:
+            if "[from] move: Knock Off" in raw_line or "[from] move: Trick" in raw_line:
                 # Held-item mutation: non-proc pruning applies to the ORIGINAL assignment
                 # only. Either surface here ends with the mon holding NOTHING (Knock Off
-                # removal, or a Trick that took the item and returned none) — a public
-                # item state determinized worlds can express, unlike a live swap.
-                belief = self._replace_belief(belief, item_mutated=True, item_removed=True)
+                # removal, or a Trick that took the item and returned none — probed:
+                # ``|-enditem|SLOT|ITEM|[silent]|[from] move: Trick``) — a public item
+                # state determinized worlds can express, unlike a live swap.
+                belief = self._replace_belief(
+                    belief, item_mutated=True, item_removed=True, current_public_item=None
+                )
+            elif "[from] move:" in raw_line:
+                # Hardening (PR #741 review): an -enditem from an UNAUDITED move source
+                # (a pool change to Thief/Covet, ...) is not extended removal semantics —
+                # the giving/taking halves of such moves are unmodeled. Mark the mutation
+                # with NO removal and NO confirmed current item: world construction fails
+                # closed loudly (public_effect_blocked) instead of silently handing the
+                # sampled item back or guessing.
+                belief = self._replace_belief(
+                    belief, item_mutated=True, item_removed=False, current_public_item=None
+                )
+            else:
+                # Consumption (a berry ``[eat]``, White Herb, gen4+ ``[from] stealeat``):
+                # the item is publicly GONE from the holder. Unlike Knock Off/Trick this
+                # does NOT set item_mutated — a self-consumed item was (unless a prior
+                # mutation says otherwise) the original assignment, so revealed_item must
+                # keep pinning variant matching. Worlds express the current state by
+                # clearing the sampled item, instead of handing the eaten berry back.
+                belief = self._replace_belief(
+                    belief, item_removed=True, current_public_item=None
+                )
         if _normalize_identifier(belief.revealed_item or "") == _normalize_identifier(item):
             return  # already known
         self._replace_belief(

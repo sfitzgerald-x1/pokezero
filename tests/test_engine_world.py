@@ -224,6 +224,58 @@ class BattleSpecConstructionTests(unittest.TestCase):
         )
         self.assertIsNone(world.spec.side_two.pokemon[0].item)
 
+    def test_current_item_override_substitutes_only_the_named_mon(self) -> None:
+        # Trick-swap override: the mon publicly holds the protocol-named
+        # CURRENT item; the world substitutes exactly it, on exactly that mon
+        # — spread/moves/ability stay the sampled assignment's (Trick moves
+        # only the item).
+        world = battle_spec_from_payload(
+            _payload(self.dex),
+            _override(),
+            dex=self.dex,
+            current_item_overrides={"p2": {"snorlax": "petayaberry"}},
+        )
+        p2 = world.spec.side_two
+        self.assertEqual(p2.pokemon[0].item, "petayaberry")  # Tricked Snorlax
+        self.assertEqual(p2.pokemon[1].item, "leftovers")  # backline untouched
+        self.assertEqual(world.spec.side_one.pokemon[0].item, "leftovers")  # self side untouched
+
+    def test_current_item_override_applies_to_the_self_slot_too(self) -> None:
+        # The exchange's other half: OUR mon now holds the opponent's item;
+        # the self side's packed team is the battle-start assignment, so it
+        # needs the same substitution.
+        world = battle_spec_from_payload(
+            _payload(self.dex),
+            _override(),
+            dex=self.dex,
+            current_item_overrides={"p1": {"swampert": "choiceband"}},
+        )
+        self.assertEqual(world.spec.side_one.pokemon[0].item, "choiceband")
+        self.assertEqual(world.spec.side_two.pokemon[0].item, "leftovers")
+
+    def test_current_item_override_normalizes_display_names(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex),
+            _override(),
+            dex=self.dex,
+            current_item_overrides={"p2": {"Snorlax": "Petaya Berry"}},
+        )
+        self.assertEqual(world.spec.side_two.pokemon[0].item, "petayaberry")
+
+    def test_conflicting_removal_and_override_fails_closed(self) -> None:
+        # "Holds nothing" and "holds X" for the same mon is contradictory
+        # belief state: never guess — a wrong item in a searched world is
+        # silent wrongness.
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                _payload(self.dex),
+                _override(),
+                dex=self.dex,
+                removed_item_species={"p2": ("snorlax",)},
+                current_item_overrides={"p2": {"snorlax": "petayaberry"}},
+            )
+        self.assertEqual(caught.exception.reason, "item_state_conflict")
+
     def test_toxic_stage_maps_to_toxic_count(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["toxicStage"] = 3
@@ -569,7 +621,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p2",
                 "public_materialization_state": env.public_materialization_state("p2"),
             })()
-            blocked, _encored, _removed = policy._public_effect_signals(context)
+            blocked, _encored, _removed, _overridden = policy._public_effect_signals(context)
             self.assertIn("p1", blocked)
             self.assertIn("transformed", blocked["p1"])
             state_p2 = env.public_materialization_state("p2")
@@ -597,7 +649,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                     "player_id": "p2",
                     "public_materialization_state": env.public_materialization_state("p2"),
                 })()
-                blocked_now, _, _ = policy._public_effect_signals(context_now)
+                blocked_now, _, _, _ = policy._public_effect_signals(context_now)
                 belief_now = observation_p2.metadata.get("belief_view") or {}
                 actives = [m for m in belief_now.get("opponent_pokemon") or [] if m.get("active")]
                 if actives and "ditto" not in str(actives[0].get("species", "")).lower():
@@ -645,7 +697,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _, _ = policy._public_effect_signals(context)
+            blocked, _, _, _ = policy._public_effect_signals(context)
             self.assertIn("p2", blocked)
             self.assertIn("transformed", blocked["p2"])
             with self.assertRaises(EngineWorldUnsupported) as caught:
@@ -712,7 +764,7 @@ class KnockOffRemovalLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _encored, removed = policy._public_effect_signals(context)
+            blocked, _encored, removed, _overridden = policy._public_effect_signals(context)
             self.assertEqual(blocked, {})
             self.assertEqual(removed, {"p2": ("snorlax",)})
 
@@ -726,6 +778,96 @@ class KnockOffRemovalLiveTests(unittest.TestCase):
             self.assertIsNone(snorlax.item)
             ttar_side = getattr(world.spec, world.slot_sides["p1"])
             self.assertEqual(next(m for m in ttar_side.pokemon if m.id == "tyranitar").item, "leftovers")
+        finally:
+            env.close()
+
+
+@unittest.skipIf(
+    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    "requires a built local Showdown checkout",
+)
+class TrickSwapOverrideLiveTests(unittest.TestCase):
+    """End-to-end Trick-swap override against the REAL sim protocol: a public
+    exchange must not wall world construction — the built world carries the
+    protocol-confirmed CURRENT item on BOTH mons of the exchange."""
+
+    def test_trick_exchange_constructs_with_both_current_items(self) -> None:
+        from pokezero.dex import load_showdown_dex
+        from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        zam = FixturePokemon(species="Alakazam", moves=("Trick", "Psychic"),
+                             ability="Synchronize", item="Petaya Berry", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((zam, _SWAMPERT)),
+            "p2": pack_team((lax, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99005, start_override=override)
+            actions = {}
+            for player in env.requested_players():
+                observation = env.observe(player)
+                legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                want = "trick" if player == "p1" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move" and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            result = env.step(actions)
+            self.assertIsNone(result.terminal)
+
+            observation_p1 = env.observe("p1")
+            belief_view = observation_p1.metadata.get("belief_view") or {}
+            lax_belief = next(
+                m for m in belief_view.get("opponent_pokemon") or []
+                if "snorlax" in str(m.get("species", "")).lower()
+            )
+            # The real |-item|...|[from] move: Trick| lines must have set the
+            # swap flags AND the protocol-confirmed current item on both mons.
+            self.assertTrue(lax_belief.get("item_mutated"))
+            self.assertFalse(lax_belief.get("item_removed"))
+            self.assertEqual(lax_belief.get("current_public_item"), "Petaya Berry")
+            zam_belief = next(
+                m for m in belief_view.get("self_pokemon") or []
+                if "alakazam" in str(m.get("species", "")).lower()
+            )
+            self.assertTrue(zam_belief.get("item_mutated"))
+            self.assertEqual(zam_belief.get("current_public_item"), "Leftovers")
+
+            policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
+                                      config=EngineMctsConfig())
+            context = type("Ctx", (), {
+                "observation": observation_p1,
+                "player_id": "p1",
+                "public_materialization_state": env.public_materialization_state("p1"),
+            })()
+            blocked, _encored, removed, overridden = policy._public_effect_signals(context)
+            self.assertEqual(blocked, {})
+            self.assertEqual(removed, {})
+            self.assertEqual(overridden, {
+                "p2": {"snorlax": "petayaberry"},
+                "p1": {"alakazam": "leftovers"},
+            })
+
+            # Construction goes through, with BOTH current items substituted.
+            world = world_battle_spec(
+                env.public_materialization_state("p1"), override, dex=dex,
+                blocked_slots=blocked, removed_item_species=removed,
+                current_item_overrides=overridden,
+            )
+            p2_side = getattr(world.spec, world.slot_sides["p2"])
+            snorlax = next(m for m in p2_side.pokemon if m.id == "snorlax")
+            self.assertEqual(snorlax.item, "petayaberry")
+            p1_side = getattr(world.spec, world.slot_sides["p1"])
+            alakazam = next(m for m in p1_side.pokemon if m.id == "alakazam")
+            self.assertEqual(alakazam.item, "leftovers")
+            # Exchange partners' teammates keep their sampled items.
+            self.assertEqual(next(m for m in p2_side.pokemon if m.id == "swampert").item, "leftovers")
         finally:
             env.close()
 

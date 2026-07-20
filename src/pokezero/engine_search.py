@@ -66,11 +66,13 @@ class EngineSearchFallbackWarning(UserWarning):
     be attributable through the fallback/world-failure reason taxonomy —
     benches report the rate and the reasons rather than hiding either.
     (The one-time 0.0% bench rate does not hold on all seed trajectories:
-    battles where the opponent publicly Transforms, or holds an item Trick
-    swapped onto it, fail worlds closed for the rest of the battle by
-    design — both leaf-eval modes hit the same wall on the same battles.
-    Knock-Off REMOVALS no longer wall: the belief_view removal/swap
-    distinction lets sampled worlds express "publicly holds no item".)
+    battles where the opponent publicly Transforms fail worlds closed for
+    the rest of the battle by design — both leaf-eval modes hit the same
+    wall on the same battles. Item mutations no longer wall: Knock-Off
+    REMOVALS and public consumptions clear the sampled item
+    (``removed_item_species``), and Trick SWAPS substitute the
+    protocol-confirmed current item (``current_item_overrides``); only a
+    mutation with no confirmed current item still fails closed.)
     """
 
 
@@ -210,10 +212,19 @@ class EngineMctsStats:
     decisions: int = 0
     searched_decisions: int = 0
     fallback_decisions: int = 0
-    # Decisions where the removal signal fired (an opposing mon's item is
-    # publicly stripped): worlds constructed with that item cleared instead of
-    # failing closed. Localizes which battles exercise the removal path.
+    # Decisions where the removal signal fired (a mon's item is publicly
+    # stripped or consumed): worlds constructed with that item cleared instead
+    # of failing closed. Localizes which battles exercise the removal path.
+    # TELEMETRY ONLY (PR #741 review note): a decision where several mons carry
+    # the signal — or where both this and item_override_decisions fire — bumps
+    # each counter once per decision, so the counters can co-occur/over-count
+    # relative to distinct battles; nothing gates on them.
     removed_item_decisions: int = 0
+    # Decisions where the Trick-swap current-item override fired (a mon
+    # publicly holds a protocol-confirmed item that is not the sampled
+    # assignment): worlds constructed with the revealed CURRENT item
+    # substituted instead of failing closed. Telemetry only, as above.
+    item_override_decisions: int = 0
     worlds_attempted: int = 0
     worlds_searched: int = 0
     total_iterations: int = 0
@@ -240,6 +251,7 @@ class EngineMctsStats:
             "fallback_decisions": self.fallback_decisions,
             "fallback_rate": self.fallback_decisions / self.decisions if self.decisions else 0.0,
             "removed_item_decisions": self.removed_item_decisions,
+            "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
             "worlds_searched": self.worlds_searched,
             "total_iterations": self.total_iterations,
@@ -350,9 +362,13 @@ class EngineMctsPolicy:
             live_fold = self._advance_live_fold(context)
             if live_fold is None and self._config.leaf_eval == "model":
                 return self._fallback(context, rng, "live_fold_broken")
-        blocked_slots, encored_moves, removed_item_species = self._public_effect_signals(context)
+        blocked_slots, encored_moves, removed_item_species, current_item_overrides = (
+            self._public_effect_signals(context)
+        )
         if removed_item_species:
             self.stats.removed_item_decisions += 1
+        if current_item_overrides:
+            self.stats.item_override_decisions += 1
         recharging_slots = self._recharging_slots(context)
         truant_slots = self._truant_loaf_slots(context)
 
@@ -386,6 +402,7 @@ class EngineMctsPolicy:
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
                     removed_item_species=removed_item_species,
+                    current_item_overrides=current_item_overrides,
                     recharging_slots=recharging_slots,
                     truant_slots=truant_slots,
                     rng=rng,
@@ -961,7 +978,12 @@ class EngineMctsPolicy:
 
     def _public_effect_signals(
         self, context: PolicyContext
-    ) -> tuple[dict[str, str], dict[str, str], dict[str, tuple[str, ...]]]:
+    ) -> tuple[
+        dict[str, str],
+        dict[str, str],
+        dict[str, tuple[str, ...]],
+        dict[str, dict[str, str]],
+    ]:
         """Public-information signals engine_world cannot see in the payload.
 
         - blocked_slots: the opponent's active is publicly Transformed (the
@@ -970,39 +992,67 @@ class EngineMctsPolicy:
           closed rather than search a silently wrong world.
         - encored_moves: the opponent's publicly-observed last move, consumed
           by engine_world only when that side carries the encore volatile.
-        - removed_item_species: per slot, species whose held item was publicly
-          STRIPPED (Knock Off, or a Trick that took the item and returned
-          none) and not replaced since — the current public item state is
-          exactly "no item", which the sampled world expresses by clearing
-          the sampled set's item. Only true swaps (``item_mutated`` without
-          ``item_removed``: the holder carries an item that is not the
-          sampled assignment) stay fail-closed.
+        - removed_item_species: per slot, species whose held item is publicly
+          GONE (Knock Off, an item-taking Trick, or a public consumption —
+          berry eaten / White Herb) and not replaced since — the current
+          public item state is exactly "no item", which the sampled world
+          expresses by clearing the sampled set's item.
+        - current_item_overrides: per slot, species → CURRENT item id for mons
+          whose held item was Trick-swapped AND whose resulting item the
+          protocol positively named (belief ``current_public_item``, set only
+          by the audited ``|-item|...|[from] move: Trick`` line, holder
+          identified from the line itself) — the sampled world substitutes the
+          revealed current item for the sampled assignment's. A mutated mon
+          with NO protocol-confirmed current item stays fail-closed: wrong
+          items in searched worlds are strictly worse than falling back.
+
+        Item signals cover BOTH seats: the self side's sampled world is the
+        battle-START packed team, so after a Trick/eat our own mon's world
+        item is just as stale as an opponent's (the self seat never walled —
+        it was silently wrong; belief tracks both sides from the same public
+        lines).
         """
 
         blocked: dict[str, str] = {}
         encored: dict[str, str] = {}
         removed: dict[str, tuple[str, ...]] = {}
+        overridden: dict[str, dict[str, str]] = {}
         metadata = context.observation.metadata
         if not isinstance(metadata, Mapping):
-            return blocked, encored, removed
+            return blocked, encored, removed, overridden
+        self_slot = context.player_id
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
         belief_view = metadata.get("belief_view")
         opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
+        self_rows = belief_view.get("self_pokemon") if isinstance(belief_view, Mapping) else None
+
+        for slot, rows in ((opponent_slot, opponents), (self_slot, self_rows)):
+            for mon in rows or ():
+                if not isinstance(mon, Mapping):
+                    continue
+                species_id = normalize_id(str(mon.get("species") or ""))
+                if mon.get("item_removed"):
+                    # Publicly holds nothing NOW (stripped or consumed) —
+                    # checked before item_mutated: a consumed berry does not
+                    # mutate, and a mutated-then-consumed mon is still just
+                    # itemless. Any stale current_public_item loses to this.
+                    if species_id:
+                        removed[slot] = removed.get(slot, ()) + (species_id,)
+                elif mon.get("item_mutated"):
+                    current_item = normalize_id(str(mon.get("current_public_item") or ""))
+                    if species_id and current_item:
+                        overridden.setdefault(slot, {})[species_id] = current_item
+                    else:
+                        # Mutated with no protocol-confirmed current item
+                        # (unaudited mutation source, or a pre-override
+                        # serialized payload): no sampled world can express
+                        # it, so construction fails closed.
+                        blocked[slot] = f"item mutated on {mon.get('species')} with unconfirmed current item"
+
         active_species: str | None = None
         for mon in opponents or ():
             if not isinstance(mon, Mapping):
                 continue
-            if mon.get("item_mutated"):
-                if mon.get("item_removed"):
-                    species_id = normalize_id(str(mon.get("species") or ""))
-                    if species_id:
-                        removed[opponent_slot] = removed.get(opponent_slot, ()) + (species_id,)
-                else:
-                    # A live Trick swap: the current holder's item is not the
-                    # sampled set's item and rule-outs stay frozen to the
-                    # ORIGINAL assignment upstream — no sampled world can
-                    # express it, so construction fails closed.
-                    blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
             if not mon.get("active"):
                 continue
             active_species = str(mon.get("species") or "") or None
@@ -1021,7 +1071,7 @@ class EngineMctsPolicy:
                 if move is not None:
                     encored[opponent_slot] = move
                     break
-        return blocked, encored, removed
+        return blocked, encored, removed, overridden
 
     def _map_choices(
         self, context: PolicyContext, aggregated: Mapping[str, float]
@@ -1277,6 +1327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             decisions_before = policy.stats.decisions
             fallbacks_before = policy.stats.fallback_decisions
             removed_before = policy.stats.removed_item_decisions
+            overrides_before = policy.stats.item_override_decisions
             fallback_reasons_before = Counter(policy.stats.fallback_reasons)
             world_failures_before = Counter(policy.stats.world_failure_reasons)
             result = driver.run(seed=seed, battle_id=f"engine-mcts-bench-{seed}")
@@ -1294,6 +1345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "decisions": policy.stats.decisions - decisions_before,
                 "fallback_decisions": game_fallbacks,
                 "removed_item_decisions": policy.stats.removed_item_decisions - removed_before,
+                "item_override_decisions": policy.stats.item_override_decisions - overrides_before,
                 "fallback_reasons": dict(
                     Counter(policy.stats.fallback_reasons) - fallback_reasons_before
                 ),

@@ -239,14 +239,18 @@ class RechargeSignalTests(unittest.TestCase):
 
 
 class PublicEffectSignalTests(unittest.TestCase):
-    """The item-mutation split: removals are representable, swaps fail closed."""
+    """The item-mutation split: removals/consumptions clear, confirmed swaps
+    substitute the current item, unconfirmed mutations fail closed."""
 
-    def _signals(self, opponent_pokemon):
+    def _signals(self, opponent_pokemon, self_pokemon=None):
+        belief_view = {"opponent_pokemon": opponent_pokemon}
+        if self_pokemon is not None:
+            belief_view["self_pokemon"] = self_pokemon
         context = type("Ctx", (), {
             "player_id": "p1",
             "observation": type("Obs", (), {
                 "metadata": {
-                    "belief_view": {"opponent_pokemon": opponent_pokemon},
+                    "belief_view": belief_view,
                     "recent_public_events": [],
                 },
             })(),
@@ -254,23 +258,83 @@ class PublicEffectSignalTests(unittest.TestCase):
         return _policy()._public_effect_signals(context)
 
     def test_knock_off_removal_is_not_blocked(self) -> None:
-        blocked, _encored, removed = self._signals([
+        blocked, _encored, removed, overridden = self._signals([
             {"species": "Blissey", "active": True, "item_mutated": True, "item_removed": True},
         ])
         self.assertEqual(blocked, {})
         self.assertEqual(removed, {"p2": ("blissey",)})
+        self.assertEqual(overridden, {})
 
-    def test_trick_swap_stays_fail_closed(self) -> None:
-        blocked, _encored, removed = self._signals([
+    def test_trick_swap_with_confirmed_current_item_overrides(self) -> None:
+        # The post-swap CURRENT item is protocol-confirmed (the |-item| line):
+        # worlds substitute it instead of failing closed.
+        blocked, _encored, removed, overridden = self._signals([
+            {"species": "Furret", "active": True, "item_mutated": True,
+             "item_removed": False, "current_public_item": "Petaya Berry"},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {})
+        self.assertEqual(overridden, {"p2": {"furret": "petayaberry"}})
+
+    def test_mutation_without_confirmed_current_item_stays_fail_closed(self) -> None:
+        # No protocol-confirmed current item (unaudited mutation source, or a
+        # pre-override serialized payload): never guess — fail closed.
+        blocked, _encored, removed, overridden = self._signals([
             {"species": "Blissey", "active": True, "item_mutated": True, "item_removed": False},
         ])
-        self.assertEqual(blocked, {"p2": "item mutated on Blissey"})
+        self.assertEqual(blocked, {"p2": "item mutated on Blissey with unconfirmed current item"})
         self.assertEqual(removed, {})
+        self.assertEqual(overridden, {})
+
+    def test_consumed_item_routes_to_removed_without_mutation(self) -> None:
+        # A publicly-eaten berry: item_removed without item_mutated (the eaten
+        # item still pins the original assignment). The removal signal must
+        # not require the mutation flag.
+        blocked, _encored, removed, overridden = self._signals([
+            {"species": "Furret", "active": True, "item_mutated": False, "item_removed": True},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {"p2": ("furret",)})
+        self.assertEqual(overridden, {})
+
+    def test_removal_beats_stale_current_item(self) -> None:
+        # Trick gave the mon an item, then it was stripped/eaten: item_removed
+        # wins over any leftover current_public_item value.
+        blocked, _encored, removed, overridden = self._signals([
+            {"species": "Furret", "active": True, "item_mutated": True,
+             "item_removed": True, "current_public_item": "Petaya Berry"},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {"p2": ("furret",)})
+        self.assertEqual(overridden, {})
+
+    def test_self_side_item_signals_use_the_self_slot(self) -> None:
+        # The self side's world team is the battle-START assignment too: after
+        # the opponent Tricks OUR mon (or our berry is eaten) the same signals
+        # apply, keyed to the self slot. The self seat never walled here — it
+        # was silently stale.
+        blocked, _encored, removed, overridden = self._signals(
+            [
+                {"species": "Alakazam", "active": True, "item_mutated": True,
+                 "item_removed": False, "current_public_item": "Leftovers"},
+            ],
+            self_pokemon=[
+                {"species": "Furret", "active": True, "item_mutated": True,
+                 "item_removed": False, "current_public_item": "Petaya Berry"},
+                {"species": "Snorlax", "active": False, "item_removed": True},
+            ],
+        )
+        self.assertEqual(blocked, {})
+        self.assertEqual(overridden, {
+            "p2": {"alakazam": "leftovers"},
+            "p1": {"furret": "petayaberry"},
+        })
+        self.assertEqual(removed, {"p1": ("snorlax",)})
 
     def test_benched_removal_still_collected(self) -> None:
         # The mutation lives on the mon, not the active slot: a knocked-off
         # mon on the bench still needs its sampled item cleared.
-        blocked, _encored, removed = self._signals([
+        blocked, _encored, removed, _overridden = self._signals([
             {"species": "Snorlax", "active": True},
             {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
         ])
@@ -278,21 +342,21 @@ class PublicEffectSignalTests(unittest.TestCase):
         self.assertEqual(removed, {"p2": ("blissey",)})
 
     def test_multiple_removals_accumulate(self) -> None:
-        blocked, _encored, removed = self._signals([
+        blocked, _encored, removed, _overridden = self._signals([
             {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
             {"species": "Snorlax", "active": True, "item_mutated": True, "item_removed": True},
         ])
         self.assertEqual(blocked, {})
         self.assertEqual(removed, {"p2": ("blissey", "snorlax")})
 
-    def test_removal_plus_swap_still_blocks_the_slot(self) -> None:
-        # One mon knocked off (representable), another holding a Tricked item
-        # (not representable): the slot must still fail closed on the swap.
-        blocked, _encored, removed = self._signals([
+    def test_removal_plus_unconfirmed_mutation_still_blocks_the_slot(self) -> None:
+        # One mon knocked off (representable), another mutated with no
+        # confirmed current item: the slot must still fail closed.
+        blocked, _encored, removed, _overridden = self._signals([
             {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
             {"species": "Kecleon", "active": True, "item_mutated": True, "item_removed": False},
         ])
-        self.assertEqual(blocked, {"p2": "item mutated on Kecleon"})
+        self.assertEqual(blocked, {"p2": "item mutated on Kecleon with unconfirmed current item"})
         self.assertEqual(removed, {"p2": ("blissey",)})
 
 
