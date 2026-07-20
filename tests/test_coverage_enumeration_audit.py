@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from pokezero.coverage_enumeration_audit import (
+    CoverageSelection,
     build_coverage_plan,
     merge_coverage_ledgers,
     normalize_coverage_move,
 )
+from pokezero.deep_line_audit import DeepLineAuditReport
 from pokezero.randbat import (
     Gen3RandbatSource,
     Gen3RandbatSpeciesUniverse,
     Gen3RandbatVariant,
     RandbatSourceMetadata,
 )
+
+
+_CLI_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "coverage_enumeration_audit.py"
+_CLI_SPEC = importlib.util.spec_from_file_location("coverage_enumeration_audit_cli_test", _CLI_MODULE_PATH)
+if _CLI_SPEC is None or _CLI_SPEC.loader is None:  # pragma: no cover - importlib invariant
+    raise RuntimeError(f"could not import coverage audit driver from {_CLI_MODULE_PATH}")
+coverage_audit_cli = importlib.util.module_from_spec(_CLI_SPEC)
+_CLI_SPEC.loader.exec_module(coverage_audit_cli)
 
 
 def _variant(
@@ -137,6 +150,117 @@ class CoverageEnumerationPlanTests(unittest.TestCase):
         self.assertNotEqual(
             normalize_coverage_move("hiddenpowerfire"),
             normalize_coverage_move("hiddenpowergrass"),
+        )
+
+
+class CoverageEnumerationDriverTests(unittest.TestCase):
+    def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:
+        """Trace must split its public copied fact from its native source atom."""
+
+        categories = (
+            "belief:possible_ability:synchronize",
+            "belief:possible_item:leftovers",
+            "belief:possible_ability:trace",
+            "belief:possible_ability:overgrow",
+            "belief:possible_move:psychic",
+            "belief:possible_move:thunderbolt",
+            "belief:possible_move:willowisp",
+            "belief:possible_move:calmmind",
+        )
+        rows = {category: index + 101 for index, category in enumerate(categories)}
+        vocab = SimpleNamespace(
+            encode=lambda category: rows[category],
+            is_enumerated=lambda category: category in rows,
+        )
+        categorical_ids = [
+            [0] * 40
+            for _ in range(coverage_audit_cli.OPPONENT_POKEMON_TOKEN_OFFSET + 1)
+        ]
+        self_token = coverage_audit_cli.SELF_POKEMON_TOKEN_OFFSET
+        opponent_token = coverage_audit_cli.OPPONENT_POKEMON_TOKEN_OFFSET
+        categorical_ids[self_token][coverage_audit_cli.CATEGORY_BELIEF_ABILITY_OFFSET] = rows[
+            "belief:possible_ability:synchronize"
+        ]
+        categorical_ids[self_token][coverage_audit_cli.CATEGORY_BELIEF_ITEM_OFFSET] = rows[
+            "belief:possible_item:leftovers"
+        ]
+        # Trace copied the opponent's Overgrow publicly, but Trace remains the
+        # native source ability for belief-candidate membership.
+        categorical_ids[opponent_token][coverage_audit_cli.CATEGORY_BELIEF_ABILITY_OFFSET] = rows[
+            "belief:possible_ability:overgrow"
+        ]
+        categorical_ids[opponent_token][coverage_audit_cli.CATEGORY_BELIEF_ITEM_OFFSET] = rows[
+            "belief:possible_item:leftovers"
+        ]
+        for index, move in enumerate(("psychic", "thunderbolt", "willowisp", "calmmind")):
+            categorical_ids[opponent_token][coverage_audit_cli.CATEGORY_BELIEF_MOVE_OFFSET + index] = rows[
+                f"belief:possible_move:{move}"
+            ]
+        observation = SimpleNamespace(categorical_ids=categorical_ids)
+        belief = SimpleNamespace(
+            revealed_ability="Overgrow",
+            possible_abilities=("Trace",),
+            candidate_variants=({"variant_id": "gardevoir-trace"},),
+        )
+        state = SimpleNamespace(
+            turn_number=1,
+            belief_view=SimpleNamespace(opponent_by_species=lambda: {"gardevoir": belief}),
+        )
+        source = SimpleNamespace(
+            universe_for=lambda _species: SimpleNamespace(
+                variants=(SimpleNamespace(variant_id="gardevoir-trace"),)
+            )
+        )
+        env = SimpleNamespace(
+            config=SimpleNamespace(category_vocab=vocab),
+            _state_for_player=lambda _player_id: state,
+            _belief_set_source=source,
+            snapshot=lambda: SimpleNamespace(latest_requests={}),
+        )
+        self_selection = CoverageSelection(
+            species="Alakazam",
+            ability="Synchronize",
+            item="Leftovers",
+            level=80,
+            moves=("psychic",),
+            variant_id="alakazam-synchronize",
+            source_set_id="alakazam",
+            pass_name="A",
+        )
+        opponent_selection = CoverageSelection(
+            species="Gardevoir",
+            ability="Trace",
+            item="Leftovers",
+            level=80,
+            moves=("psychic", "thunderbolt", "willowisp", "calmmind"),
+            variant_id="gardevoir-trace",
+            source_set_id="gardevoir",
+            pass_name="A",
+        )
+        report = DeepLineAuditReport()
+
+        with patch.object(coverage_audit_cli, "audit_live_decision", return_value=observation):
+            coverage_audit_cli._audit_source_selection(
+                env,
+                player_id="p1",
+                self_selection=self_selection,
+                opponent_selection=opponent_selection,
+                report=report,
+            )
+
+        self.assertEqual(report.findings, [])
+        self.assertEqual(report.randbat_candidate_variants_checked, 1)
+        self.assertIn(
+            rows["belief:possible_ability:overgrow"],
+            categorical_ids[opponent_token][
+                coverage_audit_cli.CATEGORY_BELIEF_ABILITY_OFFSET : coverage_audit_cli.CATEGORY_BELIEF_ITEM_OFFSET
+            ],
+        )
+        self.assertNotIn(
+            rows["belief:possible_ability:trace"],
+            categorical_ids[opponent_token][
+                coverage_audit_cli.CATEGORY_BELIEF_ABILITY_OFFSET : coverage_audit_cli.CATEGORY_BELIEF_ITEM_OFFSET
+            ],
         )
 
 
