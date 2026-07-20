@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
@@ -176,7 +177,7 @@ def load_observed_signatures(paths: Iterable[Path | str]) -> tuple[Counter[str],
     provenance_paths: dict[str, list[str]] = defaultdict(list)
     for raw_path in paths:
         path = Path(raw_path)
-        payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
         signatures = payload.get("protocol_signatures", {})
         if not isinstance(signatures, Mapping):
             raise ValueError(f"{path} protocol_signatures must be an object")
@@ -188,6 +189,20 @@ def load_observed_signatures(paths: Iterable[Path | str]) -> tuple[Counter[str],
                 counts[str(signature)] += count
                 provenance_paths[str(signature)].append(str(path))
     return counts, {signature: sorted(paths) for signature, paths in sorted(provenance_paths.items())}
+
+
+def load_observed_audit_provenance(paths: Iterable[Path | str]) -> list[dict[str, Any]]:
+    """Require each dynamic census input to declare its v3 audit provenance."""
+
+    entries: list[dict[str, Any]] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        provenance = payload.get("audit_provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError(f"{path} is missing audit_provenance")
+        entries.append({"path": str(path), "audit_provenance": dict(provenance)})
+    return entries
 
 
 def _signature_tag(signature: str) -> str:
@@ -204,7 +219,9 @@ def build_protocol_inventory(
 
     engine = discover_engine_emissions(showdown_root)
     consumers = discover_consumer_dispatches(public_root)
-    observed_signatures, observed_sources = load_observed_signatures(observed_audits)
+    observed_paths = tuple(observed_audits)
+    observed_signatures, observed_sources = load_observed_signatures(observed_paths)
+    observed_provenance = load_observed_audit_provenance(observed_paths)
     observed_by_tag: Counter[str] = Counter()
     for signature, count in observed_signatures.items():
         observed_by_tag[_signature_tag(signature)] += count
@@ -244,6 +261,7 @@ def build_protocol_inventory(
             ],
             "signature_count": len(observed_signatures),
             "tag_count": len(observed_tags),
+            "audit_provenance": observed_provenance,
         },
         "differential": {
             "observed_but_unconsumed": [
