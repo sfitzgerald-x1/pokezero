@@ -108,6 +108,10 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
     swampert = _mon("Swampert", ("Earthquake", "Ice Beam", "Protect", "Toxic"), ability="Torrent", level=84)
     blissey = _mon("Blissey", ("Seismic Toss", "Soft-Boiled", "Toxic", "Ice Beam"), ability="Natural Cure")
     celebi = _mon("Celebi", ("Calm Mind", "Baton Pass", "Psychic", "Recover"), ability="Natural Cure")
+    # Probe-verbatim bench partner for the absorb scenarios (absorb audit,
+    # 2026-07-19): L80, Surf over Toxic — keep it byte-identical to the
+    # captured games so the corpus rows reproduce the probe protocol exactly.
+    absorb_swampert = _mon("Swampert", ("Earthquake", "Ice Beam", "Surf", "Protect"), ability="Torrent")
 
     return (
         ScenarioSpec(
@@ -195,6 +199,60 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
             (blissey, swampert),
             p1_prefs=(("curse",), ("curse",), ("shadowball",)),
             p2_prefs=(("seismictoss", "softboiled"),),
+        ),
+        # --- Absorb-class abilities (Flash Fire / Volt Absorb / Water Absorb),
+        # per the probe-captured protocol (absorb audit, 2026-07-19): activation
+        # ``-start ability:``, repeat ``-immune [from] ability:``, absorb heal
+        # ``-heal <absorber> ... [from] ability: X|[of] <attacker>``, the gen3
+        # Thunder Wave NOT-absorbed gate, and the switch-clear of the flashfire
+        # volatile.
+        ScenarioSpec(
+            "flashfire_houndoom",
+            (_mon("Houndoom", ("Crunch", "Flamethrower", "Toxic", "Taunt"), ability="Flash Fire"),
+             _mon("Rapidash", ("Double-Edge", "Fire Blast", "Megahorn", "Toxic"), ability="Flash Fire")),
+            (_mon("Charizard", ("Flamethrower", "Dragon Claw", "Toxic", "Roar"), ability="Blaze"),
+             absorb_swampert),
+            # The Flash Fire holders sit on p1 with Charizard scripted to spam
+            # Flamethrower: the fallback sweep drives p1 with the engine-search
+            # policy, so this is the only orientation that guarantees the
+            # flashfire volatile on the search seat's payload from round 1's
+            # resolution onward regardless of what the search picks (pre-fix
+            # this walled every post-activation decision with
+            # ``volatile_unsupported: flashfire``). Scripted corpus run:
+            # r1 -start on Houndoom, r2 -immune, r3 switch -> ``-end``+clear
+            # plus a fresh -start on Rapidash, r4 -immune on Rapidash.
+            p1_prefs=(("crunch",), ("crunch",), ("switch:rapidash",), ("doubleedge",)),
+            p2_prefs=(("flamethrower",),),
+            seed=91007,
+            max_decision_rounds=6,
+        ),
+        ScenarioSpec(
+            "voltabsorb_lanturn",
+            (_mon("Zapdos", ("Thunderbolt", "Drill Peck", "Thunder Wave", "Roar"), ability="Pressure"),
+             blissey),
+            (_mon("Lanturn", ("Surf", "Ice Beam", "Confuse Ray", "Recover"), ability="Volt Absorb"),
+             absorb_swampert),
+            # r1 Thunderbolt at FULL hp (-immune, no heal); r2 Drill Peck
+            # (chip); r3 Thunderbolt (-heal ... [of] Zapdos — the live-captured
+            # shape behind the belief attribution fix); r4 Thunder Wave (gen3
+            # quirk: NOT absorbed, paralysis lands).
+            p1_prefs=(("thunderbolt",), ("drillpeck",), ("thunderbolt",), ("thunderwave",)),
+            p2_prefs=(("surf",),),
+            seed=91007,
+            max_decision_rounds=5,
+        ),
+        ScenarioSpec(
+            "waterabsorb_quagsire",
+            (_mon("Suicune", ("Surf", "Ice Beam", "Calm Mind", "Rest"), ability="Pressure"),
+             blissey),
+            (_mon("Quagsire", ("Earthquake", "Toxic", "Rest", "Sleep Talk"), ability="Water Absorb"),
+             absorb_swampert),
+            # r1 Surf at FULL hp (-immune); r2 Ice Beam (chip); r3 Surf
+            # (-heal ... [of] Suicune); r4 Surf (-immune again at full HP).
+            p1_prefs=(("surf",), ("icebeam",), ("surf",), ("surf",)),
+            p2_prefs=(("earthquake",),),
+            seed=91007,
+            max_decision_rounds=5,
         ),
     )
 

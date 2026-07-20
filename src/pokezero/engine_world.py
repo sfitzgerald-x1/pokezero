@@ -57,7 +57,13 @@ _WEATHER_IDS = {
 # Public volatile ids this construction expresses exactly today. Everything
 # else fails closed (substitute needs public sub-health bookkeeping; confusion
 # and kin need duration state the public replay does not carry yet).
-_SUPPORTED_VOLATILES = frozenset({"leechseed"})
+# ``flashfire`` needs neither: the parser sets it on the public ``-start``
+# line and clears it on ``-end``/switch, and the engine models it as
+# until-switch (1.5x own-fire boost; the immunity lives in the ability hook,
+# so the volatile alone is boost-only — never wrong, at worst incomplete if a
+# sampled world lacked the ability, which cannot happen for the mono-ability
+# Gen 3 randbats carriers nor for the request-known self side).
+_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire"})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {

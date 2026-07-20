@@ -1016,6 +1016,32 @@ class PublicBattleBeliefEngine:
         belief = self._target_belief(ability_slot, ability_ident)
         if belief is None or _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
+        if belief.revealed_ability:
+            # A gen3 mon has exactly one ability, so a second, DIFFERENT claim
+            # means one of the two attributions is wrong. Keep the earlier
+            # confirmation and flag: the earlier reveal named this mon on its
+            # own line (e.g. ``|-ability|p1a: Zapdos|Pressure|[silent]`` on
+            # entry) while later conflicting claims come from tag-attribution
+            # heuristics — exactly the class of the live-captured bug where a
+            # ``[of]`` misread swapped Zapdos's confirmed Pressure for Volt
+            # Absorb and silently destroyed the belief. Overwriting would also
+            # collapse the candidate variants to an impossible set (off-script
+            # fallback, uncertainty 1.0).
+            self._replace_belief(
+                belief,
+                evidence=_append_evidence(
+                    belief.evidence,
+                    BeliefEvidence(
+                        kind="conflicting-ability-evidence",
+                        detail=(
+                            f"Ignored conflicting ability claim {ability_name}; "
+                            f"keeping earlier confirmed {belief.revealed_ability}."
+                        ),
+                        source_line=raw_line,
+                    ),
+                ),
+            )
+            return
         self._replace_belief(
             belief,
             revealed_ability=ability_name,
@@ -1316,19 +1342,39 @@ def _append_evidence(
 
 def _confirmed_ability_from_event(event: Any) -> tuple[Optional[str], Optional[str]]:
     event_type = _event_value(event, "event_type")
+    actor_ident = _event_value(event, "actor_ident")
     target_ident = _event_value(event, "target_ident")
     primary = _event_value(event, "primary")
     raw_line = _event_value(event, "raw_line") or ""
     if event_type in {"-ability", "ability"} and primary:
         return target_ident, primary
+    if event_type == "-start" and primary and primary.strip().lower().startswith("ability:"):
+        # ``|-start|<holder>|ability: X`` (Flash Fire activation): the holder
+        # is the mon on the line, which the event parser surfaces as
+        # ``actor_ident`` (``-start`` is outside its target-ident group).
+        return actor_ident or target_ident, primary.split(":", 1)[1].strip()
     ability_match = re.search(r"\[from\] ability: ([^|\]]+)", raw_line)
+    if not ability_match:
+        return None, None
+    ability_name = ability_match.group(1).strip()
+    if event_type == "-heal":
+        # ``|-heal|<healed>|<cond>|[from] ability: X|[of] <attacker>`` — for
+        # heals Showdown's ``[of]`` names the MOVE SOURCE, not the ability
+        # holder (sim/battle.ts:2311 appends ``[of] ${source}`` whenever
+        # source !== target). The holder is always the healed mon (Volt/Water
+        # Absorb). Reading ``[of]`` here pinned the ability on the ATTACKER
+        # (live capture: Zapdos's protocol-confirmed Pressure was overwritten
+        # by Lanturn's Volt Absorb).
+        return target_ident, ability_name
     ident_match = re.search(r"\[of\] ([^|]+)", raw_line)
-    if ability_match:
-        return (
-            ident_match.group(1).strip() if ident_match else target_ident,
-            ability_match.group(1).strip(),
-        )
-    return None, None
+    if ident_match:
+        # Damage/status shapes (Rough Skin, Static): ``[of]`` is the holder.
+        return ident_match.group(1).strip(), ability_name
+    # No ``[of]``: the holder is the mon on the line itself. ``-immune`` sits
+    # outside the parser's target-ident group, so its ident arrives as
+    # ``actor_ident``; keep ``target_ident`` first for the shapes that do
+    # populate it.
+    return target_ident or actor_ident, ability_name
 
 
 def _ident_matches_pending(ident: Optional[str], pending: _PendingSwitch) -> bool:

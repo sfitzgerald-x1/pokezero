@@ -673,3 +673,148 @@ class ExactStateLedgerTest(unittest.TestCase):
             engine.ingest_event(event)
         dustox = self.opponent(engine, "Dustox")
         self.assertIsNone(dustox.revealed_ability)
+
+
+class AbsorbAbilityAttributionTest(unittest.TestCase):
+    """Ability-evidence attribution for the absorb-class protocol shapes.
+
+    Every protocol line here (except the synthetic conflict case) is VERBATIM
+    from the live gen3customgame captures of the absorb audit (2026-07-19,
+    probe3_showdown_capture.out): Showdown's heal convention makes ``[of]``
+    the MOVE SOURCE (sim/battle.ts:2311), so the pre-fix ``[of]``-is-holder
+    read pinned the absorb ability on the ATTACKER and destroyed its
+    previously confirmed ability.
+    """
+
+    @staticmethod
+    def engine_from(lines: list[str], set_source=None) -> PublicBattleBeliefEngine:
+        replay = parse_showdown_replay(
+            ["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines], battle_id="b"
+        )
+        engine = PublicBattleBeliefEngine(
+            format_id="gen3randombattle" if set_source is not None else None,
+            set_source=set_source,
+        )
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        return engine
+
+    @staticmethod
+    def belief(engine: PublicBattleBeliefEngine, slot: str, species: str):
+        for belief in engine.snapshot().sides[slot]:
+            if belief.species == species:
+                return belief
+        raise AssertionError(f"no belief for {slot} {species}")
+
+    _VOLTABSORB_HEAL_LINES = [
+        "|switch|p1a: Zapdos|Zapdos, L80|275/275",
+        "|switch|p2a: Lanturn|Lanturn, L80, F|331/331",
+        "|-ability|p1a: Zapdos|Pressure|[silent]",
+        "|turn|1",
+        "|move|p1a: Zapdos|Thunderbolt|p2a: Lanturn",
+        "|-heal|p2a: Lanturn|331/331|[from] ability: Volt Absorb|[of] p1a: Zapdos",
+        "|turn|2",
+    ]
+
+    def test_absorb_heal_pins_the_healed_mon_and_preserves_the_attacker(self) -> None:
+        engine = self.engine_from(self._VOLTABSORB_HEAL_LINES)
+        lanturn = self.belief(engine, "p2", "Lanturn")
+        zapdos = self.belief(engine, "p1", "Zapdos")
+        # The healed mon is the ability holder — never the ``[of]`` attacker.
+        self.assertEqual(lanturn.revealed_ability, "Volt Absorb")
+        # Zapdos's protocol-confirmed Pressure survives (the live-captured bug
+        # overwrote it with Volt Absorb).
+        self.assertEqual(zapdos.revealed_ability, "Pressure")
+        self.assertFalse(
+            [e for e in zapdos.evidence if "Volt Absorb" in (e.detail or "")],
+            "no Volt Absorb evidence may attach to the attacker",
+        )
+
+    def test_immune_pins_the_holder(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Zapdos|Zapdos, L80|275/275",
+            "|switch|p2a: Lanturn|Lanturn, L80, F|331/331",
+            "|-ability|p1a: Zapdos|Pressure|[silent]",
+            "|turn|1",
+            "|move|p1a: Zapdos|Thunderbolt|p2a: Lanturn",
+            "|-immune|p2a: Lanturn|[from] ability: Volt Absorb",
+            "|turn|2",
+        ])
+        self.assertEqual(self.belief(engine, "p2", "Lanturn").revealed_ability, "Volt Absorb")
+        self.assertEqual(self.belief(engine, "p1", "Zapdos").revealed_ability, "Pressure")
+
+    def test_flashfire_start_pins_the_holder(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Charizard|Charizard, L80, F|256/256",
+            "|switch|p2a: Houndoom|Houndoom, L80, M|251/251",
+            "|turn|1",
+            "|move|p1a: Charizard|Flamethrower|p2a: Houndoom",
+            "|-start|p2a: Houndoom|ability: Flash Fire",
+            "|turn|2",
+        ])
+        self.assertEqual(self.belief(engine, "p2", "Houndoom").revealed_ability, "Flash Fire")
+        self.assertIsNone(self.belief(engine, "p1", "Charizard").revealed_ability)
+
+    def test_waterabsorb_heal_shape(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Suicune|Suicune, L80|291/291",
+            "|switch|p2a: Quagsire|Quagsire, L80, F|283/283",
+            "|-ability|p1a: Suicune|Pressure|[silent]",
+            "|turn|1",
+            "|move|p1a: Suicune|Surf|p2a: Quagsire",
+            "|-heal|p2a: Quagsire|283/283|[from] ability: Water Absorb|[of] p1a: Suicune",
+            "|turn|2",
+        ])
+        self.assertEqual(self.belief(engine, "p2", "Quagsire").revealed_ability, "Water Absorb")
+        self.assertEqual(self.belief(engine, "p1", "Suicune").revealed_ability, "Pressure")
+
+    def test_conflicting_ability_claim_keeps_earlier_confirmation_and_flags(self) -> None:
+        # Synthetic conflict shape (the attribution fix removes the captured
+        # route to it): a later raw-line claim of a DIFFERENT ability for a mon
+        # with a protocol-confirmed one must not overwrite — keep the earlier
+        # confirmation, append a conflict flag.
+        engine = self.engine_from([
+            "|switch|p1a: Zapdos|Zapdos, L80|275/275",
+            "|switch|p2a: Lanturn|Lanturn, L80, F|331/331",
+            "|-ability|p1a: Zapdos|Pressure|[silent]",
+            "|turn|1",
+            "|-heal|p1a: Zapdos|275/275|[from] ability: Volt Absorb",
+            "|turn|2",
+        ])
+        zapdos = self.belief(engine, "p1", "Zapdos")
+        self.assertEqual(zapdos.revealed_ability, "Pressure")
+        conflicts = [e for e in zapdos.evidence if e.kind == "conflicting-ability-evidence"]
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("Volt Absorb", conflicts[0].detail)
+
+    def test_pins_flow_into_candidate_summaries_without_off_script_degradation(self) -> None:
+        # Regression for the live bug's blast radius: the mis-pinned attacker
+        # went off-script (zero surviving variants -> full pool, uncertainty
+        # 1.0). With the real randbats universe, the heal must leave BOTH mons
+        # on-script: Lanturn pinned to its absorb set, Zapdos still Pressure.
+        import os
+        from pathlib import Path
+        root = Path(
+            os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        )
+        if not (root / "data" / "random-battles" / "gen3" / "sets.json").exists():
+            self.skipTest("requires a local Showdown checkout with gen3 randbats sets")
+        from pokezero.randbat import Gen3RandbatSource
+
+        engine = self.engine_from(
+            self._VOLTABSORB_HEAL_LINES, set_source=Gen3RandbatSource.from_showdown_root(root)
+        )
+        lanturn = self.belief(engine, "p2", "Lanturn")
+        zapdos = self.belief(engine, "p1", "Zapdos")
+        self.assertEqual(lanturn.possible_abilities, ("Volt Absorb",))
+        self.assertEqual(zapdos.possible_abilities, ("Pressure",))
+        self.assertGreater(lanturn.candidate_set_count, 0)
+        self.assertTrue(
+            all(v.get("ability") == "Volt Absorb" for v in lanturn.candidate_variants)
+        )
+        # Pre-fix, Zapdos's revealed ability became Volt Absorb -> zero
+        # surviving variants -> off-script fallback, which FORCES uncertainty
+        # to exactly 1.0. On-script Pressure filtering stays below it.
+        self.assertGreater(zapdos.candidate_set_count, 0)
+        self.assertLess(zapdos.uncertainty, 1.0)

@@ -387,6 +387,24 @@ class BattleSpecConstructionTests(unittest.TestCase):
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertEqual(world.spec.side_two.volatile_statuses, ("leechseed",))
 
+    def test_flashfire_volatile_is_supported_both_seats(self) -> None:
+        # The parser sets flashfire on the public ``-start`` line and clears it
+        # on ``-end``/switch, both seats; the engine models the volatile as
+        # until-switch (probe-verified). No duration state needed — a pure
+        # allow-list pass-through, and the volatile must land in the SideSpec
+        # so the engine applies the 1.5x own-fire boost.
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["volatiles"] = ["flashfire"]
+        payload["sides"]["p2"]["volatiles"] = ["flashfire"]
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertIn("flashfire", world.spec.side_one.volatile_statuses)
+        self.assertIn("flashfire", world.spec.side_two.volatile_statuses)
+
+    def test_other_unsupported_volatiles_still_fail_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["confusion"]
+        self._assert_reason(payload, "volatile_unsupported")
+
     def test_anti_leakage_opponent_facts_come_only_from_inputs(self) -> None:
         """The constructed opponent side is a pure function of (payload, override).
 
