@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from pokezero.category_vocab import CategoryVocabulary
 from pokezero.deep_line_audit import (
@@ -132,6 +133,51 @@ class DeepLineAuditReportTest(unittest.TestCase):
         })
 
         self.assertEqual(counts, {"spikes": 2, "reflect": 4})
+
+    def test_source_manifest_separates_catalog_from_sampled_components(self) -> None:
+        source = SimpleNamespace(
+            metadata=SimpleNamespace(
+                format_id="gen3randombattle",
+                generation=3,
+                source_hash="fixture-hash",
+            ),
+            universes={
+                "xatu": SimpleNamespace(
+                    species="Xatu",
+                    variants=(
+                        SimpleNamespace(
+                            variant_id="xatu-1-variant-1",
+                            moves=("Psychic", "Wish", "Protect", "Drill Peck"),
+                            ability="Synchronize",
+                            item="Leftovers",
+                        ),
+                        SimpleNamespace(
+                            variant_id="xatu-1-variant-2",
+                            moves=("Psychic", "Night Shade", "Wish", "Protect"),
+                            ability="Early Bird",
+                            item="Lum Berry",
+                        ),
+                    ),
+                )
+            },
+        )
+        source.universe_for = lambda species: source.universes.get(str(species).lower())
+        report = DeepLineAuditReport()
+
+        report.record_randbat_source(source)
+        report.record_observed_randbat_team(({
+            "species": "Xatu",
+            "moves": ["Psychic", "Wish", "Protect", "Drill Peck"],
+            "ability": "Synchronize",
+            "item": "Leftovers",
+        },), source=source)
+
+        coverage = report.to_json_dict()["randbat_source_coverage"]
+        self.assertEqual(coverage["source_metadata"]["source_hash"], "fixture-hash")
+        self.assertEqual(coverage["catalog_component_counts"]["variant"], 2)
+        self.assertEqual(coverage["observed_component_counts"]["variant"], 1)
+        self.assertEqual(coverage["observed_component_counts"]["species"], 1)
+        self.assertEqual(coverage["unobserved_component_counts"]["ability"], 1)
 
 
 if __name__ == "__main__":

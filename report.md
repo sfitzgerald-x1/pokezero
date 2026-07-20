@@ -22,6 +22,7 @@ are not patched in this audit branch.
 | Perspective symmetry | Included whenever both seats request an action | No mismatch in the corrected random smoke. |
 | Request/action oracle | Raw request independently rebuilds all 9 legal action slots and 4 move-PP fractions | Eight-turn live smoke passed; this does not call the production legality helper. |
 | Field oracle | Bridge weather, Spikes layers, screens, and timed side-condition durations | Sand Stream plus Reflect/Light Screen scripted chains passed. Permanent ability weather is represented by bridge `duration: 0`, which the audit now handles explicitly. |
+| Source-distribution manifest | Configured Gen 3 randbat universe versus components disclosed in sampled self requests; every public opponent candidate variant is source-checked | One-game smoke checked 155 candidate variants with no membership mismatch. It observed 12/220 species, 12/1,748 exact variants, 29/125 moves, 11/71 abilities, and 5/13 items: useful provenance and coverage accounting, explicitly not an exhaustive universe sweep. |
 | Scripted mechanic chains | 18 existing `gen3customgame` scenarios, 405 decisions | 17 findings: 15 confirmed encoder divergences across Transform and Chesto-Rest; 2 perspective views of the same underlying defects. |
 | Protocol co-occurrence census | Captured for every completed audited game plus seven public protocol cuts | Committed fold sample has 0 Intimidate, 0 Sand Stream, and 0 Baton Pass occurrences across five retained fold rows. New cuts cover all three ordered chains. |
 
@@ -37,6 +38,15 @@ Result: 16 decisions checked, 0 findings after the perspective-token alignment
 correction. A later four-game depth shard reached 762 boundaries (606 at turn
 20 or later), reproduced the stale-cure and false-pinch-pruning classes in
 natural random battles, and exposed no snapshot or batch-fold divergence.
+
+The audit artifact now includes `randbat_source_coverage`, built from the exact
+local Gen 3 set universe. It records source metadata, catalog totals, sampled
+self-request component totals, and the number of public belief candidates
+confirmed as source members. This is deliberately a coverage manifest rather
+than a claim that random play exercised every species, move, ability, item, or
+variant. The one-game source smoke covered 155 candidate variants with zero
+membership mismatches, while its self-request sample covered 12/220 species,
+12/1,748 exact variants, 29/125 moves, 11/71 abilities, and 5/13 items.
 
 ```sh
 uv run python scripts/deep_line_audit.py \
@@ -187,3 +197,7 @@ schema/parity smoke, not meaningful coverage for those stateful switch chains.
 1. Scale the long-game random-battle shard with turn-20+ weighting using a persistent job, while suppressing already-confirmed signatures from the triage summary.
 2. Complete protocol co-occurrence coverage and identify any blind high-frequency chains, especially Intimidate/Sand Stream/Baton Pass switch-ins missing from the committed corpus sample.
 3. Synthesize final incidence, verification evidence, and the permanent audit-gate recommendation from the completed shard artifacts.
+4. Treat the source manifest as the explicit boundary of sampled coverage. A
+   future exhaustive component sweep would need generated fixtures or direct
+   source-derived starts for every catalog member; it is not implied by this
+   read-only deep-line run.

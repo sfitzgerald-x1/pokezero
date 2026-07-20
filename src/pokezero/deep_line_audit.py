@@ -9,8 +9,9 @@ against two independent sources:
 * a fresh, batch-built replay/belief fold for incremental-state agreement.
 
 It intentionally does not assert belief candidate identities against the hidden
-simulator state.  Those values are epistemic by design; the audit only checks
-their structural invariants and monotonicity as public evidence accumulates.
+simulator state. Those values are epistemic by design; the audit checks their
+structural invariants, monotonicity, and membership in the configured public
+Gen 3 randbat source as public evidence accumulates.
 """
 
 from __future__ import annotations
@@ -90,6 +91,7 @@ _PUBLIC_UNIT_INTERVAL_SLOTS = frozenset(
         NUMERIC_TOXIC_STAGE,
     }
 )
+_RANDBAT_COMPONENT_KINDS = ("species", "variant", "move", "ability", "item")
 
 
 @dataclass(frozen=True)
@@ -242,6 +244,19 @@ class DeepLineAuditReport:
     current_game_id: str | None = None
     suppressed_kinds: frozenset[str] = frozenset()
     suppressed_findings: Counter[str] = field(default_factory=Counter)
+    # Lane 5 is source-backed rather than omniscient: beliefs are allowed to be
+    # uncertain, but every emitted candidate must belong to the exact randbat
+    # universe used by the belief engine.  Keep catalog and observed components
+    # separate so a sampled long-game run cannot be mistaken for exhaustive
+    # universe coverage.
+    randbat_source_metadata: dict[str, Any] | None = None
+    randbat_catalog_components: dict[str, set[str]] = field(
+        default_factory=lambda: {kind: set() for kind in _RANDBAT_COMPONENT_KINDS}
+    )
+    randbat_observed_components: dict[str, set[str]] = field(
+        default_factory=lambda: {kind: set() for kind in _RANDBAT_COMPONENT_KINDS}
+    )
+    randbat_candidate_variants_checked: int = 0
 
     def add(self, finding: AuditFinding) -> None:
         if finding.kind in self.suppressed_kinds:
@@ -272,8 +287,107 @@ class DeepLineAuditReport:
         self.protocol_ordered_triples.update(other.protocol_ordered_triples)
         self.protocol_events.update(other.protocol_events)
         self.suppressed_findings.update(other.suppressed_findings)
+        if self.randbat_source_metadata is None:
+            self.randbat_source_metadata = other.randbat_source_metadata
+        elif other.randbat_source_metadata is not None:
+            if self.randbat_source_metadata != other.randbat_source_metadata:
+                raise ValueError("Cannot merge reports from different randbat source versions.")
+        for kind in _RANDBAT_COMPONENT_KINDS:
+            self.randbat_catalog_components[kind].update(other.randbat_catalog_components[kind])
+            self.randbat_observed_components[kind].update(other.randbat_observed_components[kind])
+        self.randbat_candidate_variants_checked += other.randbat_candidate_variants_checked
+
+    def record_randbat_source(self, source: Any) -> None:
+        """Register the immutable universe used to evaluate belief candidates."""
+
+        metadata = getattr(source, "metadata", None)
+        source_metadata = {
+            "format_id": str(getattr(metadata, "format_id", "gen3randombattle")),
+            "generation": int(getattr(metadata, "generation", 3)),
+            "source_hash": str(getattr(metadata, "source_hash", "")),
+        }
+        if self.randbat_source_metadata is not None:
+            if self.randbat_source_metadata != source_metadata:
+                raise ValueError("A single audit report cannot mix randbat source versions.")
+            return
+        self.randbat_source_metadata = source_metadata
+        universes = getattr(source, "universes", {})
+        if not isinstance(universes, Mapping):
+            return
+        for universe in universes.values():
+            species = _normalize_identifier(str(getattr(universe, "species", "")))
+            if species:
+                self.randbat_catalog_components["species"].add(species)
+            for variant in getattr(universe, "variants", ()):
+                variant_id = str(getattr(variant, "variant_id", ""))
+                if variant_id:
+                    self.randbat_catalog_components["variant"].add(variant_id)
+                ability = _normalize_identifier(str(getattr(variant, "ability", "")))
+                item = _normalize_identifier(str(getattr(variant, "item", "")))
+                if ability:
+                    self.randbat_catalog_components["ability"].add(ability)
+                if item:
+                    self.randbat_catalog_components["item"].add(item)
+                self.randbat_catalog_components["move"].update(
+                    move
+                    for raw_move in getattr(variant, "moves", ())
+                    if (move := _normalize_identifier(str(raw_move)))
+                )
+
+    def record_observed_randbat_team(
+        self,
+        team: Sequence[Mapping[str, Any]],
+        *,
+        source: Any,
+    ) -> None:
+        """Record components disclosed by one player's complete self request."""
+
+        for pokemon in team:
+            species = _normalize_identifier(str(pokemon.get("species") or ""))
+            ability = _normalize_identifier(str(pokemon.get("ability") or ""))
+            item = _normalize_identifier(str(pokemon.get("item") or ""))
+            if species:
+                self.randbat_observed_components["species"].add(species)
+            if ability:
+                self.randbat_observed_components["ability"].add(ability)
+            if item:
+                self.randbat_observed_components["item"].add(item)
+            moves = pokemon.get("moves")
+            observed_moves: set[str] = set()
+            if isinstance(moves, Sequence) and not isinstance(moves, (str, bytes)):
+                observed_moves.update(
+                    move for raw_move in moves if (move := _normalize_identifier(str(raw_move)))
+                )
+            self.randbat_observed_components["move"].update(observed_moves)
+            universe = source.universe_for(species) if species else None
+            for variant in getattr(universe, "variants", ()):
+                variant_moves = {
+                    _normalize_identifier(str(raw_move)) for raw_move in variant.moves
+                }
+                if (
+                    observed_moves == variant_moves
+                    and ability == _normalize_identifier(str(variant.ability))
+                    and item == _normalize_identifier(str(variant.item))
+                ):
+                    self.randbat_observed_components["variant"].add(str(variant.variant_id))
 
     def to_json_dict(self) -> dict[str, Any]:
+        source_coverage = None
+        if self.randbat_source_metadata is not None:
+            source_coverage = {
+                "source_metadata": dict(self.randbat_source_metadata),
+                "catalog_component_counts": {
+                    kind: len(self.randbat_catalog_components[kind]) for kind in _RANDBAT_COMPONENT_KINDS
+                },
+                "observed_component_counts": {
+                    kind: len(self.randbat_observed_components[kind]) for kind in _RANDBAT_COMPONENT_KINDS
+                },
+                "unobserved_component_counts": {
+                    kind: len(self.randbat_catalog_components[kind] - self.randbat_observed_components[kind])
+                    for kind in _RANDBAT_COMPONENT_KINDS
+                },
+                "candidate_variants_checked": self.randbat_candidate_variants_checked,
+            }
         return {
             "schema_version": "pokezero.deep-line-audit.v1",
             "games_audited": self.games_audited,
@@ -301,6 +415,7 @@ class DeepLineAuditReport:
                     self.protocol_ordered_triples.items(), key=lambda item: (-item[1], item[0])
                 )
             ],
+            "randbat_source_coverage": source_coverage,
         }
 
 
@@ -326,6 +441,8 @@ def audit_live_decision(
         report.turn_20_plus_decisions += 1
 
     check_randbat_candidates = snapshot.format_id == "gen3randombattle"
+    if check_randbat_candidates:
+        _audit_randbat_source_coverage(env, observation, player_id, turn, report)
     _audit_numeric_invariants(
         observation,
         player_id,
@@ -344,6 +461,82 @@ def audit_live_decision(
     if check_snapshot_roundtrip:
         _audit_snapshot_roundtrip(env, snapshot, player_id, observation, turn, report)
     return observation
+
+
+def _audit_randbat_source_coverage(
+    env: LocalShowdownEnv,
+    observation: PokeZeroObservationV0,
+    player_id: str,
+    turn: int,
+    report: DeepLineAuditReport,
+) -> None:
+    """Validate public belief candidates against the configured randbat universe.
+
+    The check deliberately never compares candidates to simulator-private truth:
+    a public belief can legitimately retain many variants.  It does establish
+    that the candidates emitted by the production fold are members of the same
+    fixed source universe, and it records exactly how much of that universe a
+    sampled battle shard happened to disclose through self requests.
+    """
+
+    source = getattr(env, "_belief_set_source", None)
+    if source is None:
+        return
+    report.record_randbat_source(source)
+
+    team = observation.metadata.get("self_team")
+    if isinstance(team, Sequence) and not isinstance(team, (str, bytes)):
+        report.record_observed_randbat_team(
+            tuple(pokemon for pokemon in team if isinstance(pokemon, Mapping)),
+            source=source,
+        )
+
+    belief_view = observation.metadata.get("belief_view")
+    if not isinstance(belief_view, Mapping):
+        return
+    opponent = belief_view.get("opponent_pokemon")
+    if not isinstance(opponent, Sequence) or isinstance(opponent, (str, bytes)):
+        return
+    for belief in opponent:
+        if not isinstance(belief, Mapping):
+            continue
+        species = str(belief.get("species") or "")
+        universe = source.universe_for(species)
+        candidates = belief.get("candidate_variants")
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+            continue
+        actual_count = belief.get("candidate_set_count")
+        if isinstance(actual_count, int):
+            _compare(
+                report,
+                kind="source_candidate_count",
+                player_id=player_id,
+                turn=turn,
+                column=f"belief:{species}.candidate_set_count",
+                expected=len(candidates),
+                actual=actual_count,
+                detail="the encoded candidate count must equal the public source-variant list length",
+            )
+        valid_variant_ids = {
+            str(variant.variant_id) for variant in getattr(universe, "variants", ())
+        }
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            report.randbat_candidate_variants_checked += 1
+            variant_id = str(candidate.get("variant_id") or "")
+            if variant_id not in valid_variant_ids:
+                report.add(
+                    AuditFinding(
+                        kind="source_candidate_membership",
+                        player_id=player_id,
+                        turn=turn,
+                        column=f"belief:{species}.variant_id",
+                        expected="member of configured species universe",
+                        actual=variant_id,
+                        detail="a public belief candidate must come from the configured Gen 3 randbat source",
+                    )
+                )
 
 
 def audit_perspective_pair(
