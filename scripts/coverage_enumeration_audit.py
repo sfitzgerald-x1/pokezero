@@ -12,7 +12,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -28,6 +27,7 @@ from pokezero.coverage_enumeration_audit import (  # noqa: E402
     build_coverage_plan,
     normalize_coverage_move,
 )
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.deep_line_audit import (  # noqa: E402
     AuditFinding,
     DeepLineAuditReport,
@@ -68,17 +68,6 @@ def _parse_shard(value: str) -> tuple[int, int]:
     return index, count
 
 
-def _current_commit() -> str | None:
-    """Return the checked-out public source revision without making it a requirement."""
-
-    try:
-        return subprocess.check_output(
-            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     """Write a complete artifact before making it visible to shard mergers."""
 
@@ -107,7 +96,7 @@ def _run_provenance(
     return {
         "schema_version": "pokezero.coverage-enumeration-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "public_repo_commit": _current_commit(),
+        "public_repo_commit": public_repo_commit(ROOT),
         "showdown_source_hash": source_hash,
         "observation_schema": observation_schema,
         # Cluster launchers set this to an immutable image digest. The explicit

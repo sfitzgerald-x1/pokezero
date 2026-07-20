@@ -45,6 +45,19 @@ class Gen3RandbatVocabTests(unittest.TestCase):
         for move in UNIVERSAL_MOVES:
             self.assertIn(f"move:{move}", strings)
 
+    def test_audit_extra_moves_get_real_rows_without_changing_default_vocab(self) -> None:
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        default_vocab = gen3_category_vocabulary(SHOWDOWN_ROOT)
+        audit_vocab = gen3_category_vocabulary(
+            SHOWDOWN_ROOT,
+            extra_moves=("Safeguard", "Future Sight"),
+        )
+        audit_oov = 1 + len(audit_vocab.tokens)
+        self.assertFalse(default_vocab.is_enumerated("move:safeguard"))
+        self.assertLess(audit_vocab.encode("move:safeguard"), audit_oov)
+        self.assertLess(audit_vocab.encode("belief:possible_move:futuresight"), audit_oov)
+
     def test_species_are_display_only_no_dead_id_rows(self) -> None:
         # Punctuation fix: only display-name forms are enumerated, not dead id forms.
         species_strings = set(gen3_randbat_category_strings(SHOWDOWN_ROOT)["species"])
