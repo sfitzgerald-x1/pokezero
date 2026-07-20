@@ -1080,6 +1080,77 @@ class ExactStateLedgerTest(unittest.TestCase):
         # but Lum is still correctly ruled out (status stuck)
         self.assertIn("lumberry", lugia.ruled_out_items)
 
+    def test_residual_pinch_crossing_keeps_berry_and_monotone_candidates(self) -> None:
+        # Report item #8 (seed 3): a pinch-berry holder that first falls to <=25% ONLY from an
+        # end-of-turn residual (Toxic) had no gen3 berry-activation opportunity at that boundary,
+        # so Petaya/Salac/Liechi must NOT be ruled out. Before the fix the residual crossing pruned
+        # the pinch variants, leaving no compatible set and forcing a full-pool fallback that made
+        # the candidate count jump 1 -> 2 (a monotonicity break / false uncertainty inflation).
+        class PinchSetSource:
+            # Two Ludicolo variants (same moves): a Petaya-Berry set and a Leftovers set.
+            _POOL = (
+                {"item": "Petaya Berry", "item_id": "petayaberry"},
+                {"item": "Leftovers", "item_id": "leftovers"},
+            )
+
+            def summarize(self, *, format_id, species, revealed_moves,
+                          revealed_ability=None, revealed_item=None,
+                          ruled_out_abilities=(), ruled_out_items=()):
+                ruled = {i.lower().replace(" ", "") for i in ruled_out_items}
+                compatible = [v for v in self._POOL if v["item_id"] not in ruled]
+                inconsistent = not compatible
+                variants = compatible or list(self._POOL)  # full-pool fallback
+                return CandidateSetSummary(
+                    species=species,
+                    candidate_count=len(variants),
+                    uncertainty=1.0 if inconsistent else len(variants) / len(self._POOL),
+                    possible_items=tuple(v["item"] for v in variants),
+                    inconsistent=inconsistent,
+                )
+
+        lines = [
+            "|switch|p1a: Blissey|Blissey, L80|600/600",
+            # Ludicolo switches in already poisoned, above the pinch threshold (93/272 = 34.2%).
+            "|switch|p2a: Ludicolo|Ludicolo, L78|93/272 tox",
+            "|turn|1",
+            # End-of-turn residual Toxic chip crosses the threshold (42/272 = 15.4%).
+            "|-damage|p2a: Ludicolo|42/272 tox|[from] psn",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(
+            ["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines], battle_id="b"
+        )
+        engine = PublicBattleBeliefEngine(set_source=PinchSetSource())
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        ludicolo = self.opponent(engine, "Ludicolo")
+        # residual-only crossing: the pinch variants survive the sweep
+        self.assertNotIn("petayaberry", ludicolo.ruled_out_items)
+        self.assertNotIn("salacberry", ludicolo.ruled_out_items)
+        self.assertNotIn("liechiberry", ludicolo.ruled_out_items)
+        # Leftovers/Lum rule-outs are unaffected (correct, independent mechanics)
+        self.assertIn("leftovers", ludicolo.ruled_out_items)
+        self.assertIn("lumberry", ludicolo.ruled_out_items)
+        # candidate stays at the single compatible (Petaya) set — monotone, no full-pool jump to 2
+        self.assertEqual(ludicolo.candidate_set_count, 1)
+        self.assertEqual(ludicolo.possible_items, ("Petaya Berry",))
+
+    def test_action_phase_pinch_non_proc_still_prunes(self) -> None:
+        # Guard against under-pruning: a mon HIT to <=25% during the action phase that does not
+        # eat its berry still rules the pinch variants out (the berry had its chance to fire).
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L76|350/350",
+            "|switch|p2a: Salamence|Salamence, L76|320/320",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Rock Slide|p2a: Salamence",
+            "|-damage|p2a: Salamence|60/320",
+            "|upkeep",
+        ])
+        salamence = self.opponent(engine, "Salamence")
+        self.assertIn("salacberry", salamence.ruled_out_items)
+        self.assertIn("petayaberry", salamence.ruled_out_items)
+        self.assertIn("liechiberry", salamence.ruled_out_items)
+
     def test_spikes_chip_counts_as_action_phase_for_leftovers(self) -> None:
         engine = self.engine_from([
             "|switch|p1a: Skarmory|Skarmory, L80|300/300",

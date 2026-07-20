@@ -1078,11 +1078,22 @@ class PublicBattleBeliefEngine:
                     ("lumberry",),
                     "Status persisted without an instant Lum cure; Lum variants removed.",
                 )
-            if hp_fraction <= 0.25 and belief.key not in self._berry_ate_this_turn:
+            # Pinch berries (Salac/Petaya/Liechi) activate on an HP DROP during the action
+            # phase (being hit), NOT on an end-of-turn residual crossing: in gen3 a mon that
+            # first falls to/below 25% from a later residual (Toxic/burn/sand/Leech chip) got
+            # no berry-activation opportunity at this boundary. Gate on the action-phase HP
+            # snapshot, exactly like the Leftovers slot above, so only a genuine action-phase
+            # non-proc — HP already at/below threshold after actions with no berry eaten —
+            # rules the pinch variants out. No snapshot => no evidence (conservative).
+            if (
+                hp_pre_residual is not None
+                and hp_pre_residual <= 0.25
+                and belief.key not in self._berry_ate_this_turn
+            ):
                 belief = self._rule_out_items(
                     belief,
                     ("salacberry", "petayaberry", "liechiberry"),
-                    "Ended a turn at or below 25% HP with no pinch-berry activation; pinch variants removed.",
+                    "Action-phase HP at or below 25% with no pinch-berry activation; pinch variants removed.",
                 )
 
     def _resolve_pending_mudshot(self) -> None:
