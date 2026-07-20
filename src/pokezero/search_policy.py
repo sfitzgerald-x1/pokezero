@@ -1313,6 +1313,10 @@ class RootPUCTSearchPolicy:
                     puct_search_completed_result_count=len(completed_search_timings),
                     puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
                     puct_search_rejected_call_count=puct_search_rejected_call_count,
+                    cross_world_initial_value_batch_count=cross_world_initial_value_batch_count,
+                    cross_world_initial_value_batch_world_count=(
+                        cross_world_initial_value_batch_world_count
+                    ),
                 )
                 return inner_fallback_decision
             except Exception as exc:
@@ -1332,11 +1336,20 @@ class RootPUCTSearchPolicy:
                     if self.start_override_planner is not None
                     else None
                 )
+                fallback_metadata = {
+                    "root_puct_cross_world_initial_value_batch_count": (
+                        cross_world_initial_value_batch_count
+                    ),
+                    "root_puct_cross_world_initial_value_batch_world_count": (
+                        cross_world_initial_value_batch_world_count
+                    ),
+                    **dict(materialization_metadata or {}),
+                }
                 inner_fallback_decision = self._fallback(
                     context,
                     rng=rng,
                     reason=f"search failed: {exc}",
-                    extra_metadata=materialization_metadata,
+                    extra_metadata=fallback_metadata,
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
@@ -1630,6 +1643,8 @@ class RootPUCTSearchPolicy:
         puct_search_completed_result_count: int | None = None,
         puct_search_rejected_call_seconds: float | None = None,
         puct_search_rejected_call_count: int | None = None,
+        cross_world_initial_value_batch_count: int | None = None,
+        cross_world_initial_value_batch_world_count: int | None = None,
     ) -> PolicyDecision:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
@@ -1679,6 +1694,21 @@ class RootPUCTSearchPolicy:
                     puct_search_completed_result_count=puct_search_completed_result_count,
                     puct_search_rejected_call_seconds=puct_search_rejected_call_seconds,
                     puct_search_rejected_call_count=puct_search_rejected_call_count,
+                ),
+                **(
+                    {
+                        "root_puct_cross_world_initial_value_batch_count": (
+                            cross_world_initial_value_batch_count
+                        ),
+                        "root_puct_cross_world_initial_value_batch_world_count": (
+                            cross_world_initial_value_batch_world_count
+                        ),
+                    }
+                    if (
+                        cross_world_initial_value_batch_count is not None
+                        and cross_world_initial_value_batch_world_count is not None
+                    )
+                    else {}
                 ),
                 **dict(extra_metadata or {}),
             },
