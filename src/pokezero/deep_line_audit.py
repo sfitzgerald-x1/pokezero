@@ -315,7 +315,9 @@ class DeepLineAuditReport:
         if not isinstance(universes, Mapping):
             return
         for universe in universes.values():
-            species = _normalize_identifier(str(getattr(universe, "species", "")))
+            species = canonical_gen3_randbat_species_id(
+                _normalize_identifier(str(getattr(universe, "species", "")))
+            )
             if species:
                 self.randbat_catalog_components["species"].add(species)
             for variant in getattr(universe, "variants", ()):
@@ -343,7 +345,9 @@ class DeepLineAuditReport:
         """Record components disclosed by one player's complete self request."""
 
         for pokemon in team:
-            species = _normalize_identifier(str(pokemon.get("species") or ""))
+            species = canonical_gen3_randbat_species_id(
+                _normalize_identifier(str(pokemon.get("species") or ""))
+            )
             ability = _normalize_identifier(str(pokemon.get("ability") or ""))
             item = _normalize_identifier(str(pokemon.get("item") or ""))
             if species:
