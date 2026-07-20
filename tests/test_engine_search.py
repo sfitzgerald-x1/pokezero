@@ -7,6 +7,7 @@ import random
 import sys
 import unittest
 from collections import Counter
+from dataclasses import replace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -546,6 +547,23 @@ class Tier2OverlayTests(unittest.TestCase):
             any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
         )
 
+    def test_stale_annotation_breaks_the_fold_loudly(self) -> None:
+        policy, source = self._annotated_policy([])
+        # A delayed tracker conclusion outside the fold's identifiable tail
+        # must fail closed before it can be applied to the wrong token.
+        source.overlay_for = lambda _player_id: {-1: (0.25, True, False, 0.0)}
+        import warnings as _warnings
+
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            result = policy._advance_live_fold(self._context(self.LEAD))
+        self.assertIsNone(result)
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
+        )
+
     def test_cross_check_binds_against_env_surfaces(self) -> None:
         # With an active source, the cross-check reference is the env's own
         # encoder state (production binding): a reference whose surfaces ARE
@@ -587,6 +605,67 @@ class Tier2OverlayTests(unittest.TestCase):
         self.assertTrue(
             any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught)
         )
+
+    def test_cross_check_binds_tier2_pins_against_env_surfaces(self) -> None:
+        def check_pin(player_id, annotate):
+            policy, source = self._annotated_policy([])
+            context = self._context(self.LEAD + self.ROUND2)
+            context.player_id = player_id
+            initial = policy._advance_live_fold(context)
+            self.assertIsNotNone(initial)
+            annotated_tokens = tuple(annotate(token) for token in initial.products().transition_tokens)
+            source._state = _FakeAnnotationState(annotated_tokens)
+            refreshed = self._context(self.LEAD + self.ROUND2, round_index=1)
+            refreshed.player_id = player_id
+            fold = policy._advance_live_fold(refreshed)
+            self.assertIsNotNone(fold)
+            products = fold.products()
+            perspective = type(
+                "Perspective",
+                (),
+                {
+                    "showdown_slot": player_id,
+                    "opponent_showdown_slot": "p2" if player_id == "p1" else "p1",
+                },
+            )()
+            bound_state = type("BoundState", (), {})()
+            bound_state.transition_tokens = annotated_tokens
+            bound_state.turn_merged_tokens = tuple(products.turn_merged_tokens)
+            bound_state.tendency_stats = products.tendency_stats
+            bound_state.perspective = perspective
+            source._state = bound_state
+            import warnings as _warnings
+
+            with _warnings.catch_warnings(record=True):
+                _warnings.simplefilter("always")
+                policy._fold_cross_check(
+                    refreshed, fold, refreshed.public_materialization_state.replay
+                )
+            self.assertEqual(policy.stats.fold_cross_check_failures, 0)
+            return products
+
+        cb_products = check_pin(
+            "p2",
+            lambda token: replace(
+                token,
+                cb_bit=token.kind == "move" and token.actor_slot == "p1",
+            ),
+        )
+        self.assertTrue(cb_products.cb_pinned_species)
+        investment_products = check_pin(
+            "p1",
+            lambda token: replace(
+                token,
+                investment=(
+                    0.5
+                    if token.kind == "move"
+                    and token.actor_slot == "p1"
+                    and token.defender_species
+                    else 0.0
+                ),
+            ),
+        )
+        self.assertTrue(investment_products.investment_pinned)
 
 
 class FallbackAlertTests(unittest.TestCase):
