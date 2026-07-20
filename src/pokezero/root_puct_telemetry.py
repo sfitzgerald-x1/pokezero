@@ -30,6 +30,11 @@ _SCALAR_COUNT_FIELDS = (
     # versus the Tier 1 replay fallback.
     "root_puct_start_override_direct_materializations",
     "root_puct_start_override_replay_materializations",
+    # These counters prove that the initial root sweep actually formed a
+    # cross-world value batch, rather than only recording that the feature was
+    # configured. They contain no battle state and are safe to persist.
+    "root_puct_cross_world_initial_value_batch_count",
+    "root_puct_cross_world_initial_value_batch_world_count",
     "root_puct_opponent_action_scenario_count",
     "root_puct_opponent_action_scenarios_generated",
     "root_puct_opponent_action_scenarios_skipped",
@@ -206,6 +211,11 @@ _MATERIALIZATION_COUNT_NAMES = {
     "root_puct_start_override_replay_materializations": "replay",
 }
 
+_INITIAL_VALUE_BATCHING_COUNT_NAMES = {
+    "root_puct_cross_world_initial_value_batch_count": "cross_world_initial_value_batch_count",
+    "root_puct_cross_world_initial_value_batch_world_count": "cross_world_initial_value_batch_world_count",
+}
+
 _COUNTER_TAXONOMY_NAMES = {
     "root_puct_direct_materialization_rejection_categories": "direct_materialization_rejection_categories",
 }
@@ -294,6 +304,7 @@ def summarize_root_puct_decision_telemetry(
     effective_total_visits = 0
     scenario_counts: dict[str, int] = {}
     materialization_counts = {name: 0 for name in _MATERIALIZATION_COUNT_NAMES.values()}
+    initial_value_batching = {name: 0 for name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.values()}
     for item in records:
         if item.get("outcome") == "fallback":
             category = str(item.get("fallback_category") or "unknown")
@@ -313,6 +324,8 @@ def summarize_root_puct_decision_telemetry(
         effective_total_visits += _nonnegative_int(item.get("root_puct_effective_total_visits")) or 0
         for field, name in _MATERIALIZATION_COUNT_NAMES.items():
             materialization_counts[name] += _nonnegative_int(item.get(field)) or 0
+        for field, name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.items():
+            initial_value_batching[name] += _nonnegative_int(item.get(field)) or 0
         for field in _SCALAR_COUNT_FIELDS:
             if not field.startswith("root_puct_opponent_action_"):
                 continue
@@ -357,6 +370,7 @@ def summarize_root_puct_decision_telemetry(
             for field, count in sorted(scenario_counts.items())
         },
         "materialization_counts": materialization_counts,
+        "initial_value_batching": initial_value_batching,
         "scenario_failure_taxonomy": {
             _COUNTER_TAXONOMY_NAMES.get(
                 field,

@@ -19,6 +19,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "root_puct_fallback_reason": "request mismatch carried private state: [secret]",
                 "root_puct_total_visits": 12,
                 "root_puct_effective_total_visits": 9,
+                "root_puct_cross_world_initial_value_batch_count": 2,
+                "root_puct_cross_world_initial_value_batch_world_count": 6,
                 "root_puct_elapsed_seconds": 0.25,
                 "policy_elapsed_seconds": 0.30,
                 "root_puct_timing": {
@@ -77,6 +79,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "fallback_category": "replay_request_mismatch",
                 "root_puct_total_visits": 12,
                 "root_puct_effective_total_visits": 9,
+                "root_puct_cross_world_initial_value_batch_count": 2,
+                "root_puct_cross_world_initial_value_batch_world_count": 6,
                 "root_puct_elapsed_seconds": 0.25,
                 "policy_elapsed_seconds": 0.30,
                 "full_decision_elapsed_seconds": 0.30,
@@ -151,6 +155,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_effective_total_visits": 8,
                     "root_puct_start_override_direct_materializations": 2,
                     "root_puct_start_override_replay_materializations": 1,
+                    "root_puct_cross_world_initial_value_batch_count": 2,
+                    "root_puct_cross_world_initial_value_batch_world_count": 6,
                     "root_puct_opponent_action_scenario_count": 2,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 1,
@@ -178,6 +184,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_effective_total_visits": 1,
                     "root_puct_start_override_direct_materializations": 1,
                     "root_puct_start_override_replay_materializations": 3,
+                    "root_puct_cross_world_initial_value_batch_count": 1,
+                    "root_puct_cross_world_initial_value_batch_world_count": 2,
                     "root_puct_opponent_action_scenario_count": 1,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 2,
@@ -224,6 +232,13 @@ class RootPUCTTelemetryTest(unittest.TestCase):
             },
         )
         self.assertEqual(report["materialization_counts"], {"direct": 3, "replay": 4})
+        self.assertEqual(
+            report["initial_value_batching"],
+            {
+                "cross_world_initial_value_batch_count": 3,
+                "cross_world_initial_value_batch_world_count": 8,
+            },
+        )
         self.assertEqual(
             report["scenario_failure_taxonomy"],
             {
