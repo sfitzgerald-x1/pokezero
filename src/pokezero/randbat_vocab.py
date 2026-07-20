@@ -155,7 +155,10 @@ def gen3_randbat_entities(showdown_root: str | Path) -> dict[str, tuple[str, ...
 
 
 def gen3_randbat_category_strings(
-    showdown_root: str | Path, *, include_turn_merged: bool = False
+    showdown_root: str | Path,
+    *,
+    include_turn_merged: bool = False,
+    extra_moves: Iterable[str] = (),
 ) -> dict[str, list[str]]:
     """Enumerate the categorical strings the encoder emits for the closed Gen 3 universe.
 
@@ -170,6 +173,15 @@ def gen3_randbat_category_strings(
     entities = gen3_randbat_entities(showdown_root)
     dex = load_showdown_dex_cached(showdown_root)
     groups: dict[str, list[str]] = {}
+    move_universe = tuple(
+        sorted(
+            {
+                _normalize_identifier(move)
+                for move in (*entities["moves"], *UNIVERSAL_MOVES, *extra_moves)
+                if _normalize_identifier(move)
+            }
+        )
+    )
 
     # The species token uses the Showdown *display name* (e.g. "species:Mr. Mime"); the id
     # form is never emitted, so enumerate display-only (no dead id-form rows). Moves DO use
@@ -192,9 +204,7 @@ def gen3_randbat_category_strings(
     # therefore remain distinct species rows.
     groups["species"] = [f"species:{_species_display(species)}" for species in entities["species"]]
 
-    move_strings = [s for move in entities["moves"] for s in _move_action_strings(move)]
-    move_strings += [f"move:{move}" for move in UNIVERSAL_MOVES]
-    move_strings += [s for move in UNIVERSAL_MOVES for s in _move_action_strings(move)]
+    move_strings = [s for move in move_universe for s in _move_action_strings(move)]
     groups["move_action"] = move_strings
     # Revealed opponent moves feed the same belief-move buckets as inferred possible_moves (see
     # showdown.py). The protocol can reveal moves that never appear in a randbats *set* entry — the
@@ -202,7 +212,7 @@ def gen3_randbat_category_strings(
     # universe must include the UNIVERSAL_MOVES too, or those tokens fall into OOV.
     groups["belief_move"] = [
         f"belief:possible_move:{_normalize_identifier(move)}"
-        for move in (*entities["moves"], *UNIVERSAL_MOVES)
+        for move in move_universe
     ]
     groups["belief_ability"] = [
         f"belief:possible_ability:{_normalize_identifier(ability)}" for ability in entities["abilities"]
@@ -250,7 +260,7 @@ def gen3_randbat_category_strings(
         turn_merged += [f"tt2_species:{_species_display(species)}" for species in entities["species"]]
         turn_merged += [
             f"tt2_move:{_normalize_identifier(move)}"
-            for move in (*entities["moves"], *UNIVERSAL_MOVES)
+            for move in move_universe
         ]
         groups["turn_merged"] = turn_merged
 
@@ -271,7 +281,7 @@ def gen3_randbat_category_strings(
     # .effect_label at play time, so this is exact coverage with no OOV path.
     move_effects: set[str] = set(DYNAMIC_MOVE_EFFECT_LABELS)  # type-dependent labels (Curse)
     priorities: set[int] = set()
-    for move in (*entities["moves"], *UNIVERSAL_MOVES):
+    for move in move_universe:
         info = dex.move_info(move)
         if info is None:
             continue
@@ -336,7 +346,10 @@ def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int,
 
 
 def gen3_category_string_aliases(
-    showdown_root: str | Path, *, include_turn_merged: bool = False
+    showdown_root: str | Path,
+    *,
+    include_turn_merged: bool = False,
+    extra_moves: Iterable[str] = (),
 ) -> dict[str, str]:
     """Category string aliases onto existing base rows."""
     entities = gen3_randbat_entities(showdown_root)
@@ -344,8 +357,10 @@ def gen3_category_string_aliases(
     has_unown = any(_normalize_identifier(species) == "unown" for species in entities["species"])
     if has_unown:
         aliases.update({f"species:{forme}": "species:Unown" for forme in UNOWN_FORMES})
-    move_universe = {_normalize_identifier(move) for move in entities["moves"]} | {
-        _normalize_identifier(move) for move in UNIVERSAL_MOVES
+    move_universe = {
+        _normalize_identifier(move)
+        for move in (*entities["moves"], *UNIVERSAL_MOVES, *extra_moves)
+        if _normalize_identifier(move)
     }
     for move in DYNAMIC_POWER_MOVE_ALIASES:
         if move not in move_universe:
@@ -366,21 +381,34 @@ def gen3_category_string_aliases(
 
 @lru_cache(maxsize=8)
 def _cached_category_vocabulary(
-    showdown_root_key: str, oov_buckets: int, include_turn_merged: bool
+    showdown_root_key: str,
+    oov_buckets: int,
+    include_turn_merged: bool,
+    extra_moves: tuple[str, ...],
 ) -> CategoryVocabulary:
     strings = [
         s
         for group in gen3_randbat_category_strings(
-            showdown_root_key, include_turn_merged=include_turn_merged
+            showdown_root_key,
+            include_turn_merged=include_turn_merged,
+            extra_moves=extra_moves,
         ).values()
         for s in group
     ]
-    aliases = gen3_category_string_aliases(showdown_root_key, include_turn_merged=include_turn_merged)
+    aliases = gen3_category_string_aliases(
+        showdown_root_key,
+        include_turn_merged=include_turn_merged,
+        extra_moves=extra_moves,
+    )
     return build_category_vocabulary(strings, oov_buckets=oov_buckets, aliases=aliases)
 
 
 def gen3_category_vocabulary(
-    showdown_root: str | Path, *, oov_buckets: int = 16, include_turn_merged: bool = False
+    showdown_root: str | Path,
+    *,
+    oov_buckets: int = 16,
+    include_turn_merged: bool = False,
+    extra_moves: Iterable[str] = (),
 ) -> CategoryVocabulary:
     """Build (cached) the string->row CategoryVocabulary for the closed Gen 3 randbat universe.
 
@@ -390,8 +418,14 @@ def gen3_category_vocabulary(
     opt-in because it changes the vocabulary size and therefore the embedding-table shape;
     only turn-merged-mode configs may set it.
     """
+    normalized_extra_moves = tuple(
+        sorted({_normalize_identifier(move) for move in extra_moves if _normalize_identifier(move)})
+    )
     return _cached_category_vocabulary(
-        str(Path(showdown_root).expanduser().resolve()), oov_buckets, include_turn_merged
+        str(Path(showdown_root).expanduser().resolve()),
+        oov_buckets,
+        include_turn_merged,
+        normalized_extra_moves,
     )
 
 

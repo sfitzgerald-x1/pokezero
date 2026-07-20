@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 import json
 import os
 import random
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -29,6 +28,7 @@ from pokezero.deep_line_audit import (  # noqa: E402
     census_protocol_cooccurrences,
     protocol_cut_fixtures,
 )
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.golden_corpus_scenarios import (  # noqa: E402
     ScriptedPreferencePolicy,
     interaction_registry_specs,
@@ -38,15 +38,6 @@ from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noq
 from pokezero.observation import ObservationFeatureMasks  # noqa: E402
 from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
 from pokezero.showdown import observation_schema_version_from_choice, observation_spec_for_schema  # noqa: E402
-
-
-def _current_commit() -> str | None:
-    try:
-        return subprocess.check_output(
-            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
@@ -214,7 +205,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     payload["audit_provenance"] = {
         "schema_version": "pokezero.deep-line-audit-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "public_repo_commit": _current_commit(),
+        "public_repo_commit": public_repo_commit(ROOT),
         "showdown_source_hash": source.metadata.source_hash,
         "observation_schema": observation_schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),

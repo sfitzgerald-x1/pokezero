@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
@@ -16,18 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pokezero.encoding_collision_audit import audit_public_decision_corpus  # noqa: E402
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.local_showdown import LocalShowdownConfig  # noqa: E402
 from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
 from pokezero.showdown import observation_schema_version_from_choice  # noqa: E402
-
-
-def _current_commit() -> str | None:
-    try:
-        return subprocess.check_output(
-            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -77,7 +68,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     payload["audit_provenance"] = {
         "schema_version": "pokezero.encoding-collision-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "public_repo_commit": _current_commit(),
+        "public_repo_commit": public_repo_commit(ROOT),
         "showdown_source_hash": source.metadata.source_hash,
         "observation_schema": observation_schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),

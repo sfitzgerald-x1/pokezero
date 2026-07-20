@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import random
-import subprocess
 import sys
 import tempfile
 from typing import Iterable
@@ -18,20 +17,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from pokezero.golden_corpus_scenarios import ScriptedPreferencePolicy, interaction_registry_specs, scenario_specs  # noqa: E402
 from pokezero.golden_corpus_scenarios import _scenario_override  # noqa: E402
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noqa: E402
 from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
 from pokezero.randbat_vocab import gen3_category_vocabulary  # noqa: E402
 from pokezero.showdown import observation_schema_version_from_choice, observation_spec_for_schema  # noqa: E402
 from pokezero.silent_mutation_audit import SilentMutationAuditReport  # noqa: E402
-
-
-def _current_commit() -> str | None:
-    try:
-        return subprocess.check_output(
-            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
@@ -106,15 +97,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     schema = observation_schema_version_from_choice(args.observation_schema)
     if schema is None:
         raise AssertionError("silent-mutation audit requires v3")
-    base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
-    root = base.resolved_showdown_root()
-    config = LocalShowdownConfig(
-        showdown_root=root,
-        set_belief_source=True,
-        observation_spec=observation_spec_for_schema(schema),
-        category_vocab=gen3_category_vocabulary(root, include_turn_merged=True),
-    )
-    report = SilentMutationAuditReport()
     scenarios = {spec.name: spec for spec in scenario_specs()}
     if args.interaction_registry:
         scenarios.update({spec.name: spec for spec in interaction_registry_specs()})
@@ -126,6 +108,30 @@ def main(argv: Iterable[str] | None = None) -> int:
     unknown = sorted(names - scenarios.keys())
     if unknown:
         parser.error(f"unknown scenario(s): {', '.join(unknown)}")
+
+    # Curated fixtures deliberately exercise Gen 3 mechanics that are absent
+    # from the current randbat source. This audit-local vocabulary is never
+    # paired with a checkpoint, so its independently assigned row indices do
+    # not affect the production vocabulary or embedding shape.
+    fixture_moves = tuple(
+        move
+        for name in sorted(names)
+        for pokemon in (*scenarios[name].p1_team, *scenarios[name].p2_team)
+        for move in pokemon.moves
+    )
+    base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
+    root = base.resolved_showdown_root()
+    config = LocalShowdownConfig(
+        showdown_root=root,
+        set_belief_source=True,
+        observation_spec=observation_spec_for_schema(schema),
+        category_vocab=gen3_category_vocabulary(
+            root,
+            include_turn_merged=True,
+            extra_moves=fixture_moves,
+        ),
+    )
+    report = SilentMutationAuditReport()
 
     env = LocalShowdownEnv(config)
     try:
@@ -141,7 +147,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     payload["audit_provenance"] = {
         "schema_version": "pokezero.silent-mutation-audit-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "public_repo_commit": _current_commit(),
+        "public_repo_commit": public_repo_commit(ROOT),
         "showdown_source_hash": source.metadata.source_hash,
         "observation_schema": schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
