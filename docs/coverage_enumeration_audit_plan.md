@@ -252,8 +252,10 @@ Run the opt-in `--exact-variants` mode when that stronger guarantee is needed:
 
 ```sh
 POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+POKEZERO_AUDIT_IMAGE_DIGEST="$IMAGE_DIGEST" \
   uv run python scripts/coverage_enumeration_audit.py \
     --exact-variants \
+    --observation-schema v3 \
     --json /tmp/pokezero-exact-variant-audit.json \
     --coverage-json /tmp/pokezero-exact-variant-ledger.json
 ```

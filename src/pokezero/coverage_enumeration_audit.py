@@ -20,6 +20,12 @@ from .showdown_fixture import FixturePokemon, pack_team
 
 PLAN_SCHEMA_VERSION = "gen3-randbat-coverage-plan-v2"
 OBSERVATION_FORMAT_ID = "gen3randombattle"
+AUDIT_PROVENANCE_MATCH_KEYS = (
+    "public_repo_commit",
+    "showdown_source_hash",
+    "observation_schema",
+    "image_digest",
+)
 
 
 def normalize_coverage_move(move: str) -> str:
@@ -36,6 +42,39 @@ def normalize_coverage_move(move: str) -> str:
     if normalized.startswith("frustration"):
         return "frustration"
     return normalized
+
+
+def require_matching_audit_provenance(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return merge-safe run provenance or reject missing/mixed shard inputs.
+
+    Shard-local fields such as timestamps, seed ranges, commands, and indexes
+    are intentionally excluded. The values that define the encoded world must
+    be identical before an aggregate result can claim full coverage.
+    """
+
+    collected = list(ledgers)
+    if not collected:
+        raise ValueError("coverage provenance requires at least one ledger")
+    provenances: list[Mapping[str, Any]] = []
+    for index, ledger in enumerate(collected):
+        provenance = ledger.get("audit_provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError(f"ledger {index} has no audit_provenance; refuse stale or unverified merge")
+        missing = [key for key in AUDIT_PROVENANCE_MATCH_KEYS if not provenance.get(key)]
+        if missing:
+            raise ValueError(
+                f"ledger {index} audit_provenance is missing required fields: {', '.join(missing)}"
+            )
+        provenances.append(provenance)
+    baseline = {key: provenances[0][key] for key in AUDIT_PROVENANCE_MATCH_KEYS}
+    for index, provenance in enumerate(provenances[1:], start=1):
+        actual = {key: provenance[key] for key in AUDIT_PROVENANCE_MATCH_KEYS}
+        if actual != baseline:
+            raise ValueError(
+                f"ledger {index} audit provenance differs from shard 0: "
+                f"expected {baseline!r}, got {actual!r}"
+            )
+    return baseline
 
 
 @dataclass(frozen=True)

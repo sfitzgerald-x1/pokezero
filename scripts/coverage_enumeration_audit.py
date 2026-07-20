@@ -9,8 +9,12 @@ surfaces are audited against the same closed randbat universe used in training.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -47,6 +51,8 @@ from pokezero.showdown import (  # noqa: E402
     CATEGORY_PRIMARY,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     SELF_POKEMON_TOKEN_OFFSET,
+    observation_schema_version_from_choice,
+    observation_spec_for_schema,
 )
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
@@ -60,6 +66,58 @@ def _parse_shard(value: str) -> tuple[int, int]:
     if count < 1 or index < 0 or index >= count:
         raise argparse.ArgumentTypeError("--shard index must satisfy 0 <= INDEX < COUNT")
     return index, count
+
+
+def _current_commit() -> str | None:
+    """Return the checked-out public source revision without making it a requirement."""
+
+    try:
+        return subprocess.check_output(
+            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write a complete artifact before making it visible to shard mergers."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        temporary_path = Path(handle.name)
+    os.replace(temporary_path, path)
+
+
+def _run_provenance(
+    *,
+    source_hash: str,
+    observation_schema: str,
+    shard_index: int,
+    shard_count: int,
+    selected_games: Iterable[CoverageGame],
+    command: Iterable[str],
+) -> dict[str, Any]:
+    """Stamp the inputs needed to reject stale or mixed audit artifacts."""
+
+    seeds = sorted({game.seed for game in selected_games})
+    return {
+        "schema_version": "pokezero.coverage-enumeration-provenance.v1",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "public_repo_commit": _current_commit(),
+        "showdown_source_hash": source_hash,
+        "observation_schema": observation_schema,
+        # Cluster launchers set this to an immutable image digest. The explicit
+        # local marker prevents a missing value from masquerading as a verified
+        # container run in committed evidence.
+        "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
+        "command": list(command),
+        "shard": {"index": shard_index, "count": shard_count},
+        "seed_range": {"start": seeds[0], "end": seeds[-1]} if seeds else None,
+    }
 
 
 def _passes(value: str) -> tuple[str, ...]:
@@ -504,6 +562,7 @@ def _write_failure_artifact(
     game: CoverageGame,
     findings: Iterable[AuditFinding],
     move_use: Mapping[str, list[str]],
+    provenance: Mapping[str, Any],
     exception: Exception | None = None,
 ) -> str:
     """Persist a compact repro only for a fixture with a real audit failure."""
@@ -531,9 +590,10 @@ def _write_failure_artifact(
             else None
         ),
         "protocol_lines": list(env.protocol_lines),
+        "audit_provenance": dict(provenance),
     }
     path = failure_dir / f"{game.game_id}.json"
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomic(path, payload)
     return str(path)
 
 
@@ -704,8 +764,15 @@ def _run_universal_move_lane(
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", type=Path, default=None)
+    parser.add_argument(
+        "--observation-schema",
+        choices=("v3",),
+        required=True,
+        help="Audit the explicit v3 observation path; v2.2 default fallback is forbidden.",
+    )
     parser.add_argument("--json", type=Path, required=True, help="Write oracle findings JSON here.")
     parser.add_argument("--coverage-json", type=Path, required=True, help="Write coverage ledger JSON here.")
     parser.add_argument("--pass", dest="coverage_pass", choices=("A", "B", "both"), default="both")
@@ -733,7 +800,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--shard", type=_parse_shard, default=(0, 1))
     parser.add_argument("--seed-start", type=int, default=9_300_000)
     parser.add_argument("--max-games", type=int, default=None, help="Testing-only cap; makes the execution ledger partial.")
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(command_arguments)
     if args.max_move_rounds < 1:
         parser.error("--max-move-rounds must be positive")
     if args.max_games is not None and args.max_games < 1:
@@ -751,6 +818,9 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     preliminary = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
     root = preliminary.resolved_showdown_root()
+    observation_schema = observation_schema_version_from_choice(args.observation_schema)
+    if observation_schema is None:  # Defensive: parser requires a concrete v3 choice.
+        raise AssertionError("coverage audit requires an explicit observation schema")
     source = load_gen3_randbat_source_cached(root)
     entities = gen3_randbat_entities(root)
     plan = build_coverage_plan(
@@ -767,11 +837,20 @@ def main(argv: Iterable[str] | None = None) -> int:
     selected_games = plan.games_for_shard(shard_index=shard_index, shard_count=shard_count)
     if args.max_games is not None:
         selected_games = selected_games[: args.max_games]
+    provenance = _run_provenance(
+        source_hash=source.metadata.source_hash,
+        observation_schema=observation_schema,
+        shard_index=shard_index,
+        shard_count=shard_count,
+        selected_games=selected_games,
+        command=(str(Path(__file__).relative_to(ROOT)), *command_arguments),
+    )
 
     config = LocalShowdownConfig(
         showdown_root=root,
         set_belief_source=True,
         category_vocab=gen3_category_vocabulary(root, include_turn_merged=True),
+        observation_spec=observation_spec_for_schema(observation_schema),
     )
     report = DeepLineAuditReport()
     completed: list[CoverageGame] = []
@@ -822,6 +901,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                             game=game,
                             findings=report.findings[findings_before:],
                             move_use=game_move_use,
+                            provenance=provenance,
                             exception=game_exception,
                         )
                     )
@@ -851,6 +931,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     execution_ledger = plan.coverage_ledger(completed)
     coverage_payload = {
         **execution_ledger,
+        "audit_provenance": provenance,
         "execution": {
             "shard": {"index": shard_index, "count": shard_count},
             "selected_game_ids": [game.game_id for game in selected_games],
@@ -863,6 +944,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "planned_full_coverage": plan.coverage_ledger(),
     }
     audit_payload = report.to_json_dict()
+    audit_payload["audit_provenance"] = provenance
     audit_payload["coverage_execution"] = {
         "source_hash": source.metadata.source_hash,
         "completed_games": len(completed),
@@ -872,10 +954,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "depth_rounds": args.depth_rounds,
         "failure_artifact_count": len(failure_artifacts),
     }
-    args.json.parent.mkdir(parents=True, exist_ok=True)
-    args.coverage_json.parent.mkdir(parents=True, exist_ok=True)
-    args.json.write_text(json.dumps(audit_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    args.coverage_json.write_text(json.dumps(coverage_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomic(args.json, audit_payload)
+    _write_json_atomic(args.coverage_json, coverage_payload)
     print(
         "coverage enumeration audit: "
         f"games={len(completed)}/{len(selected_games)} findings={len(report.findings)} "
