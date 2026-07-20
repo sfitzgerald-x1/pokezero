@@ -209,6 +209,13 @@ class TransitionToken:
     damage_outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
+    # A ``|-fail|`` line fired inside this action's event window (spec v3 corrective signal;
+    # docs/observation_v3_spec.md change 1). Deliberately WINDOW-scoped with no side condition
+    # — the engine's ``-fail`` argument sometimes names the actor, sometimes the target,
+    # depending on the effect, unlike ``-miss`` (whose actor-side condition is correct).
+    # Extracted for every replay (pure extraction, schema-independent); only a v3 encode
+    # emits it, so v2/v2.1/v2.2 output stays byte-identical.
+    fail: bool = False
     ko: bool = False  # the move's own damage fainted the defender (chip faints excluded)
     pursuit_intercept: bool = False  # |-activate|<target>|move: Pursuit marker; see docstring
     n_hits: int = 1  # from |-hitcount| (Bonemerang: always exactly 2 in this format)
@@ -322,6 +329,7 @@ class _Window:
     outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
+    fail: bool = False  # window-scoped |-fail| marker (spec v3; no side condition)
     ko: bool = False
     pursuit_intercept: bool = False
     n_hits: int = 1
@@ -840,6 +848,14 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             if current is not None and _slot_from_ident(parts[2]) == current.side:
                 current.miss = True
 
+        elif event_type == "-fail":
+            # Spec v3 (docs/observation_v3_spec.md change 1): window-scoped, deliberately NOT
+            # conditioned on which slot the argument names — the engine sometimes names the
+            # actor, sometimes the target, depending on the effect. (``-miss``'s actor-side
+            # condition above is correct for misses; fails need the window-scoped rule.)
+            if current is not None:
+                current.fail = True
+
         elif event_type == "-supereffective":
             if current is not None and target == current.defender_side:
                 current.effectiveness = EFFECTIVENESS_SUPER
@@ -910,6 +926,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             damage_outcome=window.outcome,
             crit=window.crit,
             miss=window.miss,
+            fail=window.fail,
             ko=window.ko,
             pursuit_intercept=window.pursuit_intercept,
             n_hits=window.n_hits,

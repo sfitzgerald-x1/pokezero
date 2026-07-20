@@ -147,6 +147,7 @@ class TurnSubBlock:
     damage_outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
+    fail: bool = False  # window-scoped |-fail| marker (spec v3); emitted only under v3
     ko: bool = False
     pursuit_intercept: bool = False
     n_hits: int = 1
@@ -367,6 +368,7 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
             damage_outcome=sub.damage_outcome,
             crit=sub.crit,
             miss=sub.miss,
+            fail=sub.fail,
             ko=sub.ko,
             pursuit_intercept=sub.pursuit_intercept,
             n_hits=sub.n_hits,
@@ -624,7 +626,11 @@ def _reduce_side_chain(side: str, seq: list[_Window]) -> tuple[_Chain, list[_Win
 def _is_protocol_constant(window: _Window) -> bool:
     """True when a chain-interior window carries no information beyond its identity
     (so flatten can resynthesize it exactly). ``transformed`` is inherited from the
-    representative and deliberately not checked."""
+    representative and deliberately not checked. ``fail`` (spec v3) is deliberately
+    not checked either: adding it would change the MERGE STRUCTURE for the same log
+    and break v2.2 byte-identity, and the collapsed interiors cannot carry it — a
+    cant window never takes ``-fail``, and the Sleep Talk click interior is only
+    dropped when a called execution follows (i.e. the click succeeded)."""
     return (
         window.damage_fraction == 0.0
         and window.self_hp_cost == 0.0
@@ -654,6 +660,7 @@ def _action_sub_block(window: _Window, **collapse) -> TurnSubBlock:
         damage_outcome=window.outcome,
         crit=window.crit,
         miss=window.miss,
+        fail=window.fail,
         ko=window.ko,
         pursuit_intercept=window.pursuit_intercept,
         n_hits=window.n_hits,
