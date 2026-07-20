@@ -278,6 +278,34 @@ class LocalShowdownRequestTest(unittest.TestCase):
         self.assertIsNone(output_queue.get_nowait())
         self.assertEqual(stderr_lines, [])
 
+    @staticmethod
+    def _winner_slot_env(players: Mapping[str, str]) -> LocalShowdownEnv:
+        env = object.__new__(LocalShowdownEnv)
+        env._parser = SimpleNamespace(players=dict(players))
+        env._sync_incremental_state = lambda: None  # type: ignore[method-assign]
+        return env
+
+    def test_winner_slot_resolves_distinct_usernames(self) -> None:
+        # Reachable-path control: the default self-play username map resolves each
+        # |win| to the right seat and never trips the defensive asserts.
+        env = self._winner_slot_env({"p1": "PokeZero p1", "p2": "PokeZero p2"})
+        self.assertEqual(env._winner_slot("PokeZero p2"), "p2")
+        self.assertEqual(env._winner_slot("PokeZero p1"), "p1")
+
+    def test_winner_slot_asserts_on_unmapped_winner_name(self) -> None:
+        # An unmapped winner name would otherwise silently return None ->
+        # downgrade a real win to a 0/0 draw target. It must fail loudly instead.
+        env = self._winner_slot_env({"p1": "PokeZero p1", "p2": "PokeZero p2"})
+        with self.assertRaisesRegex(AssertionError, "did not resolve to a player slot"):
+            env._winner_slot("Nobody")
+
+    def test_winner_slot_asserts_on_duplicate_usernames(self) -> None:
+        # Two seats sharing a username would first-match every win to one slot —
+        # the catastrophic silent mis-attribution the distinctness assert guards.
+        env = self._winner_slot_env({"p1": "Twin", "p2": "Twin"})
+        with self.assertRaisesRegex(AssertionError, "must be distinct"):
+            env._winner_slot("Twin")
+
 
 class BranchObservationTimingTest(unittest.TestCase):
     def test_state_normalization_substages_have_exact_timing_boundaries(self) -> None:
