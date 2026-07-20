@@ -34,6 +34,8 @@ def build_collision_capture_arg_parser() -> argparse.ArgumentParser:
 async def async_main(argv: Sequence[str] | None = None) -> int:
     parser = build_collision_capture_arg_parser()
     args = parser.parse_args(argv)
+    if args.summary_out is not None and args.summary_out.expanduser().resolve() == args.out.expanduser().resolve():
+        parser.error("--summary-out must differ from --out so progress cannot replace the collision sketch.")
     if args.showdown_root is None:
         parser.error("--showdown-root is required unless POKEZERO_SHOWDOWN_ROOT is set.")
     if args.pokezero_player != "p1":

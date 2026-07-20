@@ -25,7 +25,7 @@ from .public_decision_corpus import (
 
 
 ENCODING_COLLISION_AUDIT_SCHEMA_VERSION = "pokezero.encoding-collision-audit.v1"
-COLLISION_SKETCH_SCHEMA_VERSION = "pokezero.encoding-collision-sketch.v1"
+COLLISION_SKETCH_SCHEMA_VERSION = "pokezero.encoding-collision-sketch.v2"
 WHITELIST_VERSION = "pokezero.encoding-collision-whitelist.v1"
 DELIBERATE_ABSTRACTION_WHITELIST = frozenset(
     {
@@ -108,13 +108,19 @@ class CollisionSketchRecord:
     format_id: str
     acting_player: str
     turn_index: int
+    foulplay_random_seed: int
     observation_schema: str
     decision_kind: str
     input_hash: str
     public_fingerprint: str
 
     @classmethod
-    def from_record(cls, record: PublicDecisionRecord) -> "CollisionSketchRecord":
+    def from_record(
+        cls,
+        record: PublicDecisionRecord,
+        *,
+        foulplay_random_seed: int | None = None,
+    ) -> "CollisionSketchRecord":
         public_fingerprint, _ = canonical_public_fingerprint(record)
         return cls(
             decision_id=record.decision_id,
@@ -123,6 +129,10 @@ class CollisionSketchRecord:
             format_id=record.format_id,
             acting_player=record.acting_player,
             turn_index=record.turn_index,
+            # The default matches the bridge when no explicit FoulPlay seed
+            # override was supplied. A capture with an override records its
+            # actual per-game seed below so a collision pair stays replayable.
+            foulplay_random_seed=record.seed if foulplay_random_seed is None else foulplay_random_seed,
             observation_schema=record.observation.schema_version,
             decision_kind=decision_kind(record),
             input_hash=encoded_input_hash(record),
@@ -139,6 +149,7 @@ class CollisionSketchRecord:
             "format_id": self.format_id,
             "acting_player": self.acting_player,
             "turn_index": self.turn_index,
+            "foulplay_random_seed": self.foulplay_random_seed,
             "observation_schema": self.observation_schema,
             "decision_kind": self.decision_kind,
             "input_hash": self.input_hash,
@@ -156,6 +167,7 @@ class CollisionSketchRecord:
             "format_id",
             "acting_player",
             "turn_index",
+            "foulplay_random_seed",
             "observation_schema",
             "decision_kind",
             "input_hash",
@@ -182,8 +194,16 @@ class CollisionSketchRecord:
                 raise ValueError(f"collision sketch {field} is required.")
         seed = payload.get("seed")
         turn_index = payload.get("turn_index")
-        if not isinstance(seed, int) or seed < 0 or not isinstance(turn_index, int) or turn_index < 0:
-            raise ValueError("collision sketch seed and turn_index must be non-negative integers.")
+        foulplay_random_seed = payload.get("foulplay_random_seed")
+        if (
+            not isinstance(seed, int)
+            or seed < 0
+            or not isinstance(turn_index, int)
+            or turn_index < 0
+            or not isinstance(foulplay_random_seed, int)
+            or foulplay_random_seed < 0
+        ):
+            raise ValueError("collision sketch seed, turn_index, and FoulPlay seed must be non-negative integers.")
         return cls(
             decision_id=payload["decision_id"],
             battle_id=payload["battle_id"],
@@ -191,11 +211,41 @@ class CollisionSketchRecord:
             format_id=payload["format_id"],
             acting_player=player,
             turn_index=turn_index,
+            foulplay_random_seed=foulplay_random_seed,
             observation_schema=observation_schema,
             decision_kind=kind,
             input_hash=payload["input_hash"],
             public_fingerprint=payload["public_fingerprint"],
         )
+
+
+@dataclass(frozen=True)
+class CollisionSketchCompletion:
+    """Durable end marker proving a sketch can safely enter aggregation."""
+
+    record_count: int
+    records_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "record_type": "completion",
+            "schema_version": COLLISION_SKETCH_SCHEMA_VERSION,
+            "record_count": self.record_count,
+            "records_sha256": self.records_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CollisionSketchCompletion":
+        expected = {"record_type", "schema_version", "record_count", "records_sha256"}
+        if set(payload) != expected:
+            raise ValueError("collision sketch completion has unsupported fields.")
+        if payload.get("record_type") != "completion" or payload.get("schema_version") != COLLISION_SKETCH_SCHEMA_VERSION:
+            raise ValueError("not a collision sketch completion record.")
+        record_count = payload.get("record_count")
+        records_sha256 = payload.get("records_sha256")
+        if not isinstance(record_count, int) or record_count < 0 or not isinstance(records_sha256, str) or not _is_sha256(records_sha256):
+            raise ValueError("collision sketch completion is invalid.")
+        return cls(record_count=record_count, records_sha256=records_sha256)
 
 
 def collision_sketch_manifest(*, capture_manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -228,6 +278,7 @@ class CollisionSketchWriter:
         self.path = path
         self.manifest = _validated_collision_sketch_manifest(manifest)
         self._seen_decision_ids: set[str] = set()
+        self._records_digest = hashlib.sha256()
         self.resumed_record_count = 0
         self.record_count = 0
         self.recovered_trailing_partial = False
@@ -236,13 +287,16 @@ class CollisionSketchWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             self.recovered_trailing_partial = _normalize_collision_sketch_tail(path)
-            existing_manifest, records = _iter_collision_sketch(path)
+            existing_manifest, completion = _inspect_collision_sketch(path, require_complete=False)
             if existing_manifest != self.manifest:
                 raise ValueError("existing collision sketch has incompatible immutable capture manifest.")
-            for record in records:
+            if completion is not None:
+                raise ValueError("collision sketch is already complete and cannot be resumed.")
+            for record in _iter_collision_sketch_records(path, existing_manifest):
                 if record.decision_id in self._seen_decision_ids:
                     raise ValueError(f"existing collision sketch duplicates decision_id {record.decision_id!r}.")
                 self._seen_decision_ids.add(record.decision_id)
+                self._records_digest.update(_canonical_json_line(record.to_dict()))
                 self.resumed_record_count += 1
             self.record_count = self.resumed_record_count
             self._handle = path.open("a", encoding="utf-8")
@@ -250,11 +304,17 @@ class CollisionSketchWriter:
             self._handle = path.open("x", encoding="utf-8")
             self._write(self.manifest, sync=True)
 
-    def append_record(self, record: PublicDecisionRecord) -> int:
-        return self._append_record(record, sync=True)
+    def append_record(self, record: PublicDecisionRecord, *, foulplay_random_seed: int | None = None) -> int:
+        return self._append_record(record, foulplay_random_seed=foulplay_random_seed, sync=True)
 
-    def _append_record(self, record: PublicDecisionRecord, *, sync: bool) -> int:
-        sketch = CollisionSketchRecord.from_record(record)
+    def _append_record(
+        self,
+        record: PublicDecisionRecord,
+        *,
+        foulplay_random_seed: int | None,
+        sync: bool,
+    ) -> int:
+        sketch = CollisionSketchRecord.from_record(record, foulplay_random_seed=foulplay_random_seed)
         if sketch.observation_schema != OBSERVATION_SCHEMA_VERSION_V3:
             raise ValueError(
                 "collision sketch capture requires schema "
@@ -262,17 +322,37 @@ class CollisionSketchWriter:
             )
         if sketch.decision_id in self._seen_decision_ids:
             return 0
-        self._write(sketch.to_dict(), sync=sync)
+        payload = sketch.to_dict()
+        self._write(payload, sync=sync)
         self._seen_decision_ids.add(sketch.decision_id)
+        self._records_digest.update(_canonical_json_line(payload))
         self.record_count += 1
         return 1
 
-    def append_trajectory(self, records: Iterable[PublicDecisionRecord]) -> int:
-        written = sum(self._append_record(record, sync=False) for record in records)
+    def append_trajectory(
+        self,
+        records: Iterable[PublicDecisionRecord],
+        *,
+        foulplay_random_seed: int | None = None,
+    ) -> int:
+        written = sum(
+            self._append_record(record, foulplay_random_seed=foulplay_random_seed, sync=False)
+            for record in records
+        )
         if written:
             self._handle.flush()
             os.fsync(self._handle.fileno())
         return written
+
+    def complete(self) -> CollisionSketchCompletion:
+        """Append and fsync the terminal proof after all capture work succeeds."""
+
+        completion = CollisionSketchCompletion(
+            record_count=self.record_count,
+            records_sha256=self._records_digest.hexdigest(),
+        )
+        self._write(completion.to_dict(), sync=True)
+        return completion
 
     def close(self) -> None:
         self._handle.close()
@@ -542,6 +622,7 @@ class EncodingCollisionSketchAudit:
                     "decision_id": record.decision_id,
                     "battle_id": record.battle_id,
                     "seed": record.seed,
+                    "foulplay_random_seed": record.foulplay_random_seed,
                     "turn_index": record.turn_index,
                 },
             )
@@ -650,17 +731,17 @@ def audit_collision_sketches(
     sorted_paths = tuple(sorted(Path(path) for path in paths))
     if not sorted_paths:
         raise ValueError("collision sketch audit requires at least one sketch path.")
-    sources: list[tuple[Mapping[str, Any], Iterator[CollisionSketchRecord]]] = []
+    sources: list[tuple[Mapping[str, Any], CollisionSketchCompletion, Iterator[CollisionSketchRecord]]] = []
     for path in sorted_paths:
-        manifest, records = _iter_collision_sketch(path)
+        manifest, completion, records = _iter_collision_sketch(path)
         manifest_hashes.append(canonical_json_sha256(manifest))
         current_capture_manifest_hash = str(manifest["capture_manifest_sha256"])
         if capture_manifest_hash is None:
             capture_manifest_hash = current_capture_manifest_hash
         elif capture_manifest_hash != current_capture_manifest_hash:
             raise ValueError("collision sketches have incompatible immutable capture manifests.")
-        sources.append((manifest, records))
-    for _manifest, records in sources:
+        sources.append((manifest, completion, records))
+    for _manifest, _completion, records in sources:
         for record in records:
             if record.decision_id in seen_decision_ids:
                 raise ValueError(f"collision sketches contain duplicate decision_id {record.decision_id!r}.")
@@ -690,9 +771,19 @@ def audit_collision_sketches(
     )
 
 
-def _iter_collision_sketch(path: Path) -> tuple[Mapping[str, Any], Iterator[CollisionSketchRecord]]:
+def _inspect_collision_sketch(
+    path: Path,
+    *,
+    require_complete: bool,
+) -> tuple[Mapping[str, Any], CollisionSketchCompletion | None]:
+    """Validate framing and completion without retaining the sketch rows in memory."""
+
     if not path.is_file():
         raise ValueError(f"collision sketch does not exist: {path}")
+    manifest: Mapping[str, Any] | None = None
+    completion: CollisionSketchCompletion | None = None
+    record_count = 0
+    records_digest = hashlib.sha256()
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             text = line.strip()
@@ -704,32 +795,62 @@ def _iter_collision_sketch(path: Path) -> tuple[Mapping[str, Any], Iterator[Coll
                 raise ValueError(f"invalid collision sketch JSON at {path}:{line_number}: {exc}") from exc
             if not isinstance(payload, Mapping):
                 raise ValueError(f"collision sketch line must be an object: {path}:{line_number}")
-            manifest = _validated_collision_sketch_manifest(payload)
-            break
-        else:
-            raise ValueError(f"collision sketch is empty: {path}")
+            if manifest is None:
+                manifest = _validated_collision_sketch_manifest(payload)
+                continue
+            if completion is not None:
+                raise ValueError(f"collision sketch has records after its completion marker: {path}:{line_number}")
+            if payload.get("record_type") == "completion":
+                completion = CollisionSketchCompletion.from_dict(payload)
+                continue
+            record = CollisionSketchRecord.from_dict(payload)
+            record_count += 1
+            records_digest.update(_canonical_json_line(record.to_dict()))
+    if manifest is None:
+        raise ValueError(f"collision sketch is empty: {path}")
+    if completion is not None and (
+        completion.record_count != record_count or completion.records_sha256 != records_digest.hexdigest()
+    ):
+        raise ValueError(f"collision sketch completion does not match its records: {path}")
+    if require_complete and completion is None:
+        raise ValueError(f"collision sketch is incomplete and cannot enter aggregation: {path}")
+    return manifest, completion
 
-    def records() -> Iterator[CollisionSketchRecord]:
-        with path.open(encoding="utf-8") as handle:
-            first_record = True
-            for line_number, line in enumerate(handle, start=1):
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    payload = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"invalid collision sketch JSON at {path}:{line_number}: {exc}") from exc
-                if not isinstance(payload, Mapping):
-                    raise ValueError(f"collision sketch line must be an object: {path}:{line_number}")
-                if first_record:
-                    if _validated_collision_sketch_manifest(payload) != manifest:
-                        raise ValueError(f"collision sketch manifest changed while reading: {path}")
-                    first_record = False
-                    continue
-                yield CollisionSketchRecord.from_dict(payload)
 
-    return manifest, records()
+def _iter_collision_sketch_records(
+    path: Path,
+    manifest: Mapping[str, Any],
+) -> Iterator[CollisionSketchRecord]:
+    """Yield validated records from a sketch already checked by :func:`_inspect_collision_sketch`."""
+
+    with path.open(encoding="utf-8") as handle:
+        first_record = True
+        for line_number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid collision sketch JSON at {path}:{line_number}: {exc}") from exc
+            if not isinstance(payload, Mapping):
+                raise ValueError(f"collision sketch line must be an object: {path}:{line_number}")
+            if first_record:
+                if _validated_collision_sketch_manifest(payload) != manifest:
+                    raise ValueError(f"collision sketch manifest changed while reading: {path}")
+                first_record = False
+                continue
+            if payload.get("record_type") == "completion":
+                return
+            yield CollisionSketchRecord.from_dict(payload)
+
+
+def _iter_collision_sketch(
+    path: Path,
+) -> tuple[Mapping[str, Any], CollisionSketchCompletion, Iterator[CollisionSketchRecord]]:
+    manifest, completion = _inspect_collision_sketch(path, require_complete=True)
+    assert completion is not None
+    return manifest, completion, _iter_collision_sketch_records(path, manifest)
 
 
 def _canonical_json_line(payload: Mapping[str, Any]) -> bytes:

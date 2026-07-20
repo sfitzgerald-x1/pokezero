@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from pathlib import Path
 
-from pokezero.foulplay_collision_capture import build_collision_capture_arg_parser
+from pokezero.foulplay_collision_capture import async_main, build_collision_capture_arg_parser
 
 
 class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
@@ -20,6 +21,21 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_collision_capture_arg_parser().parse_args(
                 ["--checkpoint", "checkpoint.pt", "--out", "collision-sketch.jsonl", "--policy-mode", "root-puct"]
+            )
+
+    def test_summary_path_cannot_replace_compact_output(self) -> None:
+        with self.assertRaises(SystemExit):
+            asyncio.run(
+                async_main(
+                    [
+                        "--checkpoint",
+                        "checkpoint.pt",
+                        "--out",
+                        "collision-sketch.jsonl",
+                        "--summary-out",
+                        "collision-sketch.jsonl",
+                    ]
+                )
             )
 
 

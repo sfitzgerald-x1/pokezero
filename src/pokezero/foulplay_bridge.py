@@ -1845,13 +1845,19 @@ async def capture_controlled_foulplay_collision_sketch(
             observation_schema_version = current_schema
         elif observation_schema_version != current_schema:
             raise RuntimeError("collision sketch capture observation schema drifted within one pool")
-        captured_new_decisions += writer.append_trajectory(records)
+        foulplay_seed = (
+            config.foulplay_random_seed + (trajectory.seed - config.seed_start)
+            if config.foulplay_random_seed is not None
+            else trajectory.seed
+        )
+        captured_new_decisions += writer.append_trajectory(records, foulplay_random_seed=foulplay_seed)
         captured_games += 1
         if capture_progress_callback is not None:
             capture_progress_callback(progress_payload(status="running"))
 
     try:
         benchmark = await run_controlled_foulplay_benchmark(config, trajectory_callback=capture)
+        writer.complete()
     finally:
         writer.close()
     result = ControlledFoulPlayCollisionSketchResult(

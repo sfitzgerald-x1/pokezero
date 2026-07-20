@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +125,7 @@ class EncodingCollisionAuditTest(unittest.TestCase):
             with CollisionSketchWriter(path, manifest=manifest) as writer:
                 writer.append_record(_record(state={"turn_number": 2, "weather": "sunnyday"}))
                 writer.append_record(_record(state={"turn_number": 2, "weather": "raindance"}))
+                writer.complete()
 
             rows = path.read_text(encoding="utf-8")
             self.assertNotIn("numeric_features", rows)
@@ -161,9 +163,70 @@ class EncodingCollisionAuditTest(unittest.TestCase):
                 self.assertEqual(writer.append_record(first), 0)
                 self.assertEqual(writer.append_record(second), 1)
                 self.assertEqual(writer.record_count, 2)
+                writer.complete()
 
             payload = audit_collision_sketches([path])
         self.assertEqual(payload["records_scanned"], 2)
+
+    def test_incomplete_sketch_is_resumable_but_rejected_by_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "collision-sketch.jsonl"
+            manifest = collision_sketch_manifest(
+                capture_manifest={
+                    "opponent_legal_mask_mode": "hidden",
+                    "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+                }
+            )
+            with CollisionSketchWriter(path, manifest=manifest) as writer:
+                writer.append_record(_record(state={"turn_number": 2, "weather": "sunnyday"}))
+
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                audit_collision_sketches([path])
+
+            with CollisionSketchWriter(path, manifest=manifest, resume=True) as writer:
+                self.assertEqual(writer.resumed_record_count, 1)
+                writer.complete()
+
+            with self.assertRaisesRegex(ValueError, "already complete"):
+                CollisionSketchWriter(path, manifest=manifest, resume=True)
+
+    def test_compact_locator_retains_the_actual_foulplay_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "collision-sketch.jsonl"
+            manifest = collision_sketch_manifest(
+                capture_manifest={
+                    "opponent_legal_mask_mode": "hidden",
+                    "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+                }
+            )
+            with CollisionSketchWriter(path, manifest=manifest) as writer:
+                writer.append_record(
+                    _record(state={"turn_number": 2, "weather": "sunnyday"}),
+                    foulplay_random_seed=987654,
+                )
+                writer.complete()
+
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[1]["foulplay_random_seed"], 987654)
+
+    def test_completion_hash_rejects_a_mutated_completed_sketch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "collision-sketch.jsonl"
+            manifest = collision_sketch_manifest(
+                capture_manifest={
+                    "opponent_legal_mask_mode": "hidden",
+                    "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+                }
+            )
+            with CollisionSketchWriter(path, manifest=manifest) as writer:
+                writer.append_record(_record(state={"turn_number": 2, "weather": "sunnyday"}))
+                writer.complete()
+
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            rows[1]["input_hash"] = "0" * 64
+            path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "completion does not match"):
+                audit_collision_sketches([path])
 
 
 if __name__ == "__main__":
