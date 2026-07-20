@@ -231,6 +231,31 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertTrue(view.opponent_pokemon[0].item_mutated)
         self.assertEqual(view.opponent_pokemon[0].ruled_out_items, ("Leftovers",))
 
+    def test_parses_item_removed_and_current_public_item(self) -> None:
+        # The Trick-swap override + consumption-removal fields must survive
+        # the overlay-payload round trip (the engine-search signals read them
+        # from serialized belief views).
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["item_mutated"] = True  # type: ignore[index]
+        opponent["current_public_item"] = "Petaya Berry"  # type: ignore[index]
+
+        view = player_belief_view_from_payload(metadata["belief_view"])
+        self.assertIsNotNone(view)
+        assert view is not None
+        self.assertTrue(view.opponent_pokemon[0].item_mutated)
+        self.assertFalse(view.opponent_pokemon[0].item_removed)
+        self.assertEqual(view.opponent_pokemon[0].current_public_item, "Petaya Berry")
+
+        # A pre-override payload (no current_public_item key) parses to None:
+        # consumers fail closed exactly as before this change.
+        opponent.pop("current_public_item")  # type: ignore[union-attr]
+        opponent["item_removed"] = True  # type: ignore[index]
+        view = player_belief_view_from_payload(metadata["belief_view"])
+        assert view is not None
+        self.assertTrue(view.opponent_pokemon[0].item_removed)
+        self.assertIsNone(view.opponent_pokemon[0].current_public_item)
+
     def test_belief_world_sampling_profile_is_bounded_by_public_variant_combinations(self) -> None:
         metadata = _metadata()
         opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
