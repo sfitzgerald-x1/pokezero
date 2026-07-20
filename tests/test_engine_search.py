@@ -237,6 +237,64 @@ class RechargeSignalTests(unittest.TestCase):
         self.assertEqual(self._slots(context, rounds), ())
 
 
+class PublicEffectSignalTests(unittest.TestCase):
+    """The item-mutation split: removals are representable, swaps fail closed."""
+
+    def _signals(self, opponent_pokemon):
+        context = type("Ctx", (), {
+            "player_id": "p1",
+            "observation": type("Obs", (), {
+                "metadata": {
+                    "belief_view": {"opponent_pokemon": opponent_pokemon},
+                    "recent_public_events": [],
+                },
+            })(),
+        })()
+        return _policy()._public_effect_signals(context)
+
+    def test_knock_off_removal_is_not_blocked(self) -> None:
+        blocked, _encored, removed = self._signals([
+            {"species": "Blissey", "active": True, "item_mutated": True, "item_removed": True},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {"p2": ("blissey",)})
+
+    def test_trick_swap_stays_fail_closed(self) -> None:
+        blocked, _encored, removed = self._signals([
+            {"species": "Blissey", "active": True, "item_mutated": True, "item_removed": False},
+        ])
+        self.assertEqual(blocked, {"p2": "item mutated on Blissey"})
+        self.assertEqual(removed, {})
+
+    def test_benched_removal_still_collected(self) -> None:
+        # The mutation lives on the mon, not the active slot: a knocked-off
+        # mon on the bench still needs its sampled item cleared.
+        blocked, _encored, removed = self._signals([
+            {"species": "Snorlax", "active": True},
+            {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {"p2": ("blissey",)})
+
+    def test_multiple_removals_accumulate(self) -> None:
+        blocked, _encored, removed = self._signals([
+            {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
+            {"species": "Snorlax", "active": True, "item_mutated": True, "item_removed": True},
+        ])
+        self.assertEqual(blocked, {})
+        self.assertEqual(removed, {"p2": ("blissey", "snorlax")})
+
+    def test_removal_plus_swap_still_blocks_the_slot(self) -> None:
+        # One mon knocked off (representable), another holding a Tricked item
+        # (not representable): the slot must still fail closed on the swap.
+        blocked, _encored, removed = self._signals([
+            {"species": "Blissey", "active": False, "item_mutated": True, "item_removed": True},
+            {"species": "Kecleon", "active": True, "item_mutated": True, "item_removed": False},
+        ])
+        self.assertEqual(blocked, {"p2": "item mutated on Kecleon"})
+        self.assertEqual(removed, {"p2": ("blissey",)})
+
+
 class ModelConfigValidationTests(unittest.TestCase):
     def test_model_mode_requires_artifacts(self) -> None:
         with self.assertRaises(ValueError):

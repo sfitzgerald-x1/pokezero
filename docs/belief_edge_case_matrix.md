@@ -17,7 +17,7 @@ construct · **NOTE** = residual risk documented.
 | Transform (Ditto): copied identity, revert-on-switch, PP suppression | FIXED (prior change this branch): both seats fail closed; revert clears the block | live Ditto tests ×2 + revert assertion |
 | **Shedinja fixed HP = 1** | **FIXED-NOW** — construct computed maxhp 164 via the raw formula; a "1/1" condition fraction-scaled to an unkillable 164-HP Shedinja (silent wrongness). Base-HP-1 pin now mirrors the generator | `test_shedinja_maxhp_is_pinned_to_one` |
 | **Recharge (Hyper Beam)** | **FIXED-NOW** — self seat was already safely closed (request `trapped` flag; costless: forced turns have no decision). Opponent seat searched worlds gave the recharging mon a FREE MOVE (silent wrongness). Now: turn-exact signal from round-indexed public actions (+ miss check; fail-open if the record is unavailable) → engine `MUSTRECHARGE` volatile (verified: restricts to "No Move") | `test_recharging_slot_gets_mustrecharge_volatile` + `RechargeSignalTests` (anchor-required miss check, species continuity, scrolled-window fail-open) |
-| **Trick / Knock Off item mutation** | **FIXED-NOW** — belief exposes `item_mutated`; sampled items are frozen to the ORIGINAL assignment, so a mutated holder mismatches reality. Fail closed on any opponent `item_mutated` (pool scope: 6 sets — 4 Knock Off + 2 Trick). Knock Off removals are representable (item publicly None); recovery needs a belief_view removal-vs-swap field — follow-up | signal unit |
+| **Trick / Knock Off item mutation** | **HANDLED (removal) / SAFE-CLOSED (swap)** — belief exposes `item_mutated` + `item_removed` (removal-vs-swap): a REMOVAL (Knock Off, or an item-taking Trick that returned nothing) leaves the mon publicly ITEMLESS — `removed_item_species` signal → engine_world clears the sampled item (spread stays the original assignment's; rule-outs stay frozen upstream). A live SWAP (holder carries an item that is not the sampled assignment) still fails closed; follow-up: the post-swap CURRENT item is publicly revealed, so worlds could substitute it instead | belief removal/swap/Trick-after-KO tests · signal units · `KnockOffRemovalLiveTests` (real protocol end-to-end) |
 | Baton Pass volatile whitelist + fail-closed markers (sub HP, leech source) | HANDLED — payload `materializationBlockers` → `materialization_blocker` fail-close; pending BP boundary fails closed | `test_fail_closed_taxonomy` |
 | Encore: sole real move-locker, derivable lock, NO duration counter | HANDLED (prior change this branch) — lock derived (self: disabled pattern; opp: last public move), engine restriction pinned, no invented counter | encore tests + engine pin |
 | Taunt/Disable/Torment/Imprison | N/A in pool (inventory-certified: never gate a move); volatile allow-list fails closed anyway | allow-list default |
@@ -94,3 +94,13 @@ Truant/MUSTRECHARGE seeding). No Transform wall occurred on these seeds,
 and the hidden-power IV mismatches were world-attempt-level only (never
 cost a decision). Alerts remain worth a look, judged against this
 per-reason taxonomy rather than a zero baseline.
+Update (same day, removal recovery landed): the Knock-Off-removal recovery
+shipped (belief `item_removed` → `removed_item_species` signal →
+engine_world item clearing). Same-seed re-run on the landed code: model arm
+15.2% (60/394) with the identical per-battle composition above — 7013's
+Trick swap stays closed as predicted — and the new
+`removed_item_decisions` telemetry reads 0 on this band (no organic
+Knock-Off wall on seeds 7000-7014). The removal path is proven by the live
+end-to-end test (`KnockOffRemovalLiveTests`) and a directed paired repro on
+one post-Knock-Off state: pre-fix 0 searched / 1 fallback
+(`public_effect_blocked`), landed 1 searched / 0 fallbacks.

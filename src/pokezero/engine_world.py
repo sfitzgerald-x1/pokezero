@@ -256,6 +256,7 @@ def battle_spec_from_payload(
     approximate_substitute_health: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
+    removed_item_species: Mapping[str, Sequence[str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
     rng: Any | None = None,
@@ -265,8 +266,13 @@ def battle_spec_from_payload(
     ``payload`` must be the dict produced by
     ``local_showdown._public_materialization_payload`` (or a test literal of
     the same shape); ``override`` supplies both sides' belief-sampled packed
-    teams. Raises :class:`EngineWorldUnsupported` whenever the position holds
-    public state this construction cannot express exactly.
+    teams. ``removed_item_species`` names, per slot, normalized species whose
+    held item was publicly stripped (Knock Off / an item-taking Trick) — the
+    built world clears the sampled set's item for them, because the current
+    public item state is exactly "no item" while the sampled item only
+    reflects the set's battle-start assignment. Raises
+    :class:`EngineWorldUnsupported` whenever the position holds public state
+    this construction cannot express exactly.
     """
 
     _reject_unsupported_globals(payload)
@@ -348,6 +354,10 @@ def battle_spec_from_payload(
             opponent_committed_pending=(not is_self_slot) and self_baton_passing,
             wish_set_turn=_wish_set_turn(payload, slot),
             encored_move=(encored_moves or {}).get(slot),
+            removed_item_species=frozenset(
+                normalize_id(str(species))
+                for species in (removed_item_species or {}).get(slot, ())
+            ),
             must_recharge=slot in (recharging_slots or ()),
             truant_loafs=slot in (truant_slots or ()),
             rng=rng,
@@ -386,6 +396,7 @@ def world_battle_spec(
     approximate_substitute_health: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
+    removed_item_species: Mapping[str, Sequence[str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
     rng: Any | None = None,
@@ -409,6 +420,7 @@ def world_battle_spec(
         approximate_substitute_health=approximate_substitute_health,
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
+        removed_item_species=removed_item_species,
         recharging_slots=recharging_slots,
         truant_slots=truant_slots,
         rng=rng,
@@ -486,6 +498,7 @@ def _build_side_spec(
     force_switch: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
+    removed_item_species: frozenset[str] = frozenset(),
     must_recharge: bool = False,
     truant_loafs: bool = False,
     baton_passing: bool = False,
@@ -519,6 +532,7 @@ def _build_side_spec(
             is_self=is_self,
             self_benched_move_history=self_benched_move_history,
             approximate_sleep_turns=approximate_sleep_turns,
+            item_removed=species_id in removed_item_species,
         )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
@@ -737,6 +751,7 @@ def _build_pokemon_spec(
     is_self: bool,
     self_benched_move_history: bool = False,
     approximate_sleep_turns: bool = False,
+    item_removed: bool = False,
 ) -> PokemonSpec:
     species_id = _engine_species_id(normalize_id(mon.species))
     info = dex.species_info(species_id)
@@ -798,7 +813,11 @@ def _build_pokemon_spec(
         moves=moves,
         status=status,
         ability=normalize_id(mon.ability) if mon.ability else None,
-        item=normalize_id(mon.item) if mon.item else None,
+        # A publicly-stripped item (Knock Off / an item-taking Trick) is a fact
+        # about the CURRENT battle state; the sampled item is the set's
+        # battle-start assignment. Stats above deliberately keep the original
+        # assignment's spread — only the held item is gone.
+        item=None if item_removed else (normalize_id(mon.item) if mon.item else None),
         weight_kg=info.weight_kg if info.weight_kg > 0 else None,
     )
 

@@ -200,6 +200,30 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.slot_sides, {"p1": "side_one", "p2": "side_two"})
         self.assertEqual(world.party_species["p2"], ("snorlax", "starmie"))
 
+    def test_removed_item_species_clears_only_the_named_mon(self) -> None:
+        # Knock Off removal: the sampled set's item is the battle-START
+        # assignment; the CURRENT public state is "holds nothing". The world
+        # clears exactly the named mon's item — spread/stats stay the set's.
+        world = battle_spec_from_payload(
+            _payload(self.dex),
+            _override(),
+            dex=self.dex,
+            removed_item_species={"p2": ("snorlax",)},
+        )
+        p2 = world.spec.side_two
+        self.assertIsNone(p2.pokemon[0].item)  # knocked-off Snorlax
+        self.assertEqual(p2.pokemon[1].item, "leftovers")  # backline untouched
+        self.assertEqual(world.spec.side_one.pokemon[0].item, "leftovers")  # self side untouched
+
+    def test_removed_item_species_normalizes_display_names(self) -> None:
+        world = battle_spec_from_payload(
+            _payload(self.dex),
+            _override(),
+            dex=self.dex,
+            removed_item_species={"p2": ("Snorlax",)},
+        )
+        self.assertIsNone(world.spec.side_two.pokemon[0].item)
+
     def test_toxic_stage_maps_to_toxic_count(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["toxicStage"] = 3
@@ -527,7 +551,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p2",
                 "public_materialization_state": env.public_materialization_state("p2"),
             })()
-            blocked, _encored = policy._public_effect_signals(context)
+            blocked, _encored, _removed = policy._public_effect_signals(context)
             self.assertIn("p1", blocked)
             self.assertIn("transformed", blocked["p1"])
             state_p2 = env.public_materialization_state("p2")
@@ -555,7 +579,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                     "player_id": "p2",
                     "public_materialization_state": env.public_materialization_state("p2"),
                 })()
-                blocked_now, _ = policy._public_effect_signals(context_now)
+                blocked_now, _, _ = policy._public_effect_signals(context_now)
                 belief_now = observation_p2.metadata.get("belief_view") or {}
                 actives = [m for m in belief_now.get("opponent_pokemon") or [] if m.get("active")]
                 if actives and "ditto" not in str(actives[0].get("species", "")).lower():
@@ -603,7 +627,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _ = policy._public_effect_signals(context)
+            blocked, _, _ = policy._public_effect_signals(context)
             self.assertIn("p2", blocked)
             self.assertIn("transformed", blocked["p2"])
             with self.assertRaises(EngineWorldUnsupported) as caught:
@@ -611,6 +635,79 @@ class DittoTransformLiveTests(unittest.TestCase):
                     env.public_materialization_state("p1"), override, dex=dex, blocked_slots=blocked
                 )
             self.assertEqual(caught.exception.reason, "public_effect_blocked")
+        finally:
+            env.close()
+
+
+@unittest.skipIf(
+    not __import__("pathlib").Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/dist/sim/index.js").exists(),
+    "requires a built local Showdown checkout",
+)
+class KnockOffRemovalLiveTests(unittest.TestCase):
+    """End-to-end removal path against the REAL sim protocol: a public Knock
+    Off must not wall world construction — the built world clears the item."""
+
+    def test_knock_off_removal_constructs_with_cleared_item(self) -> None:
+        from pokezero.dex import load_showdown_dex
+        from pokezero.engine_search import EngineMctsPolicy, EngineMctsConfig
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        ttar = FixturePokemon(species="Tyranitar", moves=("Knock Off", "Rock Slide"),
+                              ability="Sand Stream", item="Leftovers", level=74,
+                              evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((ttar, _SWAMPERT)),
+            "p2": pack_team((lax, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99003, start_override=override)
+            actions = {}
+            for player in env.requested_players():
+                observation = env.observe(player)
+                legal = [c for c in observation.metadata["action_candidates"] if c.get("legal")]
+                want = "knockoff" if player == "p1" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move" and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            result = env.step(actions)
+            self.assertIsNone(result.terminal)
+
+            observation_p1 = env.observe("p1")
+            belief_view = observation_p1.metadata.get("belief_view") or {}
+            lax_belief = next(
+                m for m in belief_view.get("opponent_pokemon") or []
+                if "snorlax" in str(m.get("species", "")).lower()
+            )
+            # The real |-enditem|...|[from] move: Knock Off| line must have set BOTH flags.
+            self.assertTrue(lax_belief.get("item_mutated"))
+            self.assertTrue(lax_belief.get("item_removed"))
+
+            policy = EngineMctsPolicy(dex=dex, set_source=None, module=object(),
+                                      config=EngineMctsConfig())
+            context = type("Ctx", (), {
+                "observation": observation_p1,
+                "player_id": "p1",
+                "public_materialization_state": env.public_materialization_state("p1"),
+            })()
+            blocked, _encored, removed = policy._public_effect_signals(context)
+            self.assertEqual(blocked, {})
+            self.assertEqual(removed, {"p2": ("snorlax",)})
+
+            # Construction goes through, with the knocked-off item cleared.
+            world = world_battle_spec(
+                env.public_materialization_state("p1"), override, dex=dex,
+                blocked_slots=blocked, removed_item_species=removed,
+            )
+            p2_side = getattr(world.spec, world.slot_sides["p2"])
+            snorlax = next(m for m in p2_side.pokemon if m.id == "snorlax")
+            self.assertIsNone(snorlax.item)
+            ttar_side = getattr(world.spec, world.slot_sides["p1"])
+            self.assertEqual(next(m for m in ttar_side.pokemon if m.id == "tyranitar").item, "leftovers")
         finally:
             env.close()
 

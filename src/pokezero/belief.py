@@ -98,6 +98,13 @@ class RevealedPokemonBelief:
     # held item is mutated (Trick / Knock Off): pruning applies to the original assignment only.
     ruled_out_items: tuple[str, ...] = ()
     item_mutated: bool = False
+    # Removal vs swap, the distinction ``item_mutated`` alone cannot carry: True while the
+    # mon's CURRENT public item state is "holds nothing" because the last mutation stripped
+    # it (Knock Off, or a Trick that took the item and returned none). A removal is exactly
+    # representable in a determinized world (clear the sampled item); a live swap is not
+    # (the current holder carries an item that is not the sampled assignment), so consumers
+    # keep swaps (``item_mutated`` and not ``item_removed``) fail-closed.
+    item_removed: bool = False
     # Natural Cure detection: status carried out on switch + the side's cure-all (Heal Bell /
     # Aromatherapy) counter at exit; a clean re-entry with an unchanged counter confirms.
     status_on_exit: Optional[str] = None
@@ -134,6 +141,7 @@ class RevealedPokemonBelief:
             "turns_active": self.turns_active,
             "ruled_out_items": list(self.ruled_out_items),
             "item_mutated": self.item_mutated,
+            "item_removed": self.item_removed,
         }
 
 
@@ -618,6 +626,9 @@ class PublicBattleBeliefEngine:
                 }
                 if raw_line and "move: Trick" in raw_line:
                     changes["item_mutated"] = True
+                    # The mon RECEIVED an item: whatever its removal history, it
+                    # now publicly holds one that is not the sampled assignment.
+                    changes["item_removed"] = False
                 self._replace_belief(belief, **changes)
 
     def _record_item_reveal(self, event: Any) -> None:
@@ -657,8 +668,11 @@ class PublicBattleBeliefEngine:
             if "[eat]" in raw_line:
                 self._berry_ate_this_turn.add(belief.key)
             if "move: Knock Off" in raw_line or "move: Trick" in raw_line:
-                # Held-item mutation: non-proc pruning applies to the ORIGINAL assignment only.
-                belief = self._replace_belief(belief, item_mutated=True)
+                # Held-item mutation: non-proc pruning applies to the ORIGINAL assignment
+                # only. Either surface here ends with the mon holding NOTHING (Knock Off
+                # removal, or a Trick that took the item and returned none) — a public
+                # item state determinized worlds can express, unlike a live swap.
+                belief = self._replace_belief(belief, item_mutated=True, item_removed=True)
         if _normalize_identifier(belief.revealed_item or "") == _normalize_identifier(item):
             return  # already known
         self._replace_belief(
