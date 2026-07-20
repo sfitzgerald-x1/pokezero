@@ -334,8 +334,224 @@ class Gen3RandbatBeliefPruningTest(unittest.TestCase):
         self.assertEqual(arcanine.candidate_set_count, 1)
 
 
+# ---------------------------------------------------------------------------
+# Candidate-universe over-pruning regression fixture (STAB / setup+toxic relaxation).
+# Self-contained (no Showdown build required); mirrors the real gen3 sets whose true combos the
+# old blanket per-species-type STAB rule and the hard setup+{knockoff,rapidspin,toxic} rule pruned.
+# ---------------------------------------------------------------------------
+STAB_RELAX_FIXTURE = {
+    # Ghost/Poison, only Ghost move is the STATUS move Destiny Bond, no Poison move. The real
+    # generated set has zero STAB. Preferred Electric+Ice force Thunderbolt+Ice Punch.
+    "gengar": {
+        "level": 74,
+        "sets": [
+            {
+                "role": "Fast Attacker",
+                "movepool": [
+                    "destinybond", "explosion", "firepunch", "icepunch",
+                    "substitute", "thunderbolt", "willowisp",
+                ],
+                "abilities": ["Levitate"],
+                "preferredTypes": ["Electric", "Ice"],
+            }
+        ],
+    },
+    # Rock/Grass: Grass STAB exists only as Hidden Power Grass, and GRASS has NO enforcement
+    # checker in gen3, so Showdown makes Cradily with no Grass move. Rock (Rock Slide) IS enforced.
+    "cradily": {
+        "level": 84,
+        "sets": [
+            {
+                "role": "Bulky Support",
+                "movepool": ["earthquake", "hiddenpowergrass", "recover", "rockslide", "toxic"],
+                "abilities": ["Suction Cups"],
+                "preferredTypes": ["Ground"],
+            }
+        ],
+    },
+    # Psychic (base SpA 95 < 100 => Psychic checker does NOT fire): Calm Mind (setup) + Toxic must
+    # coexist — the old hard setup x {knockoff,rapidspin,toxic} rule pruned this real set.
+    "chimecho": {
+        "level": 89,
+        "sets": [
+            {
+                "role": "Bulky Attacker",
+                "movepool": ["calmmind", "healbell", "hiddenpowerfire", "psychic", "toxic"],
+                "abilities": ["Levitate"],
+            }
+        ],
+    },
+    # Psychic (base SpA 73 < 100 => Psychic checker does NOT fire), but the movepool has a
+    # non-Hidden-Power Psychic STAB (Psychic). Showdown's zero-STAB fallback forces that STAB, so a
+    # combo without any Psychic STAB (e.g. firepunch/protect/toxic/wish) is NOT generatable.
+    "hypno": {
+        "level": 84,
+        "sets": [
+            {
+                "role": "Bulky Support",
+                "movepool": ["firepunch", "protect", "psychic", "toxic", "wish"],
+                "abilities": ["Insomnia"],
+            }
+        ],
+    },
+}
+
+STAB_RELAX_MOVE_METADATA = {
+    "destinybond": {"type": "Ghost", "category": "Status", "basePower": 0},
+    "explosion": {"type": "Normal", "category": "Physical", "basePower": 250},
+    "firepunch": {"type": "Fire", "category": "Physical", "basePower": 75},
+    "icepunch": {"type": "Ice", "category": "Physical", "basePower": 75},
+    "substitute": {"type": "Normal", "category": "Status", "basePower": 0},
+    "thunderbolt": {"type": "Electric", "category": "Special", "basePower": 95},
+    "willowisp": {"type": "Fire", "category": "Status", "basePower": 0, "accuracy": 75},
+    "earthquake": {"type": "Ground", "category": "Physical", "basePower": 100},
+    "hiddenpowergrass": {"type": "Grass", "category": "Special", "basePower": 70},
+    "hiddenpowerfire": {"type": "Fire", "category": "Special", "basePower": 70},
+    "recover": {"type": "Normal", "category": "Status", "basePower": 0},
+    "rockslide": {"type": "Rock", "category": "Physical", "basePower": 75, "accuracy": 90},
+    "toxic": {"type": "Poison", "category": "Status", "basePower": 0},
+    "calmmind": {"type": "Psychic", "category": "Status", "basePower": 0},
+    "healbell": {"type": "Normal", "category": "Status", "basePower": 0},
+    "psychic": {"type": "Psychic", "category": "Special", "basePower": 90},
+    "protect": {"type": "Normal", "category": "Status", "basePower": 0},
+    "wish": {"type": "Normal", "category": "Status", "basePower": 0},
+}
+
+STAB_RELAX_SPECIES_METADATA = {
+    "gengar": {"types": ["Ghost", "Poison"], "baseStats": {"spe": 110, "spa": 130}},
+    "cradily": {"types": ["Rock", "Grass"], "baseStats": {"spe": 43, "spa": 81}},
+    "chimecho": {"types": ["Psychic"], "baseStats": {"spe": 65, "spa": 95}},
+    "hypno": {"types": ["Psychic"], "baseStats": {"spe": 67, "spa": 73}},
+}
+
+
+class Gen3RandbatStabRelaxationTest(unittest.TestCase):
+    def _source(self) -> Gen3RandbatSource:
+        return Gen3RandbatSource.from_data(
+            STAB_RELAX_FIXTURE,
+            move_metadata=STAB_RELAX_MOVE_METADATA,
+            species_metadata=STAB_RELAX_SPECIES_METADATA,
+        )
+
+    @staticmethod
+    def _combos(source: Gen3RandbatSource, species: str) -> set[frozenset[str]]:
+        universe = source.universe_for(species)
+        assert universe is not None
+        return {frozenset(variant.moves) for variant in universe.variants}
+
+    def test_zero_stab_set_survives_when_only_stab_is_a_status_move(self) -> None:
+        # The real Gengar set has neither Ghost nor Poison damage; Destiny Bond (Ghost STATUS) must
+        # NOT be treated as available/satisfying STAB, so this true combo stays in the universe.
+        combos = self._combos(self._source(), "Gengar")
+        self.assertIn(
+            frozenset({"thunderbolt", "icepunch", "firepunch", "willowisp"}),
+            combos,
+            "true zero-STAB Gengar set was pruned",
+        )
+
+    def test_preferred_types_keep_universe_tight(self) -> None:
+        # Every Gengar combo must carry both preferred-type STABs (Thunderbolt + Ice Punch), and no
+        # combo omitting one is admitted — the relaxation must not balloon.
+        combos = self._combos(self._source(), "Gengar")
+        self.assertTrue(combos)
+        for combo in combos:
+            self.assertIn("thunderbolt", combo)
+            self.assertIn("icepunch", combo)
+
+    def test_grass_and_dragon_types_are_never_stab_enforced(self) -> None:
+        # Grass has no moveEnforcementChecker, so a Rock/Grass set with only Rock STAB is legal.
+        combos = self._combos(self._source(), "Cradily")
+        self.assertIn(frozenset({"earthquake", "rockslide", "toxic", "recover"}), combos)
+        # Rock IS enforced: every combo (with Rock Slide available) keeps a Rock STAB.
+        for combo in combos:
+            self.assertIn("rockslide", combo)
+
+    def test_setup_and_toxic_may_coexist(self) -> None:
+        combos = self._combos(self._source(), "Chimecho")
+        self.assertIn(frozenset({"calmmind", "psychic", "toxic", "hiddenpowerfire"}), combos)
+
+    def test_zero_stab_fallback_forces_a_species_stab_when_movepool_supplies_one(self) -> None:
+        # Hypno's Psychic checker is gated off (base SpA < 100), but the movepool has a non-HP
+        # Psychic STAB, so Showdown's zero-STAB fallback forces it. A zero-STAB combo must NOT
+        # survive, and every candidate must carry the Psychic STAB.
+        combos = self._combos(self._source(), "Hypno")
+        self.assertNotIn(frozenset({"firepunch", "protect", "toxic", "wish"}), combos)
+        self.assertTrue(combos)
+        for combo in combos:
+            self.assertIn("psychic", combo)
+
+
+@unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "POKEZERO_SHOWDOWN_ROOT is not set")
+class Gen3RandbatGoldStandardTest(unittest.TestCase):
+    """Gold-standard reproduction gate: the reconstructed candidate universe must CONTAIN every
+    real set the vendored Showdown generator produces (no true opponent set is pruned)."""
+
+    def test_universe_contains_every_showdown_generated_set(self) -> None:
+        showdown_root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        source = Gen3RandbatSource.from_showdown_root(showdown_root, use_cache=False)
+        n_teams = int(os.environ.get("POKEZERO_GOLD_STANDARD_TEAMS", "400"))
+        generated = _sample_showdown_sets(showdown_root, n_teams)
+        self.assertGreater(len(generated), 0)
+
+        offscript = []
+        for entry in generated:
+            summary = source.summarize(
+                format_id="gen3randombattle",
+                species=entry["species"],
+                revealed_moves=tuple(entry["moves"]),
+                revealed_ability=entry["ability"],
+                revealed_item=entry["item"],
+            )
+            # A generated set must never read as off-script (which would spike uncertainty to 1.0
+            # and flood the possible-* buckets with the whole species pool at full reveal).
+            if summary is not None and summary.inconsistent:
+                offscript.append(entry)
+
+        self.assertEqual(
+            offscript,
+            [],
+            f"{len(offscript)}/{len(generated)} real Showdown sets are pruned (off-script); "
+            f"examples: {offscript[:5]}",
+        )
+
+    def test_speed_boost_offered_for_yanma(self) -> None:
+        # Fix 3: Yanma's ability is Compound Eyes iff the set has an inaccurate move, else Speed
+        # Boost. Never-miss moves (accuracy: true) must NOT be miscounted as inaccurate, so Speed
+        # Boost sets must appear in the universe.
+        showdown_root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        source = Gen3RandbatSource.from_showdown_root(showdown_root, use_cache=False)
+        universe = source.universe_for("Yanma")
+        self.assertIsNotNone(universe)
+        offered = {variant.ability for variant in universe.variants}
+        self.assertIn("Speed Boost", offered)
+        self.assertIn("Compound Eyes", offered)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+def _sample_showdown_sets(showdown_root: Path, n_teams: int) -> list[dict[str, object]]:
+    script = """
+const root = process.argv[1];
+const N = parseInt(process.argv[2] || '400', 10);
+const {Teams} = require(root + '/dist/sim/index.js');
+const out = [];
+for (let i = 0; i < N; i++) {
+  const team = Teams.generate('gen3randombattle', {seed: [i & 0xffff, (i >> 16) & 0xffff, i % 97, i % 89]});
+  for (const set of team) {
+    out.push({species: set.species, moves: set.moves, ability: set.ability, item: set.item});
+  }
+}
+process.stdout.write(JSON.stringify(out));
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(showdown_root), str(n_teams)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
 
 
 def _sample_showdown_set(showdown_root: Path, species: str) -> dict[str, object]:

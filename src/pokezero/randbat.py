@@ -16,7 +16,12 @@ from .belief import CandidateSetSummary
 
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
-_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v3"
+# v4: relaxed move-combo STAB / setup-incompatibility narrowing to match Showdown's actual
+# gen3 generator (see ``_required_stab_types``). The universe CONTENT changed, and the disk
+# cache is keyed on this schema (folded into ``_source_hash``), so the bump is REQUIRED — it
+# forces a rebuild and stops stale v3 caches (the old over-pruned universe) from shadowing the
+# fix in training/collection, where ``load_gen3_randbat_source_cached`` reads ``use_cache=True``.
+_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v4"
 _UNOWN_COSMETIC_FORM_SUFFIXES = frozenset("abcdefghijklmnopqrstuvwxyz") | {"exclamation", "question"}
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
 SPECIAL_TYPES = {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}
@@ -47,6 +52,53 @@ SETUP_MOVES = {
     "swordsdance",
     "tailglow",
 }
+# Moves that shouldn't count as STAB (gen3 teams.ts NO_STAB). A move of a species' type only
+# satisfies/enforces STAB if it is a damaging move NOT on this list — mirrors Showdown's
+# ``!this.noStab.includes(moveid) && (move.basePower || move.basePowerCallback)`` gate.
+NO_STAB = frozenset(
+    {
+        "eruption",
+        "explosion",
+        "fakeout",
+        "focuspunch",
+        "futuresight",
+        "icywind",
+        "knockoff",
+        "machpunch",
+        "pursuit",
+        "quickattack",
+        "rapidspin",
+        "selfdestruct",
+        "skyattack",
+        "waterspout",
+    }
+)
+# Only these species enforce a Bug STAB in the gen3 generator (moveEnforcementCheckers.Bug in
+# teams.ts). Every other Bug-type species (Scyther, Scizor, Venomoth, Beedrill, ...) does NOT
+# hard-require a Bug move, which is why the old blanket per-type STAB rule over-pruned them.
+BUG_ENFORCE_SPECIES = frozenset({"armaldo", "heracross", "parasect"})
+# The exact set of types that have a moveEnforcementChecker in gen3 teams.ts. A species type NOT
+# in this set (GRASS and DRAGON are the two gen3 types with no checker) is never STAB-enforced
+# through the per-type checker loop.
+ENFORCED_STAB_TYPES = frozenset(
+    {
+        "Bug",
+        "Dark",
+        "Electric",
+        "Fighting",
+        "Fire",
+        "Flying",
+        "Ghost",
+        "Ground",
+        "Ice",
+        "Normal",
+        "Poison",
+        "Psychic",
+        "Rock",
+        "Steel",
+        "Water",
+    }
+)
 MOVE_PAIRS = (
     ("sleeptalk", "rest"),
     ("protect", "wish"),
@@ -54,8 +106,14 @@ MOVE_PAIRS = (
     ("focuspunch", "substitute"),
     ("batonpass", "spiderweb"),
 )
+# NOTE: the SETUP_MOVES x {knockoff,rapidspin,toxic} pair was REMOVED here. In Showdown that
+# incompatibility is applied via ``incompatibleMoves``, a SOFT cull that only trims the future
+# movePool under size pressure and never guarantees exclusion — the generator produces
+# setup+Toxic (and setup+Knock Off / setup+Rapid Spin) freely. Modeling it as a HARD reject
+# pruned real sets (Cradily/Claydol/Girafarig CalmMind/SwordsDance + Toxic). The remaining pairs
+# below are kept because no Showdown-generated set in the 36k-set gold-standard sample violates
+# them (they are also soft in Showdown, but do not cause observed drift).
 INCOMPATIBLE_MOVE_PAIRS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    ((tuple(SETUP_MOVES)), ("knockoff", "rapidspin", "toxic")),
     (("rest",), ("protect", "substitute")),
     (("selfdestruct", "explosion"), ("destinybond", "painsplit", "rest")),
     (("surf",), ("hydropump",)),
@@ -419,12 +477,17 @@ def _build_variants_for_species(
             continue
         movepool = tuple(str(move) for move in raw_movepool if str(move))
         abilities = tuple(str(ability) for ability in raw_abilities if str(ability))
+        raw_preferred = raw_set.get("preferredTypes")
+        preferred_types = (
+            tuple(str(t) for t in raw_preferred if str(t)) if isinstance(raw_preferred, list) else ()
+        )
         source_set_id = f"{species_id}-{set_index}"
         for moves in _enumerate_move_sets(
             movepool,
             role=role,
             species=species,
             abilities=abilities,
+            preferred_types=preferred_types,
             move_metadata=move_metadata,
             species_metadata=species_metadata,
         ):
@@ -470,6 +533,7 @@ def _enumerate_move_sets(
     role: str,
     species: str,
     abilities: Sequence[str],
+    preferred_types: Sequence[str] = (),
     move_metadata: Mapping[str, Mapping[str, Any]],
     species_metadata: Mapping[str, Mapping[str, Any]],
 ) -> tuple[tuple[str, ...], ...]:
@@ -484,6 +548,7 @@ def _enumerate_move_sets(
             role=role,
             species=species,
             abilities=abilities,
+            preferred_types=preferred_types,
             full_movepool=unique_pool,
             move_metadata=move_metadata,
             species_metadata=species_metadata,
@@ -500,6 +565,7 @@ def _valid_gen3_move_combo(
     role: str,
     species: str,
     abilities: Sequence[str],
+    preferred_types: Sequence[str] = (),
     full_movepool: Sequence[str],
     move_metadata: Mapping[str, Mapping[str, Any]],
     species_metadata: Mapping[str, Mapping[str, Any]],
@@ -518,15 +584,122 @@ def _valid_gen3_move_combo(
         has_b = normalized_moves.intersection(group_b)
         if has_a and has_b and has_a != has_b:
             return False
+    # STAB requirement, mirroring Showdown's ACTUAL gen3 generator rather than a blanket
+    # "STAB for every species type". Showdown only forces a *STAB-eligible* (damaging,
+    # non-noStab) move for (a) every preferred type and (b) species types whose
+    # moveEnforcementChecker fires (see ``_required_stab_types``). A combo is rejected only if
+    # it omits a STAB-eligible move of a type Showdown would have enforced given this movepool.
+    combo_has_hidden_power = any(move.startswith("hiddenpower") for move in normalized_moves)
+    for required_type in _required_stab_types(
+        species=species,
+        preferred_types=preferred_types,
+        full_movepool=full_movepool,
+        move_metadata=move_metadata,
+        species_metadata=species_metadata,
+    ):
+        if _moves_have_stab_eligible(normalized_moves, required_type, move_metadata):
+            continue
+        # Showdown culls all but one Hidden Power (cullMovePool). A type whose ONLY STAB-eligible
+        # move is a Hidden Power is therefore not guaranteed when this set already spent its single
+        # HP slot on a different-typed Hidden Power — the type's HP was culled and could not be
+        # enforced. Allow the omission in exactly that case.
+        if combo_has_hidden_power and _stab_only_via_hidden_power(
+            full_movepool, required_type, move_metadata
+        ):
+            continue
+        return False
+    # Zero-STAB fallback (teams.ts 264-279): if the set ends up with NO STAB-eligible move of any
+    # species type, the generator force-adds one whenever the movepool can still supply it. So a
+    # zero-STAB combo is only reachable when the movepool cannot supply a species-type STAB at that
+    # point — i.e. there is no non-Hidden-Power species STAB, and any Hidden-Power species STAB was
+    # culled by a different-typed Hidden Power already in this combo. This is what makes e.g.
+    # ``hypno: firepunch/protect/toxic/wish`` impossible (no checker forces Psychic at base SpA
+    # < 100, but the fallback still forces the movepool's Psychic STAB).
     species_types = _species_types(species, species_metadata)
-    for species_type in species_types:
-        if _movepool_has_stab(full_movepool, species_type, move_metadata) and not _moves_have_stab(
-            normalized_moves,
-            species_type,
-            move_metadata,
+    if species_types and not any(
+        _moves_have_stab_eligible(normalized_moves, species_type, move_metadata)
+        for species_type in species_types
+    ):
+        if _movepool_species_stab_eligible(
+            full_movepool, species_types, move_metadata, hidden_power=False
+        ):
+            return False
+        if not combo_has_hidden_power and _movepool_species_stab_eligible(
+            full_movepool, species_types, move_metadata, hidden_power=True
         ):
             return False
     return True
+
+
+def _required_stab_types(
+    *,
+    species: str,
+    preferred_types: Sequence[str],
+    full_movepool: Sequence[str],
+    move_metadata: Mapping[str, Mapping[str, Any]],
+    species_metadata: Mapping[str, Mapping[str, Any]],
+) -> set[str]:
+    """Types for which this movepool forces a STAB-eligible move, per Showdown's gen3 generator.
+
+    Two enforcement mechanisms are mirrored (both add a damaging, non-noStab move):
+      * preferred-type enforcement (``randomMoveset`` "Enforce moves of all Preferred Types"),
+        which is deterministic — every generated set carries a STAB-eligible move of each
+        preferred type the movepool can supply; and
+      * per-species-type STAB enforcement via ``moveEnforcementCheckers`` — which is NOT applied
+        to every type: Bug fires only for {armaldo, heracross, parasect}; Flying skips Crobat;
+        Steel skips Forretress; Psychic requires base SpA >= 100; Poison is skipped when a Bug
+        STAB is already forced (its checker also gates on ``!counter.get('Bug')``); all other
+        types fire whenever the movepool supplies a STAB-eligible move of that type.
+
+    A type is only enforceable when the movepool actually contains a STAB-eligible move of it
+    (otherwise the generator's ``while (checker) { if (!stabMoves.length) break; ... }`` can add
+    nothing), so we gate every requirement on that.
+    """
+    species_id = _normalize_species(species)
+    required: set[str] = set()
+
+    def pool_has(type_name: str) -> bool:
+        return _movepool_has_stab_eligible(full_movepool, type_name, move_metadata)
+
+    # Preferred types: always enforced (when the movepool can supply one).
+    for type_name in preferred_types:
+        if pool_has(type_name):
+            required.add(type_name)
+
+    species_types = _species_types(species, species_metadata)
+    # A Bug STAB is forced (making Poison enforcement skip) iff Bug is preferred or the species
+    # is one of the three that enforce Bug — matching the checker's ``!counter.get('Bug')`` gate,
+    # since Bug is never otherwise force-added before Poison enforcement in gen3.
+    bug_forced = pool_has("Bug") and (
+        "Bug" in preferred_types or species_id in BUG_ENFORCE_SPECIES
+    )
+    spa = _base_stat(species, "spa", species_metadata)
+    for type_name in species_types:
+        # Only types with a moveEnforcementChecker are enforced here. Notably GRASS and DRAGON
+        # have NO checker in gen3 teams.ts, so a Grass/Dragon STAB is never hard-required (unless
+        # it is a preferred type, handled above, or the zero-STAB fallback fires) — Showdown
+        # freely makes Cradily/Celebi/Venusaur without a Grass move and Flygon/Latios without a
+        # Dragon move.
+        if type_name not in ENFORCED_STAB_TYPES or not pool_has(type_name):
+            continue
+        if type_name == "Bug":
+            if species_id in BUG_ENFORCE_SPECIES:
+                required.add(type_name)
+        elif type_name == "Flying":
+            if species_id != "crobat":
+                required.add(type_name)
+        elif type_name == "Steel":
+            if species_id != "forretress":
+                required.add(type_name)
+        elif type_name == "Psychic":
+            if spa >= 100:
+                required.add(type_name)
+        elif type_name == "Poison":
+            if not bug_forced:
+                required.add(type_name)
+        else:
+            required.add(type_name)
+    return required
 
 
 def _possible_abilities(
@@ -577,18 +750,20 @@ def _possible_items(
         return ("Thick Club",)
     if species_id == "pikachu":
         return ("Light Ball",)
+    if species_id == "shedinja":
+        return ("Lum Berry",)
     if species_id == "unown":
         return ("Choice Band",) if counters.get("Physical", 0) else ("Twisted Spoon",)
     if species_id in {"deoxys", "deoxysattack"}:
         return ("White Herb",)
+    if species_id == "farfetchd":
+        return ("Stick",)
     if "trick" in normalized_moves:
         return ("Choice Band",)
     if counters.get("Physical", 0) >= 4:
         return ("Choice Band",)
     if counters.get("Physical", 0) >= 3 and ("batonpass" in normalized_moves or (role == "Wallbreaker" and counters.get("Special", 0))):
         return ("Choice Band",)
-    if species_id == "shedinja":
-        return ("Lum Berry",)
     if "dragondance" in normalized_moves and ability != "Natural Cure" and "healbell" not in normalized_moves and "substitute" not in normalized_moves:
         return ("Lum Berry",)
     if "bellydrum" in normalized_moves:
@@ -604,8 +779,6 @@ def _possible_items(
             return ("Liechi Berry",)
         if "substitute" in normalized_moves and counters.get("Special", 0) >= 3:
             return ("Petaya Berry",)
-    if species_id == "farfetchd":
-        return ("Stick",)
     salac_reqs = 60 <= speed <= 100 and not counters.get("priority", 0)
     if "bulkup" in normalized_moves and "substitute" in normalized_moves and counters.get("Status", 0) == 2 and salac_reqs:
         return ("Salac Berry",)
@@ -644,7 +817,12 @@ def _move_counters(
         if int(metadata.get("priority") or 0) > 0:
             counters["priority"] = counters.get("priority", 0) + 1
         accuracy = metadata.get("accuracy")
-        if isinstance(accuracy, (int, float)) and accuracy < 90:
+        # Showdown counts a move as inaccurate only when ``accuracy && accuracy !== true &&
+        # accuracy < 90``. A never-miss move serializes as boolean ``true``; ``bool`` is an ``int``
+        # subclass in Python (``True < 90``), so it must be excluded explicitly — otherwise Aerial
+        # Ace et al. are miscounted as inaccurate, which (via ``_possible_abilities``) wrongly pins
+        # every Yanma set to Compound Eyes and hides Speed Boost from the candidate universe.
+        if isinstance(accuracy, (int, float)) and not isinstance(accuracy, bool) and accuracy < 90:
             counters["inaccurate"] = counters.get("inaccurate", 0) + 1
         if move in RECOVERY_MOVES:
             counters["recovery"] = counters.get("recovery", 0) + 1
@@ -672,23 +850,79 @@ def _move_type(move: str, metadata: Mapping[str, Any]) -> str:
     return str(metadata.get("type") or "")
 
 
-def _moves_have_stab(
+def _is_stab_eligible(move_id: str, species_type: str, move_metadata: Mapping[str, Mapping[str, Any]]) -> bool:
+    """A move counts toward STAB for ``species_type`` exactly when Showdown's generator would.
+
+    Mirrors ``!this.noStab.includes(moveid) && (move.basePower || move.basePowerCallback)`` with
+    the move typed as ``species_type``: it must be a DAMAGING move (fixed base power or a
+    base-power callback such as Return/Reversal/Flail; fixed-*damage* moves like Seismic Toss have
+    only ``damageCallback`` and are excluded) and NOT on the NO_STAB list (Explosion, Pursuit,
+    Quick Attack, Rapid Spin, ...). Status moves (Destiny Bond, Will-O-Wisp) never count — this is
+    the fix for the old rule that treated a status move of a species' type as satisfying STAB."""
+    metadata = move_metadata.get(move_id, {})
+    if _move_type(move_id, metadata) != species_type:
+        return False
+    if move_id in NO_STAB:
+        return False
+    if move_id.startswith("hiddenpower"):
+        return True
+    base_power = metadata.get("basePower")
+    if isinstance(base_power, (int, float)) and base_power > 0:
+        return True
+    return bool(metadata.get("basePowerCallback"))
+
+
+def _moves_have_stab_eligible(
     normalized_moves: Iterable[str],
     species_type: str,
     move_metadata: Mapping[str, Mapping[str, Any]],
 ) -> bool:
-    return any(_move_type(move, move_metadata.get(move, {})) == species_type for move in normalized_moves)
+    return any(_is_stab_eligible(move, species_type, move_metadata) for move in normalized_moves)
 
 
-def _movepool_has_stab(
+def _movepool_has_stab_eligible(
     movepool: Sequence[str],
     species_type: str,
     move_metadata: Mapping[str, Mapping[str, Any]],
 ) -> bool:
     return any(
-        _move_type((move_id := _normalize_move(move)), move_metadata.get(move_id, {})) == species_type
-        for move in movepool
+        _is_stab_eligible(_normalize_move(move), species_type, move_metadata) for move in movepool
     )
+
+
+def _movepool_species_stab_eligible(
+    movepool: Sequence[str],
+    species_types: Sequence[str],
+    move_metadata: Mapping[str, Mapping[str, Any]],
+    *,
+    hidden_power: bool,
+) -> bool:
+    """Whether the movepool has a STAB-eligible move for ANY species type, restricted to Hidden
+    Power moves (``hidden_power=True``) or non-Hidden-Power moves (``hidden_power=False``)."""
+    for move in movepool:
+        move_id = _normalize_move(move)
+        if move_id.startswith("hiddenpower") != hidden_power:
+            continue
+        if any(_is_stab_eligible(move_id, species_type, move_metadata) for species_type in species_types):
+            return True
+    return False
+
+
+def _stab_only_via_hidden_power(
+    movepool: Sequence[str],
+    species_type: str,
+    move_metadata: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """True when every STAB-eligible ``species_type`` move in the movepool is a Hidden Power.
+
+    Such a type cannot be guaranteed: Showdown keeps at most one Hidden Power per set, so if the
+    set's HP slot is used by a different-typed Hidden Power, this type's HP is culled away."""
+    eligible = [
+        move_id
+        for move in movepool
+        if _is_stab_eligible((move_id := _normalize_move(move)), species_type, move_metadata)
+    ]
+    return bool(eligible) and all(move_id.startswith("hiddenpower") for move_id in eligible)
 
 
 def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: set[str]) -> bool:
@@ -738,6 +972,7 @@ for (const move of dex.moves.all()) {
     type: move.type,
     category: move.category,
     basePower: move.basePower || 0,
+    basePowerCallback: Boolean(move.basePowerCallback),
     accuracy: move.accuracy,
     priority: move.priority || 0,
     recoil: Boolean(move.recoil || move.hasCrashDamage),

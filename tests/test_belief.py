@@ -458,6 +458,47 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIsNone(dodrio.status)
         self.assertEqual(dodrio.revealed_ability, "Early Bird")
 
+    def test_heal_bell_cures_benched_ally_not_active_mon(self) -> None:
+        # Heal Bell / Aromatherapy cure every team member; a benched ally serializes WITHOUT a
+        # position letter (``|-curestatus|p2: Snorlax|par``). The cure must land on the benched
+        # Snorlax, not the active Heal Bell user (Miltank), and must not false-pin an ability.
+        engine = self.engine_from([
+            "|switch|p1a: Zapdos|Zapdos, L77|300/300",
+            "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+            "|turn|1",
+            "|move|p1a: Zapdos|Thunder Wave|p2a: Snorlax",
+            "|-status|p2a: Snorlax|par",
+            "|turn|2",
+            "|switch|p2a: Miltank|Miltank, L82|300/300",
+            "|turn|3",
+            "|move|p2a: Miltank|Heal Bell|p2a: Miltank",
+            "|-activate|p2a: Miltank|move: Heal Bell",
+            "|-curestatus|p2: Snorlax|par|[silent]",
+        ])
+        snorlax = self.opponent(engine, "Snorlax")
+        miltank = self.opponent(engine, "Miltank")
+        self.assertIsNone(snorlax.status)  # benched ally's paralysis is cleared
+        self.assertIsNone(miltank.status)  # active user never had a status
+        self.assertNotEqual(snorlax.revealed_ability, "Early Bird")  # no false Rest-wake pin
+
+    def test_active_target_curestatus_still_resolves_to_active_mon(self) -> None:
+        # Control: an active-target cure (position-lettered ident) keeps the unchanged shared path,
+        # including the 1-turn Rest-wake Early Bird identification.
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Dodrio|Dodrio, L80|300/300",
+            "|turn|1",
+            "|move|p2a: Dodrio|Rest|p2a: Dodrio",
+            "|-status|p2a: Dodrio|slp|[from] move: Rest",
+            "|turn|2",
+            "|cant|p2a: Dodrio|slp",
+            "|turn|3",
+            "|-curestatus|p2a: Dodrio|slp|[msg]",
+        ])
+        dodrio = self.opponent(engine, "Dodrio")
+        self.assertIsNone(dodrio.status)
+        self.assertEqual(dodrio.revealed_ability, "Early Bird")
+
     def test_sleep_talk_skipped_turns_refunded_on_pivot(self) -> None:
         # gen3 refunds Sleep-Talk/Snore turns on switch-in (`slp.onSwitchIn`: `time += skippedTime`)
         # — those turns did not advance the wake timer once the mon pivots. pokezero ticks
@@ -1226,9 +1267,8 @@ class AbsorbAbilityAttributionTest(unittest.TestCase):
             self.skipTest("requires a local Showdown checkout with gen3 randbats sets")
         from pokezero.randbat import Gen3RandbatSource
 
-        engine = self.engine_from(
-            self._VOLTABSORB_HEAL_LINES, set_source=Gen3RandbatSource.from_showdown_root(root)
-        )
+        source = Gen3RandbatSource.from_showdown_root(root)
+        engine = self.engine_from(self._VOLTABSORB_HEAL_LINES, set_source=source)
         lanturn = self.belief(engine, "p2", "Lanturn")
         zapdos = self.belief(engine, "p1", "Zapdos")
         self.assertEqual(lanturn.possible_abilities, ("Volt Absorb",))
@@ -1237,8 +1277,20 @@ class AbsorbAbilityAttributionTest(unittest.TestCase):
         self.assertTrue(
             all(v.get("ability") == "Volt Absorb" for v in lanturn.candidate_variants)
         )
-        # Pre-fix, Zapdos's revealed ability became Volt Absorb -> zero
-        # surviving variants -> off-script fallback, which FORCES uncertainty
-        # to exactly 1.0. On-script Pressure filtering stays below it.
+        # Pre-fix, Zapdos's revealed ability became Volt Absorb -> zero surviving variants ->
+        # off-script fallback (inconsistent=True, uncertainty forced to 1.0). The attribution fix
+        # keeps Zapdos on Pressure; assert on the off-script signal directly rather than on
+        # uncertainty. (Under the corrected universe every real Zapdos set carries Thunderbolt —
+        # Electric IS a STAB-enforced type — so revealing it is legitimately uninformative and
+        # uncertainty is 1.0 WITHOUT being off-script; the removed spurious no-Thunderbolt variant
+        # is exactly the over-pruning this branch fixes.)
         self.assertGreater(zapdos.candidate_set_count, 0)
-        self.assertLess(zapdos.uncertainty, 1.0)
+        summary = source.summarize(
+            format_id="gen3randombattle",
+            species="Zapdos",
+            revealed_moves=zapdos.revealed_moves,
+            revealed_ability=zapdos.revealed_ability,
+            revealed_item=zapdos.revealed_item,
+            ruled_out_abilities=zapdos.ruled_out_abilities,
+        )
+        self.assertFalse(summary.inconsistent)

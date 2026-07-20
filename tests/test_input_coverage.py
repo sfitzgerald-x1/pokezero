@@ -97,6 +97,11 @@ ALLOW_NUMERIC: set[int] = {
                  # sorted-bucket alignment so no revealed move lands at depth 9 across the 12
                  # coverage seeds. The slot is byte-identically wired (observation/transitions
                  # unchanged) and still fires at broader seed counts / in real training.
+    86,          # OPP_MOVE_PP[10] — situational, SAME class as 85: the candidate-universe
+                 # over-pruning fix (#757) tightens possible_moves (removes spurious opponent
+                 # candidate sets), shifting the sorted belief-move-bucket alignment so no revealed
+                 # move lands at depth 10 across the 12 coverage seeds. Byte-identically wired; still
+                 # fires at broader seed counts / in real training.
     87, 88, 89,  # OPP_MOVE_PP[11..13] — situational (needs 12+ occupied belief-move buckets
                  # with a REVEALED move that deep in the sorted order)
     90, 91,      # OPP_MOVE_PP[14..15] — structural (mirrors BELIEF_MOVE[14..15]: 16 buckets,
@@ -119,6 +124,9 @@ ALLOW_NUMERIC: set[int] = {
     130,            # OPP_MOVE_PP_VALID[9] — situational validity twin of 85 (mirrors it exactly:
                     # revealed move at sorted bucket depth 9; freed by the #746 absorb fix's
                     # tighter possible_moves, still covered at broader seed counts)
+    131,            # OPP_MOVE_PP_VALID[10] — situational validity twin of 86 (mirrors it exactly:
+                    # revealed move at sorted bucket depth 10; freed by the #757 candidate-universe
+                    # over-pruning fix's tighter possible_moves, still covered at broader seed counts)
     132, 133, 134,  # OPP_MOVE_PP_VALID[11..13] — situational (mirrors 87..89: needs a
                     # REVEALED move that deep in the sorted bucket order)
     135, 136,       # OPP_MOVE_PP_VALID[14..15] — structural (mirrors 90..91: 16 buckets,
