@@ -90,7 +90,8 @@ path rather than duplicating them.
 
 | interaction | encoding | existing coverage |
 |---|---|---|
-| **Ditto Transform** | `enc_species = transform_species`; types/stats from copied identity; base HP stays Ditto's | `ditto_transform` scenario + belief `transform_species` (FIXED-NOW in edge matrix) |
+| **Ditto Transform** (opponent) | `enc_species = transform_species`; types/stats from copied identity; base HP stays Ditto's | `ditto_transform` scenario + belief `transform_species`; `test_transformed_ditto_encodes_target_stats_but_original_hp` |
+| **Ditto Transform** (SELF) | same copied identity/types/base-stats on OUR own transformed Ditto (base HP stays Ditto's); transform flag read from the self EXACT belief, not the self-side-absent set-source belief | FIXED (was ditto/Normal/48-across on every self-transformed decision, incl. re-transform after switch-out; opponent path was already correct). `test_self_ditto_transform_surfaces_target_identity` + `test_self_ditto_retransform_after_switch`. Rust LEAF encoder (search path) still needs the same self-transform fix — follow-up (cf. HP #758) |
 | **Baton Pass** (boosts/sub/leech pass) | `_BATON_PASS_TRANSFERRED_VOLATILES` carried; boosts NOT reset on BP `\|switch\|` | `baton_pass_boundary` scenario |
 | **Trick + Knock Off** item mutation | belief `item_mutated`/`item_removed`/`current_public_item`; current-item override both seats | `trick_swap_exchange` / `trick_berry_pinch` scenarios + belief tests |
 | **Berry / herb consumption** | `-enditem ... [eat]` → `item_removed` without mutation | `berry_eat_chesto` scenario |
