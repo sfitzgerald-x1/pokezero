@@ -287,6 +287,27 @@ TRAJECTORY_CHARTS = [
     ]),
 ]
 
+# v3-only chart groups (Sleep Clause etc.) — appended to the trajectories ONLY in the v3 report.
+V3_EXTRA_CHARTS = [
+    ("sleep clause (v3)", [
+        ("sleep clicks / seat-game", lambda r: _catrate(r, "cat_sleep")),
+        ("sleep clicked while clause active %", lambda r: _pct(r.get("sleep_clause_active_rate"))),
+    ]),
+    ("move failures & struggle (v3)", [
+        ("move-failure rate %", lambda r: _pct(r.get("move_fail_rate"))),
+        ("struggle / game", lambda r: r.get("struggle_per_game")),
+    ]),
+    ("status cure / natural cure (v3)", [
+        ("aromatherapy: avg mons cured", lambda r: r.get("aromatherapy_avg_cured")),
+        ("NC switch-in on status / game", lambda r: r.get("nc_switchin_on_status_per_game")),
+    ]),
+]
+
+# Report sets → each renders its own standalone HTML. v3 models are tracked separately from v2
+# (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and get the v3-only chart groups. Populate V3_LINEAGES with
+# the v3 lineage keys once the v3 runs exist (their inventory patterns live in trait_inventory.py).
+V3_LINEAGES = set()
+
 
 def _series(rows, fn):
     by = defaultdict(list)
@@ -301,7 +322,7 @@ def _series(rows, fn):
     return by
 
 
-def phase2_trajectories(rows_self):
+def phase2_trajectories(rows_self, charts=TRAJECTORY_CHARTS):
     """Per-checkpoint breakdowns: every trait as a line over the milestone axis (one line per
     lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate."""
     checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows_self if r.get("milestone") is not None}
@@ -319,8 +340,8 @@ def phase2_trajectories(rows_self):
     blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
-    for group_title, charts in TRAJECTORY_CHARTS:
-        cards = "".join(f'<div class="card">{svg_lines(_series(rows_self, fn), label)}</div>' for label, fn in charts)
+    for group_title, group_charts in charts:
+        cards = "".join(f'<div class="card">{svg_lines(_series(rows_self, fn), label)}</div>' for label, fn in group_charts)
         blocks.append(f'<h3>{esc(group_title)}</h3><div class="grid3">{cards}</div>')
     blocks.append("</section>")
     return "".join(blocks)
@@ -637,17 +658,26 @@ tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:
 """
 
 
-def build_html(rows):
-    # drop excluded lineages up front so every section below is consistent
-    rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES]
+def build_html(rows, report_set="v2"):
+    # Each report set is a standalone HTML. v3 renders only the v3 lineages plus the v3-only chart
+    # groups; v2 renders everything else (minus the fully-excluded lineages).
+    if report_set == "v3":
+        rows = [r for r in rows if r.get("lineage") in V3_LINEAGES]
+        charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
+        title = "PokeZero checkpoint trait tracking — v3"
+    else:
+        rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES
+                and r.get("lineage") not in V3_LINEAGES]
+        charts = TRAJECTORY_CHARTS
+        title = "PokeZero checkpoint trait tracking"
     rows_self = [r for r in rows if r.get("opponent") == "self"]
     n_self = len(rows_self)
     n_foul = len([r for r in rows if r.get("opponent") == "foulplay"])
-    body = [f'<div class="wrap"><h1>PokeZero checkpoint trait tracking</h1>',
+    body = [f'<div class="wrap"><h1>{esc(title)}</h1>',
             f'<p class="sub">{len(rows)} metric sets · {n_self} self-play · {n_foul} foul-play · '
-            f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})))}</p>']
+            f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})) or "none yet")}</p>']
     body.append(phase1_section(rows_self))
-    body.append(phase2_trajectories(rows_self))
+    body.append(phase2_trajectories(rows_self, charts))
     body.append(per_game_corr_section(
         rows, "foulplay", "Per-game trait ↔ win correlation (vs FoulPlay)",
         "Within each checkpoint&#39;s foul-play games: did the bot use the trait more in games it "
@@ -670,17 +700,18 @@ def build_html(rows):
                 f'{phase2_panel(rows, "foulplay", cks)}'
                 '</section>')
     body.append("</div>")
-    return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>PokeZero trait tracking</title><style>{CSS}</style></head><body>{''.join(body)}</body></html>"
+    return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{esc(title)}</title><style>{CSS}</style></head><body>{''.join(body)}</body></html>"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics-dir", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--set", default="v2", choices=["v2", "v3"], help="which report set to render")
     args = ap.parse_args()
     rows = load(args.metrics_dir)
-    open(args.out, "w").write(build_html(rows))
-    print(f"WROTE {args.out} ({len(rows)} metric sets)")
+    open(args.out, "w").write(build_html(rows, report_set=args.set))
+    print(f"WROTE {args.out} (set={args.set}, {len(rows)} metric sets loaded)")
 
 
 if __name__ == "__main__":

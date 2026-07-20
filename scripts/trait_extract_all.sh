@@ -41,5 +41,8 @@ export -f run_one
 tasks=$(emit_tasks); n=$(echo "$tasks" | grep -c .)
 echo "extracting $n metric sets with ${JOBS:-10} workers ..."
 echo "$tasks" | xargs -P "${JOBS:-10}" -L1 bash -c 'run_one "$@"' _ | grep -c '^ok ' | xargs echo "completed:"
-python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report.html"
-echo "EXTRACTED $n metric sets -> $REPORT/trait_report.html"
+# v2 report (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and the separate v3 report (empty until v3 runs
+# exist and V3_LINEAGES/ACTIVE are populated).
+python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report.html" --set v2
+python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report_v3.html" --set v3
+echo "EXTRACTED $n metric sets -> $REPORT/trait_report.html (+ trait_report_v3.html)"
