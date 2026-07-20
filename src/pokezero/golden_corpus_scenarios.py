@@ -326,6 +326,138 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
     )
 
 
+def interaction_registry_specs() -> tuple[ScenarioSpec, ...]:
+    """Validated-interactions registry scenarios (docs/validated_interactions.md).
+
+    A SEPARATE list from ``scenario_specs()`` on purpose: these drive the
+    protocol-census interactions for the regression suite
+    (``tests/test_interaction_registry.py``) WITHOUT joining the default corpus /
+    fallback-sweep surface, so the existing bit-exactness and sweep gates are
+    byte-for-byte unperturbed. Two of these (``castform_forecast_formechange`` and
+    ``colorchange_kecleon``) reproduce the in-battle-retype ENCODER BUGS flagged in
+    the registry — the test asserts the CORRECT behavior under ``expectedFailure``.
+    """
+
+    swampert = _mon("Swampert", ("Earthquake", "Ice Beam", "Surf", "Protect"), ability="Torrent", level=84)
+    blissey = _mon("Blissey", ("Soft-Boiled", "Seismic Toss", "Ice Beam", "Toxic"), ability="Natural Cure", level=100)
+    snorlax = _mon("Snorlax", ("Body Slam", "Curse", "Rest", "Shadow Ball"), ability="Immunity", level=100)
+
+    return (
+        # --- BUG: Castform Forecast in-battle -formechange retype (flagged case).
+        # p1 Charizard sets sun -> p2 Castform Forecast-changes to Castform-Sunny
+        # (Fire). The encoder must retype it; today it stays base Normal.
+        ScenarioSpec(
+            "castform_forecast_formechange",
+            (_mon("Charizard", ("Sunny Day", "Flamethrower", "Dragon Claw", "Toxic"), ability="Blaze", level=90), blissey),
+            (_mon("Castform", ("Fire Blast", "Ice Beam", "Thunderbolt", "Return"), ability="Forecast", level=90), swampert),
+            p1_prefs=(("sunnyday",), ("flamethrower",)),
+            p2_prefs=(("return",),),
+            seed=91020, max_decision_rounds=3,
+        ),
+        # --- BUG: Color Change typechange retype (same root cause as Castform).
+        # p2 Alakazam hits p1 Kecleon with Psychic -> Kecleon retypes to Psychic.
+        ScenarioSpec(
+            "colorchange_kecleon",
+            (_mon("Kecleon", ("Return", "Shadow Ball", "Brick Break", "Thunder Wave"), ability="Color Change", level=92), swampert),
+            (_mon("Alakazam", ("Psychic", "Fire Punch", "Ice Punch", "Thunder Punch"), ability="Synchronize"), blissey),
+            p1_prefs=(("return",),),
+            p2_prefs=(("psychic",),),
+            seed=91021, max_decision_rounds=3,
+        ),
+        # --- Deoxys formes: real dex entries (distinct stats), NOT -formechange.
+        ScenarioSpec(
+            "deoxys_forme_swap",
+            (_mon("Deoxys-Attack", ("Psycho Boost", "Superpower", "Shadow Ball", "Extreme Speed"), ability="Pressure", level=100),
+             _mon("Deoxys-Defense", ("Recover", "Toxic", "Seismic Toss", "Spikes"), ability="Pressure", level=100)),
+            (snorlax, swampert),
+            p1_prefs=(("shadowball",), ("switch:deoxysdefense",), ("recover",)),
+            p2_prefs=(("curse",),),
+            seed=91022, max_decision_rounds=4,
+        ),
+        # --- Intimidate on switch-in: p2 Salamence drops p1 lead's atk at t1.
+        ScenarioSpec(
+            "intimidate_switchin",
+            (snorlax, _mon("Porygon2", ("Recover", "Ice Beam", "Thunderbolt", "Toxic"), ability="Trace")),
+            (_mon("Salamence", ("Dragon Dance", "Earthquake", "Rock Slide", "Fire Blast"), ability="Intimidate"), swampert),
+            p1_prefs=(("bodyslam",), ("switch:porygon2",)),
+            p2_prefs=(("dragondance",),),
+            seed=91023, max_decision_rounds=3,
+        ),
+        # --- Belly Drum: -setboost atk 6 on the user.
+        ScenarioSpec(
+            "bellydrum_snorlax",
+            (_mon("Snorlax", ("Belly Drum", "Body Slam", "Curse", "Rest"), ability="Immunity", level=100), swampert),
+            (blissey, swampert),
+            p1_prefs=(("bellydrum",), ("bodyslam",)),
+            p2_prefs=(("softboiled",),),
+            seed=91024, max_decision_rounds=3,
+        ),
+        # --- Spikes stacking to 3 layers on p1's side (switch churn to eat chip).
+        ScenarioSpec(
+            "spikes_stack",
+            (blissey, swampert, _mon("Gengar", ("Shadow Ball", "Thunderbolt", "Ice Punch", "Explosion"), ability="Levitate")),
+            (_mon("Skarmory", ("Spikes", "Drill Peck", "Roar", "Toxic"), ability="Keen Eye"), snorlax),
+            p1_prefs=(("softboiled",), ("switch:swampert",), ("switch:gengar",), ("switch:blissey",), ("softboiled",)),
+            p2_prefs=(("spikes",),),
+            seed=91025, max_decision_rounds=6,
+        ),
+        # --- Substitute: volatile:substitute on the user.
+        ScenarioSpec(
+            "substitute_focuspunch",
+            (_mon("Breloom", ("Substitute", "Mach Punch", "Spore", "Seismic Toss"), ability="Effect Spore"), swampert),
+            (blissey, swampert),
+            p1_prefs=(("substitute",), ("machpunch",), ("machpunch",)),
+            p2_prefs=(("softboiled",),),
+            seed=91026, max_decision_rounds=4,
+        ),
+        # --- Weather permanence: Sand Stream (ability) is permanent in gen3.
+        ScenarioSpec(
+            "sand_stream_permanence",
+            (_mon("Tyranitar", ("Rock Slide", "Crunch", "Earthquake", "Pursuit"), ability="Sand Stream"), swampert),
+            (_mon("Charizard", ("Sunny Day", "Flamethrower", "Dragon Claw", "Toxic"), ability="Blaze", level=90), blissey),
+            p1_prefs=(("rockslide",),),
+            p2_prefs=(("flamethrower",),),
+            seed=91027, max_decision_rounds=3,
+        ),
+        # --- Roar drag resets the dragged-in mon's boosts (drag != Baton Pass).
+        ScenarioSpec(
+            "roar_drag_reset",
+            (_mon("Suicune", ("Roar", "Surf", "Calm Mind", "Rest"), ability="Pressure"), swampert),
+            (_mon("Raikou", ("Calm Mind", "Thunderbolt", "Crunch", "Rest"), ability="Pressure"), snorlax),
+            p1_prefs=(("calmmind",), ("calmmind",), ("roar",)),
+            p2_prefs=(("calmmind",),),
+            seed=91028, max_decision_rounds=4,
+        ),
+        # --- Future Sight: pending strike scheduled on the OPPONENT's side.
+        ScenarioSpec(
+            "future_sight_pending",
+            (_mon("Alakazam", ("Future Sight", "Psychic", "Recover", "Thunder Punch"), ability="Synchronize"), swampert),
+            (snorlax, swampert),
+            p1_prefs=(("futuresight",), ("recover",), ("recover",)),
+            p2_prefs=(("curse",),),
+            seed=91029, max_decision_rounds=4,
+        ),
+        # --- Perish Song: per-mon perishN volatiles counting down.
+        ScenarioSpec(
+            "perish_song",
+            (_mon("Celebi", ("Perish Song", "Recover", "Psychic", "Baton Pass"), ability="Natural Cure"), blissey),
+            (snorlax, swampert),
+            p1_prefs=(("perishsong",), ("recover",), ("recover",)),
+            p2_prefs=(("curse",),),
+            seed=91030, max_decision_rounds=4,
+        ),
+        # --- Counter / Mirror Coat: fixed-damage; Mirror Coat (Psychic) vs Dark = immune.
+        ScenarioSpec(
+            "counter_mirrorcoat",
+            (_mon("Wobbuffet", ("Counter", "Mirror Coat", "Encore", "Safeguard"), ability="Shadow Tag", level=100), swampert),
+            (_mon("Tyranitar", ("Rock Slide", "Crunch", "Earthquake", "Ice Beam"), ability="Sand Stream"), blissey),
+            p1_prefs=(("counter",), ("mirrorcoat",)),
+            p2_prefs=(("crunch",), ("icebeam",)),
+            seed=91031, max_decision_rounds=3,
+        ),
+    )
+
+
 def _scenario_override(spec: ScenarioSpec) -> BattleStartOverride:
     return BattleStartOverride(player_teams={
         "p1": pack_team(tuple(spec.p1_team)),
