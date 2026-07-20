@@ -37,6 +37,7 @@ from .golden_corpus import (
 from .golden_corpus_fold import FoldSurfaceRecorder, build_fold_rows
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2
+from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .showdown_fixture import FixturePokemon, pack_team
@@ -475,7 +476,7 @@ def play_scenario_games(
 
     config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
     env = LocalShowdownEnv(config)
-    turn_merged_active = config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    turn_merged_active = config.observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     games: list[GoldenGame] = []
     try:
         belief_hash = env.belief_set_source_hash

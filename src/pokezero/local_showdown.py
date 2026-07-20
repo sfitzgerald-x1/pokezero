@@ -24,7 +24,7 @@ from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
-    OBSERVATION_SCHEMA_VERSION_V2_2,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     ObservationSpec,
     PokeZeroObservationV0,
@@ -469,12 +469,13 @@ class LocalShowdownEnv:
         encoding_started_at = time.perf_counter() if root_puct_branch_observation else None
         root = self.config.resolved_showdown_root()
         # Prefer the explicitly-paired model vocabulary; otherwise build it from the root.
-        # A v2.2 (turn-merged) spec needs the tt_phase/tt2_* families or every merged
+        # A turn-merged (v2.2/v3) spec needs the tt_phase/tt2_* families or every merged
         # label would land in the OOV band.
         vocab = self.config.category_vocab or gen3_category_vocabulary(
             root,
             include_turn_merged=(
-                self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+                self.config.observation_spec.schema_version
+                in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
             ),
         )
         try:
@@ -1422,10 +1423,11 @@ class LocalShowdownEnv:
                     0.0, time.perf_counter() - snapshot_started_at
                 )
                 self._root_puct_branch_observation_replay_snapshot_count += 1
-        # v2.2 (turn-merged) specs need the merged stream populated alongside the
+        # Turn-merged (v2.2/v3) specs need the merged stream populated alongside the
         # per-action one (which stays the Tier-2 annotation substrate + pinned-bit source).
         turn_merged = (
-            self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+            self.config.observation_spec.schema_version
+            in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         )
         normalize_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:

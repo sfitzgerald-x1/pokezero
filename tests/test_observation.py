@@ -36,10 +36,11 @@ class ObservationSpecTest(unittest.TestCase):
             1 + 6 + 6 + ACTION_COUNT + STATS_TOKEN_COUNT + TRANSITION_TOKEN_COUNT,
         )
 
-    def test_schema_version_is_v2_2_with_v2_v2_1_supported_and_v1_legacy(self) -> None:
+    def test_schema_version_is_v2_2_with_v2_v2_1_v3_supported_and_v1_legacy(self) -> None:
         # Checkpoint-driven schema window: v2.2 (turn-merged transitions) is the
         # fresh-artifact default since the 2026-07-08 promotion; v2 and v2.1 stay fully
-        # supported checkpoint-driven modes, v1 stays legacy-refused.
+        # supported checkpoint-driven modes, v3 is supported but opt-in (not the default
+        # until the Rust fold encoder mirrors it), v1 stays legacy-refused.
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v2.2")
         self.assertEqual(
             SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
@@ -47,6 +48,7 @@ class ObservationSpecTest(unittest.TestCase):
                 "pokezero.observation.v2",
                 "pokezero.observation.v2.1",
                 "pokezero.observation.v2.2",
+                "pokezero.observation.v3",
             ),
         )
         self.assertIn("pokezero.observation.v1", LEGACY_OBSERVATION_SCHEMA_VERSIONS)

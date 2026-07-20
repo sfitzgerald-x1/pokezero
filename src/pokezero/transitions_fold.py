@@ -693,6 +693,12 @@ class FoldState:
             if current is not None and _slot_from_ident(parts[2]) == current.side:
                 current.miss = True
 
+        elif event_type == "-fail":
+            # Spec v3 window-scoped marker — mirrors transitions._fold_replay exactly
+            # (no side condition; see the batch handler's rationale).
+            if current is not None:
+                current.fail = True
+
         elif event_type == "-supereffective":
             if current is not None and target == current.defender_side:
                 current.effectiveness = EFFECTIVENESS_SUPER
@@ -1269,6 +1275,7 @@ def _token_from_window(window: _Window) -> TransitionToken:
         damage_outcome=window.outcome,
         crit=window.crit,
         miss=window.miss,
+        fail=window.fail,
         ko=window.ko,
         pursuit_intercept=window.pursuit_intercept,
         n_hits=window.n_hits,
@@ -1360,7 +1367,14 @@ def _representative_offset(sub: TurnSubBlock) -> int:
 
 
 def _window_to_payload(window: _Window) -> dict:
-    return {
+    # ``fail`` (spec v3) serializes OMIT-WHEN-DEFAULT: the fold-state payload schema
+    # ("pokezero.fold-state.v1") is a Rust-parity surface pinned byte-exactly by the
+    # committed golden-corpus sample, which predates the field (and contains no |-fail|
+    # lines). Emitting the key only when True keeps every pre-v3 payload byte-identical
+    # while round-tripping the marker for games that do fail; the key joins the fixed
+    # field set when the fold-state schema bumps with the Rust mirror + corpus
+    # regeneration at v3 (docs/observation_v3_spec.md, coordination section).
+    payload = {
         "event_index": window.event_index,
         "turn": window.turn,
         "side": window.side,
@@ -1390,6 +1404,9 @@ def _window_to_payload(window: _Window) -> dict:
         "switch_reason": window.switch_reason,
         "other_side_pending_replacement": window.other_side_pending_replacement,
     }
+    if window.fail:
+        payload["fail"] = True
+    return payload
 
 
 def _window_from_payload(payload: Mapping) -> _Window:
@@ -1412,6 +1429,7 @@ def _window_from_payload(payload: Mapping) -> _Window:
         outcome=str(payload["outcome"]),
         crit=bool(payload["crit"]),
         miss=bool(payload["miss"]),
+        fail=bool(payload.get("fail", False)),
         ko=bool(payload["ko"]),
         pursuit_intercept=bool(payload["pursuit_intercept"]),
         n_hits=int(payload["n_hits"]),
@@ -1455,11 +1473,18 @@ _TRANSITION_TOKEN_FIELDS = (
 
 
 def _transition_token_to_payload(token: TransitionToken) -> dict:
-    return {name: getattr(token, name) for name in _TRANSITION_TOKEN_FIELDS}
+    payload = {name: getattr(token, name) for name in _TRANSITION_TOKEN_FIELDS}
+    # Omit-when-default (spec v3): see _window_to_payload's rationale.
+    if token.fail:
+        payload["fail"] = True
+    return payload
 
 
 def _transition_token_from_payload(payload: Mapping) -> TransitionToken:
-    return TransitionToken(**{name: payload[name] for name in _TRANSITION_TOKEN_FIELDS})
+    return TransitionToken(
+        fail=bool(payload.get("fail", False)),
+        **{name: payload[name] for name in _TRANSITION_TOKEN_FIELDS},
+    )
 
 
 _SUB_BLOCK_FIELDS = (
@@ -1491,11 +1516,18 @@ _SUB_BLOCK_FIELDS = (
 
 
 def _sub_block_to_payload(sub: TurnSubBlock) -> dict:
-    return {name: getattr(sub, name) for name in _SUB_BLOCK_FIELDS}
+    payload = {name: getattr(sub, name) for name in _SUB_BLOCK_FIELDS}
+    # Omit-when-default (spec v3): see _window_to_payload's rationale.
+    if sub.fail:
+        payload["fail"] = True
+    return payload
 
 
 def _sub_block_from_payload(payload: Mapping) -> TurnSubBlock:
-    return TurnSubBlock(**{name: payload[name] for name in _SUB_BLOCK_FIELDS})
+    return TurnSubBlock(
+        fail=bool(payload.get("fail", False)),
+        **{name: payload[name] for name in _SUB_BLOCK_FIELDS},
+    )
 
 
 def _merged_token_to_payload(token: TurnMergedToken) -> dict:

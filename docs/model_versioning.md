@@ -6,6 +6,11 @@ the `CategoryVocabulary`, the gen3 dex data, the model/forward code, the action 
 Showdown commit, or torch/deps. Checkpoints are self-describing — they carry `schema_version`,
 `training_schema_version`, and `model_config` — so the loader can detect an incompatible stack.
 
+Observation schema `pokezero.observation.v3` (CLI `v3`, checkpoint-driven like v2.1/v2.2, not yet
+the fresh default): v2.2's turn-merged surface plus four appended numeric columns — the `-fail`
+transition-event bit per sub-block and the public sleep-clause block bits on the field token
+(`docs/observation_v3_spec.md`); v2/v2.1/v2.2 encodes stay byte-identical.
+
 ## Policy: do NOT pin active checkpoints — pin only at a breaking change
 During normal development we **do not** freeze, tag, or pin checkpoints. Active checkpoints churn
 with the recipe and are reproducible from the run + current code; pinning them continuously is

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .local_showdown import belief_set_source_env_enabled
-from .observation import OBSERVATION_SCHEMA_VERSION_V2_2
+from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from .randbat import load_gen3_randbat_source_cached
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -119,7 +119,7 @@ class OnlineBattleAgent:
         # bot dies mid-battle (foul-play then wins every game by forfeit and the probe hangs).
         # This mirrors the local self-play path (local_showdown.observe/normalize) and pairs
         # with the vocab's include_turn_merged latch already set in build_agent below.
-        turn_merged = self.spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        turn_merged = self.spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         try:
             replay = parse_showdown_replay(room_lines, battle_id=room_id)
             state = normalize_for_player(
@@ -170,7 +170,7 @@ def build_agent(
         vocab=gen3_category_vocabulary(
             showdown_root,
             include_turn_merged=(
-                spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+                spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
             ),
         ),
         dex=load_showdown_dex_cached(showdown_root),
