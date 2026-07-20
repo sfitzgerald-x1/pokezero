@@ -92,6 +92,47 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+class EnvTier2AnnotationSource:
+    """Env→policy surface for the live fold's Tier-2 annotation overlay.
+
+    Tracker conclusions are ENV-side state (as-of-first-assessment —
+    ``local_showdown._tier2_tracker_for``; they cannot be re-derived at
+    decision time because a fresh tracker would assess as-of-now). This
+    adapter reads the env's own per-player state derivation — the exact
+    pattern corpus capture uses (``golden_corpus_fold.FoldSurfaceRecorder``;
+    deterministic and tracker-idempotent) — and reduces the ANNOTATED
+    per-action stream to a ``FoldState.apply_annotations`` overlay with
+    ``build_fold_rows``' exact rule. It also exposes the boundary state for
+    the strengthened fold cross-check (live fold products vs the production
+    encoder state's surfaces — corpus generation's production-binding
+    assertion, run live).
+    """
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+
+    def active(self) -> bool:
+        probe = getattr(self._env, "tier2_residuals_active", None)
+        return bool(probe()) if callable(probe) else False
+
+    def boundary_state(self, player_id: str) -> Any:
+        return self._env._state_for_player(player_id)  # noqa: SLF001 — FoldSurfaceRecorder pattern
+
+    def overlay_for(self, player_id: str) -> dict[int, tuple]:
+        """The env trackers' per-index conclusions, cumulative from battle
+        start (``build_fold_rows``' derivation rule, verbatim)."""
+
+        state = self.boundary_state(player_id)
+        return {
+            index: (token.residual, token.residual_valid, token.cb_bit, token.investment)
+            for index, token in enumerate(state.transition_tokens)
+            if token.residual is not None
+            or token.residual_valid
+            or token.cb_bit
+            or token.investment
+        }
+
+
 @dataclass(frozen=True)
 class EngineMctsConfig:
     worlds: int = 4
@@ -182,6 +223,9 @@ class EngineMctsStats:
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
     fold_cross_check_failures: int = 0
+    # Tier-2 overlay telemetry (zero without an annotation source).
+    fold_annotations_applied: int = 0
+    fold_annotation_boundaries: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -203,6 +247,8 @@ class EngineMctsStats:
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
             "fold_cross_check_failures": self.fold_cross_check_failures,
+            "fold_annotations_applied": self.fold_annotations_applied,
+            "fold_annotation_boundaries": self.fold_annotation_boundaries,
         }
         if self.searched_decisions:
             payload["iterations_per_searched_decision"] = (
@@ -228,6 +274,7 @@ class EngineMctsPolicy:
         module: Any | None = None,
         policy_id: str = "engine-mcts",
         fixed_override: Any | None = None,
+        annotation_source: Any | None = None,
     ) -> None:
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
@@ -236,6 +283,12 @@ class EngineMctsPolicy:
         # Test/scenario hook: bypass belief sampling and use this override as
         # every world (custom-game sweeps where the catalog cannot sample).
         self._fixed_override = fixed_override
+        # Tier-2 overlay source (EnvTier2AnnotationSource protocol): when the
+        # env runs with active Tier-2 trackers, the live fold must carry the
+        # trackers' conclusions or every fold-derived annotated surface at
+        # search leaves diverges from what the env encodes. None ⇒ the fold
+        # stays unannotated (correct for tracker-inactive envs only).
+        self._annotation_source = annotation_source
         self._dex = dex
         self._set_source = set_source
         self._config = config or EngineMctsConfig()
@@ -400,15 +453,18 @@ class EngineMctsPolicy:
         production refolds the WHOLE log per observe; the incremental
         advance is closure-proven and byte-exact over both corpora.
 
-        Tier-2 annotation overlays are deliberately NOT applied here: tracker
-        conclusions are env-side state (as-of-first-assessment,
-        ``local_showdown._tier2_tracker_for``), inactive in this bench env
-        configuration; wiring them across the env→policy boundary is an
-        enumerated follow-up (docs/test_time_search_plan_v3.md ledger).
+        Tier-2 annotation overlay: when an ``annotation_source`` is attached
+        and its trackers are active, the env trackers' per-index conclusions
+        are applied at EVERY boundary (``apply_annotations_in_place`` — the
+        same per-boundary transition corpus validation replays), so the live
+        fold's annotated surfaces (transition/tier2-pinned cells at search
+        leaves) match what the env encodes. Without a source the fold stays
+        unannotated — correct only for tracker-inactive envs.
 
-        Returns None when this battle's fold is broken (an advance failed or
-        the event stream rewound) — model-mode callers fall back loudly, and
-        the battle stays broken rather than searching on silent garbage.
+        Returns None when this battle's fold is broken (an advance failed,
+        the event stream rewound, or an overlay could not be applied) —
+        model-mode callers fall back loudly, and the battle stays broken
+        rather than searching on silent garbage.
         """
         from .transitions_fold import FoldState  # noqa: PLC0415 — keep import-light
 
@@ -434,12 +490,65 @@ class EngineMctsPolicy:
                 context, key, f"advance failed: {type(error).__name__}: {error}"
             )
             return None
+        if not self._apply_tier2_overlay(context, key, fold):
+            return None
         self._live_folds[key] = fold
         self._fold_consumed[key] = len(events)
         self.stats.fold_advanced_lines += len(new_lines)
         if self._config.fold_cross_check:
             self._fold_cross_check(context, fold, replay)
         return fold
+
+    def _apply_tier2_overlay(
+        self, context: PolicyContext, key: tuple[str, str], fold: Any
+    ) -> bool:
+        """Apply the env trackers' conclusions to the live fold (True = ok).
+
+        The source's overlay is CUMULATIVE from battle start; per-boundary
+        application keeps every index identifiable (within the action tail or
+        the open window — ``FoldState._token_identity``'s contract). Already-
+        applied indices are equality-checked by ``apply_annotations_in_place``
+        (per-index immutability: a changed tracker conclusion is a real
+        regression and breaks the fold loudly). A NEW annotation whose index
+        already left the identifiable range would silently desynchronize the
+        encoder-visible surface, so it breaks the fold loudly too (cannot
+        happen in per-boundary operation — conclusions land at the first
+        boundary after their strike).
+        """
+        source = self._annotation_source
+        if source is None or not source.active():
+            return True
+        try:
+            overlay = source.overlay_for(context.player_id)
+            if overlay:
+                tail_start = fold.action_total - len(fold.action_tail)
+                stale = [
+                    index
+                    for index in overlay
+                    if index not in fold.annotations
+                    and not tail_start <= index <= fold.action_total
+                ]
+                if stale:
+                    raise ValueError(
+                        f"tracker annotations for indices {sorted(stale)[:8]} arrived "
+                        f"outside the identifiable range [{tail_start}, "
+                        f"{fold.action_total}] — encoder-visible surface would desync."
+                    )
+                before = len(fold.annotations)
+                # The FULL cumulative overlay goes through: already-applied
+                # indices are equality-checked inside (per-index immutability
+                # — a changed tracker conclusion raises and breaks the fold).
+                fold.apply_annotations_in_place(overlay)
+                applied = max(0, len(fold.annotations) - before)
+                if applied:
+                    self.stats.fold_annotations_applied += applied
+                    self.stats.fold_annotation_boundaries += 1
+        except Exception as error:  # noqa: BLE001 — loud, then fail closed
+            self._mark_fold_broken(
+                context, key, f"tier2 overlay failed: {type(error).__name__}: {error}"
+            )
+            return False
+        return True
 
     def _drop_stale_folds(self, battle_id: str) -> None:
         """Free fold state from earlier battles (drivers run one at a time)."""
@@ -461,21 +570,72 @@ class EngineMctsPolicy:
         _fold_logger.warning(message)
 
     def _fold_cross_check(self, context: PolicyContext, fold: Any, replay: Any) -> None:
-        """Debug gate: live fold products vs a from-scratch whole-log refold.
+        """Debug gate: live fold products vs the production surfaces.
 
-        The batch arm is production's own per-observe path
-        (``turn_merged.extract_transition_products``); both arms are
-        UNANNOTATED (Tier-2 overlays apply downstream of each), so the
-        surfaces must match exactly. Mismatches warn loudly and are counted;
+        With an active annotation source, the reference arm is the ENV's own
+        per-player encoder state — the ANNOTATED per-action/merged streams,
+        tendency stats, and the pinned Tier-2 reductions (corpus generation's
+        production-binding assertion, ``golden_corpus_fold.build_fold_rows``,
+        run live). Otherwise the reference is a from-scratch whole-log batch
+        refold (``turn_merged.extract_transition_products``); both arms are
+        then UNANNOTATED. Mismatches warn loudly and are counted;
         ``strict_fallbacks`` escalates to a hard error.
         """
-        from .turn_merged import extract_transition_products  # noqa: PLC0415
-
         self.stats.fold_cross_checks += 1
-        tokens, merged, tendencies = extract_transition_products(
-            replay, perspective_slot=context.player_id
-        )
         products = fold.products()
+        source = self._annotation_source
+        if source is not None and source.active():
+            from .showdown import _normalize_identifier  # noqa: PLC0415
+
+            state = source.boundary_state(context.player_id)
+            tokens = tuple(state.transition_tokens)
+            merged = tuple(state.turn_merged_tokens)
+            tendencies = state.tendency_stats
+            # Production's pinned reductions over the FULL annotated stream
+            # (showdown.py tier2_cb_pinned_species / tier2_investment_pinned).
+            opponent_slot = state.perspective.opponent_showdown_slot
+            self_slot = state.perspective.showdown_slot
+            want_cb = frozenset(
+                _normalize_identifier(token.actor_species)
+                for token in tokens
+                if token.cb_bit and token.kind == "move" and token.actor_slot == opponent_slot
+            )
+            want_investment: dict[str, float] = {}
+            for token in tokens:
+                if (
+                    token.investment
+                    and token.kind == "move"
+                    and token.actor_slot == self_slot
+                    and token.defender_species
+                ):
+                    want_investment[_normalize_identifier(token.defender_species)] = max(
+                        -1.0, min(1.0, token.investment)
+                    )
+            pinned_checks = (
+                ("cb_pinned_species", products.cb_pinned_species == want_cb),
+                ("investment_pinned", dict(products.investment_pinned) == want_investment),
+            )
+        else:
+            from .turn_merged import extract_transition_products  # noqa: PLC0415
+
+            tokens, merged, tendencies = extract_transition_products(
+                replay, perspective_slot=context.player_id
+            )
+            pinned_checks = ()
+        # A non-v2.2 env never builds merged tokens (include_turn_merged off)
+        # while the fold always carries them — compare the merged surfaces
+        # only when the reference arm has them (or the fold agrees empty).
+        merged_checks = (
+            (
+                ("turn_merged_total", products.turn_merged_total == len(merged)),
+                (
+                    "turn_merged_tokens",
+                    products.turn_merged_tokens == tuple(merged[-fold.merged_tail_limit :]),
+                ),
+            )
+            if merged or products.turn_merged_total == 0
+            else ()
+        )
         mismatched = [
             name
             for name, ok in (
@@ -484,12 +644,9 @@ class EngineMctsPolicy:
                     "transition_tokens",
                     products.transition_tokens == tuple(tokens[-fold.action_tail_limit :]),
                 ),
-                ("turn_merged_total", products.turn_merged_total == len(merged)),
-                (
-                    "turn_merged_tokens",
-                    products.turn_merged_tokens == tuple(merged[-fold.merged_tail_limit :]),
-                ),
+                *merged_checks,
                 ("tendency_stats", products.tendency_stats == tendencies),
+                *pinned_checks,
             )
             if not ok
         ]
@@ -1062,7 +1219,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_priors=not args.no_model_priors,
         fold_cross_check=args.fold_cross_check,
     )
-    policy = EngineMctsPolicy(dex=dex, set_source=set_source, config=config)
+    # Model mode needs the belief candidate-set source: the v2.2 observation's
+    # belief columns (candidate variants, possible sets) are part of the
+    # surface the model was trained on. With the source attached and the
+    # default tier2_residuals mask, the env's Tier-2 trackers are ACTIVE —
+    # the policy therefore needs the annotation source (below) or its live
+    # fold would present unannotated Tier-2 surfaces at search leaves.
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        set_belief_source=True if model_mode else None,
+    )
+    env = LocalShowdownEnv(env_config)
+    annotation_source = EnvTier2AnnotationSource(env)
+    policy = EngineMctsPolicy(
+        dex=dex, set_source=set_source, config=config, annotation_source=annotation_source
+    )
     compare_records: list[dict[str, Any]] = []
     p1_policy: Any = policy
     if model_mode and args.argmax_compare > 0:
@@ -1073,15 +1244,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy, reference, limit=args.argmax_compare, records=compare_records
         )
     opponent = RandomLegalPolicy() if args.opponent == "random-legal" else SimpleLegalPolicy()
-
-    # Model mode needs the belief candidate-set source: the v2.2 observation's
-    # belief columns (candidate variants, possible sets) are part of the
-    # surface the model was trained on.
-    env_config = LocalShowdownConfig(
-        showdown_root=args.showdown_root,
-        set_belief_source=True if model_mode else None,
-    )
-    env = LocalShowdownEnv(env_config)
     driver = RolloutDriver(
         env=env,
         policies={"p1": p1_policy, "p2": opponent},

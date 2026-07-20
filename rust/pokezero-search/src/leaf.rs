@@ -131,23 +131,32 @@ const VOLATILE_MAP: &[(PokemonVolatileStatus, &str)] = &[
     (PokemonVolatileStatus::PERISH1, "perish1"),
 ];
 
-fn tracked_volatiles(side: &Side) -> Vec<String> {
+fn tracked_volatiles(side: &Side, other: &Side) -> Vec<String> {
     use poke_engine::state::PokemonType;
     let mut out: Vec<String> = VOLATILE_MAP
         .iter()
         .filter(|(vs, _)| side.volatile_statuses.contains(vs))
         .map(|(_, id)| (*id).to_string())
         .collect();
-    // CURSE Ghost gate (review F5): only a Ghost-typed curser's volatile is
-    // real; the engine's spurious non-Ghost USER volatile is dropped.
-    if side
+    // CURSE placement (review F5 + the live-game protocol probe, 2026-07-19):
+    // the real protocol starts Curse on the cursed TARGET
+    // (`|-start|p2a: Blissey|Curse|[of] p1a: Gengar`), while the gen3 engine
+    // applies the base Curse choice's USER volatile with no Ghost split. So a
+    // Ghost-typed OPPOSING active carrying the engine CURSE volatile means
+    // THIS side's active is the cursed one; a non-Ghost active carrying it is
+    // the spurious stats-up artifact and is dropped. (The volatile's engine
+    // lifetime still follows the CURSER's switch-outs — documented
+    // engine-model deviation.)
+    let is_ghost = |s: &Side| {
+        let types = s.get_active_immutable().types;
+        types.0 == PokemonType::GHOST || types.1 == PokemonType::GHOST
+    };
+    if other
         .volatile_statuses
         .contains(&PokemonVolatileStatus::CURSE)
+        && is_ghost(other)
     {
-        let types = side.get_active_immutable().types;
-        if types.0 == PokemonType::GHOST || types.1 == PokemonType::GHOST {
-            out.push("curse".to_string());
-        }
+        out.push("curse".to_string());
     }
     out
 }
@@ -264,6 +273,100 @@ pub(crate) struct LeafMeta {
     /// mons with stale per-stint disabled bits and `use_last_used_move` is
     /// off in constructed worlds, so this is line-tracked).
     pub(crate) fresh_active: [bool; 2],
+    /// PP charged per (engine side, species key, showdown move id), replayed
+    /// over the branch's `|move|` lines with the PARSER's charging rules
+    /// (belief.py `_charge_move_use` :796 + the `|move|` ingestion exemptions
+    /// :431-445): called moves (`[from] Sleep Talk` class) and locked
+    /// continuations (`[from]lockedmove`) charge nothing, Struggle has no PP,
+    /// Pressure on the OPPOSING active doubles the charge for foe-targeted
+    /// moves. The engine only emits `DecrementPP` below 10 PP
+    /// (gen3/generate_instructions.rs "only decrement pp if the move is at 10
+    /// or less" optimization), so engine PP alone is root-frozen above 10 —
+    /// review F3; this replay is the fix.
+    pub(crate) move_charges: HashMap<(usize, String, String), i64>,
+    /// Current active species key per engine side (Pressure resolution at
+    /// `|move|` time; switches/drags update it from the DETAILS field).
+    pub(crate) active: [String; 2],
+    /// `|turn|` lines seen during the branch (the parser's turn_number
+    /// advance — set-turn arithmetic for in-branch side conditions).
+    pub(crate) turns_seen: i64,
+    /// In-branch `|-sidestart|`/`|-sideend|` replay for the TIMED conditions
+    /// (reflect/lightscreen/safeguard/mist — showdown.py
+    /// `_update_timed_side_conditions` :909): `Some(turn delta at set)` per
+    /// (engine side, condition id), `None` when the condition ended (the
+    /// parser pops the set-turn entry).
+    pub(crate) side_condition_sets: HashMap<(usize, String), Option<i64>>,
+}
+
+/// Static line-replay context: per-side facts of the sampled world the
+/// replay rules need (currently: which species carry Pressure — the parser's
+/// PP double-charge reads the opposing active's ability).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LeafMetaCtx {
+    /// Normalized species keys per engine side whose sampled ability is
+    /// Pressure (gen 3 announces Pressure on entry, so world truth and the
+    /// parser's revealed-ability rule coincide for on-field mons).
+    pub(crate) pressure: [Vec<String>; 2],
+}
+
+/// The parser's timed side conditions (showdown.py `_TIMED_SIDE_CONDITIONS`).
+const TIMED_SIDE_CONDITIONS: [&str; 4] = ["reflect", "lightscreen", "safeguard", "mist"];
+
+/// Caller moves whose called `|move|` line charges no PP of its own
+/// (belief.py `_CALLER_MOVES`; the caller's own line was already charged).
+const CALLER_MOVES: [&str; 6] = [
+    "metronome",
+    "mirrormove",
+    "sleeptalk",
+    "assist",
+    "naturepower",
+    "copycat",
+];
+
+/// `showdown._side_condition_identifier`: strip a `move:`/`ability:`/`item:`
+/// source prefix, then normalize.
+fn side_condition_id(raw: &str) -> String {
+    let condition = raw.trim();
+    let stripped = match condition.split_once(':') {
+        Some((prefix, rest))
+            if matches!(
+                prefix.trim().to_lowercase().as_str(),
+                "move" | "ability" | "item"
+            ) =>
+        {
+            rest.trim()
+        }
+        _ => condition,
+    };
+    normalize_identifier(stripped)
+}
+
+/// `belief._called_move_source`: the normalized `[from]` tag of a |move|
+/// line (both the spaced and unspaced forms; `move:` prefix stripped), or
+/// None when the line carries no `[from]`.
+fn called_move_source(line: &str) -> Option<String> {
+    let marker = line.find("[from]")?;
+    let tag = line[marker + "[from]".len()..]
+        .split('|')
+        .next()
+        .unwrap_or("")
+        .trim();
+    let tag = match tag.to_lowercase().strip_prefix("move:") {
+        Some(_) => tag.split_once(':').map(|(_, rest)| rest.trim()).unwrap_or(tag),
+        None => tag,
+    };
+    Some(normalize_identifier(tag))
+}
+
+/// Engine side index from a SIDE ident ("p1: name" / "p1a: name").
+fn side_ident_slot(rest: &str) -> Option<usize> {
+    if rest.starts_with("p1") {
+        Some(0)
+    } else if rest.starts_with("p2") {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 fn line_slot(line_after_prefix: &str) -> Option<usize> {
@@ -294,8 +397,10 @@ fn species_key(obj: &Map<String, Value>) -> String {
 /// (`showdown._ReplayParser._feed_line`: `|-status|..|tox` sets stage 1,
 /// `|-curestatus|` clears, the side's `|switch|`/`|drag|` resets stage AND
 /// stint, `|turn|` escalates every nonzero stage (cap 15) and advances every
-/// stint).
-pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String]) -> LeafMeta {
+/// stint), plus the PP-charge replay (parser rules, see [`LeafMeta`]) and the
+/// timed side-condition set-turn replay. `ctx` carries the sampled world's
+/// static per-side facts (Pressure holders).
+pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String], ctx: &LeafMetaCtx) -> LeafMeta {
     let mut out = meta.clone();
     for line in lines {
         if line.starts_with("|turn|") {
@@ -305,11 +410,44 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String]) -> LeafMeta {
                 }
                 out.stint[side] += 1;
             }
+            out.turns_seen += 1;
             continue;
         }
         if let Some(rest) = line.strip_prefix("|move|") {
             if let Some(side) = line_slot(rest) {
                 out.fresh_active[side] = false;
+                // PP-charge replay (belief.py |move| ingestion :411-445):
+                // called moves and locked continuations charge nothing;
+                // Struggle has no PP; otherwise charge 1, doubled when the
+                // move is foe-targeted and the OPPOSING active has Pressure.
+                let fields: Vec<&str> = rest.split('|').collect();
+                let move_id = showdown_move_id(&normalize_identifier(
+                    fields.get(1).copied().unwrap_or(""),
+                ));
+                let called = called_move_source(line).is_some_and(|source| {
+                    source == "lockedmove" || CALLER_MOVES.contains(&source.as_str())
+                });
+                if !called && !move_id.is_empty() && move_id != "struggle" {
+                    let target_slot = fields
+                        .get(2)
+                        .copied()
+                        .and_then(line_slot_of_ident);
+                    let foe_targeted = target_slot.is_some_and(|t| t != side);
+                    let opposing = 1 - side;
+                    let charge = if foe_targeted
+                        && ctx.pressure[opposing]
+                            .iter()
+                            .any(|key| *key == out.active[opposing])
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    *out
+                        .move_charges
+                        .entry((side, ident_species_key(rest), move_id))
+                        .or_insert(0) += charge;
+                }
             }
             continue;
         }
@@ -321,6 +459,22 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String]) -> LeafMeta {
                 }
             }
             continue;
+        }
+        // Timed side-condition set turns (showdown.py
+        // `_update_timed_side_conditions` :909-922): |-sidestart| records the
+        // parser's CURRENT turn, |-sideend| pops the entry. Side idents on
+        // these lines are side-shaped ("p1: name"), not position-shaped.
+        for (prefix, is_start) in [("|-sidestart|", true), ("|-sideend|", false)] {
+            let Some(rest) = line.strip_prefix(prefix) else { continue };
+            let Some(side) = side_ident_slot(rest) else { break };
+            let condition = side_condition_id(rest.split('|').nth(1).unwrap_or(""));
+            if TIMED_SIDE_CONDITIONS.contains(&condition.as_str()) {
+                out.side_condition_sets.insert(
+                    (side, condition),
+                    if is_start { Some(out.turns_seen) } else { None },
+                );
+            }
+            break;
         }
         for (prefix, is_status, is_cure) in [
             ("|switch|", false, false),
@@ -345,11 +499,30 @@ pub(crate) fn evolve_leaf_meta(meta: &LeafMeta, lines: &[String]) -> LeafMeta {
                 out.toxic[side] = 0;
                 out.stint[side] = 0;
                 out.fresh_active[side] = true;
+                // Active tracking (Pressure resolution): species from the
+                // DETAILS field, exactly like `evolve_self_order`.
+                let details = rest.split('|').nth(1).unwrap_or("");
+                let species = normalize_identifier(details.split(',').next().unwrap_or(""));
+                if !species.is_empty() {
+                    out.active[side] = species;
+                }
             }
             break;
         }
     }
     out
+}
+
+/// `line_slot` over a bare ident field (no leading event prefix).
+fn line_slot_of_ident(ident: &str) -> Option<usize> {
+    let ident = ident.trim();
+    if ident.starts_with("p1a: ") {
+        Some(0)
+    } else if ident.starts_with("p2a: ") {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +544,18 @@ pub(crate) struct LeafContext {
     root_self_order: Vec<String>,
     /// Root line-driven metadata (toxic stages + active stints).
     root_meta: LeafMeta,
+    /// Static replay context (Pressure holders per side, from the sampled
+    /// world's engine abilities).
+    meta_ctx: LeafMetaCtx,
+    /// Root engine active party index per side (self action-token PP base
+    /// selection: the ROOT ACTIVE's engine PP is request-seeded and exact;
+    /// benched mons' cached request-history PP is stale by their last
+    /// stint's final action, so their base is the belief ledger below).
+    root_active_party: [usize; 2],
+    /// The SELF side's belief-ledger PP charges per (species key, move id)
+    /// (`belief_view.self_pokemon[*].move_uses` — the parser's public
+    /// charging count, exact where the cached request-history PP is stale).
+    self_ledger_uses: HashMap<(String, String), i64>,
     /// Root battle turn + recorded weather (parser-formula weather ticking).
     root_turn: i64,
     root_weather: Option<String>,
@@ -476,6 +661,57 @@ impl LeafContext {
                 .unwrap_or(0);
             root_meta.stint[engine_side] = stint;
         }
+        // Root actives + Pressure holders (PP-charge replay context). The
+        // engine state carries the sampled world's abilities; gen 3 announces
+        // Pressure on entry, so world truth matches the parser's
+        // revealed-ability double-charge rule for on-field mons.
+        for (engine_side, side) in [(0usize, &root_state.side_one), (1, &root_state.side_two)] {
+            let active = active_index_usize(side);
+            root_meta.active[engine_side] = species_keys[engine_side]
+                .get(active)
+                .cloned()
+                .unwrap_or_default();
+        }
+        let mut meta_ctx = LeafMetaCtx::default();
+        for (engine_side, side) in [(0usize, &root_state.side_one), (1, &root_state.side_two)] {
+            for (party, p) in side.pokemon.into_iter().enumerate() {
+                if p.ability == poke_engine::engine::abilities::Abilities::PRESSURE {
+                    if let Some(key) = species_keys[engine_side].get(party) {
+                        meta_ctx.pressure[engine_side].push(key.clone());
+                    }
+                }
+            }
+        }
+        let root_active_party = [
+            active_index_usize(&root_state.side_one),
+            active_index_usize(&root_state.side_two),
+        ];
+        // SELF belief-ledger PP charges (see the field doc). The self side of
+        // the ledger is player-known state, not epistemic belief facts.
+        let mut self_ledger_uses: HashMap<(String, String), i64> = HashMap::new();
+        if let Some(entries) = belief
+            .and_then(|b| b.get("self_pokemon"))
+            .and_then(Value::as_array)
+        {
+            for entry in entries {
+                let Some(obj) = entry.as_object() else { continue };
+                let mon_key = species_key(obj);
+                let Some(uses) = obj.get("move_uses").and_then(Value::as_array) else {
+                    continue;
+                };
+                for pair in uses {
+                    let Some(items) = pair.as_array() else { continue };
+                    if items.len() != 2 {
+                        continue;
+                    }
+                    let Some(move_id) = items[0].as_str().map(normalize_identifier) else {
+                        continue;
+                    };
+                    let charged = items[1].as_i64().unwrap_or(0);
+                    self_ledger_uses.insert((mon_key.clone(), move_id), charged);
+                }
+            }
+        }
         let root_turn = ctx.get("turn").and_then(Value::as_i64).unwrap_or(0);
         let root_weather = md
             .get("weather")
@@ -497,6 +733,9 @@ impl LeafContext {
             ],
             root_self_order,
             root_meta,
+            meta_ctx,
+            root_active_party,
+            self_ledger_uses,
             root_turn,
             root_weather,
             root_weather_remaining,
@@ -509,6 +748,10 @@ impl LeafContext {
 
     pub(crate) fn root_meta(&self) -> &LeafMeta {
         &self.root_meta
+    }
+
+    pub(crate) fn meta_ctx(&self) -> &LeafMetaCtx {
+        &self.meta_ctx
     }
 
     pub(crate) fn self_prefix(&self) -> &'static str {
@@ -697,11 +940,11 @@ impl LeafContext {
         md.insert("opponent_active_boosts".into(), boosts_value(opp_side));
         md.insert(
             "self_active_volatiles".into(),
-            json!(tracked_volatiles(self_side)),
+            json!(tracked_volatiles(self_side, opp_side)),
         );
         md.insert(
             "opponent_active_volatiles".into(),
-            json!(tracked_volatiles(opp_side)),
+            json!(tracked_volatiles(opp_side, self_side)),
         );
 
         // --- team conditions + active flags ---
@@ -854,7 +1097,7 @@ impl LeafContext {
                         active_covered = true;
                     }
                     if !is_self {
-                        rewrite_move_uses(obj, &snapshot, *p);
+                        rewrite_move_uses(obj, engine_side, meta);
                     }
                 }
                 if is_self && !active_covered {
@@ -914,7 +1157,7 @@ impl LeafContext {
             self_options,
             &self_team_order,
             self_force_switch,
-            meta.fresh_active[self_engine],
+            meta,
         )?;
         md.insert("action_candidates".into(), candidates);
 
@@ -925,14 +1168,50 @@ impl LeafContext {
             .ok_or_else(|| err("row inputs missing public_materialization object"))?;
         pm.insert("turn".into(), json!(turn));
         pm.insert("selfActiveMoves".into(), payload_moves);
-        // Timed side-condition SET TURNS stay root-frozen: remaining turns
-        // derive from (leaf turn − set turn), which keeps ticking correctly
-        // through simulated turns; only the ACTIVE counts are rewritten.
+        // Timed side-condition set turns: ROOT-set conditions keep their
+        // recorded set turn (remaining = leaf turn − set turn keeps ticking
+        // correctly through simulated turns); conditions SET or ENDED during
+        // the branch replay the parser's own bookkeeping
+        // (`_update_timed_side_conditions`): a |-sidestart| records the turn
+        // it happened on (root turn + completed |turn| lines at that point,
+        // tracked by the line-driven metadata), a |-sideend| pops the entry.
         let (self_slot_key, opp_slot_key) = if self_is_p1 { ("p1", "p2") } else { ("p2", "p1") };
         if let Some(sides) = pm.get_mut("sides").and_then(Value::as_object_mut) {
-            for (slot, side) in [(self_slot_key, self_side), (opp_slot_key, opp_side)] {
+            for (slot, side, engine_side) in [
+                (self_slot_key, self_side, self_engine),
+                (opp_slot_key, opp_side, opp_engine),
+            ] {
                 if let Some(side_obj) = sides.get_mut(slot).and_then(Value::as_object_mut) {
                     side_obj.insert("sideConditions".into(), side_condition_counts(side));
+                    let branch_sets: Vec<(&String, &Option<i64>)> = meta
+                        .side_condition_sets
+                        .iter()
+                        .filter(|((s, _), _)| *s == engine_side)
+                        .map(|((_, condition), delta)| (condition, delta))
+                        .collect();
+                    if !branch_sets.is_empty() {
+                        if !side_obj.contains_key("sideConditionSetTurns") {
+                            side_obj.insert("sideConditionSetTurns".into(), json!({}));
+                        }
+                        if let Some(set_turns) = side_obj
+                            .get_mut("sideConditionSetTurns")
+                            .and_then(Value::as_object_mut)
+                        {
+                            for (condition, delta) in branch_sets {
+                                match delta {
+                                    Some(delta) => {
+                                        set_turns.insert(
+                                            condition.clone(),
+                                            json!(self.root_turn + delta),
+                                        );
+                                    }
+                                    None => {
+                                        set_turns.remove(condition);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -947,14 +1226,15 @@ impl LeafContext {
     fn action_surface(
         &self,
         self_side: &Side,
-        _self_engine: usize,
+        self_engine: usize,
         self_options: &[MoveChoice],
         self_team_order: &[(String, bool)],
         force_switch_shape: bool,
-        fresh_switch_in: bool,
+        meta: &LeafMeta,
     ) -> PyResult<(Value, Value)> {
         let action_count = self.tables.layout_action_count();
         let move_action_count = self.tables.layout_move_action_count();
+        let fresh_switch_in = meta.fresh_active[self_engine];
 
         // Engine move surface of the active mon, engine slot order. A
         // recharging active (MUSTRECHARGE volatile) presents the production
@@ -971,7 +1251,22 @@ impl LeafContext {
         // state) and the engine never re-enables them on a branch switch —
         // present the request semantics instead (leaf-vs-reality repro:
         // Choice-Band Nidoking fresh switch-in shows all four moves legal).
-        let mut engine_moves: Vec<(String, bool, i8)> = Vec::new(); // (showdown id, disabled, pp)
+        //
+        // PP is LINE-REPLAYED, not engine-read (review F3): the engine only
+        // emits DecrementPP below 10 PP, so engine PP is root-frozen above
+        // 10. The request's own deduction rules are replayed over the
+        // branch's |move| lines (`LeafMeta::move_charges` — the same rules
+        // the production request follows: called moves charge the caller,
+        // locked continuations and Struggle charge nothing, opposing
+        // Pressure doubles foe-targeted charges) against the ROOT snapshot's
+        // exact per-mon PP (self PP is request-seeded at world construction).
+        let active_party = active_index_usize(self_side);
+        let active_key = self.species_keys[self_engine]
+            .get(active_party)
+            .cloned()
+            .unwrap_or_default();
+        let root_pp = self.root_snapshot[self_engine].mons.get(active_party);
+        let mut engine_moves: Vec<(String, bool, i64)> = Vec::new(); // (showdown id, disabled, pp)
         if !recharging {
             for mv in active.moves.into_iter() {
                 let engine_id = format!("{:?}", mv.id).to_lowercase();
@@ -979,7 +1274,43 @@ impl LeafContext {
                     continue;
                 }
                 let disabled = if fresh_switch_in { false } else { mv.disabled };
-                engine_moves.push((showdown_move_id(&engine_id), disabled, mv.pp));
+                let sd_id = showdown_move_id(&engine_id);
+                let charged = meta
+                    .move_charges
+                    .get(&(self_engine, active_key.clone(), sd_id.clone()))
+                    .copied()
+                    .unwrap_or(0);
+                // Base PP: the ROOT ACTIVE's engine PP is request-seeded and
+                // exact. A mon ACTIVE AT THE LEAF but benched at the root
+                // carries request-history-cached PP that is stale by its
+                // last stint's FINAL action (requests are pre-action), so
+                // its base is the belief ledger's public charging count
+                // (maxpp − ledger uses — the same |move|-line rules the
+                // request follows).
+                let ledger_base = if active_party != self.root_active_party[self_engine] {
+                    self.tables.move_max_pp(&sd_id).filter(|max| *max > 0).map(|max| {
+                        let uses = self
+                            .self_ledger_uses
+                            .get(&(active_key.clone(), sd_id.clone()))
+                            .copied()
+                            .unwrap_or(0);
+                        (max - uses).max(0)
+                    })
+                } else {
+                    None
+                };
+                let root_base = root_pp.and_then(|snapshot| {
+                    snapshot
+                        .pp
+                        .iter()
+                        .find(|(id, _)| *id == sd_id)
+                        .map(|(_, pp)| *pp as i64)
+                });
+                let pp = match ledger_base.or(root_base) {
+                    Some(base) => (base - charged).max(0),
+                    None => (mv.pp as i64).max(0),
+                };
+                engine_moves.push((sd_id, disabled, pp));
             }
         }
 
@@ -1065,7 +1396,7 @@ impl LeafContext {
                     match max_pp {
                         Some(max) => payload_moves.push(json!({
                             "id": move_id,
-                            "pp": (*pp as i64).max(0),
+                            "pp": *pp,
                             "maxpp": max,
                             "disabled": *disabled,
                         })),
@@ -1192,7 +1523,7 @@ impl LeafContext {
             options,
             &team_flags,
             force_switch_shape,
-            meta.fresh_active[self_engine],
+            meta,
         )?;
         let candidates = candidates.as_array().expect("action_surface returns an array");
         let legal_action_index = |predicate: &dyn Fn(&Map<String, Value>) -> bool| {
@@ -1288,22 +1619,14 @@ pub(crate) fn evolve_self_order(
     order
 }
 
-/// Opponent `move_uses` evolution: root ledger uses + engine PP consumed
-/// since the root (the world seeds opponent PP at catalog full, so engine PP
-/// alone cannot reproduce the ledger's observed-use counts).
-fn rewrite_move_uses(
-    obj: &mut Map<String, Value>,
-    snapshot: &MonSnapshot,
-    p: &poke_engine::state::Pokemon,
-) {
-    let mut engine_pp: HashMap<String, i8> = HashMap::new();
-    for mv in p.moves.into_iter() {
-        let engine_id = format!("{:?}", mv.id).to_lowercase();
-        if engine_id == "none" {
-            continue;
-        }
-        engine_pp.insert(showdown_move_id(&engine_id), mv.pp);
-    }
+/// Opponent `move_uses` evolution: root ledger uses + the branch's
+/// LINE-REPLAYED PP charges for this mon (review F3: the engine only emits
+/// DecrementPP below 10 PP, so engine PP deltas are root-frozen above 10;
+/// the ledger's own counting rules — belief.py `_charge_move_use` — are
+/// replayed over the synthesized |move| lines instead, Pressure
+/// double-charges included).
+fn rewrite_move_uses(obj: &mut Map<String, Value>, engine_side: usize, meta: &LeafMeta) {
+    let mon_key = species_key(obj);
     let Some(uses) = obj.get_mut("move_uses").and_then(Value::as_array_mut) else {
         return;
     };
@@ -1316,15 +1639,13 @@ fn rewrite_move_uses(
             continue;
         };
         let root_uses = items[1].as_i64().unwrap_or(0);
-        let root_pp = snapshot
-            .pp
-            .iter()
-            .find(|(id, _)| *id == move_id)
-            .map(|(_, pp)| *pp);
-        let leaf_pp = engine_pp.get(&move_id).copied();
-        if let (Some(root_pp), Some(leaf_pp)) = (root_pp, leaf_pp) {
-            let consumed = (root_pp - leaf_pp).max(0) as i64;
-            items[1] = json!(root_uses + consumed);
+        let charged = meta
+            .move_charges
+            .get(&(engine_side, mon_key.clone(), move_id))
+            .copied()
+            .unwrap_or(0);
+        if charged > 0 {
+            items[1] = json!(root_uses + charged);
         }
     }
 }
@@ -1490,7 +1811,11 @@ impl PyLeafEncoder {
                     lines,
                     self.ctx.self_prefix(),
                 )),
-                Some(evolve_leaf_meta(self.ctx.root_meta(), lines)),
+                Some(evolve_leaf_meta(
+                    self.ctx.root_meta(),
+                    lines,
+                    self.ctx.meta_ctx(),
+                )),
             ),
         }
     }
@@ -1517,6 +1842,7 @@ mod tests {
                 "|upkeep",
                 "|turn|32",
             ]),
+            &LeafMetaCtx::default(),
         );
         assert_eq!(meta.toxic[1], 2);
         assert_eq!(meta.toxic[0], 0);
@@ -1543,8 +1869,11 @@ mod tests {
                 "|turn|22",
                 "|turn|23",
             ]),
+            &LeafMetaCtx::default(),
         );
         assert_eq!(meta.toxic[1], 4);
+        // Active tracking follows the switch DETAILS species.
+        assert_eq!(meta.active[1], "starmie");
     }
 
     /// toxic_stall repro: a faint-pending ply runs the ENGINE's end-of-turn
@@ -1566,6 +1895,7 @@ mod tests {
                 "|faint|p2a: Starmie",
                 "|upkeep",
             ]),
+            &LeafMetaCtx::default(),
         );
         assert_eq!(meta.toxic[1], 9);
     }
@@ -1586,10 +1916,92 @@ mod tests {
                 "|turn|10",
                 "|turn|11",
             ]),
+            &LeafMetaCtx::default(),
         );
         // p1 switched (reset) then two completed turns; p2 stayed in.
         assert_eq!(meta.stint[0], 2);
         assert_eq!(meta.stint[1], 7);
+        assert_eq!(meta.turns_seen, 2);
+    }
+
+    /// Review F3 fix: PP charges replay the PARSER's rules over |move| lines
+    /// — per (side, mon, move), called moves / locked continuations /
+    /// Struggle exempt, opposing Pressure doubles foe-targeted charges.
+    #[test]
+    fn move_charges_replay_parser_rules() {
+        let mut root = LeafMeta::default();
+        root.active = ["swampert".to_string(), "zapdos".to_string()];
+        let ctx = LeafMetaCtx {
+            pressure: [Vec::new(), vec!["zapdos".to_string()]],
+        };
+        let meta = evolve_leaf_meta(
+            &root,
+            &lines(&[
+                // Foe-targeted into a Pressure active: 2.
+                "|move|p1a: Swampert|icebeam|p2a: Zapdos",
+                // Self-targeted: never pressured (1).
+                "|move|p1a: Swampert|protect|p1a: Swampert",
+                // Opponent's own move into us: no Pressure on our side (1).
+                "|move|p2a: Zapdos|thunderbolt|p1a: Swampert",
+                // Pressure mon leaves; the same foe-targeted move now costs 1.
+                "|switch|p2a: Blissey|Blissey, L80, F|100/100",
+                "|move|p1a: Swampert|icebeam|p2a: Blissey",
+                // Sleep Talk called execution charges nothing...
+                "|move|p1a: Swampert|surf|p2a: Blissey|[from] Sleep Talk",
+                // ...locked continuations charge nothing...
+                "|move|p1a: Swampert|thrash|p2a: Blissey|[from]lockedmove",
+                // ...and Struggle has no PP.
+                "|move|p1a: Swampert|struggle|p2a: Blissey",
+            ]),
+            &ctx,
+        );
+        let charge = |side: usize, mon: &str, mv: &str| {
+            meta.move_charges
+                .get(&(side, mon.to_string(), mv.to_string()))
+                .copied()
+                .unwrap_or(0)
+        };
+        assert_eq!(charge(0, "swampert", "icebeam"), 3); // 2 (pressured) + 1
+        assert_eq!(charge(0, "swampert", "protect"), 1);
+        assert_eq!(charge(1, "zapdos", "thunderbolt"), 1);
+        assert_eq!(charge(0, "swampert", "surf"), 0);
+        assert_eq!(charge(0, "swampert", "thrash"), 0);
+        assert_eq!(charge(0, "swampert", "struggle"), 0);
+        assert_eq!(meta.active[1], "blissey");
+    }
+
+    /// Timed side-condition set turns: |-sidestart| records the turn delta at
+    /// set time (parser turn_number arithmetic), |-sideend| pops the entry;
+    /// non-timed conditions (Spikes) are not tracked.
+    #[test]
+    fn side_condition_set_turn_replay() {
+        let meta = evolve_leaf_meta(
+            &LeafMeta::default(),
+            &lines(&[
+                "|-sidestart|p1: side|Reflect",
+                "|turn|8",
+                "|-sidestart|p1: side|move: Light Screen",
+                "|-sidestart|p2: side|Spikes",
+                "|turn|9",
+                "|-sideend|p1: side|Reflect",
+            ]),
+            &LeafMetaCtx::default(),
+        );
+        assert_eq!(
+            meta.side_condition_sets
+                .get(&(0, "reflect".to_string()))
+                .copied(),
+            Some(None) // set then ended: the parser pops the entry
+        );
+        assert_eq!(
+            meta.side_condition_sets
+                .get(&(0, "lightscreen".to_string()))
+                .copied(),
+            Some(Some(1))
+        );
+        assert!(!meta
+            .side_condition_sets
+            .contains_key(&(1, "spikes".to_string())));
     }
 
     /// Review F2: Showdown's switch-swap position semantics.

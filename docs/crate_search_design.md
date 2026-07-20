@@ -226,7 +226,7 @@ state, s1, s2, ctx_json, branch_on_damage, include_post_state)`; context is
 
 | Fold-consumed class | Rendered | Notes |
 |---|---|---|
-| `\|move\|` w/ target | ✅ | opponent-target explicit (+`[miss]`); self-target explicit on success, blank+`[still]` on failure (corpus-measured rule); Curse-by-non-Ghost self-target special case; `[from]lockedmove` continuations; Sleep Talk renders both lines with the called move recovered by candidate re-generation |
+| `\|move\|` w/ target | ✅ | opponent-target explicit (+`[miss]`); self-target explicit on success, blank+`[still]` on failure (corpus-measured rule); ALREADY-STATUSED status fails keep the explicit target + `\|-fail\|target\|status` (corpus-measured 2026-07-19 — the blank form dropped the target and broke Pressure PP parity); side-condition-at-cap fails use blank+`[still]` + `\|-fail\|user`; Curse-by-non-Ghost self-target special case; Ghost Curse renders the real shape (`\|-start\|target\|Curse\|[of] user`, spurious engine boosts suppressed, flagged `lossy`: the true HP cut is not in the engine delta); `[from]lockedmove` continuations; Sleep Talk renders both lines with the called move recovered by candidate re-generation |
 | `\|switch\|/\|drag\|` | ✅ | display details from ctx; `[from] Baton Pass`; spikes chip `[from] Spikes`; drag branches render `\|drag\|` |
 | `\|cant\|` | ✅ | slp / frz / par / flinch / recharge / `ability: Truant` / `move: Taunt` |
 | `\|-damage\|/\|-heal\|/\|-sethp\|` | ✅ (sethp: n/a — engine models Pain Split as Damage+Heal) | cur/max from live engine HP (plain ASCII); recoil `[from] Recoil\|[of]`; drain `[from] drain`; Rest heal `[silent]`; crash `[from] <move>`; confusion self-hit `[from] confusion`; residual damage/heals carry best-effort `[from]` tags (windows are closed there, so tags are belt-and-braces) |
@@ -240,14 +240,16 @@ state, s1, s2, ctx_json, branch_on_damage, include_post_state)`; context is
 | `\|-miss\|` | ◐ | inferred (empty delta + acc<100 + deterministic causes ruled out); merged with full-para / move-fail branches where deltas coincide (below) |
 | `\|-supereffective\|/-resisted\|/-immune\|` | ✅ | from the engine type chart on the mutated choice; suppressed for fixed-damage moves (real protocol rule); `-immune` covers type immunity, type-status immunity (Steel/psn etc.), and the modeled ability immunities (Levitate, Wonder Guard, absorb trio, Immunity, Insomnia/Vital Spirit, Limber, Water Veil, Magma Armor) |
 | `\|-hitcount\|` | ✅ | count of rendered hits (the engine collapses 2-5-hit moves to 3 — its model, rendered faithfully) |
-| `\|-activate\|` Protect/Sub, `\|-end\|` Sub, absorb `\|-heal/-immune [from] ability:` | ✅ | Blocked / hit-sub / broke-sub / Absorbed outcomes |
+| `\|-activate\|` Protect/Sub, `\|-end\|` Sub, absorb `\|-heal/-immune [from] ability:`, Flash Fire `\|-start\|..\|ability: Flash Fire` | ✅ | Blocked / hit-sub / broke-sub / Absorbed outcomes; the Flash Fire FIRST activation renders the boost-state `-start` form (live capture) — an absorb signature the fold consumes (`_is_absorb_start`); repeats render `-immune [from] ability` |
 | `\|-transform\|` | ✅ | single line; internals silent |
 | `\|turn\|/\|upkeep\|/blank` | ✅ | ply-shape aware: end-of-turn plies emit residuals+upkeep (+turn when no replacement pending); faint-replacement plies emit switch+turn; pivot follow-ups emit upkeep+turn with no residuals (the engine never runs pivot-turn residuals — its model) |
 
 Deliberately omitted (fold provably ignores them — `fold.rs process_line`):
-`|-singleturn|`, `|-curestatus|`, `|-fail|`, `|-ability|`, `|-enditem|`,
-`|-mustrecharge|`, `|-start|` (except absorb signatures), `|-anim|`,
-`|debug|`, chat/meta lines.
+`|-singleturn|`, `|-curestatus|`, `|-ability|`, `|-enditem|`,
+`|-mustrecharge|`, `|-start|` (except absorb signatures and the
+real-shape Ghost-Curse marker), `|-anim|`, `|debug|`, chat/meta lines.
+`|-fail|` is fold-ignored but IS rendered for the two measured fail forms
+above (line-stream fidelity).
 
 ### Insufficiency findings (instruction stream ↔ event stream)
 
