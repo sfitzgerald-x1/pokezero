@@ -3041,18 +3041,25 @@ def _encode_action_tokens(
     # HP-variable base power (Reversal / Flail / Eruption / Water Spout) on its moves.
     user_types = _self_active_types(state, dex)
     user_hp_fraction = _self_active_hp_fraction(state)
+    # The acting mon's own typed move ids ("hiddenpowerfighting", ...) — the request-side fallback
+    # for resolving generic Hidden Power's real type/base power (see _self_move_mechanics_id).
+    own_move_ids = state.self_active.moves if state.self_active is not None else ()
     for move_index in range(MOVE_ACTION_COUNT):
         token_index = ACTION_CANDIDATE_TOKEN_OFFSET + move_index
         move = moves[move_index] if isinstance(moves, list) and move_index < len(moves) else None
         move_name = _request_move_name(move) if isinstance(move, Mapping) else f"slot:{move_index + 1}"
         disabled = bool(move.get("disabled")) if isinstance(move, Mapping) else True
+        # The token's move IDENTITY stays the request-keyed name (generic "hiddenpower" for HP:
+        # checkpoint-stable). Only the MECHANICS lookup resolves HP's typed variant so its true
+        # type / base power / damage class reach the acting mon's decision surface.
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"move:{move_name}")
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:move")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"move_slot:{move_index + 1}")
         if isinstance(move, Mapping):
+            mechanics_name = _self_move_mechanics_id(move, move_name, own_move_ids)
             _encode_move_mechanics(
-                categorical_ids[token_index], numeric_features[token_index], dex, move_name,
+                categorical_ids[token_index], numeric_features[token_index], dex, mechanics_name,
                 user_types, user_hp_fraction,
             )
             _set_numeric(numeric_features[token_index], NUMERIC_MOVE_PP_FRACTION, _move_pp_fraction(move))
@@ -3412,6 +3419,52 @@ def _request_move_name(move: Mapping[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return "unknown"
+
+
+_HIDDEN_POWER_TYPES = frozenset(
+    {
+        "bug", "dark", "dragon", "electric", "fighting", "fire", "flying", "ghost",
+        "grass", "ground", "ice", "poison", "psychic", "rock", "steel", "water",
+    }
+)
+
+
+def _hidden_power_variant_from_name(display_name: Any) -> str | None:
+    """Typed Hidden Power id from a request's display move name.
+
+    "Hidden Power Fighting 70" -> "hiddenpowerfighting". Returns None if the name carries no
+    recognizable HP type (leaving the caller to fall back)."""
+    if not isinstance(display_name, str):
+        return None
+    for token in re.findall(r"[a-z]+", display_name.lower()):
+        if token in _HIDDEN_POWER_TYPES:
+            return f"hiddenpower{token}"
+    return None
+
+
+def _self_move_mechanics_id(
+    move: Mapping[str, Any], move_name: str, own_move_ids: Sequence[str] = ()
+) -> str:
+    """Move id to look up for SELF action-token MECHANICS (type / base power / damage class).
+
+    Hidden Power's request keys ``id`` to the generic family ("hiddenpower"), whose dex entry is a
+    0-power Normal placeholder — so the acting mon would encode its single most common coverage move
+    as a Normal, 0-BP no-op. The real typed identity is self-observable two ways: authoritatively
+    from the display ``move`` field ("Hidden Power Fighting 70"), and, as a fallback, from the mon's
+    own typed move id in the request side list ("hiddenpowerfighting", which Showdown derives from
+    its IVs). Resolve the typed variant for the mechanics lookup ONLY; the action token's move
+    IDENTITY (CATEGORY_PRIMARY = ``move:hiddenpower``) stays generic and checkpoint-stable. Every
+    non-Hidden-Power move passes straight through."""
+    if _normalize_identifier(move_name) != "hiddenpower":
+        return move_name
+    typed = _hidden_power_variant_from_name(move.get("move"))
+    if typed is not None:
+        return typed
+    for candidate in own_move_ids:
+        normalized = _normalize_identifier(candidate)
+        if normalized.startswith("hiddenpower") and len(normalized) > len("hiddenpower"):
+            return normalized
+    return move_name
 
 
 def _request_side_id(request: Mapping[str, Any]) -> str | None:

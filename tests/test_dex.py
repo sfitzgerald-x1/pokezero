@@ -84,6 +84,21 @@ class MoveEffectLabelTest(unittest.TestCase):
         flamethrower = _move_effect("flamethrower", category="Special", basePower=95)
         self.assertEqual(resolve_move_base_power(flamethrower, 0.2), 95)  # normal move unaffected
 
+    def test_happiness_variable_base_power(self) -> None:
+        # Regression (training-data corruption): Return / Frustration carry a static dex base power
+        # of 0 (Showdown computes it from happiness at battle time). Gen 3 randbats never sets
+        # happiness, so it stays at the engine default 255 -> Return is always 102, Frustration 1.
+        # Encoded as 0, the acting mon's most-loaded physical move reads as a no-op on its own
+        # decision surface. The resolution must be happiness-driven, NOT HP-fraction-driven: the
+        # value is constant across every HP fraction (including None, unlike Reversal's static 0).
+        from pokezero.dex import resolve_move_base_power
+
+        ret = _move_effect("return", category="Physical")  # static base power 0
+        frust = _move_effect("frustration", category="Physical")
+        for hp in (None, 0.0, 0.5, 1.0):
+            self.assertEqual(resolve_move_base_power(ret, hp), 102)
+            self.assertEqual(resolve_move_base_power(frust, hp), 1)
+
     def test_resolve_move_effect_passes_through_non_dynamic_moves(self) -> None:
         from pokezero.dex import resolve_move_effect
 

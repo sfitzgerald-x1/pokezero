@@ -30,9 +30,15 @@ from pokezero.showdown import (
     NUMERIC_SELF_HP_COST,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
+    CATEGORY_PRIMARY,
+    CATEGORY_TYPE_1,
+    CATEGORY_MOVE_CATEGORY,
+    NUMERIC_BASE_POWER,
     _ReplayParser,
     _actual_stats_from_request_row,
     _encode_move_mechanics,
+    _hidden_power_variant_from_name,
+    _self_move_mechanics_id,
     _max_hp_from_condition,
     _move_pp_fraction,
     NUMERIC_BASE_ATK,
@@ -445,6 +451,122 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(eat_num[NUMERIC_REVEALED_ITEM], 0.0)  # consumed berry is not held
         self.assertEqual(eat_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:salacberry"))
         self.assertEqual(eat_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)  # eaten item still pins the set
+
+    def test_self_move_mechanics_id_resolves_hidden_power_variant(self) -> None:
+        # Fix 1 unit: the SELF action token must encode Hidden Power's TRUE type/base power, not the
+        # generic "hiddenpower" family placeholder (Normal, base power 0). Resolution prefers the
+        # authoritative display name, then falls back to the mon's own typed move id (IV-derived by
+        # Showdown); every non-HP move — and HP with no resolvable source — passes through.
+        for display, expected in (
+            ("Hidden Power Fighting 70", "hiddenpowerfighting"),
+            ("Hidden Power Ice 70", "hiddenpowerice"),
+            ("Hidden Power Grass 70", "hiddenpowergrass"),
+            ("Hidden Power Ground 70", "hiddenpowerground"),
+        ):
+            self.assertEqual(_hidden_power_variant_from_name(display), expected)
+        self.assertIsNone(_hidden_power_variant_from_name("Thunderbolt"))
+        self.assertIsNone(_hidden_power_variant_from_name(None))
+        # Primary: display name.
+        self.assertEqual(
+            _self_move_mechanics_id({"move": "Hidden Power Ice 70", "id": "hiddenpower"}, "hiddenpower"),
+            "hiddenpowerice",
+        )
+        # Fallback: no usable display name -> the mon's own typed move id.
+        self.assertEqual(
+            _self_move_mechanics_id(
+                {"id": "hiddenpower"}, "hiddenpower", ["thunderbolt", "hiddenpowergrass", "rest"]
+            ),
+            "hiddenpowergrass",
+        )
+        # Degenerate (nothing resolvable) -> generic, i.e. unchanged from today.
+        self.assertEqual(
+            _self_move_mechanics_id({"id": "hiddenpower"}, "hiddenpower", ["thunderbolt"]), "hiddenpower"
+        )
+        # Non-HP passthrough (Return/Frustration are fixed downstream in dex.resolve_move_base_power).
+        self.assertEqual(_self_move_mechanics_id({"move": "Return 102", "id": "return"}, "return"), "return")
+        self.assertEqual(_self_move_mechanics_id({"move": "Earthquake", "id": "earthquake"}, "earthquake"), "earthquake")
+
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_self_hidden_power_and_return_action_tokens_encode_true_mechanics(self) -> None:
+        # Fix 1 integration (training-data-corruption guard): the acting mon's own Hidden Power is on
+        # its decision surface every turn (162/220 Gen 3 species). The Showdown request keys the move
+        # `id` to the generic "hiddenpower" family whose dex entry is a 0-power, Normal placeholder, so
+        # the self action token used to encode base power 0 / type Normal — blinding the policy/value
+        # net to its single most common coverage move. Return (happiness-variable, static base power 0)
+        # is the same corruption on the power scalar. Post-fix the action token carries the true typed
+        # mechanics WHILE the move IDENTITY (CATEGORY_PRIMARY) stays the generic family id, so the fix
+        # is checkpoint-compatible (no observation-schema / column-layout change, only values).
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        request = json.dumps(
+            {
+                "active": [
+                    {
+                        "moves": [
+                            {"move": "Hidden Power Ice 70", "id": "hiddenpower"},
+                            {"move": "Return 102", "id": "return"},
+                            {"move": "Thunderbolt", "id": "thunderbolt"},
+                            {"move": "Rest", "id": "rest"},
+                        ],
+                        "trapped": False,
+                    }
+                ],
+                "side": {
+                    "id": "p2",
+                    "name": "Them",
+                    "pokemon": [
+                        {
+                            "ident": "p2a: Zapdos",
+                            "details": "Zapdos, L78",
+                            "condition": "100/100",
+                            "active": True,
+                            "moves": ["hiddenpowerice", "return", "thunderbolt", "rest"],
+                        },
+                        {
+                            "ident": "p2b: Snorlax",
+                            "details": "Snorlax, L78",
+                            "condition": "100/100",
+                            "active": False,
+                        },
+                    ],
+                },
+            }
+        )
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Starmie|Starmie, L78|100/100",
+            "|switch|p2a: Zapdos|Zapdos, L78|100/100",
+            "|turn|1",
+            "|request|" + request,
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p2")
+        obs = observation_from_player_state(
+            state, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC, dex=dex
+        )
+        action_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT
+        hp_cat, hp_num = obs.categorical_ids[action_offset + 0], obs.numeric_features[action_offset + 0]
+        ret_cat, ret_num = obs.categorical_ids[action_offset + 1], obs.numeric_features[action_offset + 1]
+
+        # Hidden Power Ice: true type (Ice, not Normal), Special damage class, base power 70 (0.35).
+        self.assertEqual(hp_cat[CATEGORY_PRIMARY], vocab.encode("move:hiddenpower"))  # IDENTITY stays generic
+        self.assertNotEqual(hp_cat[CATEGORY_TYPE_1], vocab.encode("type:Normal"))
+        self.assertEqual(hp_cat[CATEGORY_TYPE_1], vocab.encode("type:Ice"))
+        self.assertEqual(hp_cat[CATEGORY_MOVE_CATEGORY], vocab.encode("move_category:Special"))
+        self.assertAlmostEqual(hp_num[NUMERIC_BASE_POWER], 70.0 / 200.0, places=6)
+
+        # Return: type/category already correct (Normal/Physical); only the 0 power scalar was wrong.
+        self.assertEqual(ret_cat[CATEGORY_PRIMARY], vocab.encode("move:return"))
+        self.assertEqual(ret_cat[CATEGORY_TYPE_1], vocab.encode("type:Normal"))
+        self.assertAlmostEqual(ret_num[NUMERIC_BASE_POWER], 102.0 / 200.0, places=6)
 
     @unittest.skipUnless(
         Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),

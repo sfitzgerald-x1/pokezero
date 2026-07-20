@@ -112,9 +112,11 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
         self.assertFalse(ditto.transformed)
         self.assertIsNone(ditto.transform_species)
 
-    def test_called_moves_are_not_recorded_as_revealed(self) -> None:
-        # Metronome / Sleep Talk invoke another move; the invoked move is not part of the caller's
-        # set. Both the "[from]move: X" and bare "[from] X" protocol forms must be guarded.
+    def test_random_caller_moves_are_not_recorded_as_revealed(self) -> None:
+        # Metronome / Assist / Nature Power invoke a RANDOM move that is NOT part of the caller's set,
+        # so the invoked move must not be recorded as revealed. (Sleep Talk is the exception — it can
+        # only call the mon's OWN set members — and is covered by the test below.) Both the
+        # "[from]move: X" and bare "[from] X" protocol forms must be guarded.
         lines = [
             "|start",
             "|switch|p1a: Clefable|Clefable, F|100/100",
@@ -123,18 +125,90 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
             "|move|p1a: Clefable|Metronome|p1a: Clefable",
             "|move|p1a: Clefable|Fissure|p2a: Blissey|[from]move: Metronome",
             "|turn|2",
-            "|move|p1a: Clefable|Sleep Talk|p1a: Clefable",
-            "|move|p1a: Clefable|Ice Beam|p2a: Blissey|[from] Sleep Talk",
-            "|turn|3",
         ]
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
         snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
         clefable = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Clefable")
 
         self.assertIn("Metronome", clefable.revealed_moves)
-        self.assertIn("Sleep Talk", clefable.revealed_moves)
         self.assertNotIn("Fissure", clefable.revealed_moves)
-        self.assertNotIn("Ice Beam", clefable.revealed_moves)
+
+    def test_sleep_talk_called_moves_are_recorded_as_revealed(self) -> None:
+        # Fix 2 (training-data corruption): Sleep Talk — unlike Metronome/Assist — can only call the
+        # sleeping mon's OWN set members, so "|move|...|X|[from] Sleep Talk" is a GENUINE reveal of X.
+        # The engine used to lump Sleep Talk with the random callers and drop the callee, so a
+        # Rest/Talk mon could demonstrate its whole set and record none of it, blinding the model to
+        # the opponent's revealed coverage (40/220 Gen 3 species carry Sleep Talk). The callee must be
+        # revealed WHILE the PP ledger stays correct: Sleep Talk (the caller) is charged; the callee,
+        # which spends no PP of its own, is not. Both protocol forms ("[from]move: X" / "[from] X").
+        lines = [
+            "|start",
+            "|switch|p1a: Starmie|Starmie, F|261/261",
+            "|switch|p2a: Snorlax|Snorlax, M|380/380",
+            "|turn|1",
+            "|move|p2a: Snorlax|Body Slam|p1a: Starmie",
+            "|turn|2",
+            "|move|p1a: Starmie|Spore|p2a: Snorlax",
+            "|-status|p2a: Snorlax|slp|[from] move: Spore",
+            "|turn|3",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Earthquake|p1a: Starmie|[from]move: Sleep Talk",
+            "|turn|4",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Shadow Ball|p1a: Starmie|[from] Sleep Talk",
+            "|turn|5",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        snorlax = next(pokemon for pokemon in snapshot.side("p2") if pokemon.species == "Snorlax")
+
+        self.assertIn("Sleep Talk", snorlax.revealed_moves)  # the caller (used directly)
+        self.assertIn("Earthquake", snorlax.revealed_moves)  # sleep-talk-called set member
+        self.assertIn("Shadow Ball", snorlax.revealed_moves)  # sleep-talk-called set member
+        # PP ledger unchanged: Sleep Talk charged per use (twice); the called moves spend none.
+        uses = {move_id: count for move_id, count in snorlax.move_uses}
+        self.assertEqual(uses.get("sleeptalk"), 2)
+        self.assertEqual(uses.get("bodyslam"), 1)
+        self.assertNotIn("earthquake", uses)
+        self.assertNotIn("shadowball", uses)
+
+    def test_struggle_is_not_recorded_and_leaves_belief_untouched(self) -> None:
+        # Fix 3 (training-data corruption): Struggle is a forced pseudo-move, never a set member. It
+        # used to be appended to revealed_moves unconditionally; since no randbats set contains it,
+        # the set source then fell to its inconsistent fallback (full species pool, uncertainty 1.0)
+        # for the REST of the game — wiping a hard-won endgame read exactly when it matters most.
+        # Struggle must never enter revealed_moves; the accumulated belief must be untouched.
+        base = [
+            "|start",
+            "|switch|p1a: Starmie|Starmie, F|261/261",
+            "|switch|p2a: Snorlax|Snorlax, M|380/380",
+            "|turn|1",
+            "|move|p2a: Snorlax|Body Slam|p1a: Starmie",
+            "|turn|2",
+            "|move|p2a: Snorlax|Earthquake|p1a: Starmie",
+            "|turn|3",
+        ]
+        struggle = base + [
+            "|move|p2a: Snorlax|Struggle|p1a: Starmie",
+            "|-damage|p1a: Starmie|200/261",
+            "|-damage|p2a: Snorlax|360/380|[from] Recoil|[of] p1a: Starmie",
+            "|turn|4",
+        ]
+
+        def snorlax_belief(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            snapshot = PublicBattleBeliefEngine.from_events(
+                replay.public_events, format_id="gen3randombattle", set_source=FakeSetSource()
+            ).snapshot()
+            return next(p for p in snapshot.side("p2") if p.species == "Snorlax")
+
+        before = snorlax_belief(base)
+        after = snorlax_belief(struggle)
+        self.assertNotIn("Struggle", after.revealed_moves)
+        # Belief is byte-for-byte what it was before the forced Struggle.
+        self.assertEqual(after.revealed_moves, before.revealed_moves)
+        self.assertEqual(after.candidate_set_count, before.candidate_set_count)
+        self.assertEqual(after.uncertainty, before.uncertainty)
 
     def test_locked_move_continuation_is_still_recorded(self) -> None:
         # "[from]lockedmove" (Thrash/Outrage/Petal Dance) IS the mon's own move continuing — it must
@@ -363,9 +437,10 @@ class ExactStateLedgerTest(unittest.TestCase):
         uses = dict(arcanine.move_uses)
         self.assertEqual(uses.get("sleeptalk"), 1)
         self.assertEqual(uses.get("rest"), 1)
-        self.assertNotIn("flamethrower", uses)
-        # revealed moves keep existing caller suppression: Flamethrower is not set evidence
-        self.assertNotIn("Flamethrower", arcanine.revealed_moves)
+        self.assertNotIn("flamethrower", uses)  # the callee spends none of its own PP
+        # Reveal and PP ledger are decoupled: Sleep Talk can only call the mon's OWN set members, so
+        # the callee IS genuine set evidence and must be revealed — while charging it no PP (Fix 2).
+        self.assertIn("Flamethrower", arcanine.revealed_moves)
 
     def test_sleep_counters_rest_flag_and_early_bird(self) -> None:
         engine = self.engine_from([
