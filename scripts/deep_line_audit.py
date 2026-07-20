@@ -31,6 +31,7 @@ from pokezero.deep_line_audit import (  # noqa: E402
 )
 from pokezero.golden_corpus_scenarios import (  # noqa: E402
     ScriptedPreferencePolicy,
+    interaction_registry_specs,
     scenario_specs,
 )
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noqa: E402
@@ -110,6 +111,18 @@ def _audit_scenario(env: LocalShowdownEnv, spec, report: DeepLineAuditReport) ->
     census_protocol_cooccurrences(env.snapshot().protocol_lines, report=report)
 
 
+def _available_scenarios(*, include_interaction_registry: bool) -> dict[str, object]:
+    """Return the explicitly selectable scenario fixtures for this audit run."""
+
+    scenarios = {spec.name: spec for spec in scenario_specs()}
+    if include_interaction_registry:
+        duplicate_names = scenarios.keys() & {spec.name for spec in interaction_registry_specs()}
+        if duplicate_names:
+            raise AssertionError(f"scenario registry contains duplicate names: {sorted(duplicate_names)}")
+        scenarios.update({spec.name: spec for spec in interaction_registry_specs()})
+    return scenarios
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -124,6 +137,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--max-rounds", type=int, default=250)
     parser.add_argument("--scenarios", action="store_true", help="Audit all deterministic chain scenarios.")
+    parser.add_argument(
+        "--interaction-registry",
+        action="store_true",
+        help="Audit the curated party/silent-noop interaction registry in addition to selected scenarios.",
+    )
     parser.add_argument("--protocol-fixtures", action="store_true", help="Audit minimal public protocol cuts.")
     parser.add_argument("--scenario", action="append", default=[], help="Audit one named scenario (repeatable).")
     parser.add_argument(
@@ -158,7 +176,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         for seed in range(args.seed_start, args.seed_start + args.random_games):
             _audit_game(env, seed=seed, report=report, max_rounds=args.max_rounds)
-        selected = {spec.name: spec for spec in scenario_specs()}
+        selected = _available_scenarios(include_interaction_registry=args.interaction_registry)
         names = set(args.scenario)
         if args.scenarios:
             names.update(selected)
