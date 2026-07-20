@@ -94,6 +94,17 @@ _PUBLIC_UNIT_INTERVAL_SLOTS = frozenset(
 _RANDBAT_COMPONENT_KINDS = ("species", "variant", "move", "ability", "item")
 
 
+def _normalize_randbat_component_move(value: str) -> str:
+    """Normalize request-side dynamic-power spellings to the source move id."""
+
+    move = _normalize_identifier(value)
+    if move.startswith("return"):
+        return "return"
+    if move.startswith("frustration"):
+        return "frustration"
+    return move
+
+
 @dataclass(frozen=True)
 class AuditFinding:
     """One reproducible encoder inconsistency or invariant failure."""
@@ -333,7 +344,7 @@ class DeepLineAuditReport:
                 self.randbat_catalog_components["move"].update(
                     move
                     for raw_move in getattr(variant, "moves", ())
-                    if (move := _normalize_identifier(str(raw_move)))
+                    if (move := _normalize_randbat_component_move(str(raw_move)))
                 )
 
     def record_observed_randbat_team(
@@ -360,13 +371,13 @@ class DeepLineAuditReport:
             observed_moves: set[str] = set()
             if isinstance(moves, Sequence) and not isinstance(moves, (str, bytes)):
                 observed_moves.update(
-                    move for raw_move in moves if (move := _normalize_identifier(str(raw_move)))
+                    move for raw_move in moves if (move := _normalize_randbat_component_move(str(raw_move)))
                 )
             self.randbat_observed_components["move"].update(observed_moves)
             universe = source.universe_for(species) if species else None
             for variant in getattr(universe, "variants", ()):
                 variant_moves = {
-                    _normalize_identifier(str(raw_move)) for raw_move in variant.moves
+                    _normalize_randbat_component_move(str(raw_move)) for raw_move in variant.moves
                 }
                 if (
                     observed_moves == variant_moves

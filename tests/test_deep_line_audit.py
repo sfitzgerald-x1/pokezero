@@ -147,7 +147,7 @@ class DeepLineAuditReportTest(unittest.TestCase):
                     variants=(
                         SimpleNamespace(
                             variant_id="xatu-1-variant-1",
-                            moves=("Psychic", "Wish", "Protect", "Drill Peck"),
+                            moves=("Psychic", "Wish", "Protect", "Return"),
                             ability="Synchronize",
                             item="Leftovers",
                         ),
@@ -167,7 +167,7 @@ class DeepLineAuditReportTest(unittest.TestCase):
         report.record_randbat_source(source)
         report.record_observed_randbat_team(({
             "species": "Xatu",
-            "moves": ["Psychic", "Wish", "Protect", "Drill Peck"],
+            "moves": ["Psychic", "Wish", "Protect", "Return102"],
             "ability": "Synchronize",
             "item": "Leftovers",
         },), source=source)
@@ -178,6 +178,8 @@ class DeepLineAuditReportTest(unittest.TestCase):
         self.assertEqual(coverage["observed_component_counts"]["variant"], 1)
         self.assertEqual(coverage["observed_component_counts"]["species"], 1)
         self.assertEqual(coverage["unobserved_component_counts"]["ability"], 1)
+        self.assertIn("return", report.randbat_observed_components["move"])
+        self.assertNotIn("return102", report.randbat_observed_components["move"])
 
 
 if __name__ == "__main__":
