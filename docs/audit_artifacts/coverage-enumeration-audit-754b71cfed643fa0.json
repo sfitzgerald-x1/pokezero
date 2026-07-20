@@ -1,0 +1,49 @@
+{
+  "coverage_execution": {
+    "completed_games": 220,
+    "coverage_complete": true,
+    "planned_games": 220,
+    "selected_games": 220,
+    "source_hash": "754b71cfed643fa0"
+  },
+  "decisions_checked": 440,
+  "finding_count": 0,
+  "findings": [],
+  "games_audited": 223,
+  "protocol_cooccurrences": [],
+  "protocol_events": {},
+  "protocol_ordered_pairs": [],
+  "protocol_ordered_triples": [],
+  "randbat_source_coverage": {
+    "candidate_variants_checked": 3495,
+    "catalog_component_counts": {
+      "ability": 71,
+      "item": 13,
+      "move": 125,
+      "species": 220,
+      "variant": 1748
+    },
+    "observed_component_counts": {
+      "ability": 71,
+      "item": 13,
+      "move": 125,
+      "species": 220,
+      "variant": 276
+    },
+    "source_metadata": {
+      "format_id": "gen3randombattle",
+      "generation": 3,
+      "source_hash": "754b71cfed643fa0"
+    },
+    "unobserved_component_counts": {
+      "ability": 0,
+      "item": 0,
+      "move": 0,
+      "species": 0,
+      "variant": 1472
+    }
+  },
+  "schema_version": "pokezero.deep-line-audit.v1",
+  "suppressed_finding_counts": {},
+  "turn_20_plus_decisions": 0
+}

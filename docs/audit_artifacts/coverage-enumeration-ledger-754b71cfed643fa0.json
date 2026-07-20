@@ -1,0 +1,5208 @@
+{
+  "complete": true,
+  "execution": {
+    "completed_game_ids": [
+      "draft-a-001",
+      "draft-a-002",
+      "draft-a-003",
+      "draft-a-004",
+      "draft-a-005",
+      "draft-a-006",
+      "draft-a-007",
+      "draft-a-008",
+      "draft-a-009",
+      "draft-a-010",
+      "draft-a-011",
+      "draft-a-012",
+      "draft-a-013",
+      "draft-a-014",
+      "draft-a-015",
+      "draft-a-016",
+      "draft-a-017",
+      "draft-a-018",
+      "draft-a-019",
+      "draft-a-020",
+      "draft-a-021",
+      "draft-a-022",
+      "draft-a-023",
+      "draft-a-024",
+      "draft-a-025",
+      "draft-a-026",
+      "draft-a-027",
+      "draft-a-028",
+      "draft-a-029",
+      "draft-a-030",
+      "draft-a-031",
+      "draft-a-032",
+      "draft-a-033",
+      "draft-a-034",
+      "draft-a-035",
+      "draft-a-036",
+      "draft-a-037",
+      "draft-a-038",
+      "draft-a-039",
+      "draft-a-040",
+      "draft-a-041",
+      "draft-a-042",
+      "draft-a-043",
+      "draft-a-044",
+      "draft-a-045",
+      "draft-a-046",
+      "draft-a-047",
+      "draft-a-048",
+      "draft-a-049",
+      "draft-a-050",
+      "draft-a-051",
+      "draft-a-052",
+      "draft-a-053",
+      "draft-a-054",
+      "draft-a-055",
+      "draft-a-056",
+      "draft-a-057",
+      "draft-a-058",
+      "draft-a-059",
+      "draft-a-060",
+      "draft-a-061",
+      "draft-a-062",
+      "draft-a-063",
+      "draft-a-064",
+      "draft-a-065",
+      "draft-a-066",
+      "draft-a-067",
+      "draft-a-068",
+      "draft-a-069",
+      "draft-a-070",
+      "draft-a-071",
+      "draft-a-072",
+      "draft-a-073",
+      "draft-a-074",
+      "draft-a-075",
+      "draft-a-076",
+      "draft-a-077",
+      "draft-a-078",
+      "draft-a-079",
+      "draft-a-080",
+      "draft-a-081",
+      "draft-a-082",
+      "draft-a-083",
+      "draft-a-084",
+      "draft-a-085",
+      "draft-a-086",
+      "draft-a-087",
+      "draft-a-088",
+      "draft-a-089",
+      "draft-a-090",
+      "draft-a-091",
+      "draft-a-092",
+      "draft-a-093",
+      "draft-a-094",
+      "draft-a-095",
+      "draft-a-096",
+      "draft-a-097",
+      "draft-a-098",
+      "draft-a-099",
+      "draft-a-100",
+      "draft-a-101",
+      "draft-a-102",
+      "draft-a-103",
+      "draft-a-104",
+      "draft-a-105",
+      "draft-a-106",
+      "draft-a-107",
+      "draft-a-108",
+      "draft-a-109",
+      "draft-a-110",
+      "draft-b-111",
+      "draft-b-112",
+      "draft-b-113",
+      "draft-b-114",
+      "draft-b-115",
+      "draft-b-116",
+      "draft-b-117",
+      "draft-b-118",
+      "draft-b-119",
+      "draft-b-120",
+      "draft-b-121",
+      "draft-b-122",
+      "draft-b-123",
+      "draft-b-124",
+      "draft-b-125",
+      "draft-b-126",
+      "draft-b-127",
+      "draft-b-128",
+      "draft-b-129",
+      "draft-b-130",
+      "draft-b-131",
+      "draft-b-132",
+      "draft-b-133",
+      "draft-b-134",
+      "draft-b-135",
+      "draft-b-136",
+      "draft-b-137",
+      "draft-b-138",
+      "draft-b-139",
+      "draft-b-140",
+      "draft-b-141",
+      "draft-b-142",
+      "draft-b-143",
+      "draft-b-144",
+      "draft-b-145",
+      "draft-b-146",
+      "draft-b-147",
+      "draft-b-148",
+      "draft-b-149",
+      "draft-b-150",
+      "draft-b-151",
+      "draft-b-152",
+      "draft-b-153",
+      "draft-b-154",
+      "draft-b-155",
+      "draft-b-156",
+      "draft-b-157",
+      "draft-b-158",
+      "draft-b-159",
+      "draft-b-160",
+      "draft-b-161",
+      "draft-b-162",
+      "draft-b-163",
+      "draft-b-164",
+      "draft-b-165",
+      "draft-b-166",
+      "draft-b-167",
+      "draft-b-168",
+      "draft-b-169",
+      "draft-b-170",
+      "draft-b-171",
+      "draft-b-172",
+      "draft-b-173",
+      "draft-b-174",
+      "draft-b-175",
+      "draft-b-176",
+      "draft-b-177",
+      "draft-b-178",
+      "draft-b-179",
+      "draft-b-180",
+      "draft-b-181",
+      "draft-b-182",
+      "draft-b-183",
+      "draft-b-184",
+      "draft-b-185",
+      "draft-b-186",
+      "draft-b-187",
+      "draft-b-188",
+      "draft-b-189",
+      "draft-b-190",
+      "draft-b-191",
+      "draft-b-192",
+      "draft-b-193",
+      "draft-b-194",
+      "draft-b-195",
+      "draft-b-196",
+      "draft-b-197",
+      "draft-b-198",
+      "draft-b-199",
+      "draft-b-200",
+      "draft-b-201",
+      "draft-b-202",
+      "draft-b-203",
+      "draft-b-204",
+      "draft-b-205",
+      "draft-b-206",
+      "draft-b-207",
+      "draft-b-208",
+      "draft-b-209",
+      "draft-b-210",
+      "draft-b-211",
+      "draft-b-212",
+      "draft-b-213",
+      "draft-b-214",
+      "draft-b-215",
+      "draft-b-216",
+      "draft-b-217",
+      "draft-b-218",
+      "draft-b-219",
+      "draft-b-220"
+    ],
+    "move_use": {
+      "draft-a-001": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-002": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-003": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-004": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-005": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-006": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-007": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-008": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-009": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-010": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-011": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-012": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-013": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-014": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-015": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-016": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-017": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-018": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-019": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-020": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-021": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-022": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-023": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-024": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-025": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-026": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-027": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-028": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-029": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-030": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-031": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-032": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-033": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-034": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-035": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-036": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-037": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-038": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-039": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-040": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-041": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-042": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-043": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-044": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-045": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-046": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-047": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-048": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-049": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-050": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-051": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-052": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-053": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-054": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-055": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-056": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-057": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-058": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-059": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-060": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-061": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-062": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-063": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-064": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-065": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-066": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-067": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-068": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-069": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-070": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-071": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-072": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-073": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-074": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-075": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-076": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-077": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-078": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-079": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-080": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-081": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-082": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-083": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-084": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-085": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-086": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-087": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-088": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-089": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-090": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-091": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-092": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-093": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-094": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-095": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-096": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-097": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-098": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-099": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-100": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-101": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-102": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-103": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-104": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-105": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-106": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-107": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-108": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-109": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-a-110": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-111": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-112": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-113": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-114": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-115": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-116": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-117": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-118": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-119": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-120": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-121": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-122": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-123": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-124": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-125": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-126": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-127": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-128": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-129": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-130": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-131": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-132": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-133": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-134": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-135": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-136": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-137": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-138": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-139": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-140": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-141": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-142": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-143": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-144": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-145": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-146": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-147": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-148": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-149": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-150": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-151": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-152": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-153": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-154": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-155": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-156": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-157": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-158": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-159": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-160": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-161": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-162": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-163": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-164": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-165": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-166": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-167": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-168": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-169": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-170": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-171": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-172": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-173": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-174": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-175": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-176": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-177": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-178": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-179": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-180": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-181": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-182": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-183": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-184": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-185": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-186": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-187": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-188": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-189": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-190": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-191": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-192": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-193": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-194": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-195": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-196": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-197": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-198": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-199": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-200": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-201": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-202": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-203": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-204": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-205": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-206": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-207": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-208": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-209": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-210": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-211": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-212": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-213": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-214": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-215": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-216": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-217": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-218": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-219": {
+        "p1": [],
+        "p2": []
+      },
+      "draft-b-220": {
+        "p1": [],
+        "p2": []
+      }
+    },
+    "selected_game_ids": [
+      "draft-a-001",
+      "draft-a-002",
+      "draft-a-003",
+      "draft-a-004",
+      "draft-a-005",
+      "draft-a-006",
+      "draft-a-007",
+      "draft-a-008",
+      "draft-a-009",
+      "draft-a-010",
+      "draft-a-011",
+      "draft-a-012",
+      "draft-a-013",
+      "draft-a-014",
+      "draft-a-015",
+      "draft-a-016",
+      "draft-a-017",
+      "draft-a-018",
+      "draft-a-019",
+      "draft-a-020",
+      "draft-a-021",
+      "draft-a-022",
+      "draft-a-023",
+      "draft-a-024",
+      "draft-a-025",
+      "draft-a-026",
+      "draft-a-027",
+      "draft-a-028",
+      "draft-a-029",
+      "draft-a-030",
+      "draft-a-031",
+      "draft-a-032",
+      "draft-a-033",
+      "draft-a-034",
+      "draft-a-035",
+      "draft-a-036",
+      "draft-a-037",
+      "draft-a-038",
+      "draft-a-039",
+      "draft-a-040",
+      "draft-a-041",
+      "draft-a-042",
+      "draft-a-043",
+      "draft-a-044",
+      "draft-a-045",
+      "draft-a-046",
+      "draft-a-047",
+      "draft-a-048",
+      "draft-a-049",
+      "draft-a-050",
+      "draft-a-051",
+      "draft-a-052",
+      "draft-a-053",
+      "draft-a-054",
+      "draft-a-055",
+      "draft-a-056",
+      "draft-a-057",
+      "draft-a-058",
+      "draft-a-059",
+      "draft-a-060",
+      "draft-a-061",
+      "draft-a-062",
+      "draft-a-063",
+      "draft-a-064",
+      "draft-a-065",
+      "draft-a-066",
+      "draft-a-067",
+      "draft-a-068",
+      "draft-a-069",
+      "draft-a-070",
+      "draft-a-071",
+      "draft-a-072",
+      "draft-a-073",
+      "draft-a-074",
+      "draft-a-075",
+      "draft-a-076",
+      "draft-a-077",
+      "draft-a-078",
+      "draft-a-079",
+      "draft-a-080",
+      "draft-a-081",
+      "draft-a-082",
+      "draft-a-083",
+      "draft-a-084",
+      "draft-a-085",
+      "draft-a-086",
+      "draft-a-087",
+      "draft-a-088",
+      "draft-a-089",
+      "draft-a-090",
+      "draft-a-091",
+      "draft-a-092",
+      "draft-a-093",
+      "draft-a-094",
+      "draft-a-095",
+      "draft-a-096",
+      "draft-a-097",
+      "draft-a-098",
+      "draft-a-099",
+      "draft-a-100",
+      "draft-a-101",
+      "draft-a-102",
+      "draft-a-103",
+      "draft-a-104",
+      "draft-a-105",
+      "draft-a-106",
+      "draft-a-107",
+      "draft-a-108",
+      "draft-a-109",
+      "draft-a-110",
+      "draft-b-111",
+      "draft-b-112",
+      "draft-b-113",
+      "draft-b-114",
+      "draft-b-115",
+      "draft-b-116",
+      "draft-b-117",
+      "draft-b-118",
+      "draft-b-119",
+      "draft-b-120",
+      "draft-b-121",
+      "draft-b-122",
+      "draft-b-123",
+      "draft-b-124",
+      "draft-b-125",
+      "draft-b-126",
+      "draft-b-127",
+      "draft-b-128",
+      "draft-b-129",
+      "draft-b-130",
+      "draft-b-131",
+      "draft-b-132",
+      "draft-b-133",
+      "draft-b-134",
+      "draft-b-135",
+      "draft-b-136",
+      "draft-b-137",
+      "draft-b-138",
+      "draft-b-139",
+      "draft-b-140",
+      "draft-b-141",
+      "draft-b-142",
+      "draft-b-143",
+      "draft-b-144",
+      "draft-b-145",
+      "draft-b-146",
+      "draft-b-147",
+      "draft-b-148",
+      "draft-b-149",
+      "draft-b-150",
+      "draft-b-151",
+      "draft-b-152",
+      "draft-b-153",
+      "draft-b-154",
+      "draft-b-155",
+      "draft-b-156",
+      "draft-b-157",
+      "draft-b-158",
+      "draft-b-159",
+      "draft-b-160",
+      "draft-b-161",
+      "draft-b-162",
+      "draft-b-163",
+      "draft-b-164",
+      "draft-b-165",
+      "draft-b-166",
+      "draft-b-167",
+      "draft-b-168",
+      "draft-b-169",
+      "draft-b-170",
+      "draft-b-171",
+      "draft-b-172",
+      "draft-b-173",
+      "draft-b-174",
+      "draft-b-175",
+      "draft-b-176",
+      "draft-b-177",
+      "draft-b-178",
+      "draft-b-179",
+      "draft-b-180",
+      "draft-b-181",
+      "draft-b-182",
+      "draft-b-183",
+      "draft-b-184",
+      "draft-b-185",
+      "draft-b-186",
+      "draft-b-187",
+      "draft-b-188",
+      "draft-b-189",
+      "draft-b-190",
+      "draft-b-191",
+      "draft-b-192",
+      "draft-b-193",
+      "draft-b-194",
+      "draft-b-195",
+      "draft-b-196",
+      "draft-b-197",
+      "draft-b-198",
+      "draft-b-199",
+      "draft-b-200",
+      "draft-b-201",
+      "draft-b-202",
+      "draft-b-203",
+      "draft-b-204",
+      "draft-b-205",
+      "draft-b-206",
+      "draft-b-207",
+      "draft-b-208",
+      "draft-b-209",
+      "draft-b-210",
+      "draft-b-211",
+      "draft-b-212",
+      "draft-b-213",
+      "draft-b-214",
+      "draft-b-215",
+      "draft-b-216",
+      "draft-b-217",
+      "draft-b-218",
+      "draft-b-219",
+      "draft-b-220"
+    ],
+    "shard": {
+      "count": 1,
+      "index": 0
+    },
+    "universal_moves": {
+      "hiddenpower": {
+        "action_row": 299,
+        "complete": true,
+        "expected_row": 299,
+        "source_move": "hiddenpowergrass"
+      },
+      "recharge": {
+        "action_row": 370,
+        "complete": true,
+        "expected_row": 370,
+        "protocol_cant_observed": true
+      },
+      "struggle": {
+        "action_row": 415,
+        "complete": true,
+        "expected_row": 415,
+        "protocol_move_observed": true
+      }
+    }
+  },
+  "expected": {
+    "ability_pairs": [
+      {
+        "ability": "pressure",
+        "species": "absol"
+      },
+      {
+        "ability": "pressure",
+        "species": "aerodactyl"
+      },
+      {
+        "ability": "rockhead",
+        "species": "aerodactyl"
+      },
+      {
+        "ability": "rockhead",
+        "species": "aggron"
+      },
+      {
+        "ability": "pickup",
+        "species": "aipom"
+      },
+      {
+        "ability": "runaway",
+        "species": "aipom"
+      },
+      {
+        "ability": "synchronize",
+        "species": "alakazam"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "altaria"
+      },
+      {
+        "ability": "static",
+        "species": "ampharos"
+      },
+      {
+        "ability": "intimidate",
+        "species": "arbok"
+      },
+      {
+        "ability": "intimidate",
+        "species": "arcanine"
+      },
+      {
+        "ability": "insomnia",
+        "species": "ariados"
+      },
+      {
+        "ability": "swarm",
+        "species": "ariados"
+      },
+      {
+        "ability": "battlearmor",
+        "species": "armaldo"
+      },
+      {
+        "ability": "pressure",
+        "species": "articuno"
+      },
+      {
+        "ability": "hugepower",
+        "species": "azumarill"
+      },
+      {
+        "ability": "insomnia",
+        "species": "banette"
+      },
+      {
+        "ability": "swarm",
+        "species": "beautifly"
+      },
+      {
+        "ability": "swarm",
+        "species": "beedrill"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "bellossom"
+      },
+      {
+        "ability": "torrent",
+        "species": "blastoise"
+      },
+      {
+        "ability": "blaze",
+        "species": "blaziken"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "blissey"
+      },
+      {
+        "ability": "effectspore",
+        "species": "breloom"
+      },
+      {
+        "ability": "compoundeyes",
+        "species": "butterfree"
+      },
+      {
+        "ability": "sandveil",
+        "species": "cacturne"
+      },
+      {
+        "ability": "magmaarmor",
+        "species": "camerupt"
+      },
+      {
+        "ability": "forecast",
+        "species": "castform"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "celebi"
+      },
+      {
+        "ability": "blaze",
+        "species": "charizard"
+      },
+      {
+        "ability": "levitate",
+        "species": "chimecho"
+      },
+      {
+        "ability": "levitate",
+        "species": "claydol"
+      },
+      {
+        "ability": "cutecharm",
+        "species": "clefable"
+      },
+      {
+        "ability": "shellarmor",
+        "species": "cloyster"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "corsola"
+      },
+      {
+        "ability": "suctioncups",
+        "species": "cradily"
+      },
+      {
+        "ability": "hypercutter",
+        "species": "crawdaunt"
+      },
+      {
+        "ability": "innerfocus",
+        "species": "crobat"
+      },
+      {
+        "ability": "cutecharm",
+        "species": "delcatty"
+      },
+      {
+        "ability": "hustle",
+        "species": "delibird"
+      },
+      {
+        "ability": "pressure",
+        "species": "deoxys"
+      },
+      {
+        "ability": "pressure",
+        "species": "deoxysattack"
+      },
+      {
+        "ability": "pressure",
+        "species": "deoxysdefense"
+      },
+      {
+        "ability": "pressure",
+        "species": "deoxysspeed"
+      },
+      {
+        "ability": "thickfat",
+        "species": "dewgong"
+      },
+      {
+        "ability": "limber",
+        "species": "ditto"
+      },
+      {
+        "ability": "earlybird",
+        "species": "dodrio"
+      },
+      {
+        "ability": "sturdy",
+        "species": "donphan"
+      },
+      {
+        "ability": "innerfocus",
+        "species": "dragonite"
+      },
+      {
+        "ability": "arenatrap",
+        "species": "dugtrio"
+      },
+      {
+        "ability": "serenegrace",
+        "species": "dunsparce"
+      },
+      {
+        "ability": "pressure",
+        "species": "dusclops"
+      },
+      {
+        "ability": "shielddust",
+        "species": "dustox"
+      },
+      {
+        "ability": "static",
+        "species": "electabuzz"
+      },
+      {
+        "ability": "static",
+        "species": "electrode"
+      },
+      {
+        "ability": "pressure",
+        "species": "entei"
+      },
+      {
+        "ability": "synchronize",
+        "species": "espeon"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "exeggutor"
+      },
+      {
+        "ability": "soundproof",
+        "species": "exploud"
+      },
+      {
+        "ability": "innerfocus",
+        "species": "farfetchd"
+      },
+      {
+        "ability": "keeneye",
+        "species": "fearow"
+      },
+      {
+        "ability": "torrent",
+        "species": "feraligatr"
+      },
+      {
+        "ability": "flashfire",
+        "species": "flareon"
+      },
+      {
+        "ability": "levitate",
+        "species": "flygon"
+      },
+      {
+        "ability": "sturdy",
+        "species": "forretress"
+      },
+      {
+        "ability": "keeneye",
+        "species": "furret"
+      },
+      {
+        "ability": "trace",
+        "species": "gardevoir"
+      },
+      {
+        "ability": "levitate",
+        "species": "gengar"
+      },
+      {
+        "ability": "earlybird",
+        "species": "girafarig"
+      },
+      {
+        "ability": "innerfocus",
+        "species": "glalie"
+      },
+      {
+        "ability": "hypercutter",
+        "species": "gligar"
+      },
+      {
+        "ability": "cloudnine",
+        "species": "golduck"
+      },
+      {
+        "ability": "rockhead",
+        "species": "golem"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "gorebyss"
+      },
+      {
+        "ability": "intimidate",
+        "species": "granbull"
+      },
+      {
+        "ability": "drought",
+        "species": "groudon"
+      },
+      {
+        "ability": "thickfat",
+        "species": "grumpig"
+      },
+      {
+        "ability": "intimidate",
+        "species": "gyarados"
+      },
+      {
+        "ability": "guts",
+        "species": "hariyama"
+      },
+      {
+        "ability": "thickfat",
+        "species": "hariyama"
+      },
+      {
+        "ability": "guts",
+        "species": "heracross"
+      },
+      {
+        "ability": "swarm",
+        "species": "heracross"
+      },
+      {
+        "ability": "keeneye",
+        "species": "hitmonchan"
+      },
+      {
+        "ability": "limber",
+        "species": "hitmonlee"
+      },
+      {
+        "ability": "intimidate",
+        "species": "hitmontop"
+      },
+      {
+        "ability": "pressure",
+        "species": "hooh"
+      },
+      {
+        "ability": "flashfire",
+        "species": "houndoom"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "huntail"
+      },
+      {
+        "ability": "insomnia",
+        "species": "hypno"
+      },
+      {
+        "ability": "oblivious",
+        "species": "illumise"
+      },
+      {
+        "ability": "serenegrace",
+        "species": "jirachi"
+      },
+      {
+        "ability": "voltabsorb",
+        "species": "jolteon"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "jumpluff"
+      },
+      {
+        "ability": "oblivious",
+        "species": "jynx"
+      },
+      {
+        "ability": "battlearmor",
+        "species": "kabutops"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "kabutops"
+      },
+      {
+        "ability": "earlybird",
+        "species": "kangaskhan"
+      },
+      {
+        "ability": "colorchange",
+        "species": "kecleon"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "kingdra"
+      },
+      {
+        "ability": "hypercutter",
+        "species": "kingler"
+      },
+      {
+        "ability": "drizzle",
+        "species": "kyogre"
+      },
+      {
+        "ability": "voltabsorb",
+        "species": "lanturn"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "lapras"
+      },
+      {
+        "ability": "levitate",
+        "species": "latias"
+      },
+      {
+        "ability": "levitate",
+        "species": "latios"
+      },
+      {
+        "ability": "swarm",
+        "species": "ledian"
+      },
+      {
+        "ability": "owntempo",
+        "species": "lickitung"
+      },
+      {
+        "ability": "pickup",
+        "species": "linoone"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "ludicolo"
+      },
+      {
+        "ability": "pressure",
+        "species": "lugia"
+      },
+      {
+        "ability": "levitate",
+        "species": "lunatone"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "luvdisc"
+      },
+      {
+        "ability": "guts",
+        "species": "machamp"
+      },
+      {
+        "ability": "flamebody",
+        "species": "magcargo"
+      },
+      {
+        "ability": "flamebody",
+        "species": "magmar"
+      },
+      {
+        "ability": "magnetpull",
+        "species": "magneton"
+      },
+      {
+        "ability": "static",
+        "species": "manectric"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "mantine"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "mantine"
+      },
+      {
+        "ability": "rockhead",
+        "species": "marowak"
+      },
+      {
+        "ability": "intimidate",
+        "species": "masquerain"
+      },
+      {
+        "ability": "intimidate",
+        "species": "mawile"
+      },
+      {
+        "ability": "purepower",
+        "species": "medicham"
+      },
+      {
+        "ability": "overgrow",
+        "species": "meganium"
+      },
+      {
+        "ability": "clearbody",
+        "species": "metagross"
+      },
+      {
+        "ability": "synchronize",
+        "species": "mew"
+      },
+      {
+        "ability": "pressure",
+        "species": "mewtwo"
+      },
+      {
+        "ability": "intimidate",
+        "species": "mightyena"
+      },
+      {
+        "ability": "marvelscale",
+        "species": "milotic"
+      },
+      {
+        "ability": "thickfat",
+        "species": "miltank"
+      },
+      {
+        "ability": "minus",
+        "species": "minun"
+      },
+      {
+        "ability": "levitate",
+        "species": "misdreavus"
+      },
+      {
+        "ability": "pressure",
+        "species": "moltres"
+      },
+      {
+        "ability": "soundproof",
+        "species": "mrmime"
+      },
+      {
+        "ability": "stickyhold",
+        "species": "muk"
+      },
+      {
+        "ability": "insomnia",
+        "species": "murkrow"
+      },
+      {
+        "ability": "poisonpoint",
+        "species": "nidoking"
+      },
+      {
+        "ability": "poisonpoint",
+        "species": "nidoqueen"
+      },
+      {
+        "ability": "flashfire",
+        "species": "ninetales"
+      },
+      {
+        "ability": "speedboost",
+        "species": "ninjask"
+      },
+      {
+        "ability": "insomnia",
+        "species": "noctowl"
+      },
+      {
+        "ability": "magnetpull",
+        "species": "nosepass"
+      },
+      {
+        "ability": "suctioncups",
+        "species": "octillery"
+      },
+      {
+        "ability": "shellarmor",
+        "species": "omastar"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "omastar"
+      },
+      {
+        "ability": "effectspore",
+        "species": "parasect"
+      },
+      {
+        "ability": "keeneye",
+        "species": "pelipper"
+      },
+      {
+        "ability": "limber",
+        "species": "persian"
+      },
+      {
+        "ability": "keeneye",
+        "species": "pidgeot"
+      },
+      {
+        "ability": "static",
+        "species": "pikachu"
+      },
+      {
+        "ability": "oblivious",
+        "species": "piloswine"
+      },
+      {
+        "ability": "hypercutter",
+        "species": "pinsir"
+      },
+      {
+        "ability": "plus",
+        "species": "plusle"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "politoed"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "poliwrath"
+      },
+      {
+        "ability": "trace",
+        "species": "porygon2"
+      },
+      {
+        "ability": "vitalspirit",
+        "species": "primeape"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "quagsire"
+      },
+      {
+        "ability": "poisonpoint",
+        "species": "qwilfish"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "qwilfish"
+      },
+      {
+        "ability": "static",
+        "species": "raichu"
+      },
+      {
+        "ability": "pressure",
+        "species": "raikou"
+      },
+      {
+        "ability": "flashfire",
+        "species": "rapidash"
+      },
+      {
+        "ability": "guts",
+        "species": "raticate"
+      },
+      {
+        "ability": "airlock",
+        "species": "rayquaza"
+      },
+      {
+        "ability": "clearbody",
+        "species": "regice"
+      },
+      {
+        "ability": "clearbody",
+        "species": "regirock"
+      },
+      {
+        "ability": "clearbody",
+        "species": "registeel"
+      },
+      {
+        "ability": "rockhead",
+        "species": "relicanth"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "relicanth"
+      },
+      {
+        "ability": "rockhead",
+        "species": "rhydon"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "roselia"
+      },
+      {
+        "ability": "keeneye",
+        "species": "sableye"
+      },
+      {
+        "ability": "intimidate",
+        "species": "salamence"
+      },
+      {
+        "ability": "sandveil",
+        "species": "sandslash"
+      },
+      {
+        "ability": "overgrow",
+        "species": "sceptile"
+      },
+      {
+        "ability": "swarm",
+        "species": "scizor"
+      },
+      {
+        "ability": "swarm",
+        "species": "scyther"
+      },
+      {
+        "ability": "swiftswim",
+        "species": "seaking"
+      },
+      {
+        "ability": "shedskin",
+        "species": "seviper"
+      },
+      {
+        "ability": "roughskin",
+        "species": "sharpedo"
+      },
+      {
+        "ability": "wonderguard",
+        "species": "shedinja"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "shiftry"
+      },
+      {
+        "ability": "earlybird",
+        "species": "shiftry"
+      },
+      {
+        "ability": "sturdy",
+        "species": "shuckle"
+      },
+      {
+        "ability": "keeneye",
+        "species": "skarmory"
+      },
+      {
+        "ability": "truant",
+        "species": "slaking"
+      },
+      {
+        "ability": "owntempo",
+        "species": "slowbro"
+      },
+      {
+        "ability": "owntempo",
+        "species": "slowking"
+      },
+      {
+        "ability": "owntempo",
+        "species": "smeargle"
+      },
+      {
+        "ability": "innerfocus",
+        "species": "sneasel"
+      },
+      {
+        "ability": "immunity",
+        "species": "snorlax"
+      },
+      {
+        "ability": "thickfat",
+        "species": "snorlax"
+      },
+      {
+        "ability": "levitate",
+        "species": "solrock"
+      },
+      {
+        "ability": "owntempo",
+        "species": "spinda"
+      },
+      {
+        "ability": "intimidate",
+        "species": "stantler"
+      },
+      {
+        "ability": "naturalcure",
+        "species": "starmie"
+      },
+      {
+        "ability": "rockhead",
+        "species": "steelix"
+      },
+      {
+        "ability": "rockhead",
+        "species": "sudowoodo"
+      },
+      {
+        "ability": "pressure",
+        "species": "suicune"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "sunflora"
+      },
+      {
+        "ability": "liquidooze",
+        "species": "swalot"
+      },
+      {
+        "ability": "torrent",
+        "species": "swampert"
+      },
+      {
+        "ability": "guts",
+        "species": "swellow"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "tangela"
+      },
+      {
+        "ability": "intimidate",
+        "species": "tauros"
+      },
+      {
+        "ability": "clearbody",
+        "species": "tentacruel"
+      },
+      {
+        "ability": "liquidooze",
+        "species": "tentacruel"
+      },
+      {
+        "ability": "serenegrace",
+        "species": "togetic"
+      },
+      {
+        "ability": "whitesmoke",
+        "species": "torkoal"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "tropius"
+      },
+      {
+        "ability": "blaze",
+        "species": "typhlosion"
+      },
+      {
+        "ability": "sandstream",
+        "species": "tyranitar"
+      },
+      {
+        "ability": "synchronize",
+        "species": "umbreon"
+      },
+      {
+        "ability": "levitate",
+        "species": "unown"
+      },
+      {
+        "ability": "guts",
+        "species": "ursaring"
+      },
+      {
+        "ability": "waterabsorb",
+        "species": "vaporeon"
+      },
+      {
+        "ability": "shielddust",
+        "species": "venomoth"
+      },
+      {
+        "ability": "overgrow",
+        "species": "venusaur"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "victreebel"
+      },
+      {
+        "ability": "vitalspirit",
+        "species": "vigoroth"
+      },
+      {
+        "ability": "chlorophyll",
+        "species": "vileplume"
+      },
+      {
+        "ability": "swarm",
+        "species": "volbeat"
+      },
+      {
+        "ability": "waterveil",
+        "species": "wailord"
+      },
+      {
+        "ability": "thickfat",
+        "species": "walrein"
+      },
+      {
+        "ability": "levitate",
+        "species": "weezing"
+      },
+      {
+        "ability": "oblivious",
+        "species": "whiscash"
+      },
+      {
+        "ability": "cutecharm",
+        "species": "wigglytuff"
+      },
+      {
+        "ability": "shadowtag",
+        "species": "wobbuffet"
+      },
+      {
+        "ability": "earlybird",
+        "species": "xatu"
+      },
+      {
+        "ability": "synchronize",
+        "species": "xatu"
+      },
+      {
+        "ability": "compoundeyes",
+        "species": "yanma"
+      },
+      {
+        "ability": "speedboost",
+        "species": "yanma"
+      },
+      {
+        "ability": "immunity",
+        "species": "zangoose"
+      },
+      {
+        "ability": "pressure",
+        "species": "zapdos"
+      }
+    ],
+    "items": [
+      "Choice Band",
+      "Leftovers",
+      "Liechi Berry",
+      "Light Ball",
+      "Lum Berry",
+      "Petaya Berry",
+      "Salac Berry",
+      "Silk Scarf",
+      "Soul Dew",
+      "Stick",
+      "Thick Club",
+      "Twisted Spoon",
+      "White Herb"
+    ],
+    "moves": [
+      "aerialace",
+      "agility",
+      "aromatherapy",
+      "batonpass",
+      "bellydrum",
+      "bodyslam",
+      "bonemerang",
+      "brickbreak",
+      "bulkup",
+      "calmmind",
+      "charm",
+      "counter",
+      "crosschop",
+      "crunch",
+      "curse",
+      "destinybond",
+      "doubleedge",
+      "dragonclaw",
+      "dragondance",
+      "drillpeck",
+      "earthquake",
+      "encore",
+      "endure",
+      "explosion",
+      "extremespeed",
+      "facade",
+      "fireblast",
+      "firepunch",
+      "flail",
+      "flamethrower",
+      "focuspunch",
+      "gigadrain",
+      "haze",
+      "headbutt",
+      "healbell",
+      "hiddenpowerbug",
+      "hiddenpowerdark",
+      "hiddenpowerelectric",
+      "hiddenpowerfighting",
+      "hiddenpowerfire",
+      "hiddenpowerflying",
+      "hiddenpowerghost",
+      "hiddenpowergrass",
+      "hiddenpowerground",
+      "hiddenpowerice",
+      "hiddenpowerpsychic",
+      "hiddenpowerrock",
+      "hiddenpowersteel",
+      "hydropump",
+      "hyperbeam",
+      "hypnosis",
+      "icebeam",
+      "icepunch",
+      "irontail",
+      "knockoff",
+      "leafblade",
+      "leechseed",
+      "lovelykiss",
+      "machpunch",
+      "magicalleaf",
+      "meanlook",
+      "megahorn",
+      "meteormash",
+      "milkdrink",
+      "mirrorcoat",
+      "moonlight",
+      "morningsun",
+      "mudshot",
+      "needlearm",
+      "overheat",
+      "painsplit",
+      "perishsong",
+      "protect",
+      "psychic",
+      "psychoboost",
+      "pursuit",
+      "quickattack",
+      "raindance",
+      "rapidspin",
+      "razorleaf",
+      "recover",
+      "refresh",
+      "rest",
+      "return",
+      "reversal",
+      "roar",
+      "rockslide",
+      "sacredfire",
+      "seismictoss",
+      "selfdestruct",
+      "shadowball",
+      "signalbeam",
+      "silverwind",
+      "skyuppercut",
+      "slackoff",
+      "sleeppowder",
+      "sleeptalk",
+      "sludgebomb",
+      "softboiled",
+      "solarbeam",
+      "spiderweb",
+      "spikes",
+      "spore",
+      "steelwing",
+      "stunspore",
+      "substitute",
+      "sunnyday",
+      "superpower",
+      "surf",
+      "swordsdance",
+      "synthesis",
+      "tailglow",
+      "thunder",
+      "thunderbolt",
+      "thunderpunch",
+      "thunderwave",
+      "toxic",
+      "transform",
+      "trick",
+      "volttackle",
+      "whirlwind",
+      "willowisp",
+      "wish",
+      "wrap",
+      "yawn"
+    ],
+    "species": [
+      "absol",
+      "aerodactyl",
+      "aggron",
+      "aipom",
+      "alakazam",
+      "altaria",
+      "ampharos",
+      "arbok",
+      "arcanine",
+      "ariados",
+      "armaldo",
+      "articuno",
+      "azumarill",
+      "banette",
+      "beautifly",
+      "beedrill",
+      "bellossom",
+      "blastoise",
+      "blaziken",
+      "blissey",
+      "breloom",
+      "butterfree",
+      "cacturne",
+      "camerupt",
+      "castform",
+      "celebi",
+      "charizard",
+      "chimecho",
+      "claydol",
+      "clefable",
+      "cloyster",
+      "corsola",
+      "cradily",
+      "crawdaunt",
+      "crobat",
+      "delcatty",
+      "delibird",
+      "deoxys",
+      "deoxysattack",
+      "deoxysdefense",
+      "deoxysspeed",
+      "dewgong",
+      "ditto",
+      "dodrio",
+      "donphan",
+      "dragonite",
+      "dugtrio",
+      "dunsparce",
+      "dusclops",
+      "dustox",
+      "electabuzz",
+      "electrode",
+      "entei",
+      "espeon",
+      "exeggutor",
+      "exploud",
+      "farfetchd",
+      "fearow",
+      "feraligatr",
+      "flareon",
+      "flygon",
+      "forretress",
+      "furret",
+      "gardevoir",
+      "gengar",
+      "girafarig",
+      "glalie",
+      "gligar",
+      "golduck",
+      "golem",
+      "gorebyss",
+      "granbull",
+      "groudon",
+      "grumpig",
+      "gyarados",
+      "hariyama",
+      "heracross",
+      "hitmonchan",
+      "hitmonlee",
+      "hitmontop",
+      "hooh",
+      "houndoom",
+      "huntail",
+      "hypno",
+      "illumise",
+      "jirachi",
+      "jolteon",
+      "jumpluff",
+      "jynx",
+      "kabutops",
+      "kangaskhan",
+      "kecleon",
+      "kingdra",
+      "kingler",
+      "kyogre",
+      "lanturn",
+      "lapras",
+      "latias",
+      "latios",
+      "ledian",
+      "lickitung",
+      "linoone",
+      "ludicolo",
+      "lugia",
+      "lunatone",
+      "luvdisc",
+      "machamp",
+      "magcargo",
+      "magmar",
+      "magneton",
+      "manectric",
+      "mantine",
+      "marowak",
+      "masquerain",
+      "mawile",
+      "medicham",
+      "meganium",
+      "metagross",
+      "mew",
+      "mewtwo",
+      "mightyena",
+      "milotic",
+      "miltank",
+      "minun",
+      "misdreavus",
+      "moltres",
+      "mrmime",
+      "muk",
+      "murkrow",
+      "nidoking",
+      "nidoqueen",
+      "ninetales",
+      "ninjask",
+      "noctowl",
+      "nosepass",
+      "octillery",
+      "omastar",
+      "parasect",
+      "pelipper",
+      "persian",
+      "pidgeot",
+      "pikachu",
+      "piloswine",
+      "pinsir",
+      "plusle",
+      "politoed",
+      "poliwrath",
+      "porygon2",
+      "primeape",
+      "quagsire",
+      "qwilfish",
+      "raichu",
+      "raikou",
+      "rapidash",
+      "raticate",
+      "rayquaza",
+      "regice",
+      "regirock",
+      "registeel",
+      "relicanth",
+      "rhydon",
+      "roselia",
+      "sableye",
+      "salamence",
+      "sandslash",
+      "sceptile",
+      "scizor",
+      "scyther",
+      "seaking",
+      "seviper",
+      "sharpedo",
+      "shedinja",
+      "shiftry",
+      "shuckle",
+      "skarmory",
+      "slaking",
+      "slowbro",
+      "slowking",
+      "smeargle",
+      "sneasel",
+      "snorlax",
+      "solrock",
+      "spinda",
+      "stantler",
+      "starmie",
+      "steelix",
+      "sudowoodo",
+      "suicune",
+      "sunflora",
+      "swalot",
+      "swampert",
+      "swellow",
+      "tangela",
+      "tauros",
+      "tentacruel",
+      "togetic",
+      "torkoal",
+      "tropius",
+      "typhlosion",
+      "tyranitar",
+      "umbreon",
+      "unown",
+      "ursaring",
+      "vaporeon",
+      "venomoth",
+      "venusaur",
+      "victreebel",
+      "vigoroth",
+      "vileplume",
+      "volbeat",
+      "wailord",
+      "walrein",
+      "weezing",
+      "whiscash",
+      "wigglytuff",
+      "wobbuffet",
+      "xatu",
+      "yanma",
+      "zangoose",
+      "zapdos"
+    ]
+  },
+  "first_coverage": {
+    "ability_pairs": {
+      "absol:pressure": "draft-a-001",
+      "aerodactyl:pressure": "draft-a-001",
+      "aerodactyl:rockhead": "draft-b-111",
+      "aggron:rockhead": "draft-a-002",
+      "aipom:pickup": "draft-a-002",
+      "aipom:runaway": "draft-b-112",
+      "alakazam:synchronize": "draft-a-003",
+      "altaria:naturalcure": "draft-a-003",
+      "ampharos:static": "draft-a-004",
+      "arbok:intimidate": "draft-a-004",
+      "arcanine:intimidate": "draft-a-005",
+      "ariados:insomnia": "draft-a-005",
+      "ariados:swarm": "draft-b-115",
+      "armaldo:battlearmor": "draft-a-006",
+      "articuno:pressure": "draft-a-006",
+      "azumarill:hugepower": "draft-a-007",
+      "banette:insomnia": "draft-a-007",
+      "beautifly:swarm": "draft-a-008",
+      "beedrill:swarm": "draft-a-008",
+      "bellossom:chlorophyll": "draft-a-009",
+      "blastoise:torrent": "draft-a-009",
+      "blaziken:blaze": "draft-a-010",
+      "blissey:naturalcure": "draft-a-010",
+      "breloom:effectspore": "draft-a-011",
+      "butterfree:compoundeyes": "draft-a-011",
+      "cacturne:sandveil": "draft-a-012",
+      "camerupt:magmaarmor": "draft-a-012",
+      "castform:forecast": "draft-a-013",
+      "celebi:naturalcure": "draft-a-013",
+      "charizard:blaze": "draft-a-014",
+      "chimecho:levitate": "draft-a-014",
+      "claydol:levitate": "draft-a-015",
+      "clefable:cutecharm": "draft-a-015",
+      "cloyster:shellarmor": "draft-a-016",
+      "corsola:naturalcure": "draft-a-016",
+      "cradily:suctioncups": "draft-a-017",
+      "crawdaunt:hypercutter": "draft-a-017",
+      "crobat:innerfocus": "draft-a-018",
+      "delcatty:cutecharm": "draft-a-018",
+      "delibird:hustle": "draft-a-019",
+      "deoxys:pressure": "draft-a-019",
+      "deoxysattack:pressure": "draft-a-020",
+      "deoxysdefense:pressure": "draft-a-020",
+      "deoxysspeed:pressure": "draft-a-021",
+      "dewgong:thickfat": "draft-a-021",
+      "ditto:limber": "draft-a-022",
+      "dodrio:earlybird": "draft-a-022",
+      "donphan:sturdy": "draft-a-023",
+      "dragonite:innerfocus": "draft-a-023",
+      "dugtrio:arenatrap": "draft-a-024",
+      "dunsparce:serenegrace": "draft-a-024",
+      "dusclops:pressure": "draft-a-025",
+      "dustox:shielddust": "draft-a-025",
+      "electabuzz:static": "draft-a-026",
+      "electrode:static": "draft-a-026",
+      "entei:pressure": "draft-a-027",
+      "espeon:synchronize": "draft-a-027",
+      "exeggutor:chlorophyll": "draft-a-028",
+      "exploud:soundproof": "draft-a-028",
+      "farfetchd:innerfocus": "draft-a-029",
+      "fearow:keeneye": "draft-a-029",
+      "feraligatr:torrent": "draft-a-030",
+      "flareon:flashfire": "draft-a-030",
+      "flygon:levitate": "draft-a-031",
+      "forretress:sturdy": "draft-a-031",
+      "furret:keeneye": "draft-a-032",
+      "gardevoir:trace": "draft-a-032",
+      "gengar:levitate": "draft-a-033",
+      "girafarig:earlybird": "draft-a-033",
+      "glalie:innerfocus": "draft-a-034",
+      "gligar:hypercutter": "draft-a-034",
+      "golduck:cloudnine": "draft-a-035",
+      "golem:rockhead": "draft-a-035",
+      "gorebyss:swiftswim": "draft-a-036",
+      "granbull:intimidate": "draft-a-036",
+      "groudon:drought": "draft-a-037",
+      "grumpig:thickfat": "draft-a-037",
+      "gyarados:intimidate": "draft-a-038",
+      "hariyama:guts": "draft-a-038",
+      "hariyama:thickfat": "draft-b-148",
+      "heracross:guts": "draft-a-039",
+      "heracross:swarm": "draft-b-149",
+      "hitmonchan:keeneye": "draft-a-039",
+      "hitmonlee:limber": "draft-a-040",
+      "hitmontop:intimidate": "draft-a-040",
+      "hooh:pressure": "draft-a-041",
+      "houndoom:flashfire": "draft-a-041",
+      "huntail:swiftswim": "draft-a-042",
+      "hypno:insomnia": "draft-a-042",
+      "illumise:oblivious": "draft-a-043",
+      "jirachi:serenegrace": "draft-a-043",
+      "jolteon:voltabsorb": "draft-a-044",
+      "jumpluff:chlorophyll": "draft-a-044",
+      "jynx:oblivious": "draft-a-045",
+      "kabutops:battlearmor": "draft-a-045",
+      "kabutops:swiftswim": "draft-b-155",
+      "kangaskhan:earlybird": "draft-a-046",
+      "kecleon:colorchange": "draft-a-046",
+      "kingdra:swiftswim": "draft-a-047",
+      "kingler:hypercutter": "draft-a-047",
+      "kyogre:drizzle": "draft-a-048",
+      "lanturn:voltabsorb": "draft-a-048",
+      "lapras:waterabsorb": "draft-a-049",
+      "latias:levitate": "draft-a-049",
+      "latios:levitate": "draft-a-050",
+      "ledian:swarm": "draft-a-050",
+      "lickitung:owntempo": "draft-a-051",
+      "linoone:pickup": "draft-a-051",
+      "ludicolo:swiftswim": "draft-a-052",
+      "lugia:pressure": "draft-a-052",
+      "lunatone:levitate": "draft-a-053",
+      "luvdisc:swiftswim": "draft-a-053",
+      "machamp:guts": "draft-a-054",
+      "magcargo:flamebody": "draft-a-054",
+      "magmar:flamebody": "draft-a-055",
+      "magneton:magnetpull": "draft-a-055",
+      "manectric:static": "draft-a-056",
+      "mantine:swiftswim": "draft-a-056",
+      "mantine:waterabsorb": "draft-b-166",
+      "marowak:rockhead": "draft-a-057",
+      "masquerain:intimidate": "draft-a-057",
+      "mawile:intimidate": "draft-a-058",
+      "medicham:purepower": "draft-a-058",
+      "meganium:overgrow": "draft-a-059",
+      "metagross:clearbody": "draft-a-059",
+      "mew:synchronize": "draft-a-060",
+      "mewtwo:pressure": "draft-a-060",
+      "mightyena:intimidate": "draft-a-061",
+      "milotic:marvelscale": "draft-a-061",
+      "miltank:thickfat": "draft-a-062",
+      "minun:minus": "draft-a-062",
+      "misdreavus:levitate": "draft-a-063",
+      "moltres:pressure": "draft-a-063",
+      "mrmime:soundproof": "draft-a-064",
+      "muk:stickyhold": "draft-a-064",
+      "murkrow:insomnia": "draft-a-065",
+      "nidoking:poisonpoint": "draft-a-065",
+      "nidoqueen:poisonpoint": "draft-a-066",
+      "ninetales:flashfire": "draft-a-066",
+      "ninjask:speedboost": "draft-a-067",
+      "noctowl:insomnia": "draft-a-067",
+      "nosepass:magnetpull": "draft-a-068",
+      "octillery:suctioncups": "draft-a-068",
+      "omastar:shellarmor": "draft-a-069",
+      "omastar:swiftswim": "draft-b-179",
+      "parasect:effectspore": "draft-a-069",
+      "pelipper:keeneye": "draft-a-070",
+      "persian:limber": "draft-a-070",
+      "pidgeot:keeneye": "draft-a-071",
+      "pikachu:static": "draft-a-071",
+      "piloswine:oblivious": "draft-a-072",
+      "pinsir:hypercutter": "draft-a-072",
+      "plusle:plus": "draft-a-073",
+      "politoed:waterabsorb": "draft-a-073",
+      "poliwrath:waterabsorb": "draft-a-074",
+      "porygon2:trace": "draft-a-074",
+      "primeape:vitalspirit": "draft-a-075",
+      "quagsire:waterabsorb": "draft-a-075",
+      "qwilfish:poisonpoint": "draft-a-076",
+      "qwilfish:swiftswim": "draft-b-186",
+      "raichu:static": "draft-a-076",
+      "raikou:pressure": "draft-a-077",
+      "rapidash:flashfire": "draft-a-077",
+      "raticate:guts": "draft-a-078",
+      "rayquaza:airlock": "draft-a-078",
+      "regice:clearbody": "draft-a-079",
+      "regirock:clearbody": "draft-a-079",
+      "registeel:clearbody": "draft-a-080",
+      "relicanth:rockhead": "draft-a-080",
+      "relicanth:swiftswim": "draft-b-190",
+      "rhydon:rockhead": "draft-a-081",
+      "roselia:naturalcure": "draft-a-081",
+      "sableye:keeneye": "draft-a-082",
+      "salamence:intimidate": "draft-a-082",
+      "sandslash:sandveil": "draft-a-083",
+      "sceptile:overgrow": "draft-a-083",
+      "scizor:swarm": "draft-a-084",
+      "scyther:swarm": "draft-a-084",
+      "seaking:swiftswim": "draft-a-085",
+      "seviper:shedskin": "draft-a-085",
+      "sharpedo:roughskin": "draft-a-086",
+      "shedinja:wonderguard": "draft-a-086",
+      "shiftry:chlorophyll": "draft-a-087",
+      "shiftry:earlybird": "draft-b-197",
+      "shuckle:sturdy": "draft-a-087",
+      "skarmory:keeneye": "draft-a-088",
+      "slaking:truant": "draft-a-088",
+      "slowbro:owntempo": "draft-a-089",
+      "slowking:owntempo": "draft-a-089",
+      "smeargle:owntempo": "draft-a-090",
+      "sneasel:innerfocus": "draft-a-090",
+      "snorlax:immunity": "draft-a-091",
+      "snorlax:thickfat": "draft-b-201",
+      "solrock:levitate": "draft-a-091",
+      "spinda:owntempo": "draft-a-092",
+      "stantler:intimidate": "draft-a-092",
+      "starmie:naturalcure": "draft-a-093",
+      "steelix:rockhead": "draft-a-093",
+      "sudowoodo:rockhead": "draft-a-094",
+      "suicune:pressure": "draft-a-094",
+      "sunflora:chlorophyll": "draft-a-095",
+      "swalot:liquidooze": "draft-a-095",
+      "swampert:torrent": "draft-a-096",
+      "swellow:guts": "draft-a-096",
+      "tangela:chlorophyll": "draft-a-097",
+      "tauros:intimidate": "draft-a-097",
+      "tentacruel:clearbody": "draft-a-098",
+      "tentacruel:liquidooze": "draft-b-208",
+      "togetic:serenegrace": "draft-a-098",
+      "torkoal:whitesmoke": "draft-a-099",
+      "tropius:chlorophyll": "draft-a-099",
+      "typhlosion:blaze": "draft-a-100",
+      "tyranitar:sandstream": "draft-a-100",
+      "umbreon:synchronize": "draft-a-101",
+      "unown:levitate": "draft-a-101",
+      "ursaring:guts": "draft-a-102",
+      "vaporeon:waterabsorb": "draft-a-102",
+      "venomoth:shielddust": "draft-a-103",
+      "venusaur:overgrow": "draft-a-103",
+      "victreebel:chlorophyll": "draft-a-104",
+      "vigoroth:vitalspirit": "draft-a-104",
+      "vileplume:chlorophyll": "draft-a-105",
+      "volbeat:swarm": "draft-a-105",
+      "wailord:waterveil": "draft-a-106",
+      "walrein:thickfat": "draft-a-106",
+      "weezing:levitate": "draft-a-107",
+      "whiscash:oblivious": "draft-a-107",
+      "wigglytuff:cutecharm": "draft-a-108",
+      "wobbuffet:shadowtag": "draft-a-108",
+      "xatu:earlybird": "draft-a-109",
+      "xatu:synchronize": "draft-b-219",
+      "yanma:compoundeyes": "draft-a-109",
+      "yanma:speedboost": "draft-b-219",
+      "zangoose:immunity": "draft-a-110",
+      "zapdos:pressure": "draft-a-110"
+    },
+    "items": {
+      "Choice Band": "draft-a-001",
+      "Leftovers": "draft-a-002",
+      "Liechi Berry": "draft-a-001",
+      "Light Ball": "draft-a-071",
+      "Lum Berry": "draft-a-014",
+      "Petaya Berry": "draft-a-036",
+      "Salac Berry": "draft-a-007",
+      "Silk Scarf": "draft-a-051",
+      "Soul Dew": "draft-a-049",
+      "Stick": "draft-a-029",
+      "Thick Club": "draft-a-057",
+      "Twisted Spoon": "draft-a-101",
+      "White Herb": "draft-a-019"
+    },
+    "moves": {
+      "aerialace": "draft-a-018",
+      "agility": "draft-a-005",
+      "aromatherapy": "draft-a-010",
+      "batonpass": "draft-a-001",
+      "bellydrum": "draft-a-051",
+      "bodyslam": "draft-a-018",
+      "bonemerang": "draft-a-057",
+      "brickbreak": "draft-a-002",
+      "bulkup": "draft-a-036",
+      "calmmind": "draft-a-003",
+      "charm": "draft-a-098",
+      "counter": "draft-a-108",
+      "crosschop": "draft-a-026",
+      "crunch": "draft-a-017",
+      "curse": "draft-a-024",
+      "destinybond": "draft-a-007",
+      "doubleedge": "draft-a-001",
+      "dragonclaw": "draft-a-003",
+      "dragondance": "draft-a-014",
+      "drillpeck": "draft-a-022",
+      "earthquake": "draft-a-001",
+      "encore": "draft-a-003",
+      "endure": "draft-a-007",
+      "explosion": "draft-a-012",
+      "extremespeed": "draft-a-005",
+      "facade": "draft-a-078",
+      "fireblast": "draft-a-005",
+      "firepunch": "draft-a-003",
+      "flail": "draft-a-022",
+      "flamethrower": "draft-a-003",
+      "focuspunch": "draft-a-019",
+      "gigadrain": "draft-a-028",
+      "haze": "draft-a-003",
+      "headbutt": "draft-b-134",
+      "healbell": "draft-a-003",
+      "hiddenpowerbug": "draft-a-006",
+      "hiddenpowerdark": "draft-a-012",
+      "hiddenpowerelectric": "draft-a-017",
+      "hiddenpowerfighting": "draft-a-001",
+      "hiddenpowerfire": "draft-a-006",
+      "hiddenpowerflying": "draft-a-001",
+      "hiddenpowerghost": "draft-a-007",
+      "hiddenpowergrass": "draft-a-013",
+      "hiddenpowerground": "draft-a-018",
+      "hiddenpowerice": "draft-a-004",
+      "hiddenpowerpsychic": "draft-a-101",
+      "hiddenpowerrock": "draft-a-005",
+      "hiddenpowersteel": "draft-a-031",
+      "hydropump": "draft-a-007",
+      "hyperbeam": "draft-a-088",
+      "hypnosis": "draft-a-032",
+      "icebeam": "draft-a-006",
+      "icepunch": "draft-a-026",
+      "irontail": "draft-a-002",
+      "knockoff": "draft-a-038",
+      "leafblade": "draft-a-083",
+      "leechseed": "draft-a-009",
+      "lovelykiss": "draft-a-045",
+      "machpunch": "draft-a-011",
+      "magicalleaf": "draft-a-009",
+      "meanlook": "draft-a-063",
+      "megahorn": "draft-a-039",
+      "meteormash": "draft-a-059",
+      "milkdrink": "draft-a-062",
+      "mirrorcoat": "draft-a-108",
+      "moonlight": "draft-a-009",
+      "morningsun": "draft-a-008",
+      "mudshot": "draft-a-047",
+      "needlearm": "draft-a-012",
+      "overheat": "draft-a-028",
+      "painsplit": "draft-a-025",
+      "perishsong": "draft-a-063",
+      "protect": "draft-a-006",
+      "psychic": "draft-a-003",
+      "psychoboost": "draft-a-019",
+      "pursuit": "draft-a-041",
+      "quickattack": "draft-a-022",
+      "raindance": "draft-a-036",
+      "rapidspin": "draft-a-006",
+      "razorleaf": "draft-b-205",
+      "recover": "draft-a-013",
+      "refresh": "draft-a-009",
+      "rest": "draft-a-004",
+      "return": "draft-a-002",
+      "reversal": "draft-a-040",
+      "roar": "draft-a-009",
+      "rockslide": "draft-a-001",
+      "sacredfire": "draft-a-041",
+      "seismictoss": "draft-a-010",
+      "selfdestruct": "draft-a-076",
+      "shadowball": "draft-a-001",
+      "signalbeam": "draft-a-005",
+      "silverwind": "draft-a-050",
+      "skyuppercut": "draft-a-010",
+      "slackoff": "draft-a-104",
+      "sleeppowder": "draft-a-009",
+      "sleeptalk": "draft-a-004",
+      "sludgebomb": "draft-a-004",
+      "softboiled": "draft-a-010",
+      "solarbeam": "draft-a-095",
+      "spiderweb": "draft-b-115",
+      "spikes": "draft-a-012",
+      "spore": "draft-a-011",
+      "steelwing": "draft-a-084",
+      "stunspore": "draft-a-011",
+      "substitute": "draft-a-001",
+      "sunnyday": "draft-a-095",
+      "superpower": "draft-a-019",
+      "surf": "draft-a-009",
+      "swordsdance": "draft-a-008",
+      "synthesis": "draft-a-028",
+      "tailglow": "draft-a-105",
+      "thunder": "draft-a-048",
+      "thunderbolt": "draft-a-004",
+      "thunderpunch": "draft-a-010",
+      "thunderwave": "draft-a-002",
+      "toxic": "draft-a-002",
+      "transform": "draft-a-022",
+      "trick": "draft-a-032",
+      "volttackle": "draft-a-071",
+      "whirlwind": "draft-a-025",
+      "willowisp": "draft-a-025",
+      "wish": "draft-a-018",
+      "wrap": "draft-a-087",
+      "yawn": "draft-a-095"
+    },
+    "species": {
+      "absol": "draft-a-001",
+      "aerodactyl": "draft-a-001",
+      "aggron": "draft-a-002",
+      "aipom": "draft-a-002",
+      "alakazam": "draft-a-003",
+      "altaria": "draft-a-003",
+      "ampharos": "draft-a-004",
+      "arbok": "draft-a-004",
+      "arcanine": "draft-a-005",
+      "ariados": "draft-a-005",
+      "armaldo": "draft-a-006",
+      "articuno": "draft-a-006",
+      "azumarill": "draft-a-007",
+      "banette": "draft-a-007",
+      "beautifly": "draft-a-008",
+      "beedrill": "draft-a-008",
+      "bellossom": "draft-a-009",
+      "blastoise": "draft-a-009",
+      "blaziken": "draft-a-010",
+      "blissey": "draft-a-010",
+      "breloom": "draft-a-011",
+      "butterfree": "draft-a-011",
+      "cacturne": "draft-a-012",
+      "camerupt": "draft-a-012",
+      "castform": "draft-a-013",
+      "celebi": "draft-a-013",
+      "charizard": "draft-a-014",
+      "chimecho": "draft-a-014",
+      "claydol": "draft-a-015",
+      "clefable": "draft-a-015",
+      "cloyster": "draft-a-016",
+      "corsola": "draft-a-016",
+      "cradily": "draft-a-017",
+      "crawdaunt": "draft-a-017",
+      "crobat": "draft-a-018",
+      "delcatty": "draft-a-018",
+      "delibird": "draft-a-019",
+      "deoxys": "draft-a-019",
+      "deoxysattack": "draft-a-020",
+      "deoxysdefense": "draft-a-020",
+      "deoxysspeed": "draft-a-021",
+      "dewgong": "draft-a-021",
+      "ditto": "draft-a-022",
+      "dodrio": "draft-a-022",
+      "donphan": "draft-a-023",
+      "dragonite": "draft-a-023",
+      "dugtrio": "draft-a-024",
+      "dunsparce": "draft-a-024",
+      "dusclops": "draft-a-025",
+      "dustox": "draft-a-025",
+      "electabuzz": "draft-a-026",
+      "electrode": "draft-a-026",
+      "entei": "draft-a-027",
+      "espeon": "draft-a-027",
+      "exeggutor": "draft-a-028",
+      "exploud": "draft-a-028",
+      "farfetchd": "draft-a-029",
+      "fearow": "draft-a-029",
+      "feraligatr": "draft-a-030",
+      "flareon": "draft-a-030",
+      "flygon": "draft-a-031",
+      "forretress": "draft-a-031",
+      "furret": "draft-a-032",
+      "gardevoir": "draft-a-032",
+      "gengar": "draft-a-033",
+      "girafarig": "draft-a-033",
+      "glalie": "draft-a-034",
+      "gligar": "draft-a-034",
+      "golduck": "draft-a-035",
+      "golem": "draft-a-035",
+      "gorebyss": "draft-a-036",
+      "granbull": "draft-a-036",
+      "groudon": "draft-a-037",
+      "grumpig": "draft-a-037",
+      "gyarados": "draft-a-038",
+      "hariyama": "draft-a-038",
+      "heracross": "draft-a-039",
+      "hitmonchan": "draft-a-039",
+      "hitmonlee": "draft-a-040",
+      "hitmontop": "draft-a-040",
+      "hooh": "draft-a-041",
+      "houndoom": "draft-a-041",
+      "huntail": "draft-a-042",
+      "hypno": "draft-a-042",
+      "illumise": "draft-a-043",
+      "jirachi": "draft-a-043",
+      "jolteon": "draft-a-044",
+      "jumpluff": "draft-a-044",
+      "jynx": "draft-a-045",
+      "kabutops": "draft-a-045",
+      "kangaskhan": "draft-a-046",
+      "kecleon": "draft-a-046",
+      "kingdra": "draft-a-047",
+      "kingler": "draft-a-047",
+      "kyogre": "draft-a-048",
+      "lanturn": "draft-a-048",
+      "lapras": "draft-a-049",
+      "latias": "draft-a-049",
+      "latios": "draft-a-050",
+      "ledian": "draft-a-050",
+      "lickitung": "draft-a-051",
+      "linoone": "draft-a-051",
+      "ludicolo": "draft-a-052",
+      "lugia": "draft-a-052",
+      "lunatone": "draft-a-053",
+      "luvdisc": "draft-a-053",
+      "machamp": "draft-a-054",
+      "magcargo": "draft-a-054",
+      "magmar": "draft-a-055",
+      "magneton": "draft-a-055",
+      "manectric": "draft-a-056",
+      "mantine": "draft-a-056",
+      "marowak": "draft-a-057",
+      "masquerain": "draft-a-057",
+      "mawile": "draft-a-058",
+      "medicham": "draft-a-058",
+      "meganium": "draft-a-059",
+      "metagross": "draft-a-059",
+      "mew": "draft-a-060",
+      "mewtwo": "draft-a-060",
+      "mightyena": "draft-a-061",
+      "milotic": "draft-a-061",
+      "miltank": "draft-a-062",
+      "minun": "draft-a-062",
+      "misdreavus": "draft-a-063",
+      "moltres": "draft-a-063",
+      "mrmime": "draft-a-064",
+      "muk": "draft-a-064",
+      "murkrow": "draft-a-065",
+      "nidoking": "draft-a-065",
+      "nidoqueen": "draft-a-066",
+      "ninetales": "draft-a-066",
+      "ninjask": "draft-a-067",
+      "noctowl": "draft-a-067",
+      "nosepass": "draft-a-068",
+      "octillery": "draft-a-068",
+      "omastar": "draft-a-069",
+      "parasect": "draft-a-069",
+      "pelipper": "draft-a-070",
+      "persian": "draft-a-070",
+      "pidgeot": "draft-a-071",
+      "pikachu": "draft-a-071",
+      "piloswine": "draft-a-072",
+      "pinsir": "draft-a-072",
+      "plusle": "draft-a-073",
+      "politoed": "draft-a-073",
+      "poliwrath": "draft-a-074",
+      "porygon2": "draft-a-074",
+      "primeape": "draft-a-075",
+      "quagsire": "draft-a-075",
+      "qwilfish": "draft-a-076",
+      "raichu": "draft-a-076",
+      "raikou": "draft-a-077",
+      "rapidash": "draft-a-077",
+      "raticate": "draft-a-078",
+      "rayquaza": "draft-a-078",
+      "regice": "draft-a-079",
+      "regirock": "draft-a-079",
+      "registeel": "draft-a-080",
+      "relicanth": "draft-a-080",
+      "rhydon": "draft-a-081",
+      "roselia": "draft-a-081",
+      "sableye": "draft-a-082",
+      "salamence": "draft-a-082",
+      "sandslash": "draft-a-083",
+      "sceptile": "draft-a-083",
+      "scizor": "draft-a-084",
+      "scyther": "draft-a-084",
+      "seaking": "draft-a-085",
+      "seviper": "draft-a-085",
+      "sharpedo": "draft-a-086",
+      "shedinja": "draft-a-086",
+      "shiftry": "draft-a-087",
+      "shuckle": "draft-a-087",
+      "skarmory": "draft-a-088",
+      "slaking": "draft-a-088",
+      "slowbro": "draft-a-089",
+      "slowking": "draft-a-089",
+      "smeargle": "draft-a-090",
+      "sneasel": "draft-a-090",
+      "snorlax": "draft-a-091",
+      "solrock": "draft-a-091",
+      "spinda": "draft-a-092",
+      "stantler": "draft-a-092",
+      "starmie": "draft-a-093",
+      "steelix": "draft-a-093",
+      "sudowoodo": "draft-a-094",
+      "suicune": "draft-a-094",
+      "sunflora": "draft-a-095",
+      "swalot": "draft-a-095",
+      "swampert": "draft-a-096",
+      "swellow": "draft-a-096",
+      "tangela": "draft-a-097",
+      "tauros": "draft-a-097",
+      "tentacruel": "draft-a-098",
+      "togetic": "draft-a-098",
+      "torkoal": "draft-a-099",
+      "tropius": "draft-a-099",
+      "typhlosion": "draft-a-100",
+      "tyranitar": "draft-a-100",
+      "umbreon": "draft-a-101",
+      "unown": "draft-a-101",
+      "ursaring": "draft-a-102",
+      "vaporeon": "draft-a-102",
+      "venomoth": "draft-a-103",
+      "venusaur": "draft-a-103",
+      "victreebel": "draft-a-104",
+      "vigoroth": "draft-a-104",
+      "vileplume": "draft-a-105",
+      "volbeat": "draft-a-105",
+      "wailord": "draft-a-106",
+      "walrein": "draft-a-106",
+      "weezing": "draft-a-107",
+      "whiscash": "draft-a-107",
+      "wigglytuff": "draft-a-108",
+      "wobbuffet": "draft-a-108",
+      "xatu": "draft-a-109",
+      "yanma": "draft-a-109",
+      "zangoose": "draft-a-110",
+      "zapdos": "draft-a-110"
+    }
+  },
+  "games_selected": 220,
+  "games_total": 220,
+  "planned_full_coverage": {
+    "complete": true,
+    "expected": {
+      "ability_pairs": [
+        {
+          "ability": "pressure",
+          "species": "absol"
+        },
+        {
+          "ability": "pressure",
+          "species": "aerodactyl"
+        },
+        {
+          "ability": "rockhead",
+          "species": "aerodactyl"
+        },
+        {
+          "ability": "rockhead",
+          "species": "aggron"
+        },
+        {
+          "ability": "pickup",
+          "species": "aipom"
+        },
+        {
+          "ability": "runaway",
+          "species": "aipom"
+        },
+        {
+          "ability": "synchronize",
+          "species": "alakazam"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "altaria"
+        },
+        {
+          "ability": "static",
+          "species": "ampharos"
+        },
+        {
+          "ability": "intimidate",
+          "species": "arbok"
+        },
+        {
+          "ability": "intimidate",
+          "species": "arcanine"
+        },
+        {
+          "ability": "insomnia",
+          "species": "ariados"
+        },
+        {
+          "ability": "swarm",
+          "species": "ariados"
+        },
+        {
+          "ability": "battlearmor",
+          "species": "armaldo"
+        },
+        {
+          "ability": "pressure",
+          "species": "articuno"
+        },
+        {
+          "ability": "hugepower",
+          "species": "azumarill"
+        },
+        {
+          "ability": "insomnia",
+          "species": "banette"
+        },
+        {
+          "ability": "swarm",
+          "species": "beautifly"
+        },
+        {
+          "ability": "swarm",
+          "species": "beedrill"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "bellossom"
+        },
+        {
+          "ability": "torrent",
+          "species": "blastoise"
+        },
+        {
+          "ability": "blaze",
+          "species": "blaziken"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "blissey"
+        },
+        {
+          "ability": "effectspore",
+          "species": "breloom"
+        },
+        {
+          "ability": "compoundeyes",
+          "species": "butterfree"
+        },
+        {
+          "ability": "sandveil",
+          "species": "cacturne"
+        },
+        {
+          "ability": "magmaarmor",
+          "species": "camerupt"
+        },
+        {
+          "ability": "forecast",
+          "species": "castform"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "celebi"
+        },
+        {
+          "ability": "blaze",
+          "species": "charizard"
+        },
+        {
+          "ability": "levitate",
+          "species": "chimecho"
+        },
+        {
+          "ability": "levitate",
+          "species": "claydol"
+        },
+        {
+          "ability": "cutecharm",
+          "species": "clefable"
+        },
+        {
+          "ability": "shellarmor",
+          "species": "cloyster"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "corsola"
+        },
+        {
+          "ability": "suctioncups",
+          "species": "cradily"
+        },
+        {
+          "ability": "hypercutter",
+          "species": "crawdaunt"
+        },
+        {
+          "ability": "innerfocus",
+          "species": "crobat"
+        },
+        {
+          "ability": "cutecharm",
+          "species": "delcatty"
+        },
+        {
+          "ability": "hustle",
+          "species": "delibird"
+        },
+        {
+          "ability": "pressure",
+          "species": "deoxys"
+        },
+        {
+          "ability": "pressure",
+          "species": "deoxysattack"
+        },
+        {
+          "ability": "pressure",
+          "species": "deoxysdefense"
+        },
+        {
+          "ability": "pressure",
+          "species": "deoxysspeed"
+        },
+        {
+          "ability": "thickfat",
+          "species": "dewgong"
+        },
+        {
+          "ability": "limber",
+          "species": "ditto"
+        },
+        {
+          "ability": "earlybird",
+          "species": "dodrio"
+        },
+        {
+          "ability": "sturdy",
+          "species": "donphan"
+        },
+        {
+          "ability": "innerfocus",
+          "species": "dragonite"
+        },
+        {
+          "ability": "arenatrap",
+          "species": "dugtrio"
+        },
+        {
+          "ability": "serenegrace",
+          "species": "dunsparce"
+        },
+        {
+          "ability": "pressure",
+          "species": "dusclops"
+        },
+        {
+          "ability": "shielddust",
+          "species": "dustox"
+        },
+        {
+          "ability": "static",
+          "species": "electabuzz"
+        },
+        {
+          "ability": "static",
+          "species": "electrode"
+        },
+        {
+          "ability": "pressure",
+          "species": "entei"
+        },
+        {
+          "ability": "synchronize",
+          "species": "espeon"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "exeggutor"
+        },
+        {
+          "ability": "soundproof",
+          "species": "exploud"
+        },
+        {
+          "ability": "innerfocus",
+          "species": "farfetchd"
+        },
+        {
+          "ability": "keeneye",
+          "species": "fearow"
+        },
+        {
+          "ability": "torrent",
+          "species": "feraligatr"
+        },
+        {
+          "ability": "flashfire",
+          "species": "flareon"
+        },
+        {
+          "ability": "levitate",
+          "species": "flygon"
+        },
+        {
+          "ability": "sturdy",
+          "species": "forretress"
+        },
+        {
+          "ability": "keeneye",
+          "species": "furret"
+        },
+        {
+          "ability": "trace",
+          "species": "gardevoir"
+        },
+        {
+          "ability": "levitate",
+          "species": "gengar"
+        },
+        {
+          "ability": "earlybird",
+          "species": "girafarig"
+        },
+        {
+          "ability": "innerfocus",
+          "species": "glalie"
+        },
+        {
+          "ability": "hypercutter",
+          "species": "gligar"
+        },
+        {
+          "ability": "cloudnine",
+          "species": "golduck"
+        },
+        {
+          "ability": "rockhead",
+          "species": "golem"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "gorebyss"
+        },
+        {
+          "ability": "intimidate",
+          "species": "granbull"
+        },
+        {
+          "ability": "drought",
+          "species": "groudon"
+        },
+        {
+          "ability": "thickfat",
+          "species": "grumpig"
+        },
+        {
+          "ability": "intimidate",
+          "species": "gyarados"
+        },
+        {
+          "ability": "guts",
+          "species": "hariyama"
+        },
+        {
+          "ability": "thickfat",
+          "species": "hariyama"
+        },
+        {
+          "ability": "guts",
+          "species": "heracross"
+        },
+        {
+          "ability": "swarm",
+          "species": "heracross"
+        },
+        {
+          "ability": "keeneye",
+          "species": "hitmonchan"
+        },
+        {
+          "ability": "limber",
+          "species": "hitmonlee"
+        },
+        {
+          "ability": "intimidate",
+          "species": "hitmontop"
+        },
+        {
+          "ability": "pressure",
+          "species": "hooh"
+        },
+        {
+          "ability": "flashfire",
+          "species": "houndoom"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "huntail"
+        },
+        {
+          "ability": "insomnia",
+          "species": "hypno"
+        },
+        {
+          "ability": "oblivious",
+          "species": "illumise"
+        },
+        {
+          "ability": "serenegrace",
+          "species": "jirachi"
+        },
+        {
+          "ability": "voltabsorb",
+          "species": "jolteon"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "jumpluff"
+        },
+        {
+          "ability": "oblivious",
+          "species": "jynx"
+        },
+        {
+          "ability": "battlearmor",
+          "species": "kabutops"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "kabutops"
+        },
+        {
+          "ability": "earlybird",
+          "species": "kangaskhan"
+        },
+        {
+          "ability": "colorchange",
+          "species": "kecleon"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "kingdra"
+        },
+        {
+          "ability": "hypercutter",
+          "species": "kingler"
+        },
+        {
+          "ability": "drizzle",
+          "species": "kyogre"
+        },
+        {
+          "ability": "voltabsorb",
+          "species": "lanturn"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "lapras"
+        },
+        {
+          "ability": "levitate",
+          "species": "latias"
+        },
+        {
+          "ability": "levitate",
+          "species": "latios"
+        },
+        {
+          "ability": "swarm",
+          "species": "ledian"
+        },
+        {
+          "ability": "owntempo",
+          "species": "lickitung"
+        },
+        {
+          "ability": "pickup",
+          "species": "linoone"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "ludicolo"
+        },
+        {
+          "ability": "pressure",
+          "species": "lugia"
+        },
+        {
+          "ability": "levitate",
+          "species": "lunatone"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "luvdisc"
+        },
+        {
+          "ability": "guts",
+          "species": "machamp"
+        },
+        {
+          "ability": "flamebody",
+          "species": "magcargo"
+        },
+        {
+          "ability": "flamebody",
+          "species": "magmar"
+        },
+        {
+          "ability": "magnetpull",
+          "species": "magneton"
+        },
+        {
+          "ability": "static",
+          "species": "manectric"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "mantine"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "mantine"
+        },
+        {
+          "ability": "rockhead",
+          "species": "marowak"
+        },
+        {
+          "ability": "intimidate",
+          "species": "masquerain"
+        },
+        {
+          "ability": "intimidate",
+          "species": "mawile"
+        },
+        {
+          "ability": "purepower",
+          "species": "medicham"
+        },
+        {
+          "ability": "overgrow",
+          "species": "meganium"
+        },
+        {
+          "ability": "clearbody",
+          "species": "metagross"
+        },
+        {
+          "ability": "synchronize",
+          "species": "mew"
+        },
+        {
+          "ability": "pressure",
+          "species": "mewtwo"
+        },
+        {
+          "ability": "intimidate",
+          "species": "mightyena"
+        },
+        {
+          "ability": "marvelscale",
+          "species": "milotic"
+        },
+        {
+          "ability": "thickfat",
+          "species": "miltank"
+        },
+        {
+          "ability": "minus",
+          "species": "minun"
+        },
+        {
+          "ability": "levitate",
+          "species": "misdreavus"
+        },
+        {
+          "ability": "pressure",
+          "species": "moltres"
+        },
+        {
+          "ability": "soundproof",
+          "species": "mrmime"
+        },
+        {
+          "ability": "stickyhold",
+          "species": "muk"
+        },
+        {
+          "ability": "insomnia",
+          "species": "murkrow"
+        },
+        {
+          "ability": "poisonpoint",
+          "species": "nidoking"
+        },
+        {
+          "ability": "poisonpoint",
+          "species": "nidoqueen"
+        },
+        {
+          "ability": "flashfire",
+          "species": "ninetales"
+        },
+        {
+          "ability": "speedboost",
+          "species": "ninjask"
+        },
+        {
+          "ability": "insomnia",
+          "species": "noctowl"
+        },
+        {
+          "ability": "magnetpull",
+          "species": "nosepass"
+        },
+        {
+          "ability": "suctioncups",
+          "species": "octillery"
+        },
+        {
+          "ability": "shellarmor",
+          "species": "omastar"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "omastar"
+        },
+        {
+          "ability": "effectspore",
+          "species": "parasect"
+        },
+        {
+          "ability": "keeneye",
+          "species": "pelipper"
+        },
+        {
+          "ability": "limber",
+          "species": "persian"
+        },
+        {
+          "ability": "keeneye",
+          "species": "pidgeot"
+        },
+        {
+          "ability": "static",
+          "species": "pikachu"
+        },
+        {
+          "ability": "oblivious",
+          "species": "piloswine"
+        },
+        {
+          "ability": "hypercutter",
+          "species": "pinsir"
+        },
+        {
+          "ability": "plus",
+          "species": "plusle"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "politoed"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "poliwrath"
+        },
+        {
+          "ability": "trace",
+          "species": "porygon2"
+        },
+        {
+          "ability": "vitalspirit",
+          "species": "primeape"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "quagsire"
+        },
+        {
+          "ability": "poisonpoint",
+          "species": "qwilfish"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "qwilfish"
+        },
+        {
+          "ability": "static",
+          "species": "raichu"
+        },
+        {
+          "ability": "pressure",
+          "species": "raikou"
+        },
+        {
+          "ability": "flashfire",
+          "species": "rapidash"
+        },
+        {
+          "ability": "guts",
+          "species": "raticate"
+        },
+        {
+          "ability": "airlock",
+          "species": "rayquaza"
+        },
+        {
+          "ability": "clearbody",
+          "species": "regice"
+        },
+        {
+          "ability": "clearbody",
+          "species": "regirock"
+        },
+        {
+          "ability": "clearbody",
+          "species": "registeel"
+        },
+        {
+          "ability": "rockhead",
+          "species": "relicanth"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "relicanth"
+        },
+        {
+          "ability": "rockhead",
+          "species": "rhydon"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "roselia"
+        },
+        {
+          "ability": "keeneye",
+          "species": "sableye"
+        },
+        {
+          "ability": "intimidate",
+          "species": "salamence"
+        },
+        {
+          "ability": "sandveil",
+          "species": "sandslash"
+        },
+        {
+          "ability": "overgrow",
+          "species": "sceptile"
+        },
+        {
+          "ability": "swarm",
+          "species": "scizor"
+        },
+        {
+          "ability": "swarm",
+          "species": "scyther"
+        },
+        {
+          "ability": "swiftswim",
+          "species": "seaking"
+        },
+        {
+          "ability": "shedskin",
+          "species": "seviper"
+        },
+        {
+          "ability": "roughskin",
+          "species": "sharpedo"
+        },
+        {
+          "ability": "wonderguard",
+          "species": "shedinja"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "shiftry"
+        },
+        {
+          "ability": "earlybird",
+          "species": "shiftry"
+        },
+        {
+          "ability": "sturdy",
+          "species": "shuckle"
+        },
+        {
+          "ability": "keeneye",
+          "species": "skarmory"
+        },
+        {
+          "ability": "truant",
+          "species": "slaking"
+        },
+        {
+          "ability": "owntempo",
+          "species": "slowbro"
+        },
+        {
+          "ability": "owntempo",
+          "species": "slowking"
+        },
+        {
+          "ability": "owntempo",
+          "species": "smeargle"
+        },
+        {
+          "ability": "innerfocus",
+          "species": "sneasel"
+        },
+        {
+          "ability": "immunity",
+          "species": "snorlax"
+        },
+        {
+          "ability": "thickfat",
+          "species": "snorlax"
+        },
+        {
+          "ability": "levitate",
+          "species": "solrock"
+        },
+        {
+          "ability": "owntempo",
+          "species": "spinda"
+        },
+        {
+          "ability": "intimidate",
+          "species": "stantler"
+        },
+        {
+          "ability": "naturalcure",
+          "species": "starmie"
+        },
+        {
+          "ability": "rockhead",
+          "species": "steelix"
+        },
+        {
+          "ability": "rockhead",
+          "species": "sudowoodo"
+        },
+        {
+          "ability": "pressure",
+          "species": "suicune"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "sunflora"
+        },
+        {
+          "ability": "liquidooze",
+          "species": "swalot"
+        },
+        {
+          "ability": "torrent",
+          "species": "swampert"
+        },
+        {
+          "ability": "guts",
+          "species": "swellow"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "tangela"
+        },
+        {
+          "ability": "intimidate",
+          "species": "tauros"
+        },
+        {
+          "ability": "clearbody",
+          "species": "tentacruel"
+        },
+        {
+          "ability": "liquidooze",
+          "species": "tentacruel"
+        },
+        {
+          "ability": "serenegrace",
+          "species": "togetic"
+        },
+        {
+          "ability": "whitesmoke",
+          "species": "torkoal"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "tropius"
+        },
+        {
+          "ability": "blaze",
+          "species": "typhlosion"
+        },
+        {
+          "ability": "sandstream",
+          "species": "tyranitar"
+        },
+        {
+          "ability": "synchronize",
+          "species": "umbreon"
+        },
+        {
+          "ability": "levitate",
+          "species": "unown"
+        },
+        {
+          "ability": "guts",
+          "species": "ursaring"
+        },
+        {
+          "ability": "waterabsorb",
+          "species": "vaporeon"
+        },
+        {
+          "ability": "shielddust",
+          "species": "venomoth"
+        },
+        {
+          "ability": "overgrow",
+          "species": "venusaur"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "victreebel"
+        },
+        {
+          "ability": "vitalspirit",
+          "species": "vigoroth"
+        },
+        {
+          "ability": "chlorophyll",
+          "species": "vileplume"
+        },
+        {
+          "ability": "swarm",
+          "species": "volbeat"
+        },
+        {
+          "ability": "waterveil",
+          "species": "wailord"
+        },
+        {
+          "ability": "thickfat",
+          "species": "walrein"
+        },
+        {
+          "ability": "levitate",
+          "species": "weezing"
+        },
+        {
+          "ability": "oblivious",
+          "species": "whiscash"
+        },
+        {
+          "ability": "cutecharm",
+          "species": "wigglytuff"
+        },
+        {
+          "ability": "shadowtag",
+          "species": "wobbuffet"
+        },
+        {
+          "ability": "earlybird",
+          "species": "xatu"
+        },
+        {
+          "ability": "synchronize",
+          "species": "xatu"
+        },
+        {
+          "ability": "compoundeyes",
+          "species": "yanma"
+        },
+        {
+          "ability": "speedboost",
+          "species": "yanma"
+        },
+        {
+          "ability": "immunity",
+          "species": "zangoose"
+        },
+        {
+          "ability": "pressure",
+          "species": "zapdos"
+        }
+      ],
+      "items": [
+        "Choice Band",
+        "Leftovers",
+        "Liechi Berry",
+        "Light Ball",
+        "Lum Berry",
+        "Petaya Berry",
+        "Salac Berry",
+        "Silk Scarf",
+        "Soul Dew",
+        "Stick",
+        "Thick Club",
+        "Twisted Spoon",
+        "White Herb"
+      ],
+      "moves": [
+        "aerialace",
+        "agility",
+        "aromatherapy",
+        "batonpass",
+        "bellydrum",
+        "bodyslam",
+        "bonemerang",
+        "brickbreak",
+        "bulkup",
+        "calmmind",
+        "charm",
+        "counter",
+        "crosschop",
+        "crunch",
+        "curse",
+        "destinybond",
+        "doubleedge",
+        "dragonclaw",
+        "dragondance",
+        "drillpeck",
+        "earthquake",
+        "encore",
+        "endure",
+        "explosion",
+        "extremespeed",
+        "facade",
+        "fireblast",
+        "firepunch",
+        "flail",
+        "flamethrower",
+        "focuspunch",
+        "gigadrain",
+        "haze",
+        "headbutt",
+        "healbell",
+        "hiddenpowerbug",
+        "hiddenpowerdark",
+        "hiddenpowerelectric",
+        "hiddenpowerfighting",
+        "hiddenpowerfire",
+        "hiddenpowerflying",
+        "hiddenpowerghost",
+        "hiddenpowergrass",
+        "hiddenpowerground",
+        "hiddenpowerice",
+        "hiddenpowerpsychic",
+        "hiddenpowerrock",
+        "hiddenpowersteel",
+        "hydropump",
+        "hyperbeam",
+        "hypnosis",
+        "icebeam",
+        "icepunch",
+        "irontail",
+        "knockoff",
+        "leafblade",
+        "leechseed",
+        "lovelykiss",
+        "machpunch",
+        "magicalleaf",
+        "meanlook",
+        "megahorn",
+        "meteormash",
+        "milkdrink",
+        "mirrorcoat",
+        "moonlight",
+        "morningsun",
+        "mudshot",
+        "needlearm",
+        "overheat",
+        "painsplit",
+        "perishsong",
+        "protect",
+        "psychic",
+        "psychoboost",
+        "pursuit",
+        "quickattack",
+        "raindance",
+        "rapidspin",
+        "razorleaf",
+        "recover",
+        "refresh",
+        "rest",
+        "return",
+        "reversal",
+        "roar",
+        "rockslide",
+        "sacredfire",
+        "seismictoss",
+        "selfdestruct",
+        "shadowball",
+        "signalbeam",
+        "silverwind",
+        "skyuppercut",
+        "slackoff",
+        "sleeppowder",
+        "sleeptalk",
+        "sludgebomb",
+        "softboiled",
+        "solarbeam",
+        "spiderweb",
+        "spikes",
+        "spore",
+        "steelwing",
+        "stunspore",
+        "substitute",
+        "sunnyday",
+        "superpower",
+        "surf",
+        "swordsdance",
+        "synthesis",
+        "tailglow",
+        "thunder",
+        "thunderbolt",
+        "thunderpunch",
+        "thunderwave",
+        "toxic",
+        "transform",
+        "trick",
+        "volttackle",
+        "whirlwind",
+        "willowisp",
+        "wish",
+        "wrap",
+        "yawn"
+      ],
+      "species": [
+        "absol",
+        "aerodactyl",
+        "aggron",
+        "aipom",
+        "alakazam",
+        "altaria",
+        "ampharos",
+        "arbok",
+        "arcanine",
+        "ariados",
+        "armaldo",
+        "articuno",
+        "azumarill",
+        "banette",
+        "beautifly",
+        "beedrill",
+        "bellossom",
+        "blastoise",
+        "blaziken",
+        "blissey",
+        "breloom",
+        "butterfree",
+        "cacturne",
+        "camerupt",
+        "castform",
+        "celebi",
+        "charizard",
+        "chimecho",
+        "claydol",
+        "clefable",
+        "cloyster",
+        "corsola",
+        "cradily",
+        "crawdaunt",
+        "crobat",
+        "delcatty",
+        "delibird",
+        "deoxys",
+        "deoxysattack",
+        "deoxysdefense",
+        "deoxysspeed",
+        "dewgong",
+        "ditto",
+        "dodrio",
+        "donphan",
+        "dragonite",
+        "dugtrio",
+        "dunsparce",
+        "dusclops",
+        "dustox",
+        "electabuzz",
+        "electrode",
+        "entei",
+        "espeon",
+        "exeggutor",
+        "exploud",
+        "farfetchd",
+        "fearow",
+        "feraligatr",
+        "flareon",
+        "flygon",
+        "forretress",
+        "furret",
+        "gardevoir",
+        "gengar",
+        "girafarig",
+        "glalie",
+        "gligar",
+        "golduck",
+        "golem",
+        "gorebyss",
+        "granbull",
+        "groudon",
+        "grumpig",
+        "gyarados",
+        "hariyama",
+        "heracross",
+        "hitmonchan",
+        "hitmonlee",
+        "hitmontop",
+        "hooh",
+        "houndoom",
+        "huntail",
+        "hypno",
+        "illumise",
+        "jirachi",
+        "jolteon",
+        "jumpluff",
+        "jynx",
+        "kabutops",
+        "kangaskhan",
+        "kecleon",
+        "kingdra",
+        "kingler",
+        "kyogre",
+        "lanturn",
+        "lapras",
+        "latias",
+        "latios",
+        "ledian",
+        "lickitung",
+        "linoone",
+        "ludicolo",
+        "lugia",
+        "lunatone",
+        "luvdisc",
+        "machamp",
+        "magcargo",
+        "magmar",
+        "magneton",
+        "manectric",
+        "mantine",
+        "marowak",
+        "masquerain",
+        "mawile",
+        "medicham",
+        "meganium",
+        "metagross",
+        "mew",
+        "mewtwo",
+        "mightyena",
+        "milotic",
+        "miltank",
+        "minun",
+        "misdreavus",
+        "moltres",
+        "mrmime",
+        "muk",
+        "murkrow",
+        "nidoking",
+        "nidoqueen",
+        "ninetales",
+        "ninjask",
+        "noctowl",
+        "nosepass",
+        "octillery",
+        "omastar",
+        "parasect",
+        "pelipper",
+        "persian",
+        "pidgeot",
+        "pikachu",
+        "piloswine",
+        "pinsir",
+        "plusle",
+        "politoed",
+        "poliwrath",
+        "porygon2",
+        "primeape",
+        "quagsire",
+        "qwilfish",
+        "raichu",
+        "raikou",
+        "rapidash",
+        "raticate",
+        "rayquaza",
+        "regice",
+        "regirock",
+        "registeel",
+        "relicanth",
+        "rhydon",
+        "roselia",
+        "sableye",
+        "salamence",
+        "sandslash",
+        "sceptile",
+        "scizor",
+        "scyther",
+        "seaking",
+        "seviper",
+        "sharpedo",
+        "shedinja",
+        "shiftry",
+        "shuckle",
+        "skarmory",
+        "slaking",
+        "slowbro",
+        "slowking",
+        "smeargle",
+        "sneasel",
+        "snorlax",
+        "solrock",
+        "spinda",
+        "stantler",
+        "starmie",
+        "steelix",
+        "sudowoodo",
+        "suicune",
+        "sunflora",
+        "swalot",
+        "swampert",
+        "swellow",
+        "tangela",
+        "tauros",
+        "tentacruel",
+        "togetic",
+        "torkoal",
+        "tropius",
+        "typhlosion",
+        "tyranitar",
+        "umbreon",
+        "unown",
+        "ursaring",
+        "vaporeon",
+        "venomoth",
+        "venusaur",
+        "victreebel",
+        "vigoroth",
+        "vileplume",
+        "volbeat",
+        "wailord",
+        "walrein",
+        "weezing",
+        "whiscash",
+        "wigglytuff",
+        "wobbuffet",
+        "xatu",
+        "yanma",
+        "zangoose",
+        "zapdos"
+      ]
+    },
+    "first_coverage": {
+      "ability_pairs": {
+        "absol:pressure": "draft-a-001",
+        "aerodactyl:pressure": "draft-a-001",
+        "aerodactyl:rockhead": "draft-b-111",
+        "aggron:rockhead": "draft-a-002",
+        "aipom:pickup": "draft-a-002",
+        "aipom:runaway": "draft-b-112",
+        "alakazam:synchronize": "draft-a-003",
+        "altaria:naturalcure": "draft-a-003",
+        "ampharos:static": "draft-a-004",
+        "arbok:intimidate": "draft-a-004",
+        "arcanine:intimidate": "draft-a-005",
+        "ariados:insomnia": "draft-a-005",
+        "ariados:swarm": "draft-b-115",
+        "armaldo:battlearmor": "draft-a-006",
+        "articuno:pressure": "draft-a-006",
+        "azumarill:hugepower": "draft-a-007",
+        "banette:insomnia": "draft-a-007",
+        "beautifly:swarm": "draft-a-008",
+        "beedrill:swarm": "draft-a-008",
+        "bellossom:chlorophyll": "draft-a-009",
+        "blastoise:torrent": "draft-a-009",
+        "blaziken:blaze": "draft-a-010",
+        "blissey:naturalcure": "draft-a-010",
+        "breloom:effectspore": "draft-a-011",
+        "butterfree:compoundeyes": "draft-a-011",
+        "cacturne:sandveil": "draft-a-012",
+        "camerupt:magmaarmor": "draft-a-012",
+        "castform:forecast": "draft-a-013",
+        "celebi:naturalcure": "draft-a-013",
+        "charizard:blaze": "draft-a-014",
+        "chimecho:levitate": "draft-a-014",
+        "claydol:levitate": "draft-a-015",
+        "clefable:cutecharm": "draft-a-015",
+        "cloyster:shellarmor": "draft-a-016",
+        "corsola:naturalcure": "draft-a-016",
+        "cradily:suctioncups": "draft-a-017",
+        "crawdaunt:hypercutter": "draft-a-017",
+        "crobat:innerfocus": "draft-a-018",
+        "delcatty:cutecharm": "draft-a-018",
+        "delibird:hustle": "draft-a-019",
+        "deoxys:pressure": "draft-a-019",
+        "deoxysattack:pressure": "draft-a-020",
+        "deoxysdefense:pressure": "draft-a-020",
+        "deoxysspeed:pressure": "draft-a-021",
+        "dewgong:thickfat": "draft-a-021",
+        "ditto:limber": "draft-a-022",
+        "dodrio:earlybird": "draft-a-022",
+        "donphan:sturdy": "draft-a-023",
+        "dragonite:innerfocus": "draft-a-023",
+        "dugtrio:arenatrap": "draft-a-024",
+        "dunsparce:serenegrace": "draft-a-024",
+        "dusclops:pressure": "draft-a-025",
+        "dustox:shielddust": "draft-a-025",
+        "electabuzz:static": "draft-a-026",
+        "electrode:static": "draft-a-026",
+        "entei:pressure": "draft-a-027",
+        "espeon:synchronize": "draft-a-027",
+        "exeggutor:chlorophyll": "draft-a-028",
+        "exploud:soundproof": "draft-a-028",
+        "farfetchd:innerfocus": "draft-a-029",
+        "fearow:keeneye": "draft-a-029",
+        "feraligatr:torrent": "draft-a-030",
+        "flareon:flashfire": "draft-a-030",
+        "flygon:levitate": "draft-a-031",
+        "forretress:sturdy": "draft-a-031",
+        "furret:keeneye": "draft-a-032",
+        "gardevoir:trace": "draft-a-032",
+        "gengar:levitate": "draft-a-033",
+        "girafarig:earlybird": "draft-a-033",
+        "glalie:innerfocus": "draft-a-034",
+        "gligar:hypercutter": "draft-a-034",
+        "golduck:cloudnine": "draft-a-035",
+        "golem:rockhead": "draft-a-035",
+        "gorebyss:swiftswim": "draft-a-036",
+        "granbull:intimidate": "draft-a-036",
+        "groudon:drought": "draft-a-037",
+        "grumpig:thickfat": "draft-a-037",
+        "gyarados:intimidate": "draft-a-038",
+        "hariyama:guts": "draft-a-038",
+        "hariyama:thickfat": "draft-b-148",
+        "heracross:guts": "draft-a-039",
+        "heracross:swarm": "draft-b-149",
+        "hitmonchan:keeneye": "draft-a-039",
+        "hitmonlee:limber": "draft-a-040",
+        "hitmontop:intimidate": "draft-a-040",
+        "hooh:pressure": "draft-a-041",
+        "houndoom:flashfire": "draft-a-041",
+        "huntail:swiftswim": "draft-a-042",
+        "hypno:insomnia": "draft-a-042",
+        "illumise:oblivious": "draft-a-043",
+        "jirachi:serenegrace": "draft-a-043",
+        "jolteon:voltabsorb": "draft-a-044",
+        "jumpluff:chlorophyll": "draft-a-044",
+        "jynx:oblivious": "draft-a-045",
+        "kabutops:battlearmor": "draft-a-045",
+        "kabutops:swiftswim": "draft-b-155",
+        "kangaskhan:earlybird": "draft-a-046",
+        "kecleon:colorchange": "draft-a-046",
+        "kingdra:swiftswim": "draft-a-047",
+        "kingler:hypercutter": "draft-a-047",
+        "kyogre:drizzle": "draft-a-048",
+        "lanturn:voltabsorb": "draft-a-048",
+        "lapras:waterabsorb": "draft-a-049",
+        "latias:levitate": "draft-a-049",
+        "latios:levitate": "draft-a-050",
+        "ledian:swarm": "draft-a-050",
+        "lickitung:owntempo": "draft-a-051",
+        "linoone:pickup": "draft-a-051",
+        "ludicolo:swiftswim": "draft-a-052",
+        "lugia:pressure": "draft-a-052",
+        "lunatone:levitate": "draft-a-053",
+        "luvdisc:swiftswim": "draft-a-053",
+        "machamp:guts": "draft-a-054",
+        "magcargo:flamebody": "draft-a-054",
+        "magmar:flamebody": "draft-a-055",
+        "magneton:magnetpull": "draft-a-055",
+        "manectric:static": "draft-a-056",
+        "mantine:swiftswim": "draft-a-056",
+        "mantine:waterabsorb": "draft-b-166",
+        "marowak:rockhead": "draft-a-057",
+        "masquerain:intimidate": "draft-a-057",
+        "mawile:intimidate": "draft-a-058",
+        "medicham:purepower": "draft-a-058",
+        "meganium:overgrow": "draft-a-059",
+        "metagross:clearbody": "draft-a-059",
+        "mew:synchronize": "draft-a-060",
+        "mewtwo:pressure": "draft-a-060",
+        "mightyena:intimidate": "draft-a-061",
+        "milotic:marvelscale": "draft-a-061",
+        "miltank:thickfat": "draft-a-062",
+        "minun:minus": "draft-a-062",
+        "misdreavus:levitate": "draft-a-063",
+        "moltres:pressure": "draft-a-063",
+        "mrmime:soundproof": "draft-a-064",
+        "muk:stickyhold": "draft-a-064",
+        "murkrow:insomnia": "draft-a-065",
+        "nidoking:poisonpoint": "draft-a-065",
+        "nidoqueen:poisonpoint": "draft-a-066",
+        "ninetales:flashfire": "draft-a-066",
+        "ninjask:speedboost": "draft-a-067",
+        "noctowl:insomnia": "draft-a-067",
+        "nosepass:magnetpull": "draft-a-068",
+        "octillery:suctioncups": "draft-a-068",
+        "omastar:shellarmor": "draft-a-069",
+        "omastar:swiftswim": "draft-b-179",
+        "parasect:effectspore": "draft-a-069",
+        "pelipper:keeneye": "draft-a-070",
+        "persian:limber": "draft-a-070",
+        "pidgeot:keeneye": "draft-a-071",
+        "pikachu:static": "draft-a-071",
+        "piloswine:oblivious": "draft-a-072",
+        "pinsir:hypercutter": "draft-a-072",
+        "plusle:plus": "draft-a-073",
+        "politoed:waterabsorb": "draft-a-073",
+        "poliwrath:waterabsorb": "draft-a-074",
+        "porygon2:trace": "draft-a-074",
+        "primeape:vitalspirit": "draft-a-075",
+        "quagsire:waterabsorb": "draft-a-075",
+        "qwilfish:poisonpoint": "draft-a-076",
+        "qwilfish:swiftswim": "draft-b-186",
+        "raichu:static": "draft-a-076",
+        "raikou:pressure": "draft-a-077",
+        "rapidash:flashfire": "draft-a-077",
+        "raticate:guts": "draft-a-078",
+        "rayquaza:airlock": "draft-a-078",
+        "regice:clearbody": "draft-a-079",
+        "regirock:clearbody": "draft-a-079",
+        "registeel:clearbody": "draft-a-080",
+        "relicanth:rockhead": "draft-a-080",
+        "relicanth:swiftswim": "draft-b-190",
+        "rhydon:rockhead": "draft-a-081",
+        "roselia:naturalcure": "draft-a-081",
+        "sableye:keeneye": "draft-a-082",
+        "salamence:intimidate": "draft-a-082",
+        "sandslash:sandveil": "draft-a-083",
+        "sceptile:overgrow": "draft-a-083",
+        "scizor:swarm": "draft-a-084",
+        "scyther:swarm": "draft-a-084",
+        "seaking:swiftswim": "draft-a-085",
+        "seviper:shedskin": "draft-a-085",
+        "sharpedo:roughskin": "draft-a-086",
+        "shedinja:wonderguard": "draft-a-086",
+        "shiftry:chlorophyll": "draft-a-087",
+        "shiftry:earlybird": "draft-b-197",
+        "shuckle:sturdy": "draft-a-087",
+        "skarmory:keeneye": "draft-a-088",
+        "slaking:truant": "draft-a-088",
+        "slowbro:owntempo": "draft-a-089",
+        "slowking:owntempo": "draft-a-089",
+        "smeargle:owntempo": "draft-a-090",
+        "sneasel:innerfocus": "draft-a-090",
+        "snorlax:immunity": "draft-a-091",
+        "snorlax:thickfat": "draft-b-201",
+        "solrock:levitate": "draft-a-091",
+        "spinda:owntempo": "draft-a-092",
+        "stantler:intimidate": "draft-a-092",
+        "starmie:naturalcure": "draft-a-093",
+        "steelix:rockhead": "draft-a-093",
+        "sudowoodo:rockhead": "draft-a-094",
+        "suicune:pressure": "draft-a-094",
+        "sunflora:chlorophyll": "draft-a-095",
+        "swalot:liquidooze": "draft-a-095",
+        "swampert:torrent": "draft-a-096",
+        "swellow:guts": "draft-a-096",
+        "tangela:chlorophyll": "draft-a-097",
+        "tauros:intimidate": "draft-a-097",
+        "tentacruel:clearbody": "draft-a-098",
+        "tentacruel:liquidooze": "draft-b-208",
+        "togetic:serenegrace": "draft-a-098",
+        "torkoal:whitesmoke": "draft-a-099",
+        "tropius:chlorophyll": "draft-a-099",
+        "typhlosion:blaze": "draft-a-100",
+        "tyranitar:sandstream": "draft-a-100",
+        "umbreon:synchronize": "draft-a-101",
+        "unown:levitate": "draft-a-101",
+        "ursaring:guts": "draft-a-102",
+        "vaporeon:waterabsorb": "draft-a-102",
+        "venomoth:shielddust": "draft-a-103",
+        "venusaur:overgrow": "draft-a-103",
+        "victreebel:chlorophyll": "draft-a-104",
+        "vigoroth:vitalspirit": "draft-a-104",
+        "vileplume:chlorophyll": "draft-a-105",
+        "volbeat:swarm": "draft-a-105",
+        "wailord:waterveil": "draft-a-106",
+        "walrein:thickfat": "draft-a-106",
+        "weezing:levitate": "draft-a-107",
+        "whiscash:oblivious": "draft-a-107",
+        "wigglytuff:cutecharm": "draft-a-108",
+        "wobbuffet:shadowtag": "draft-a-108",
+        "xatu:earlybird": "draft-a-109",
+        "xatu:synchronize": "draft-b-219",
+        "yanma:compoundeyes": "draft-a-109",
+        "yanma:speedboost": "draft-b-219",
+        "zangoose:immunity": "draft-a-110",
+        "zapdos:pressure": "draft-a-110"
+      },
+      "items": {
+        "Choice Band": "draft-a-001",
+        "Leftovers": "draft-a-002",
+        "Liechi Berry": "draft-a-001",
+        "Light Ball": "draft-a-071",
+        "Lum Berry": "draft-a-014",
+        "Petaya Berry": "draft-a-036",
+        "Salac Berry": "draft-a-007",
+        "Silk Scarf": "draft-a-051",
+        "Soul Dew": "draft-a-049",
+        "Stick": "draft-a-029",
+        "Thick Club": "draft-a-057",
+        "Twisted Spoon": "draft-a-101",
+        "White Herb": "draft-a-019"
+      },
+      "moves": {
+        "aerialace": "draft-a-018",
+        "agility": "draft-a-005",
+        "aromatherapy": "draft-a-010",
+        "batonpass": "draft-a-001",
+        "bellydrum": "draft-a-051",
+        "bodyslam": "draft-a-018",
+        "bonemerang": "draft-a-057",
+        "brickbreak": "draft-a-002",
+        "bulkup": "draft-a-036",
+        "calmmind": "draft-a-003",
+        "charm": "draft-a-098",
+        "counter": "draft-a-108",
+        "crosschop": "draft-a-026",
+        "crunch": "draft-a-017",
+        "curse": "draft-a-024",
+        "destinybond": "draft-a-007",
+        "doubleedge": "draft-a-001",
+        "dragonclaw": "draft-a-003",
+        "dragondance": "draft-a-014",
+        "drillpeck": "draft-a-022",
+        "earthquake": "draft-a-001",
+        "encore": "draft-a-003",
+        "endure": "draft-a-007",
+        "explosion": "draft-a-012",
+        "extremespeed": "draft-a-005",
+        "facade": "draft-a-078",
+        "fireblast": "draft-a-005",
+        "firepunch": "draft-a-003",
+        "flail": "draft-a-022",
+        "flamethrower": "draft-a-003",
+        "focuspunch": "draft-a-019",
+        "gigadrain": "draft-a-028",
+        "haze": "draft-a-003",
+        "headbutt": "draft-b-134",
+        "healbell": "draft-a-003",
+        "hiddenpowerbug": "draft-a-006",
+        "hiddenpowerdark": "draft-a-012",
+        "hiddenpowerelectric": "draft-a-017",
+        "hiddenpowerfighting": "draft-a-001",
+        "hiddenpowerfire": "draft-a-006",
+        "hiddenpowerflying": "draft-a-001",
+        "hiddenpowerghost": "draft-a-007",
+        "hiddenpowergrass": "draft-a-013",
+        "hiddenpowerground": "draft-a-018",
+        "hiddenpowerice": "draft-a-004",
+        "hiddenpowerpsychic": "draft-a-101",
+        "hiddenpowerrock": "draft-a-005",
+        "hiddenpowersteel": "draft-a-031",
+        "hydropump": "draft-a-007",
+        "hyperbeam": "draft-a-088",
+        "hypnosis": "draft-a-032",
+        "icebeam": "draft-a-006",
+        "icepunch": "draft-a-026",
+        "irontail": "draft-a-002",
+        "knockoff": "draft-a-038",
+        "leafblade": "draft-a-083",
+        "leechseed": "draft-a-009",
+        "lovelykiss": "draft-a-045",
+        "machpunch": "draft-a-011",
+        "magicalleaf": "draft-a-009",
+        "meanlook": "draft-a-063",
+        "megahorn": "draft-a-039",
+        "meteormash": "draft-a-059",
+        "milkdrink": "draft-a-062",
+        "mirrorcoat": "draft-a-108",
+        "moonlight": "draft-a-009",
+        "morningsun": "draft-a-008",
+        "mudshot": "draft-a-047",
+        "needlearm": "draft-a-012",
+        "overheat": "draft-a-028",
+        "painsplit": "draft-a-025",
+        "perishsong": "draft-a-063",
+        "protect": "draft-a-006",
+        "psychic": "draft-a-003",
+        "psychoboost": "draft-a-019",
+        "pursuit": "draft-a-041",
+        "quickattack": "draft-a-022",
+        "raindance": "draft-a-036",
+        "rapidspin": "draft-a-006",
+        "razorleaf": "draft-b-205",
+        "recover": "draft-a-013",
+        "refresh": "draft-a-009",
+        "rest": "draft-a-004",
+        "return": "draft-a-002",
+        "reversal": "draft-a-040",
+        "roar": "draft-a-009",
+        "rockslide": "draft-a-001",
+        "sacredfire": "draft-a-041",
+        "seismictoss": "draft-a-010",
+        "selfdestruct": "draft-a-076",
+        "shadowball": "draft-a-001",
+        "signalbeam": "draft-a-005",
+        "silverwind": "draft-a-050",
+        "skyuppercut": "draft-a-010",
+        "slackoff": "draft-a-104",
+        "sleeppowder": "draft-a-009",
+        "sleeptalk": "draft-a-004",
+        "sludgebomb": "draft-a-004",
+        "softboiled": "draft-a-010",
+        "solarbeam": "draft-a-095",
+        "spiderweb": "draft-b-115",
+        "spikes": "draft-a-012",
+        "spore": "draft-a-011",
+        "steelwing": "draft-a-084",
+        "stunspore": "draft-a-011",
+        "substitute": "draft-a-001",
+        "sunnyday": "draft-a-095",
+        "superpower": "draft-a-019",
+        "surf": "draft-a-009",
+        "swordsdance": "draft-a-008",
+        "synthesis": "draft-a-028",
+        "tailglow": "draft-a-105",
+        "thunder": "draft-a-048",
+        "thunderbolt": "draft-a-004",
+        "thunderpunch": "draft-a-010",
+        "thunderwave": "draft-a-002",
+        "toxic": "draft-a-002",
+        "transform": "draft-a-022",
+        "trick": "draft-a-032",
+        "volttackle": "draft-a-071",
+        "whirlwind": "draft-a-025",
+        "willowisp": "draft-a-025",
+        "wish": "draft-a-018",
+        "wrap": "draft-a-087",
+        "yawn": "draft-a-095"
+      },
+      "species": {
+        "absol": "draft-a-001",
+        "aerodactyl": "draft-a-001",
+        "aggron": "draft-a-002",
+        "aipom": "draft-a-002",
+        "alakazam": "draft-a-003",
+        "altaria": "draft-a-003",
+        "ampharos": "draft-a-004",
+        "arbok": "draft-a-004",
+        "arcanine": "draft-a-005",
+        "ariados": "draft-a-005",
+        "armaldo": "draft-a-006",
+        "articuno": "draft-a-006",
+        "azumarill": "draft-a-007",
+        "banette": "draft-a-007",
+        "beautifly": "draft-a-008",
+        "beedrill": "draft-a-008",
+        "bellossom": "draft-a-009",
+        "blastoise": "draft-a-009",
+        "blaziken": "draft-a-010",
+        "blissey": "draft-a-010",
+        "breloom": "draft-a-011",
+        "butterfree": "draft-a-011",
+        "cacturne": "draft-a-012",
+        "camerupt": "draft-a-012",
+        "castform": "draft-a-013",
+        "celebi": "draft-a-013",
+        "charizard": "draft-a-014",
+        "chimecho": "draft-a-014",
+        "claydol": "draft-a-015",
+        "clefable": "draft-a-015",
+        "cloyster": "draft-a-016",
+        "corsola": "draft-a-016",
+        "cradily": "draft-a-017",
+        "crawdaunt": "draft-a-017",
+        "crobat": "draft-a-018",
+        "delcatty": "draft-a-018",
+        "delibird": "draft-a-019",
+        "deoxys": "draft-a-019",
+        "deoxysattack": "draft-a-020",
+        "deoxysdefense": "draft-a-020",
+        "deoxysspeed": "draft-a-021",
+        "dewgong": "draft-a-021",
+        "ditto": "draft-a-022",
+        "dodrio": "draft-a-022",
+        "donphan": "draft-a-023",
+        "dragonite": "draft-a-023",
+        "dugtrio": "draft-a-024",
+        "dunsparce": "draft-a-024",
+        "dusclops": "draft-a-025",
+        "dustox": "draft-a-025",
+        "electabuzz": "draft-a-026",
+        "electrode": "draft-a-026",
+        "entei": "draft-a-027",
+        "espeon": "draft-a-027",
+        "exeggutor": "draft-a-028",
+        "exploud": "draft-a-028",
+        "farfetchd": "draft-a-029",
+        "fearow": "draft-a-029",
+        "feraligatr": "draft-a-030",
+        "flareon": "draft-a-030",
+        "flygon": "draft-a-031",
+        "forretress": "draft-a-031",
+        "furret": "draft-a-032",
+        "gardevoir": "draft-a-032",
+        "gengar": "draft-a-033",
+        "girafarig": "draft-a-033",
+        "glalie": "draft-a-034",
+        "gligar": "draft-a-034",
+        "golduck": "draft-a-035",
+        "golem": "draft-a-035",
+        "gorebyss": "draft-a-036",
+        "granbull": "draft-a-036",
+        "groudon": "draft-a-037",
+        "grumpig": "draft-a-037",
+        "gyarados": "draft-a-038",
+        "hariyama": "draft-a-038",
+        "heracross": "draft-a-039",
+        "hitmonchan": "draft-a-039",
+        "hitmonlee": "draft-a-040",
+        "hitmontop": "draft-a-040",
+        "hooh": "draft-a-041",
+        "houndoom": "draft-a-041",
+        "huntail": "draft-a-042",
+        "hypno": "draft-a-042",
+        "illumise": "draft-a-043",
+        "jirachi": "draft-a-043",
+        "jolteon": "draft-a-044",
+        "jumpluff": "draft-a-044",
+        "jynx": "draft-a-045",
+        "kabutops": "draft-a-045",
+        "kangaskhan": "draft-a-046",
+        "kecleon": "draft-a-046",
+        "kingdra": "draft-a-047",
+        "kingler": "draft-a-047",
+        "kyogre": "draft-a-048",
+        "lanturn": "draft-a-048",
+        "lapras": "draft-a-049",
+        "latias": "draft-a-049",
+        "latios": "draft-a-050",
+        "ledian": "draft-a-050",
+        "lickitung": "draft-a-051",
+        "linoone": "draft-a-051",
+        "ludicolo": "draft-a-052",
+        "lugia": "draft-a-052",
+        "lunatone": "draft-a-053",
+        "luvdisc": "draft-a-053",
+        "machamp": "draft-a-054",
+        "magcargo": "draft-a-054",
+        "magmar": "draft-a-055",
+        "magneton": "draft-a-055",
+        "manectric": "draft-a-056",
+        "mantine": "draft-a-056",
+        "marowak": "draft-a-057",
+        "masquerain": "draft-a-057",
+        "mawile": "draft-a-058",
+        "medicham": "draft-a-058",
+        "meganium": "draft-a-059",
+        "metagross": "draft-a-059",
+        "mew": "draft-a-060",
+        "mewtwo": "draft-a-060",
+        "mightyena": "draft-a-061",
+        "milotic": "draft-a-061",
+        "miltank": "draft-a-062",
+        "minun": "draft-a-062",
+        "misdreavus": "draft-a-063",
+        "moltres": "draft-a-063",
+        "mrmime": "draft-a-064",
+        "muk": "draft-a-064",
+        "murkrow": "draft-a-065",
+        "nidoking": "draft-a-065",
+        "nidoqueen": "draft-a-066",
+        "ninetales": "draft-a-066",
+        "ninjask": "draft-a-067",
+        "noctowl": "draft-a-067",
+        "nosepass": "draft-a-068",
+        "octillery": "draft-a-068",
+        "omastar": "draft-a-069",
+        "parasect": "draft-a-069",
+        "pelipper": "draft-a-070",
+        "persian": "draft-a-070",
+        "pidgeot": "draft-a-071",
+        "pikachu": "draft-a-071",
+        "piloswine": "draft-a-072",
+        "pinsir": "draft-a-072",
+        "plusle": "draft-a-073",
+        "politoed": "draft-a-073",
+        "poliwrath": "draft-a-074",
+        "porygon2": "draft-a-074",
+        "primeape": "draft-a-075",
+        "quagsire": "draft-a-075",
+        "qwilfish": "draft-a-076",
+        "raichu": "draft-a-076",
+        "raikou": "draft-a-077",
+        "rapidash": "draft-a-077",
+        "raticate": "draft-a-078",
+        "rayquaza": "draft-a-078",
+        "regice": "draft-a-079",
+        "regirock": "draft-a-079",
+        "registeel": "draft-a-080",
+        "relicanth": "draft-a-080",
+        "rhydon": "draft-a-081",
+        "roselia": "draft-a-081",
+        "sableye": "draft-a-082",
+        "salamence": "draft-a-082",
+        "sandslash": "draft-a-083",
+        "sceptile": "draft-a-083",
+        "scizor": "draft-a-084",
+        "scyther": "draft-a-084",
+        "seaking": "draft-a-085",
+        "seviper": "draft-a-085",
+        "sharpedo": "draft-a-086",
+        "shedinja": "draft-a-086",
+        "shiftry": "draft-a-087",
+        "shuckle": "draft-a-087",
+        "skarmory": "draft-a-088",
+        "slaking": "draft-a-088",
+        "slowbro": "draft-a-089",
+        "slowking": "draft-a-089",
+        "smeargle": "draft-a-090",
+        "sneasel": "draft-a-090",
+        "snorlax": "draft-a-091",
+        "solrock": "draft-a-091",
+        "spinda": "draft-a-092",
+        "stantler": "draft-a-092",
+        "starmie": "draft-a-093",
+        "steelix": "draft-a-093",
+        "sudowoodo": "draft-a-094",
+        "suicune": "draft-a-094",
+        "sunflora": "draft-a-095",
+        "swalot": "draft-a-095",
+        "swampert": "draft-a-096",
+        "swellow": "draft-a-096",
+        "tangela": "draft-a-097",
+        "tauros": "draft-a-097",
+        "tentacruel": "draft-a-098",
+        "togetic": "draft-a-098",
+        "torkoal": "draft-a-099",
+        "tropius": "draft-a-099",
+        "typhlosion": "draft-a-100",
+        "tyranitar": "draft-a-100",
+        "umbreon": "draft-a-101",
+        "unown": "draft-a-101",
+        "ursaring": "draft-a-102",
+        "vaporeon": "draft-a-102",
+        "venomoth": "draft-a-103",
+        "venusaur": "draft-a-103",
+        "victreebel": "draft-a-104",
+        "vigoroth": "draft-a-104",
+        "vileplume": "draft-a-105",
+        "volbeat": "draft-a-105",
+        "wailord": "draft-a-106",
+        "walrein": "draft-a-106",
+        "weezing": "draft-a-107",
+        "whiscash": "draft-a-107",
+        "wigglytuff": "draft-a-108",
+        "wobbuffet": "draft-a-108",
+        "xatu": "draft-a-109",
+        "yanma": "draft-a-109",
+        "zangoose": "draft-a-110",
+        "zapdos": "draft-a-110"
+      }
+    },
+    "games_selected": 220,
+    "games_total": 220,
+    "schema_version": "gen3-randbat-coverage-plan-v1",
+    "source_metadata": {
+      "format_id": "gen3randombattle",
+      "generation": 3,
+      "source_hash": "754b71cfed643fa0"
+    },
+    "uncovered": {
+      "ability_pairs": [],
+      "items": [],
+      "moves": [],
+      "species": []
+    }
+  },
+  "schema_version": "gen3-randbat-coverage-plan-v1",
+  "source_metadata": {
+    "format_id": "gen3randombattle",
+    "generation": 3,
+    "source_hash": "754b71cfed643fa0"
+  },
+  "uncovered": {
+    "ability_pairs": [],
+    "items": [],
+    "moves": [],
+    "species": []
+  }
+}
