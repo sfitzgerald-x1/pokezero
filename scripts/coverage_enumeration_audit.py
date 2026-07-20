@@ -332,14 +332,87 @@ def _first_legal(observation) -> int | None:
     return next((index for index, allowed in enumerate(observation.legal_action_mask) if allowed), None)
 
 
+def _audit_true_variant_survival(
+    env: LocalShowdownEnv,
+    *,
+    player_id: str,
+    opponent_selection: CoverageSelection,
+    report: DeepLineAuditReport,
+) -> None:
+    """Ensure public move evidence never prunes the fixture's true source tuple."""
+
+    state = env._state_for_player(player_id)
+    turn = state.turn_number
+    belief = state.belief_view.opponent_by_species().get(opponent_selection.species_id)
+    if belief is None:
+        _record(
+            report,
+            kind="coverage_opponent_belief_missing",
+            player_id=player_id,
+            turn=turn,
+            column="belief_view.opponent_pokemon",
+            expected=opponent_selection.species_id,
+            actual=None,
+            detail="a visible fixture opponent must retain a source-backed belief record",
+        )
+        return
+    candidate_ids = {
+        str(candidate.get("variant_id") or "")
+        for candidate in belief.candidate_variants
+        if isinstance(candidate, Mapping)
+    }
+    if opponent_selection.variant_id not in candidate_ids:
+        _record(
+            report,
+            kind="coverage_true_variant_pruned_after_action",
+            player_id=player_id,
+            turn=turn,
+            column="belief_view.candidate_variants",
+            expected=opponent_selection.variant_id,
+            actual=sorted(candidate_ids),
+            detail="public action evidence must not eliminate the true source-derived fixture variant",
+        )
+
+
+def _audit_depth_boundary(
+    env: LocalShowdownEnv,
+    *,
+    game: CoverageGame,
+    report: DeepLineAuditReport,
+) -> None:
+    """Run the dynamic oracle suite at a post-action decision boundary."""
+
+    selections = {"p1": game.p1, "p2": game.p2}
+    requested = env.requested_players()
+    for player_id in requested:
+        observation = audit_live_decision(env, player_id, report=report)
+        _audit_action_token_identity(
+            env,
+            observation,
+            player_id=player_id,
+            report=report,
+            turn=env._state_for_player(player_id).turn_number,
+        )
+        opponent_id = "p2" if player_id == "p1" else "p1"
+        _audit_true_variant_survival(
+            env,
+            player_id=player_id,
+            opponent_selection=selections[opponent_id],
+            report=report,
+        )
+    if requested:
+        audit_perspective_pair(env, report=report)
+
+
 def _run_move_use_lane(
     env: LocalShowdownEnv,
     *,
     game: CoverageGame,
     report: DeepLineAuditReport,
     max_rounds: int,
+    depth_rounds: int = 0,
 ) -> dict[str, list[str]]:
-    """Best-effort optional move-reveal lane, separately reported from static coverage."""
+    """Best-effort move-reveal lane with an optional post-action oracle pass."""
 
     selections = {"p1": game.p1, "p2": game.p2}
     next_move_index = {"p1": 0, "p2": 0}
@@ -366,6 +439,8 @@ def _run_move_use_lane(
                     return used
                 actions[player_id] = legal
         env.step(actions)
+        if depth_rounds and env.terminal() is None:
+            _audit_depth_boundary(env, game=game, report=report)
     return used
 
 
@@ -377,6 +452,7 @@ def _run_game(
     source,
     use_moves: bool,
     max_move_rounds: int,
+    depth_rounds: int,
 ) -> dict[str, list[str]]:
     env.reset_with_start_override(seed=game.seed, start_override=game.start_override())
     report.begin_game(game.game_id)
@@ -399,7 +475,48 @@ def _run_game(
         game=game,
         report=report,
         max_rounds=max_move_rounds,
+        depth_rounds=depth_rounds,
     ) if use_moves else {"p1": [], "p2": []}
+
+
+def _write_failure_artifact(
+    failure_dir: Path,
+    *,
+    env: LocalShowdownEnv,
+    game: CoverageGame,
+    findings: Iterable[AuditFinding],
+    move_use: Mapping[str, list[str]],
+    exception: Exception | None = None,
+) -> str:
+    """Persist a compact repro only for a fixture with a real audit failure."""
+
+    failure_dir.mkdir(parents=True, exist_ok=True)
+    terminal = env.terminal()
+    try:
+        turn = int(env.snapshot().replay.turn_number)
+    except Exception:
+        turn = None
+    payload = {
+        "schema_version": "coverage-depth-failure-v1",
+        "game": game.to_json_dict(),
+        "turn": turn,
+        "terminal": (
+            {"winner": terminal.winner, "turn_count": terminal.turn_count, "capped": terminal.capped}
+            if terminal is not None
+            else None
+        ),
+        "move_use": {player_id: list(moves) for player_id, moves in sorted(move_use.items())},
+        "findings": [finding.to_json_dict() for finding in findings],
+        "exception": (
+            {"type": type(exception).__name__, "message": str(exception)}
+            if exception is not None
+            else None
+        ),
+        "protocol_lines": list(env.protocol_lines),
+    }
+    path = failure_dir / f"{game.game_id}.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
 
 
 def _first_variant_with_move(source, move_id: str):
@@ -580,6 +697,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         action="store_true",
         help="Audit every exact source variant in paired 1v1 fixtures, not only atom coverage.",
     )
+    parser.add_argument(
+        "--depth-rounds",
+        type=int,
+        default=0,
+        help="After each scripted action, audit this many rounds per exact-variant fixture (default: 0).",
+    )
+    parser.add_argument(
+        "--failure-dir",
+        type=Path,
+        default=None,
+        help="Write protocol reproductions only for depth fixtures with findings or execution errors.",
+    )
     parser.add_argument("--use-moves", action="store_true", help="Run the optional best-effort move-reveal lane.")
     parser.add_argument("--universal-lane", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-move-rounds", type=int, default=8)
@@ -591,8 +720,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("--max-move-rounds must be positive")
     if args.max_games is not None and args.max_games < 1:
         parser.error("--max-games must be positive when provided")
+    if args.depth_rounds < 0:
+        parser.error("--depth-rounds must be non-negative")
     if args.exact_variants and args.coverage_pass != "both":
         parser.error("--exact-variants covers every reachable ability and requires --pass both")
+    if args.depth_rounds and not args.exact_variants:
+        parser.error("--depth-rounds requires --exact-variants")
+    if args.depth_rounds and args.failure_dir is None:
+        parser.error("--depth-rounds requires --failure-dir so only failing fixtures retain traces")
 
     preliminary = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
     root = preliminary.resolved_showdown_root()
@@ -622,19 +757,32 @@ def main(argv: Iterable[str] | None = None) -> int:
     completed: list[CoverageGame] = []
     move_use: dict[str, dict[str, list[str]]] = {}
     universal_moves: dict[str, Any] = {}
+    failure_artifacts: list[str] = []
     env = LocalShowdownEnv(config)
     try:
         for game in selected_games:
+            findings_before = len(report.findings)
             try:
                 move_use[game.game_id] = _run_game(
                     env,
                     game=game,
                     report=report,
                     source=source,
-                    use_moves=args.use_moves,
-                    max_move_rounds=args.max_move_rounds,
+                    use_moves=args.use_moves or bool(args.depth_rounds),
+                    max_move_rounds=args.depth_rounds or args.max_move_rounds,
+                    depth_rounds=args.depth_rounds,
                 )
                 completed.append(game)
+                if args.failure_dir is not None and len(report.findings) > findings_before:
+                    failure_artifacts.append(
+                        _write_failure_artifact(
+                            args.failure_dir,
+                            env=env,
+                            game=game,
+                            findings=report.findings[findings_before:],
+                            move_use=move_use[game.game_id],
+                        )
+                    )
             except Exception as exc:  # Preserve partial evidence for a fixture execution failure.
                 _record(
                     report,
@@ -646,7 +794,19 @@ def main(argv: Iterable[str] | None = None) -> int:
                     actual=type(exc).__name__,
                     detail=str(exc),
                 )
-                break
+                if args.failure_dir is not None:
+                    failure_artifacts.append(
+                        _write_failure_artifact(
+                            args.failure_dir,
+                            env=env,
+                            game=game,
+                            findings=report.findings[findings_before:],
+                            move_use=move_use.get(game.game_id, {"p1": [], "p2": []}),
+                            exception=exc,
+                        )
+                    )
+                if not args.depth_rounds:
+                    break
         if args.universal_lane:
             universal_moves = _run_universal_move_lane(
                 env,
@@ -666,6 +826,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             "completed_game_ids": [game.game_id for game in completed],
             "move_use": move_use,
             "universal_moves": universal_moves,
+            "failure_artifacts": failure_artifacts,
+            "depth_rounds": args.depth_rounds,
         },
         "planned_full_coverage": plan.coverage_ledger(),
     }
@@ -676,6 +838,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "selected_games": len(selected_games),
         "planned_games": len(plan.games),
         "coverage_complete": execution_ledger["complete"],
+        "depth_rounds": args.depth_rounds,
+        "failure_artifact_count": len(failure_artifacts),
     }
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.coverage_json.parent.mkdir(parents=True, exist_ok=True)

@@ -269,6 +269,63 @@ coverage, and an explicit `uncovered.variants` set; completion requires it to
 be empty alongside the atom sets. It remains static tuple coverage, not an
 exhaustive move-use or multi-turn interaction sweep.
 
+### 7.5 Bounded exact-variant depth run (planned, do not launch before fixes land)
+
+After all encoder and belief fixes under test have landed in one fresh image,
+run a bounded dynamic extension over the same exact-variant universe. This is
+not a replacement for random deep-line games: it is a deterministic way to
+exercise post-action request, belief-pruning, PP, action-token, and
+perspective surfaces for every source tuple.
+
+**Preflight contract:** rebuild Showdown, record the source hash, verify the
+image includes every intended fix, and reserve a new output directory. Do not
+reuse the 874-fixture static audit evidence as proof of this dynamic run.
+
+Use eight independent shard workers, each with a distinct summary/ledger path
+and the shared failure directory below:
+
+```sh
+for shard in 0 1 2 3 4 5 6 7; do
+  POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+    uv run python scripts/coverage_enumeration_audit.py \
+      --exact-variants \
+      --depth-rounds 8 \
+      --shard "$shard/8" \
+      --no-universal-lane \
+      --failure-dir "$OUT/failures" \
+      --json "$OUT/audit-$shard.json" \
+      --coverage-json "$OUT/ledger-$shard.json" &
+done
+wait
+```
+
+`--depth-rounds` is deliberately bounded: it scripts legal moves in source
+order, then after every action re-runs the live differential oracle,
+perspective check, action-token identity check, and true-variant-survival
+check. A terminal game simply stops early; it is reported as bounded depth, not
+misrepresented as a complete move-use proof.
+
+The runner writes no protocol trace for a successful fixture. If a fixture has
+a finding or execution exception, it writes exactly one reproducible JSON file
+under `$OUT/failures/`, containing the source tuple, seed, executed moves,
+post-failure protocol lines, terminal state, and only that fixture's findings.
+Workers continue after a failed fixture in depth mode, so one bad variant does
+not discard coverage of the remaining source universe. Inspect the failure
+directory first; aggregate summaries are for counts and ledger completion.
+
+After all workers finish, merge the eight coverage ledgers and require an empty
+`uncovered.variants` set:
+
+```sh
+uv run python scripts/merge_coverage_ledgers.py \
+  --input "$OUT"/ledger-{0,1,2,3,4,5,6,7}.json \
+  --output "$OUT/ledger-merged.json"
+```
+
+Any nonzero worker exit, nonempty failure directory, or nonempty merged
+uncovered set is a failed audit and must be triaged before treating the run as
+clean.
+
 ## 8. Orchestration & budget
 
 Deterministic and embarrassingly parallel across games (~220 draft games + a small gap-fill set,

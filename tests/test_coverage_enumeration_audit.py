@@ -198,19 +198,39 @@ class CoverageEnumerationPlanTests(unittest.TestCase):
 
 
 class CoverageEnumerationDriverTests(unittest.TestCase):
-    def test_exact_variant_cli_rejects_partial_ability_passes(self) -> None:
+    @staticmethod
+    def _cli_error(*arguments: str) -> int:
         with redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                coverage_audit_cli.main(
-                    (
-                        "--json", "/tmp/coverage-audit.json",
-                        "--coverage-json", "/tmp/coverage-ledger.json",
-                        "--exact-variants",
-                        "--pass", "A",
-                    )
-                )
+            with unittest.TestCase().assertRaises(SystemExit) as raised:
+                coverage_audit_cli.main(arguments)
+        return raised.exception.code
 
-        self.assertEqual(raised.exception.code, 2)
+    def test_exact_variant_cli_rejects_partial_ability_passes(self) -> None:
+        code = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+            "--exact-variants",
+            "--pass", "A",
+        )
+
+        self.assertEqual(code, 2)
+
+    def test_depth_cli_requires_exact_variants_and_failure_directory(self) -> None:
+        missing_exact = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+            "--depth-rounds", "1",
+            "--failure-dir", "/tmp/coverage-failures",
+        )
+        missing_failure_dir = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+            "--exact-variants",
+            "--depth-rounds", "1",
+        )
+
+        self.assertEqual(missing_exact, 2)
+        self.assertEqual(missing_failure_dir, 2)
 
     def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:
         """Trace must split its public copied fact from its native source atom."""
