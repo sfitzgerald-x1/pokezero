@@ -4120,6 +4120,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 batch_adaptive_root_values=True,
             )
 
+    def test_root_puct_policy_rejects_adaptive_branch_reuse_without_adaptive_batching(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires batch_adaptive_root_values"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                reuse_adaptive_root_branches=True,
+            )
+
     def test_root_puct_policy_rejects_adaptive_value_batching_with_leaf_rollouts(self) -> None:
         with self.assertRaisesRegex(ValueError, "zero leaf rollout"):
             RootPUCTSearchPolicy(

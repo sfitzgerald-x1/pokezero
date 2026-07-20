@@ -1075,6 +1075,118 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(aggregate_timing.adaptive_value_evaluation_count, 6)
         self.assertEqual(aggregate_timing.adaptive_cross_world_batched_leaf_count, 6)
 
+    def test_puct_branch_search_group_reuses_direct_root_branches_without_changing_values(self) -> None:
+        trajectory = BattleTrajectory(battle_id="cached-adaptive-worlds", format_id="gen3randombattle", seed=80)
+        common_kwargs = {
+            "trajectory": trajectory,
+            "player_id": "p1",
+            "prefix_decision_round_count": 0,
+            "legal_action_mask": (True, True, False, False, False, False, False, False, False),
+            "action_priors": (0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            "cpuct": 2.0,
+            "root_visit_budget": 5,
+            "value_fn": lambda _history: (_ for _ in ()).throw(
+                AssertionError("all leaves must batch")
+            ),
+            "value_batch_fn": lambda histories: tuple(
+                float(_only_legal_action(history[-1])) for history in histories
+            ),
+            "batch_adaptive_values": True,
+        }
+
+        def requests_for(env):
+            return tuple(
+                PUCTBranchSearchRequest(
+                    opponent_actions=opponent_actions,
+                    start_override=_start_override(),
+                    prepared_prefix=prepare_replay_prefix(
+                        env=env,
+                        trajectory=trajectory,
+                        player_id="p1",
+                        prefix_decision_round_count=0,
+                        start_override=_start_override(),
+                        expected_current_observation=_observation(0),
+                    ),
+                )
+                for opponent_actions in ({"p2": 0}, {"p2": 1})
+            )
+
+        reference_env = PlayerObservationFusedBridgeEnv()
+        reference = puct_branch_search_group(
+            env=reference_env,
+            requests=requests_for(reference_env),
+            expected_current_observation=_observation(0),
+            **common_kwargs,
+        )
+        cached_env = PlayerObservationFusedBridgeEnv()
+        cached = puct_branch_search_group(
+            env=cached_env,
+            requests=requests_for(cached_env),
+            expected_current_observation=_observation(0),
+            reuse_adaptive_root_branches=True,
+            **common_kwargs,
+        )
+
+        self.assertEqual(
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [
+                        (candidate.action_index, candidate.value, candidate.visits, candidate.total_value)
+                        for candidate in result.candidates
+                    ],
+                )
+                for result in cached
+            ],
+            [
+                (
+                    result.action_index,
+                    result.most_visited_candidate.action_index,
+                    [
+                        (candidate.action_index, candidate.value, candidate.visits, candidate.total_value)
+                        for candidate in result.candidates
+                    ],
+                )
+                for result in reference
+            ],
+        )
+        self.assertEqual([result.timing.value_evaluation_count for result in cached], [5, 5])
+        self.assertEqual(
+            [result.timing.adaptive_value_evaluation_count for result in cached],
+            [3, 3],
+        )
+        self.assertEqual(
+            [result.timing.adaptive_cross_world_batched_leaf_count for result in cached],
+            [3, 3],
+        )
+        self.assertEqual(
+            [result.timing.adaptive_reused_root_branch_count for result in cached],
+            [3, 3],
+        )
+        self.assertEqual(reference_env.fused_search_step_calls, 10)
+        self.assertEqual(cached_env.fused_search_step_calls, 4)
+        self.assertEqual(cached_env.player_observation_calls, ["p1"] * 4)
+
+    def test_puct_branch_search_group_rejects_branch_reuse_without_adaptive_batching(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires batched adaptive values"):
+            puct_branch_search_group(
+                env=ValueBranchEnv(),
+                trajectory=BattleTrajectory(
+                    battle_id="invalid-branch-cache",
+                    format_id="gen3randombattle",
+                    seed=81,
+                ),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True,) + (False,) * (ACTION_COUNT - 1),
+                requests=(PUCTBranchSearchRequest(opponent_actions={"p2": 0}),),
+                value_fn=lambda _history: 0.0,
+                value_batch_fn=lambda histories: tuple(0.0 for _history in histories),
+                action_priors=(1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                reuse_adaptive_root_branches=True,
+            )
+
     def test_puct_branch_search_group_batches_only_nonterminal_adaptive_leaves(self) -> None:
         trajectory = BattleTrajectory(battle_id="batch-adaptive-terminals", format_id="gen3randombattle", seed=79)
         batch_histories = []

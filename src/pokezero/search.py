@@ -242,6 +242,9 @@ class RootPUCTSearchTiming:
     # time accounting a second time.
     adaptive_value_evaluation_count: int = 0
     adaptive_cross_world_batched_leaf_count: int = 0
+    # Reusing a branch avoids only the deterministic simulator transition. The
+    # adaptive value evaluation and PUCT backup still run for every visit.
+    adaptive_reused_root_branch_count: int = 0
     rollout_tail_seconds: float = 0.0
     rollout_tail_count: int = 0
     # These diagnostic fields partition residual wall time without changing the
@@ -983,6 +986,9 @@ class RootPUCTSearchTiming:
             adaptive_cross_world_batched_leaf_count=sum(
                 timing.adaptive_cross_world_batched_leaf_count for timing in timings
             ),
+            adaptive_reused_root_branch_count=sum(
+                timing.adaptive_reused_root_branch_count for timing in timings
+            ),
             rollout_tail_seconds=sum(timing.rollout_tail_seconds for timing in timings),
             rollout_tail_count=sum(timing.rollout_tail_count for timing in timings),
             puct_search_result_residual_seconds=sum(
@@ -1162,6 +1168,7 @@ class RootPUCTSearchTiming:
             "adaptive_cross_world_batched_leaf_count": (
                 self.adaptive_cross_world_batched_leaf_count
             ),
+            "adaptive_reused_root_branch_count": self.adaptive_reused_root_branch_count,
             "policy_value_evaluation_seconds": self.policy_value_evaluation_seconds,
             "policy_value_evaluation_count": self.policy_value_evaluation_count,
             "rollout_tail_seconds": self.rollout_tail_seconds,
@@ -1255,6 +1262,7 @@ class _RootPUCTSearchTimingAccumulator:
     value_evaluation_count: int = 0
     adaptive_value_evaluation_count: int = 0
     adaptive_cross_world_batched_leaf_count: int = 0
+    adaptive_reused_root_branch_count: int = 0
     rollout_tail_seconds: float = 0.0
     rollout_tail_count: int = 0
 
@@ -1398,6 +1406,9 @@ class _RootPUCTSearchTimingAccumulator:
         if batch_size > 1:
             self.adaptive_cross_world_batched_leaf_count += 1
 
+    def add_adaptive_reused_root_branch(self) -> None:
+        self.adaptive_reused_root_branch_count += 1
+
     def add_rollout_tail(self, elapsed_seconds: float) -> None:
         self.rollout_tail_seconds += elapsed_seconds
         self.rollout_tail_count += 1
@@ -1482,6 +1493,7 @@ class _RootPUCTSearchTimingAccumulator:
             adaptive_cross_world_batched_leaf_count=(
                 self.adaptive_cross_world_batched_leaf_count
             ),
+            adaptive_reused_root_branch_count=self.adaptive_reused_root_branch_count,
             rollout_tail_seconds=self.rollout_tail_seconds,
             rollout_tail_count=self.rollout_tail_count,
             total_seconds=total_seconds,
@@ -2263,6 +2275,7 @@ def puct_branch_search_group(
     expected_current_observation: PokeZeroObservationV0 | None = None,
     replay_hp_fraction_tolerance: float = 0.0,
     batch_adaptive_values: bool = False,
+    reuse_adaptive_root_branches: bool = False,
 ) -> tuple[PUCTBranchSearchResult, ...]:
     """Batch root value leaves across independent sampled worlds.
 
@@ -2284,6 +2297,8 @@ def puct_branch_search_group(
         raise ValueError("root_visit_budget must be positive when set.")
     if leaf_rollout_decision_rounds != 0:
         raise ValueError("puct branch search group supports only zero leaf rollout decision rounds.")
+    if reuse_adaptive_root_branches and not batch_adaptive_values:
+        raise ValueError("adaptive root branch reuse requires batched adaptive values.")
     if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
         raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
 
@@ -2401,6 +2416,7 @@ def puct_branch_search_group(
             replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
             value_batch_fn=value_batch_fn,
             completed_value_searches=completed_value_searches,
+            reuse_adaptive_root_branches=reuse_adaptive_root_branches,
         )
 
     results: list[PUCTBranchSearchResult] = []
@@ -2672,6 +2688,7 @@ def _finish_puct_branch_search_group_batched_adaptive(
     expected_current_observation: PokeZeroObservationV0 | None,
     replay_hp_fraction_tolerance: float,
     value_batch_fn: ObservationValueBatchFunction,
+    reuse_adaptive_root_branches: bool,
     completed_value_searches: Sequence[
         tuple[
             PUCTBranchSearchRequest,
@@ -2776,22 +2793,39 @@ def _finish_puct_branch_search_group_batched_adaptive(
                 tuple(state.accumulators.values()),
                 cpuct=cpuct,
             ).action_index
-            branch = _branch_from_replay_prefix(
-                env=env,
-                trajectory=trajectory,
-                player_id=player_id,
-                prefix_decision_round_count=prefix_decision_round_count,
-                branch_actions={**dict(state.request.opponent_actions), player_id: action_index},
-                start_override=state.request.start_override,
-                expected_current_observation=expected_current_observation,
-                restorable_prefix=state.restorable_prefix,
-                replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
-                observation_player_id=player_id,
-                timing=state.timing,
+            cached_branch = state.accumulators[action_index].value_candidate.branch
+            can_reuse_branch = (
+                reuse_adaptive_root_branches
+                and state.restorable_prefix is not None
+                and state.restorable_prefix.snapshot_restore_mode == "bridge-handle"
+                and player_id in cached_branch.step_result.observations
             )
-            bridge_timing = _bridge_timing_delta(bridge_timing_before, _bridge_timing_snapshot(env))
-            if bridge_timing is not None:
-                state.timing.add_bridge_subtiming(bridge_timing)
+            if can_reuse_branch:
+                # A bridge-handle snapshot is immutable at the root. Reusing
+                # this one-ply result retains the same observation/value batch
+                # and backup while skipping the redundant bridge round trip.
+                branch = cached_branch
+                state.timing.add_adaptive_reused_root_branch()
+            else:
+                branch = _branch_from_replay_prefix(
+                    env=env,
+                    trajectory=trajectory,
+                    player_id=player_id,
+                    prefix_decision_round_count=prefix_decision_round_count,
+                    branch_actions={**dict(state.request.opponent_actions), player_id: action_index},
+                    start_override=state.request.start_override,
+                    expected_current_observation=expected_current_observation,
+                    restorable_prefix=state.restorable_prefix,
+                    replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
+                    observation_player_id=player_id,
+                    timing=state.timing,
+                )
+                bridge_timing = _bridge_timing_delta(
+                    bridge_timing_before,
+                    _bridge_timing_snapshot(env),
+                )
+                if bridge_timing is not None:
+                    state.timing.add_bridge_subtiming(bridge_timing)
             if branch.step_result.terminal is None:
                 pending_values.append(
                     _PendingAdaptivePUCTValue(

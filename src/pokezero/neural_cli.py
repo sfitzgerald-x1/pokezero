@@ -933,6 +933,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--reuse-adaptive-root-branches",
+        action="store_true",
+        help=(
+            "Reuse deterministic bridge-handle root branches during adaptive batched visits. "
+            "Requires --batch-adaptive-root-values; value evaluations and PUCT backups still run."
+        ),
+    )
+    root_puct_play.add_argument(
         "--root-time-budget-ms",
         type=int,
         default=None,
@@ -3966,6 +3974,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         raise ValueError("--batch-adaptive-root-values requires --batch-initial-root-values.")
     if args.batch_adaptive_root_values and args.root_time_budget_ms is not None:
         raise ValueError("--batch-adaptive-root-values cannot be combined with --root-time-budget-ms.")
+    if args.reuse_adaptive_root_branches and not args.batch_adaptive_root_values:
+        raise ValueError("--reuse-adaptive-root-branches requires --batch-adaptive-root-values.")
     if args.root_time_budget_ms is not None:
         if args.root_time_budget_ms <= 0:
             raise ValueError("root time budget must be positive when set.")
@@ -4072,6 +4082,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             "root_extra_visits": args.root_extra_visits,
             "batch_initial_root_values": bool(getattr(args, "batch_initial_root_values", False)),
             "batch_adaptive_root_values": bool(getattr(args, "batch_adaptive_root_values", False)),
+            "reuse_adaptive_root_branches": bool(
+                getattr(args, "reuse_adaptive_root_branches", False)
+            ),
             "adaptive_root_contested_extra_visits": args.adaptive_root_contested_extra_visits,
             "adaptive_root_uncontested_extra_visits": args.adaptive_root_uncontested_extra_visits,
             "adaptive_root_policy_entropy_threshold": args.adaptive_root_policy_entropy_threshold,
@@ -4232,6 +4245,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             value_fn=value_fn,
             value_batch_fn=value_batch_fn if getattr(args, "batch_initial_root_values", False) else None,
             batch_adaptive_root_values=bool(getattr(args, "batch_adaptive_root_values", False)),
+            reuse_adaptive_root_branches=bool(
+                getattr(args, "reuse_adaptive_root_branches", False)
+            ),
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
             opponent_action_scenario_planner=opponent_action_scenario_planner,
