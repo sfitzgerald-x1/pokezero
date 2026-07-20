@@ -52,6 +52,17 @@ def _active_hp_from_snapshot(snapshot: LocalShowdownSnapshot, player: str) -> in
     return hp
 
 
+def _active_item_state_from_snapshot(snapshot: LocalShowdownSnapshot, player: str) -> tuple[str, str]:
+    battle = snapshot.bridge_snapshot["battle"]
+    side_index = 0 if player == "p1" else 1
+    pokemon = battle["sides"][side_index]["pokemon"][0]
+    current_item = pokemon["item"]
+    assigned_item = pokemon["set"]["item"]
+    assert isinstance(current_item, str)
+    assert isinstance(assigned_item, str)
+    return current_item, assigned_item
+
+
 def request_payload(
     side: str,
     *,
@@ -1085,6 +1096,197 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     expected_branch.observations["p1"].numeric_features,
                 )
 
+    def test_public_materialization_preserves_confirmed_trick_items(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Furret",
+                            ability="Keen Eye",
+                            item="Choice Band",
+                            moves=("Trick", "Tackle"),
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Alakazam",
+                            ability="Synchronize",
+                            item="Petaya Berry",
+                            moves=("Harden", "Tackle"),
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with (
+            LocalShowdownEnv(config) as source,
+            LocalShowdownEnv(config) as with_current_item,
+            LocalShowdownEnv(config) as without_current_item,
+        ):
+            source.reset_with_start_override(seed=211, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})  # Trick swaps Choice Band and Petaya Berry.
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            self.assertEqual(payload["sides"]["p1"]["pokemon"][0]["currentItem"], "Petaya Berry")
+            self.assertEqual(payload["sides"]["p2"]["pokemon"][0]["currentItem"], "Choice Band")
+            source_items = {
+                player: _active_item_state_from_snapshot(source.snapshot(), player)
+                for player in ("p1", "p2")
+            }
+
+            with_current_item.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=211,
+            )
+
+            original_payload = local_showdown_module._public_materialization_payload
+
+            def without_override_payload(*args: Any, **kwargs: Any) -> dict[str, Any]:
+                stale_payload = original_payload(*args, **kwargs)
+                for side in stale_payload["sides"].values():
+                    for row in side["pokemon"]:
+                        row.pop("currentItem", None)
+                return stale_payload
+
+            # Paired A/B: removing the protocol-confirmed override recreates the original
+            # sampled items, while the production payload must match the live source exactly.
+            with mock.patch.object(
+                local_showdown_module,
+                "_public_materialization_payload",
+                side_effect=without_override_payload,
+            ):
+                without_current_item.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=211,
+                )
+
+            restored_items = {
+                player: _active_item_state_from_snapshot(with_current_item.snapshot(), player)
+                for player in ("p1", "p2")
+            }
+            stale_items = {
+                player: _active_item_state_from_snapshot(without_current_item.snapshot(), player)
+                for player in ("p1", "p2")
+            }
+            self.assertEqual(restored_items, source_items)
+            self.assertNotEqual(stale_items, source_items)
+            self.assertEqual(restored_items["p1"], ("petayaberry", "Choice Band"))
+            self.assertEqual(restored_items["p2"], ("choiceband", "Petaya Berry"))
+
+            source.reseed_simulator_rng(911)
+            with_current_item.reseed_simulator_rng(911)
+            without_current_item.reseed_simulator_rng(911)
+            source.step({"p1": 1, "p2": 0})
+            with_current_item.step({"p1": 1, "p2": 0})
+            without_current_item.step({"p1": 1, "p2": 0})
+            source_hp = _active_hp_from_snapshot(source.snapshot(), "p2")
+            restored_hp = _active_hp_from_snapshot(with_current_item.snapshot(), "p2")
+            stale_hp = _active_hp_from_snapshot(without_current_item.snapshot(), "p2")
+
+        self.assertEqual(restored_hp, source_hp)
+        self.assertLess(stale_hp, source_hp)
+
+    def test_public_materialization_fails_closed_for_public_item_removal(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Sneasel",
+                            ability="Keen Eye",
+                            moves=("Knock Off", "Tackle"),
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Alakazam",
+                            ability="Synchronize",
+                            item="Leftovers",
+                            moves=("Harden",),
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=223, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            self.assertIn(
+                "item-state-removed:Alakazam",
+                payload["sides"]["p2"]["materializationBlockers"],
+            )
+            with self.assertRaisesRegex(LocalShowdownError, "item-state-removed:Alakazam"):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=223,
+                )
+
+    def test_public_materialization_fails_closed_for_unconfirmed_item_mutation(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Sneasel",
+                            ability="Keen Eye",
+                            moves=("Thief", "Tackle"),
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Alakazam",
+                            ability="Synchronize",
+                            item="Leftovers",
+                            moves=("Harden",),
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=227, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+
+            self.assertIn(
+                "item-state-unconfirmed:Sneasel",
+                payload["sides"]["p1"]["materializationBlockers"],
+            )
+            self.assertIn(
+                "item-state-unconfirmed:Alakazam",
+                payload["sides"]["p2"]["materializationBlockers"],
+            )
+            with self.assertRaisesRegex(LocalShowdownError, "item-state-unconfirmed:Sneasel"):
+                search_env.materialize_public_world(
+                    state=materialization,
+                    start_override=start_override,
+                    seed=227,
+                )
+
     def test_public_materialization_fails_closed_for_volatile_without_complete_public_state(self) -> None:
         config = integration_config()
         assert config is not None
@@ -1116,6 +1318,24 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         config = integration_config()
         assert config is not None
         cases = (
+            (
+                "flashfire",
+                73,
+                FixturePokemon(
+                    species="Houndoom",
+                    ability="Flash Fire",
+                    moves=("Harden", "Ember"),
+                ),
+                FixturePokemon(
+                    species="Charmander",
+                    ability="Blaze",
+                    moves=("Ember", "Harden"),
+                ),
+                {"p1": 0, "p2": 0},
+                {"p1": 1, "p2": 1},
+                "p2",
+                "lower",
+            ),
             (
                 "focusenergy",
                 2,

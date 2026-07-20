@@ -19,6 +19,17 @@ decisions conditional on V3 results. V2 measurements remain useful on their
 own terms, and any later cross-engine comparison must be an explicitly scoped
 experiment with its own paired evaluation.
 
+### Scope freeze (2026-07-19)
+
+V2 is now in maintenance. Its diagnostic record is sufficient to retire further
+throughput work on this implementation: no W2 curve relaunch, player-view
+splitting, batching expansion, or snapshot/bridge optimization is planned.
+Those questions price a substrate that is no longer the project’s forward search
+path. The only remaining V2 measurement is the pre-registered W3 frontier
+comparison below. After its durable result is recorded, V2 accepts only
+correctness and fail-closed materialization bug fixes. This is not evidence
+about, or a dependency on, the separately owned V3 workstream.
+
 ## Established results
 
 - **Search works.** Root-PUCT-120 + frozen isotonic leaf, fallback enabled, 1M
@@ -71,6 +82,11 @@ experiment with its own paired evaluation.
 
 ### W1 — Fix opponent-scenario legality
 
+**Disposition:** closed as an optimization workstream. The known
+direct-materialization correctness walls were fixed in the shared belief
+planner; remaining branch-legality fallback is a residual V2 limitation, not a
+reason to restart the retired W1 program.
+
 The illegal-scenario wall blocks pure search and silently caps current
 strength. In order:
 
@@ -100,43 +116,40 @@ strength. In order:
    Deliverable: **winrate vs seconds-per-turn curve** and its knee — "how far
    can we reasonably search" answered in points, not visits.
 
-**Execution status (2026-07-20):** the first two frontier W2 Jobs were
-intentionally retired before completion. They predated the validated CPU-thread
-and adaptive-batching W5 configuration, so their multi-hour partial rows are
-not the fast-path curve and must not select W3's knee. Their persisted artifacts
-remain diagnostic-only. The replacement five-point curve is now running with
-the validated strict direct-materialization, initial/adaptive-batched,
-adaptive-branch-reuse, eight-thread CPU profile. It uses fresh non-reserved
-probe seeds, the final 3M checkpoint, and its checkpoint-matched frozen leaf;
-the matching marker-backed W3 controller remains downstream of its selected
-knee.
+**Disposition:** canceled by the V2 scope freeze. The early frontier jobs
+remain diagnostic-only, and the replacement five-point curve will not be
+launched. The validated CPU-only direct-materialization profile supplies the
+fixed extra-120 operating point for W3; it does not select a new W2 knee.
 
 ### W3 — Frontier small checkpoint (v2.2 @ 3M)
 
-**Current readiness (2026-07-18):** `emeta-v2-2-lr3m-3m-belief` continued from
+**Current readiness (2026-07-19):** `emeta-v2-2-lr3m-3m-belief` continued from
 2M to 3,000,000 total games and produced its frontier checkpoint at iteration
 625. It is the current final-checkpoint candidate. Its checkpoint-matched Step-0
 capture/refit completed and selected an isotonic value leaf: Pearson `0.593`,
 sign accuracy `0.773`, and ECE `0.143`. The ranking and sign gates pass; the ECE
 miss is recorded as the plan's documented-proceed outcome rather than a clean
-calibration pass. The pre-tuned matching W2 Jobs and their waiting W3
-controllers were retired before producing a curve; the replacement W2 run must
-use the validated W5 fast-path configuration. A marker-backed W3 controller
-will submit the paired frontier read from that resulting knee. No frontier
-paired-search result has been claimed yet.
+calibration pass. The retired W2 curve does not gate this read. A persistent,
+CPU-only W3 job is submitted at the standard extra-120 operating point with
+strict direct materialization, the frozen leaf, and 200 paired FoulPlay seeds.
+Its result is the final V2 strength number; no frontier paired-search result is
+claimed until that job writes its complete marker.
 
 1. **Refit the value leaf first** (Step-0 refit on the frontier checkpoint).
    A 1M-fitted isotonic map on a 3M value head confounds the read — the one
    prerequisite kept from the old program.
-2. Paired baseline at the W2 knee budget: raw vs search at the frontier after
-   the checkpoint-matched leaf passes its gate.
+2. Paired baseline at the fixed extra-120 operating point: raw vs search at the
+   frontier after the checkpoint-matched leaf passes its gate.
    Deliverable: does a stronger prior shrink search's edge (1M vs frontier
    delta comparison)?
-3. If a later final checkpoint is designated, re-point the same capture,
-   refit, and paired-read commands at that checkpoint rather than reusing this
-   leaf. Those numbers feed final-checkpoint designation.
+3. This is the final V2 frontier read. A later checkpoint requires a separately
+   scoped experiment; it must not silently extend this plan.
 
 ### W4 — Search cost at M (50M) and L (200M) scale
+
+**Disposition:** canceled by the V2 scope freeze. The initial cost probe is
+retained as historical diagnostics only; no new M/L measurements or GPU-backed
+V2 runners will be launched.
 
 1. Per-decision search cost with M and L checkpoints on the validated W5
    direct-materialization, initial/adaptive-batched, adaptive-branch-reuse
@@ -316,15 +329,58 @@ Deferred: tree reuse, early termination, vectorized stepping, and the multi-ply
 question — all get re-priced after the adaptive-batching probe has a durable
 result. Success remains **more winrate at fixed wall-clock**, not more visits.
 
-## Order and cost
+**Scope-freeze disposition:** the direct-materialization implementation and
+its bounded validation are retained, but no further W5 performance work is
+authorized. In particular, player-view splitting, additional batching, and
+one-round-trip snapshot candidates are canceled. The strict anti-leakage and
+fail-closed constraints remain production requirements for future V2 bug fixes.
 
-W5 (materialization redesign) is now first — W1's diagnosis and W4's cost
-table are complete and both point at it. The previous W2 runs were retired
-because they were not using the validated W5 fast path; W2 resumes from a fresh
-configuration after the current bounded telemetry selects its next target, and
-W3 follows that curve. Every strength
-claim uses the paired harness, both arms on shared seeds; no strength claims
-from unpaired or single-arm runs.
+## V2 disposition
+
+### Landed
+
+- Direct public-world materialization replaced replay-from-root on the V2
+  primary path. The strict checks retain the anti-leakage invariant: they never
+  serialize a live battle.
+- The CPU-only fast-path profile established a practical fixed W3 operating
+  point: eight Torch threads, strict direct reconstruction, initial/adaptive
+  value batching, and adaptive branch reuse. It reserves no GPU.
+- The shared belief planner now covers the remaining known public-world walls:
+  audited post-Trick current items are applied to reconstructed Pokemon,
+  request-state flags remain represented, and Flash Fire is retained as a
+  public static volatile. Removed, ambiguous, or unaudited item mutations fail
+  closed instead of silently reconstructing a stale item state. Focused paired
+  tests prove that omitting the audited current item changes reconstructed
+  mechanics.
+- The 3M checkpoint has a checkpoint-matched frozen isotonic leaf. Its
+  documented-proceed calibration result is Pearson `0.593`, sign accuracy
+  `0.773`, and ECE `0.143`.
+
+### Canceled
+
+- The W2 five-budget curve and W2 knee selection.
+- W4 M/L-scale profiling and any GPU-backed V2 evaluator expansion.
+- Further W5 throughput changes, including player-view splitting, batching
+  expansion, and bridge/snapshot round-trip work.
+- New W1 taxonomy or scenario-legality optimization campaigns.
+
+### Final pending read
+
+The sole remaining V2 deliverable is the submitted W3 raw-versus-refitted-leaf
+comparison at extra 120 on 200 paired FoulPlay seeds. It is a paired,
+non-binding V2 frontier result. The final update must record its result and
+confidence interval from the immutable completion artifact; it must not infer a
+strength claim from mechanics telemetry or partial rows.
+
+### Residual known issues
+
+- Search remains one-ply and may fall back when a public belief world cannot be
+  materialized or an opponent-action scenario is illegal. Those cases must stay
+  explicit in telemetry and fail closed where public state is insufficient.
+- The frozen leaf's ECE remains above the original clean-calibration target;
+  every result using it carries the documented-proceed caveat.
+- V2 is maintenance-only after W3. Any future search redesign or engine
+  comparison needs a separately owned plan and fresh evidence.
 
 ## Retired from the previous plan
 

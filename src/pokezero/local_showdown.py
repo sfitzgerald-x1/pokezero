@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
-from .belief import PublicBattleBeliefEngine
+from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
@@ -1652,19 +1652,24 @@ def _public_materialization_payload(
 ) -> dict[str, Any]:
     replay = state.replay
     sides: dict[PlayerId, dict[str, Any]] = {}
+    belief_snapshot = state.belief_engine.snapshot()
     for player in PLAYER_IDS:
         rows = (
             _request_materialization_rows(state.self_request, self_move_states=state.self_move_states)
             if player == state.player_id
             else [_pokemon_materialization_row(pokemon) for pokemon in replay.public_revealed.get(player, ())]
         )
+        blockers = set(replay.direct_materialization_blockers.get(player, ()))
+        _apply_public_item_materialization_state(
+            rows,
+            belief_snapshot.side(player),
+            blockers,
+        )
         sides[player] = {
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
-            "materializationBlockers": list(
-                replay.direct_materialization_blockers.get(player, ())
-            ),
+            "materializationBlockers": sorted(blockers),
             # The parser's observation feature advances the toxic value at a new turn. The
             # simulator state at the request boundary is one residual behind that feature.
             "toxicStage": _materialization_toxic_stage(replay, player),
@@ -1793,6 +1798,49 @@ def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
         "condition": pokemon.condition,
         "active": pokemon.active,
     }
+
+
+def _apply_public_item_materialization_state(
+    rows: list[dict[str, Any]],
+    beliefs: Sequence[RevealedPokemonBelief],
+    blockers: set[str],
+) -> None:
+    """Attach only protocol-confirmed live item state to direct-world rows.
+
+    A sampled set's item describes the battle-start assignment. Trick can publicly replace
+    that item later, so starting the sampled world alone silently recreates the old holder.
+    The belief engine records an audited ``current_public_item`` only for the corresponding
+    protocol surface. Removals and unaudited mutations intentionally remain blockers: this
+    constructor has no complete item-history representation, and guessing would create a
+    mechanically false world.
+    """
+
+    rows_by_species: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        species = row.get("species")
+        if isinstance(species, str):
+            rows_by_species.setdefault(_materialization_identifier(species), []).append(row)
+
+    for belief in beliefs:
+        if not (belief.item_mutated or belief.item_removed):
+            continue
+        species = belief.species
+        matching_rows = rows_by_species.get(_materialization_identifier(species), ())
+        if len(matching_rows) != 1:
+            blockers.add(f"item-state-ambiguous:{species or 'unknown'}")
+            continue
+        if belief.item_removed:
+            blockers.add(f"item-state-removed:{species}")
+            continue
+        current_item = belief.current_public_item
+        if not isinstance(current_item, str) or not current_item.strip():
+            blockers.add(f"item-state-unconfirmed:{species}")
+            continue
+        matching_rows[0]["currentItem"] = current_item
+
+
+def _materialization_identifier(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def _request_materialization_rows(

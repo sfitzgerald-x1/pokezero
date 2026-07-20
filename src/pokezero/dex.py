@@ -360,15 +360,26 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
 
 _HP_BASE_POWER_LOW = frozenset({"reversal", "flail"})  # low user HP -> high base power
 _HP_BASE_POWER_HIGH = frozenset({"eruption", "waterspout"})  # high user HP -> high base power
+# Happiness-variable moves. Return = floor(happiness / 2.5); Frustration = floor((255 - happiness)
+# / 2.5) or 1. Their static dex base power is a 0 placeholder (Showdown computes the value from
+# happiness at battle time). The Gen 3 randbats generator never sets happiness, so it stays at the
+# engine default 255 for every mon -> Return is always 102, Frustration always 1 (the Showdown
+# request even spells the resolved power in the display name, e.g. "Return 102"). Resolving the
+# constant here fixes the 0-power feed on the acting mon's action token (and any other consumer).
+_HAPPINESS_BASE_POWER = {"return": 102, "frustration": 1}
 
 
 def resolve_move_base_power(move: "MoveInfo", user_hp_fraction: float | None = None) -> int:
-    """Base power, resolving HP-variable moves from the user's current HP fraction at encode time.
+    """Base power, resolving variable-power moves at encode time.
 
     Reversal/Flail scale inversely with the user's remaining HP (Gen 3 breakpoints on 48*HP/maxHP);
-    Eruption/Water Spout scale directly (150*HP/maxHP). Their static dex base power is 0, so without
-    this they would mislead the model. All other moves return their fixed base power.
+    Eruption/Water Spout scale directly (150*HP/maxHP). Return/Frustration scale with happiness,
+    which Gen 3 randbats leaves at the default 255 (-> 102 / 1). All of these carry a static dex base
+    power of 0, so without this they would mislead the model. All other moves return fixed base power.
     """
+    happiness_power = _HAPPINESS_BASE_POWER.get(move.id)
+    if happiness_power is not None:
+        return happiness_power
     if user_hp_fraction is None:
         return move.base_power
     fraction = max(0.0, min(1.0, user_hp_fraction))

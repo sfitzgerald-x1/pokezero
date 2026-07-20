@@ -45,9 +45,10 @@ _EVS = {s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")}
 
 
 def _mon(species: str, moves: Sequence[str], *, ability: str, item: str = "Leftovers",
-         level: int = 80, ivs: Mapping[str, int] | None = None) -> FixturePokemon:
+         level: int = 80, ivs: Mapping[str, int] | None = None,
+         gender: str | None = None) -> FixturePokemon:
     return FixturePokemon(species=species, moves=tuple(moves), ability=ability,
-                          item=item, level=level, evs=dict(_EVS), ivs=ivs)
+                          item=item, level=level, evs=dict(_EVS), ivs=ivs, gender=gender)
 
 
 @dataclass(frozen=True)
@@ -296,6 +297,31 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
                   ability="Immunity", item="Chesto Berry"), blissey),
             p1_prefs=(("earthquake",),),
             p2_prefs=(("curse",), ("rest",), ("bodyslam",), ("rest",), ("bodyslam",), ("rest",)),
+        ),
+        # --- Attract (infatuation) 50%-per-turn move immobilization
+        # (third_party/poke-engine-gen3-attract.patch; walls audit 2026-07-19).
+        # The fallback sweep drives p1 with the engine-search policy, so the
+        # ATTRACT-carrying mon must sit on p1 for its volatile to reach the
+        # search seat's world construction (pre-fix this walled every attracted
+        # decision with ``volatile_unsupported: attract``). Blissey is
+        # female-only and bulky, so the infatuation is gender-valid and the
+        # source survives to keep the volatile live. Genders are pinned (Custom
+        # Game does not enforce randbats gender ratios) so Attract never fails
+        # the ``onTryImmunity`` opposite-gender gate. One game exercises BOTH
+        # branches the search must price: r1 p2 casts Attract -> r2 p1 decision
+        # carries a FREE attract; r2 p2 casts Thunder Wave -> r3+ p1 decisions
+        # carry the PARALYSIS + attract composition (net move prob 0.75*0.5,
+        # commutative with Showdown's attract-before-par onBeforeMove order).
+        ScenarioSpec(
+            "attract_snorlax",
+            (_mon("Snorlax", ("Body Slam", "Curse", "Rest", "Shadow Ball"),
+                  ability="Immunity", gender="M"), swampert),
+            (_mon("Blissey", ("Attract", "Thunder Wave", "Soft-Boiled", "Seismic Toss"),
+                  ability="Natural Cure", gender="F"), blissey),
+            p1_prefs=(("curse",), ("bodyslam",)),
+            p2_prefs=(("attract",), ("thunderwave",), ("softboiled",)),
+            seed=91011,
+            max_decision_rounds=5,
         ),
     )
 

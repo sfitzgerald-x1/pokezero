@@ -607,6 +607,15 @@ impl<'a> MonToken<'a> {
     fn details(&self) -> Option<&str> {
         as_str(get(self.entry, "details"))
     }
+    /// The mon's own request-side move ids (`ShowdownPokemon.moves`) — the fallback source for
+    /// resolving generic Hidden Power's typed variant ("hiddenpowerice", ...); see
+    /// `self_move_mechanics_id`.
+    fn moves(&self) -> Vec<String> {
+        as_array(get(self.entry, "moves"))
+            .iter()
+            .map(str_or_empty)
+            .collect()
+    }
     fn ability(&self) -> Option<&str> {
         as_str(get(self.entry, "ability"))
     }
@@ -1646,6 +1655,11 @@ fn encode_pokemon_tokens(
 /// — the mirror of `golden_encoder_backends._synthesized_request`.
 struct RequestMove {
     name: String,
+    /// The request's display move name (`move` field, e.g. "Hidden Power Fighting 70"), the
+    /// authoritative source for resolving generic Hidden Power's typed variant. The golden-corpus
+    /// materialization omits it (only id/pp/maxpp/disabled), so it is usually None and resolution
+    /// falls back to the mon's own typed move id; see `self_move_mechanics_id`.
+    display: Option<String>,
     disabled: bool,
     pp_fraction: Option<f64>,
 }
@@ -1681,12 +1695,14 @@ fn request_moves(md: &Value, pm: &Value) -> Vec<RequestMove> {
                 };
                 moves.push(RequestMove {
                     name: str_or_empty(get(entry, "id")),
+                    display: as_str(get(entry, "move")).map(str::to_string),
                     disabled: as_bool(get(entry, "disabled")),
                     pp_fraction,
                 });
             }
             None => moves.push(RequestMove {
                 name: move_name,
+                display: None,
                 disabled: as_bool(get(candidate, "disabled")),
                 pp_fraction: None,
             }),
@@ -1696,7 +1712,20 @@ fn request_moves(md: &Value, pm: &Value) -> Vec<RequestMove> {
 }
 
 /// `dex.resolve_move_base_power`.
+///
+/// Return/Frustration scale with happiness, which gen3 randbats leaves at the engine default 255
+/// (-> 102 / 1). Their static dex base power is a 0 placeholder, so this resolves the constant at
+/// encode time, mirroring `dex._HAPPINESS_BASE_POWER` (checked FIRST, before the HP-fraction guard,
+/// exactly as Python does). This is deliberately NOT baked into the exported table: the raw
+/// `MoveEntry.base_power` field is also read as the static dex value by the tier2 `is_physical`
+/// heuristic (`info.base_power > 0`, mirroring showdown._is_physical_attack), which must stay 0 for
+/// Return to keep byte-parity with Python. See scripts/export_encoder_tables.py for the split.
 fn resolve_move_base_power(info: &MoveEntry, user_hp_fraction: Option<f64>) -> i64 {
+    match info.id.as_str() {
+        "return" => return 102,
+        "frustration" => return 1,
+        _ => {}
+    }
     let Some(fraction) = user_hp_fraction else {
         return info.base_power;
     };
@@ -1736,6 +1765,51 @@ fn resolve_move_effect(info: &MoveEntry, user_types: &[String]) -> (String, i64,
         info.effect_chance,
         info.self_hp_cost,
     )
+}
+
+/// `showdown._HIDDEN_POWER_TYPES`: the 16 gen3 Hidden Power types.
+const HIDDEN_POWER_TYPES: [&str; 16] = [
+    "bug", "dark", "dragon", "electric", "fighting", "fire", "flying", "ghost", "grass", "ground",
+    "ice", "poison", "psychic", "rock", "steel", "water",
+];
+
+/// `showdown._hidden_power_variant_from_name`: typed Hidden Power id from a request's display name.
+/// "Hidden Power Fighting 70" -> "hiddenpowerfighting". None if no recognizable HP type is present.
+fn hidden_power_variant_from_name(display_name: Option<&str>) -> Option<String> {
+    let lowered = display_name?.to_lowercase();
+    // Mirror re.findall(r"[a-z]+", ...): scan maximal runs of ascii lowercase letters.
+    for token in lowered.split(|c: char| !c.is_ascii_lowercase()) {
+        if !token.is_empty() && HIDDEN_POWER_TYPES.contains(&token) {
+            return Some(format!("hiddenpower{token}"));
+        }
+    }
+    None
+}
+
+/// `showdown._self_move_mechanics_id`: the move id to look up for SELF action-token MECHANICS
+/// (type / base power / damage class).
+///
+/// Hidden Power's request keys `id` to the generic family ("hiddenpower"), whose dex entry is a
+/// 0-power Normal placeholder. The real typed identity is self-observable: authoritatively from the
+/// display `move` field ("Hidden Power Fighting 70"), and, as a fallback, from the mon's own typed
+/// move id in the request side list ("hiddenpowerice", which Showdown derives from its IVs). Resolve
+/// the typed variant for the mechanics lookup ONLY; the action token's move IDENTITY
+/// (CATEGORY_PRIMARY = `move:hiddenpower`) stays generic and checkpoint-stable. Every non-Hidden
+/// Power move passes straight through.
+fn self_move_mechanics_id(entry: &RequestMove, own_move_ids: &[String]) -> String {
+    if normalize_identifier(&entry.name) != "hiddenpower" {
+        return entry.name.clone();
+    }
+    if let Some(typed) = hidden_power_variant_from_name(entry.display.as_deref()) {
+        return typed;
+    }
+    for candidate in own_move_ids {
+        let normalized = normalize_identifier(candidate);
+        if normalized.starts_with("hiddenpower") && normalized.len() > "hiddenpower".len() {
+            return normalized;
+        }
+    }
+    entry.name.clone()
 }
 
 fn encode_move_mechanics(
@@ -1824,6 +1898,9 @@ fn encode_action_tokens(
         .unwrap_or_default();
     let user_hp_fraction =
         active.and_then(|mon| condition_features(mon.condition()).hp_fraction);
+    // The acting mon's own typed move ids ("hiddenpowerice", ...) — the request-side fallback for
+    // resolving generic Hidden Power's real type/base power (see self_move_mechanics_id).
+    let own_move_ids: Vec<String> = active.map(|mon| mon.moves()).unwrap_or_default();
 
     for move_index in 0..layout.move_action_count {
         let token = action_offset + move_index;
@@ -1845,7 +1922,18 @@ fn encode_action_tokens(
             format!("move_slot:{}", move_index + 1),
         );
         if let Some(entry) = entry {
-            encode_move_mechanics(tables, grid, token, &entry.name, &user_types, user_hp_fraction)?;
+            // Identity (CATEGORY_PRIMARY above) stays generic; only the MECHANICS lookup resolves
+            // Hidden Power's typed variant so its true type / base power / damage class land on the
+            // acting mon's decision surface.
+            let mechanics_name = self_move_mechanics_id(entry, &own_move_ids);
+            encode_move_mechanics(
+                tables,
+                grid,
+                token,
+                &mechanics_name,
+                &user_types,
+                user_hp_fraction,
+            )?;
             grid.set_num(
                 token,
                 layout.num_col("NUMERIC_MOVE_PP_FRACTION")?,

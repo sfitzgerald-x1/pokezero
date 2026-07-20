@@ -20,6 +20,7 @@ gated on a poke-engine root-option export).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
 from .poke_engine_backend import (
@@ -36,6 +37,15 @@ TYPE_SLOTS = 2
 
 # Module attributes the adapter needs to construct a state.
 ADAPTER_CONSTRUCTION_API = ("State", "Side", "Pokemon", "Move")
+
+
+class PokeEngineAttractUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a state needs Attract but the native patch is absent.
+
+    Upstream accepts the volatile token while silently omitting its Gen 3
+    immobilization branch. Treating that as a supported state would make search
+    optimistically price every attracted turn, so construction must fail closed.
+    """
 
 
 @dataclass(frozen=True)
@@ -190,6 +200,15 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
     if missing:
         raise PokeEngineUnavailableError("Missing construction API: " + ", ".join(missing))
 
+    if _spec_requires_attract(spec):
+        _require_attract_immobilization(engine)
+
+    return _build_poke_engine_state_unchecked(spec, engine)
+
+
+def _build_poke_engine_state_unchecked(spec: BattleSpec, engine: Any) -> Any:
+    """Build a state after any mechanic-specific capability checks have run."""
+
     side_one = _build_side(engine, spec.side_one, "side_one")
     side_two = _build_side(engine, spec.side_two, "side_two")
 
@@ -208,6 +227,106 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
             spec.weather_turns_remaining, "weather_turns_remaining"
         )
     return engine.State(**kwargs)
+
+
+def _spec_requires_attract(spec: BattleSpec) -> bool:
+    return any(
+        str(volatile).casefold() == "attract"
+        for side in (spec.side_one, spec.side_two)
+        for volatile in side.volatile_statuses
+    )
+
+
+def _require_attract_immobilization(engine: Any) -> None:
+    """Prove that the installed binding has the Gen 3 Attract patch.
+
+    There is no binding-level version marker for this local patch. Exercise the
+    exact adapter rendering instead: an attracted Swords Dance user must split
+    into equal move and immobilization branches. The result is cached per
+    module, so a search decision never repeats the probe for each sampled world.
+    """
+
+    try:
+        supported = _cached_attract_immobilization_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable. They remain safe to probe;
+        # production extension modules are hashable and use the cache above.
+        supported = _attract_immobilization_supported(engine)
+    if not supported:
+        raise PokeEngineAttractUnsupportedError(
+            "Attract requires the patched poke-engine wheel; the installed engine did not "
+            "produce the required Gen 3 50/50 immobilization branches. Rebuild with "
+            "third_party/poke-engine-gen3-attract.patch."
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_attract_immobilization_supported(engine: Any) -> bool:
+    return _attract_immobilization_supported(engine)
+
+
+def _attract_immobilization_supported(engine: Any) -> bool:
+    """Return whether a minimal adapter-rendered Attract state branches 50/50."""
+
+    generate = getattr(engine, "generate_instructions", None)
+    if not callable(generate):
+        return False
+    try:
+        state = _build_poke_engine_state_unchecked(_attract_probe_spec(), engine)
+        branches = tuple(generate(state, "swordsdance", "splash"))
+        total = sum(float(branch.percentage) for branch in branches)
+        moved = sum(
+            float(branch.percentage)
+            for branch in branches
+            if any("Boost SideOne" in str(instruction) for instruction in branch.instruction_list)
+        )
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
+    immobilized = total - moved
+    return (
+        abs(total - 100.0) < 1e-6
+        and abs(moved - 50.0) < 1e-6
+        and abs(immobilized - 50.0) < 1e-6
+    )
+
+
+def _attract_probe_spec() -> BattleSpec:
+    """A deterministic move whose only missing branch is Attract immobilization."""
+
+    snorlax = PokemonSpec(
+        id="snorlax",
+        level=80,
+        types=("normal",),
+        hp=300,
+        maxhp=300,
+        attack=180,
+        defense=180,
+        special_attack=180,
+        special_defense=180,
+        speed=120,
+        ability="innerfocus",
+        item="none",
+        moves=(MoveSpec(id="swordsdance", pp=16), MoveSpec(id="bodyslam", pp=16)),
+    )
+    wobbuffet = PokemonSpec(
+        id="wobbuffet",
+        level=80,
+        types=("psychic",),
+        hp=300,
+        maxhp=300,
+        attack=180,
+        defense=180,
+        special_attack=180,
+        special_defense=180,
+        speed=120,
+        ability="shadowtag",
+        item="none",
+        moves=(MoveSpec(id="splash", pp=16), MoveSpec(id="tackle", pp=16)),
+    )
+    return BattleSpec(
+        side_one=SideSpec(pokemon=(snorlax,), volatile_statuses=("attract",)),
+        side_two=SideSpec(pokemon=(wobbuffet,)),
+    )
 
 
 def _build_side(engine: Any, side: SideSpec, path: str) -> Any:

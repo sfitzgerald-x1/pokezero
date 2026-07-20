@@ -92,6 +92,12 @@ class RevealedPokemonBelief:
     # marks Rest self-sleep (wake deterministic modulo Early Bird candidates).
     sleep_turns: int = 0
     rest_sleep: bool = False
+    # gen3 sleep ``skippedTime``: the count of TRAILING contiguous Sleep-Talk/Snore (``sleepUsable``)
+    # turns immediately before this mon last switched out. Those turns did not advance the wake
+    # timer once the mon returns — gen3 refunds them on switch-in (``time += skippedTime``) — so
+    # ``_on_switch_in`` subtracts this from ``sleep_turns``. Resets to 0 on a non-sleepUsable sleep
+    # turn (matching the sim) and on switch-in (once consumed).
+    sleep_skipped_turns: int = 0
     # Turns this mon has been active in its current stint (reset on entry).
     turns_active: int = 0
     # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries). Frozen once the
@@ -149,6 +155,7 @@ class RevealedPokemonBelief:
             "move_uses": [list(pair) for pair in self.move_uses],
             "sleep_turns": self.sleep_turns,
             "rest_sleep": self.rest_sleep,
+            "sleep_skipped_turns": self.sleep_skipped_turns,
             "turns_active": self.turns_active,
             "ruled_out_items": list(self.ruled_out_items),
             "item_mutated": self.item_mutated,
@@ -356,6 +363,10 @@ class PublicBattleBeliefEngine:
         # Rest wake — so this set suppresses the false Early Bird pin (Fix C). The
         # ``-activate`` precedes its ``-curestatus`` in the same residual phase.
         self._shed_skin_activated_this_turn: set[str] = set()
+        # Belief keys with an unresolved ``|cant|…|slp`` this turn — awaiting a following
+        # ``sleepUsable`` (Sleep Talk / Snore) move that would mark the turn as ``skippedTime``.
+        # Any key still unresolved at ``|upkeep|`` was a plain sleep turn, which resets skip to 0.
+        self._sleep_cant_pending: set[str] = set()
         self._hp_after_actions: dict[str, Optional[float]] = {}
         # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
         self._pending_mudshot: Optional[dict[str, Any]] = None
@@ -441,6 +452,20 @@ class PublicBattleBeliefEngine:
                 belief = self._upsert(showdown_slot=actor_slot, species=species)
                 move_id = _normalize_identifier(str(primary))
                 caller = _called_move_source(raw_line)
+                # gen3 ``skippedTime``: a mon that ``|cant|…|slp``s this turn but still MOVES did
+                # so via a ``sleepUsable`` move (Sleep Talk / Snore are the only ones that let a
+                # sleeping mon act). That turn does not count toward waking once it pivots, so
+                # accumulate it here; the following ``[from] Sleep Talk`` called move (caller set)
+                # is not a fresh selection and must not double-count.
+                if (
+                    caller is None
+                    and move_id in _SLEEP_USABLE_MOVES
+                    and belief.key in self._sleep_cant_pending
+                ):
+                    self._sleep_cant_pending.discard(belief.key)
+                    belief = self._replace_belief(
+                        belief, sleep_skipped_turns=belief.sleep_skipped_turns + 1
+                    )
                 if move_id in {"healbell", "aromatherapy"}:
                     self._cure_all_count[actor_slot] = self._cure_all_count.get(actor_slot, 0) + 1
                 if move_id == "mudshot":
@@ -457,15 +482,28 @@ class PublicBattleBeliefEngine:
                 # discarded on switch-out — never the real set's ledger); Struggle has no PP.
                 if belief.transformed:
                     return
-                if caller in _CALLER_MOVES:
+                # Sleep Talk (unlike Metronome/Assist/Nature Power/...) can only call the mon's OWN
+                # set members, so the executed callee is a GENUINE reveal even though it spends no PP
+                # of its own. The other _CALLER_MOVES call random, non-set moves — those never reveal.
+                sleep_talk_called = caller == "sleeptalk"
+                if caller in _CALLER_MOVES and not sleep_talk_called:
                     # The called execution spends no PP of its own; the caller was already
                     # charged on its own |move| line (Showdown always emits it first).
                     return
-                if _called_move_source(raw_line) == "lockedmove":
+                if caller == "lockedmove":
                     # Locked continuations (Solar Beam release) already paid on initiation.
                     # _called_move_source normalizes both the spaced and unspaced [from] forms.
                     return
-                if move_id != "struggle":
+                if move_id == "struggle":
+                    # Struggle is a forced pseudo-move, never a set member (cf. showdown.py's
+                    # exclusion from the determinized move list). Recording it as revealed makes the
+                    # belief inconsistent with every real variant, collapsing the mon to the
+                    # max-entropy fallback (full pool, uncertainty 1.0) and wiping a hard-won endgame
+                    # read for the rest of the game. It spends none of the mon's own PP either.
+                    return
+                # A Sleep-Talk-called move spends none of the callee's PP (the Sleep Talk |move| line
+                # already charged the caller); everything else that reaches here charges normally.
+                if not sleep_talk_called:
                     foe_targeted = bool(target_slot) and target_slot != actor_slot
                     belief = self._charge_move_use(belief, move_id, foe_targeted=foe_targeted)
                 revealed_moves = _append_unique(belief.revealed_moves, str(primary))
@@ -523,6 +561,9 @@ class PublicBattleBeliefEngine:
                 if status_value == "slp":
                     changes["sleep_turns"] = 0
                     changes["rest_sleep"] = rest
+                    # gen3 ``slp.onStart`` sets ``skippedTime = 0`` — a fresh sleep never inherits a
+                    # prior stint's Sleep-Talk refund.
+                    changes["sleep_skipped_turns"] = 0
                     # Sleep Clause Mod engages only for opponent-inflicted sleep (never Rest,
                     # never Synchronize-style reflections, which carry a [from] ability tag).
                     if not rest and not (raw_line and "[from] ability:" in raw_line):
@@ -574,7 +615,9 @@ class PublicBattleBeliefEngine:
                             ),
                         )
                 self._clear_sleep_clause_for(belief)
-                self._replace_belief(belief, status=None, sleep_turns=0, rest_sleep=False)
+                self._replace_belief(
+                    belief, status=None, sleep_turns=0, rest_sleep=False, sleep_skipped_turns=0
+                )
             return
 
         if event_type == "cant" and raw_line and "|slp" in raw_line:
@@ -588,6 +631,10 @@ class PublicBattleBeliefEngine:
                 if species:
                     belief = self._upsert(showdown_slot=cant_slot, species=species)
                     self._replace_belief(belief, sleep_turns=belief.sleep_turns + 1)
+                    # Mark the cant unresolved: a following Sleep-Talk/Snore ``|move|`` this turn
+                    # reclassifies it as a ``skippedTime`` turn; otherwise ``|upkeep|`` clears it as
+                    # a plain (skip-resetting) sleep turn.
+                    self._sleep_cant_pending.add(belief.key)
             return
 
         if event_type == "faint" and target_slot:
@@ -629,6 +676,14 @@ class PublicBattleBeliefEngine:
             # end-of-turn non-proc pruning runs here with this turn's proc sets fully populated.
             self._sweep_end_of_turn_non_procs()
             self._resolve_pending_mudshot()
+            # A ``|cant|…|slp`` still unresolved at upkeep saw no ``sleepUsable`` move this turn: a
+            # plain sleep turn, which resets ``skippedTime`` to 0 in the sim (only a trailing run of
+            # Sleep-Talk/Snore turns is refundable on the next pivot).
+            for pending_key in self._sleep_cant_pending:
+                belief = self._belief_by_key(pending_key)
+                if belief is not None and belief.sleep_skipped_turns:
+                    self._replace_belief(belief, sleep_skipped_turns=0)
+            self._sleep_cant_pending = set()
             self._leftovers_healed_this_turn = set()
             self._berry_ate_this_turn = set()
             self._shed_skin_activated_this_turn = set()
@@ -796,6 +851,7 @@ class PublicBattleBeliefEngine:
         twin._hp_after_actions = dict(self._hp_after_actions)
         twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
         twin._shed_skin_activated_this_turn = set(self._shed_skin_activated_this_turn)
+        twin._sleep_cant_pending = set(self._sleep_cant_pending)
         twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
         return twin
 
@@ -960,6 +1016,13 @@ class PublicBattleBeliefEngine:
             changes["rest_sleep"] = False
         elif condition_status is not None:
             changes["status"] = condition_status
+            if condition_status == "slp":
+                # gen3 refunds the sleep turns spent on Sleep Talk / Snore before this pivot
+                # (``time += skippedTime`` in ``slp.onSwitchIn``): those turns did not advance the
+                # wake timer, so subtract them from the observed sleep count on re-entry.
+                changes["sleep_turns"] = max(0, belief.sleep_turns - belief.sleep_skipped_turns)
+        # skippedTime is consumed on switch-in in the sim; clear it regardless of the return status.
+        changes["sleep_skipped_turns"] = 0
         changes["status_on_exit"] = None
         changes["cure_all_count_on_exit"] = -1
         return self._replace_belief(belief, **changes)
@@ -1236,6 +1299,13 @@ class PublicBattleBeliefEngine:
             None,
         )
 
+    def _belief_by_key(self, key: str) -> RevealedPokemonBelief | None:
+        for side in self._sides.values():
+            for pokemon in side:
+                if pokemon.key == key:
+                    return pokemon
+        return None
+
 
 @dataclass(frozen=True)
 class _PendingSwitch:
@@ -1340,6 +1410,10 @@ def _event_value(event: Any, name: str) -> Optional[str]:
 _CALLER_MOVES = frozenset(
     {"metronome", "mirrormove", "sleeptalk", "assist", "naturepower", "copycat"}
 )
+
+# gen3 ``move.sleepUsable`` — the only moves a sleeping mon may execute (its ``|cant|…|slp`` still
+# fires first). Selecting one accrues ``skippedTime`` (see ``sleep_skipped_turns``).
+_SLEEP_USABLE_MOVES = frozenset({"sleeptalk", "snore"})
 
 
 _RESIDUAL_HP_TAGS = (

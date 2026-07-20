@@ -8,6 +8,7 @@ import unittest
 from pokezero.poke_engine_adapter import (
     BattleSpec,
     MoveSpec,
+    PokeEngineAttractUnsupportedError,
     PokemonSpec,
     SideSpec,
     build_poke_engine_state,
@@ -64,6 +65,13 @@ def fake_construction_module(*, instructions: list | None = None) -> ModuleType:
 
 def instruction(delta: str, percentage: float = 50.0) -> SimpleNamespace:
     return SimpleNamespace(delta=delta, percentage=percentage)
+
+
+def attract_branch(*, moved: bool, percentage: float = 50.0) -> SimpleNamespace:
+    """A minimal generate_instructions branch for the Attract patch probe."""
+
+    instructions = ("Boost SideOne",) if moved else ("CantMove",)
+    return SimpleNamespace(percentage=percentage, instruction_list=instructions)
 
 
 class BuildPokeEngineStateTest(unittest.TestCase):
@@ -314,6 +322,37 @@ class BuildPokeEngineStateValidationTest(unittest.TestCase):
         with self.assertRaises(PokeEngineUnavailableError) as ctx:
             build_poke_engine_state(self.base, module=engine)
         self.assertIn("Move", str(ctx.exception))
+
+
+class AttractPatchCapabilityTest(unittest.TestCase):
+    def _attracted_spec(self) -> BattleSpec:
+        base = minimal_gen3_fixture()
+        return replace(
+            base,
+            side_one=replace(base.side_one, volatile_statuses=("attract",)),
+        )
+
+    def test_attract_build_requires_a_real_immobilization_branch(self) -> None:
+        engine = fake_construction_module(
+            instructions=[
+                attract_branch(moved=True),
+                attract_branch(moved=False),
+            ]
+        )
+
+        state = build_poke_engine_state(self._attracted_spec(), module=engine)
+
+        self.assertEqual(state.kwargs["side_one"].volatile_statuses, {"attract"})
+
+    def test_attract_build_fails_closed_when_engine_accepts_but_ignores_it(self) -> None:
+        engine = fake_construction_module(
+            instructions=[attract_branch(moved=True, percentage=100.0)]
+        )
+
+        with self.assertRaises(PokeEngineAttractUnsupportedError) as caught:
+            build_poke_engine_state(self._attracted_spec(), module=engine)
+
+        self.assertIn("patched poke-engine", str(caught.exception))
 
 
 class FakeModuleIsolationTest(unittest.TestCase):

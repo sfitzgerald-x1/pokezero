@@ -822,6 +822,9 @@ class _ReplayParser:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
             self.pending_baton_pass.discard(_slot_from_ident(parts[2]))
+        # Re-seed the toxic ramp from the PUBLIC end-of-turn residual BEFORE the condition update
+        # overwrites the pre-damage HP (needed to measure the residual's magnitude).
+        self._reseed_toxic_stage_from_residual(parts)
         _update_public_pokemon_condition(parts, self.public_active, self.public_revealed)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
@@ -837,6 +840,51 @@ class _ReplayParser:
         _flag_baton_pass(parts, self.pending_baton_pass)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _reseed_toxic_stage_from_residual(self, parts: Sequence[str]) -> None:
+        """Recover the badly-poisoned (tox) ramp stage from the PUBLIC end-of-turn toxic residual.
+
+        A ``tox`` mon that switches out has its counter reset to 0 (Gen 3, ``tox.onSwitchIn`` sets
+        ``effectState.stage = 0``); on re-entry the ``tox`` rides only the switch-line condition
+        string with no fresh ``|-status|``, so ``_update_toxic_stage`` never re-seeds and the
+        per-``|turn|`` escalation (gated on ``if stage``) can never lift it off 0 — the encoder
+        would emit the contradictory ``status:tox`` + ``toxic_stage == 0`` for the whole stint.
+
+        The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
+        ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
+        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …), so the observed residual
+        fraction gives ``stage = round(16 * damage / maxhp)``. Re-deriving here fixes the pivot,
+        the forced re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox``
+        (replay import / mid-battle observe start) uniformly, for both seats. Regular (non-badly)
+        poison also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the
+        residual's own status token, which is ``tox`` only for badly-poisoned mons.
+        """
+
+        if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
+            return
+        # The tox clock's residual is tagged exactly ``[from] psn`` (no ``[of]`` source field).
+        if not any(field.strip() == "[from] psn" for field in parts[4:]):
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.toxic_stage:
+            return
+        new_condition = parts[3]
+        # Only a BADLY-poisoned residual ramps; a plain ``psn`` residual carries no ``tox`` token.
+        if "tox" not in new_condition.split():
+            return
+        active = self.public_active.get(slot)
+        prev_condition = active.condition if active is not None and active.ident == parts[2] else None
+        prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
+        cur_hp, cur_max = _hp_numerator_denominator(new_condition)
+        max_hp = prev_max or cur_max
+        if prev_hp is None or cur_hp is None or not max_hp:
+            return
+        damage = prev_hp - cur_hp
+        if damage <= 0:
+            return
+        # round(16 * damage_fraction) recovers the sim's stage for every reachable stage (1..14;
+        # a mon never survives to stage 15). Clamp to [1, 15]: a tox residual is always >= stage 1.
+        self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -1908,6 +1956,23 @@ def _max_hp_from_condition(condition: str | None) -> int | None:
     return int(denominator) if denominator.isdigit() and int(denominator) > 0 else None
 
 
+def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | None]:
+    """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
+
+    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``); the
+    caller derives the toxic-residual fraction from the pair, so either scale recovers the stage.
+    """
+    if not condition:
+        return None, None
+    head = condition.split()[0]
+    if "/" not in head:
+        return None, None
+    numerator, _, denominator = head.partition("/")
+    current = int(numerator) if numerator.isdigit() else None
+    maximum = int(denominator) if denominator.isdigit() and int(denominator) > 0 else None
+    return current, maximum
+
+
 def _opponent_team_from_public_state(
     replay: ShowdownReplayState,
     opponent_slot: str,
@@ -2217,6 +2282,14 @@ def _encode_pokemon_tokens(
         revealed_moves = belief.revealed_moves if belief is not None else ()
         revealed_ability = belief.revealed_ability if belief is not None else None
         revealed_item = belief.revealed_item if belief is not None else None
+        # CURRENT-held: True once the mon has publicly parted with its item — Knock Off /
+        # a Trick that returned nothing / a consumed berry or White Herb. belief.item_removed
+        # is the audited "holds nothing now" flag (belief.py sets it on every such surface).
+        # revealed_item keeps NAMING the (now-gone) item so the possible_item set-identity
+        # columns below still narrow the opponent's set; only the current-possession signal
+        # (NUMERIC_REVEALED_ITEM) reflects the removal. Unaudited 0-occurrence mutations
+        # (Thief/Covet: item_mutated without item_removed) stay fail-closed as still-held.
+        item_removed = belief.item_removed if belief is not None else False
         possible_abilities = belief.possible_abilities if belief is not None else ()
         possible_items = belief.possible_items if belief is not None else ()
         possible_moves = belief.possible_moves if belief is not None else ()
@@ -2280,7 +2353,7 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_ITEM_COUNT, float(len(item_feature_values)))
         _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_MOVE_COUNT, float(len(possible_moves)))
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ABILITY, 1.0 if revealed_ability else 0.0)
-        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
+        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if (revealed_item and not item_removed) else 0.0)
         # ---- spec v2 per-mon blocks. ----
         exact = _belief_for_species(exact_beliefs_by_species, candidate.species)
         if masks.exact_state:
@@ -2968,18 +3041,25 @@ def _encode_action_tokens(
     # HP-variable base power (Reversal / Flail / Eruption / Water Spout) on its moves.
     user_types = _self_active_types(state, dex)
     user_hp_fraction = _self_active_hp_fraction(state)
+    # The acting mon's own typed move ids ("hiddenpowerfighting", ...) — the request-side fallback
+    # for resolving generic Hidden Power's real type/base power (see _self_move_mechanics_id).
+    own_move_ids = state.self_active.moves if state.self_active is not None else ()
     for move_index in range(MOVE_ACTION_COUNT):
         token_index = ACTION_CANDIDATE_TOKEN_OFFSET + move_index
         move = moves[move_index] if isinstance(moves, list) and move_index < len(moves) else None
         move_name = _request_move_name(move) if isinstance(move, Mapping) else f"slot:{move_index + 1}"
         disabled = bool(move.get("disabled")) if isinstance(move, Mapping) else True
+        # The token's move IDENTITY stays the request-keyed name (generic "hiddenpower" for HP:
+        # checkpoint-stable). Only the MECHANICS lookup resolves HP's typed variant so its true
+        # type / base power / damage class reach the acting mon's decision surface.
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"move:{move_name}")
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:move")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"move_slot:{move_index + 1}")
         if isinstance(move, Mapping):
+            mechanics_name = _self_move_mechanics_id(move, move_name, own_move_ids)
             _encode_move_mechanics(
-                categorical_ids[token_index], numeric_features[token_index], dex, move_name,
+                categorical_ids[token_index], numeric_features[token_index], dex, mechanics_name,
                 user_types, user_hp_fraction,
             )
             _set_numeric(numeric_features[token_index], NUMERIC_MOVE_PP_FRACTION, _move_pp_fraction(move))
@@ -3339,6 +3419,52 @@ def _request_move_name(move: Mapping[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return "unknown"
+
+
+_HIDDEN_POWER_TYPES = frozenset(
+    {
+        "bug", "dark", "dragon", "electric", "fighting", "fire", "flying", "ghost",
+        "grass", "ground", "ice", "poison", "psychic", "rock", "steel", "water",
+    }
+)
+
+
+def _hidden_power_variant_from_name(display_name: Any) -> str | None:
+    """Typed Hidden Power id from a request's display move name.
+
+    "Hidden Power Fighting 70" -> "hiddenpowerfighting". Returns None if the name carries no
+    recognizable HP type (leaving the caller to fall back)."""
+    if not isinstance(display_name, str):
+        return None
+    for token in re.findall(r"[a-z]+", display_name.lower()):
+        if token in _HIDDEN_POWER_TYPES:
+            return f"hiddenpower{token}"
+    return None
+
+
+def _self_move_mechanics_id(
+    move: Mapping[str, Any], move_name: str, own_move_ids: Sequence[str] = ()
+) -> str:
+    """Move id to look up for SELF action-token MECHANICS (type / base power / damage class).
+
+    Hidden Power's request keys ``id`` to the generic family ("hiddenpower"), whose dex entry is a
+    0-power Normal placeholder — so the acting mon would encode its single most common coverage move
+    as a Normal, 0-BP no-op. The real typed identity is self-observable two ways: authoritatively
+    from the display ``move`` field ("Hidden Power Fighting 70"), and, as a fallback, from the mon's
+    own typed move id in the request side list ("hiddenpowerfighting", which Showdown derives from
+    its IVs). Resolve the typed variant for the mechanics lookup ONLY; the action token's move
+    IDENTITY (CATEGORY_PRIMARY = ``move:hiddenpower``) stays generic and checkpoint-stable. Every
+    non-Hidden-Power move passes straight through."""
+    if _normalize_identifier(move_name) != "hiddenpower":
+        return move_name
+    typed = _hidden_power_variant_from_name(move.get("move"))
+    if typed is not None:
+        return typed
+    for candidate in own_move_ids:
+        normalized = _normalize_identifier(candidate)
+        if normalized.startswith("hiddenpower") and len(normalized) > len("hiddenpower"):
+            return normalized
+    return move_name
 
 
 def _request_side_id(request: Mapping[str, Any]) -> str | None:

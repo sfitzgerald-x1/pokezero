@@ -63,6 +63,102 @@ orderings directly against the engine at mid-battle HP states the one-turn
 differential cannot reach. Worth reporting upstream: the original
 all-items-after-status ordering is a real gen3 bug in poke-engine 0.0.47.
 
+## Confirmed deviation 3: Attract volatile accepted but ignored
+
+poke-engine 0.0.47 has `PokemonVolatileStatus::ATTRACT` in the gen3 enum
+(`src/gen3/state.rs`) but **zero behavioral references** to it in
+`src/gen3/generate_instructions.rs` / `choice_effects.rs` (nor in genx —
+upstream never modeled infatuation immobilization). Probe-confirmed (walls
+audit 2026-07-19): an attracted mon's turn is byte-identical to a mon with no
+volatile — it moves 100% of the time. Real gen3 Attract immobilizes the holder
+50% per turn (`data/moves.ts` `attract` condition, `onBeforeMove` priority 2,
+`randomChance(1,2)`).
+
+**Impact:** systematic optimism about the attracted seat (it "always moves").
+On-distribution frequency is low — the Attract *move* is absent from the gen3
+randbats pool; infatuation arises only via Cute Charm procs
+(Clefable/Delcatty/Wigglytuff, gen3-mod 1/3 on contact, opposite gender) — a
+proc-gated singleton in the 100-seed band. But when it hits, every turn the
+attracted mon acts is over-valued by ~50%.
+
+**Disposition: PATCHED (2026-07-19).**
+`third_party/poke-engine-gen3-attract.patch`, applied AFTER the residual-order
+patch by `scripts/setup_poke_engine.sh` / `scripts/vendor_poke_engine_src.sh`
+(`--fuzz=0`). The patch adds a 50/50 **chance branch** in
+`generate_instructions_from_existing_status_conditions`, directly mirroring the
+confusion self-hit branch immediately above it: it clones the incoming
+instructions, weights the clone 0.5 and pushes it as a terminal (the move never
+executes), and reduces the surviving branch to 0.5. Unlike confusion the
+immobilized branch carries an **empty delta** (attract deals no self-damage) —
+the same shape as the fully-paralyzed branch. This is a weighted two-outcome
+split, not a point mutation, so the exact-expectation backup and chance-node
+machinery price it exactly, as they already do for full paralysis and the
+confusion self-hit.
+
+**Composition ordering (verified vs Showdown gen3 source).** Showdown resolves
+`onBeforeMove` high-priority-first: flinch (8) → confusion (3) → attract (2) →
+paralysis (1). The engine's order is: flinch/taunt hard-gate in
+`cannot_use_move` (100% skip, before any status branch) → paralysis → freeze →
+sleep → confusion → **attract** (the patch) → move. Consequences:
+
+- **flinch**: a 100% "can't move" gate in BOTH sims; attract/confusion/par are
+  never reached under a flinch. Exact.
+- **confusion → attract**: same order as Showdown. A confused+attracted mon is
+  exact in both probability AND reason attribution (50% confusion self-hit, then
+  25% attract-immobilize, 25% move — identical to Showdown's
+  confusion-before-attract resolution).
+- **paralysis**: the engine resolves it *before* attract; Showdown resolves it
+  *after*. The internal immobilized-reason split therefore differs (engine:
+  25% par / 37.5% attract; Showdown: 50% attract / 12.5% par) but the net
+  P(move) = 0.75 × 0.5 = **0.375** is identical (the two independent gates are
+  commutative) and BOTH immobilized branches are empty-delta terminals, so the
+  **leaf-state distribution is exact**. Only the rendered `|cant|` reason label
+  (an events.rs concern) depends on which volatile is credited — invisible to
+  search value.
+
+**Source-leave decision (explicit).** Real Gen 3 Attract clears when the
+infatuation source leaves play (`onUpdate` removes the volatile when
+`effectState.source` goes inactive; Showdown emits a public
+`|-end|mon|Attract|[silent]`). The engine does not track the infatuation
+source, and adding source-identity tracking to the world state is out of scope
+for a proc-gated singleton. **Chosen: a bounded in-search over-model** — attract
+persists across the 2-3 ply search horizon even if the source switches out. This
+is a small over-model strictly in the immobilizing (pessimistic) direction, the
+exact opposite of the prior total no-op (which was optimistic), and it is bounded
+to deep plies: the *live* attract state is always exact because the observation
+parser clears the volatile on the real `-end`/switch (the volatile is seeded
+verbatim from the public payload each decision). Only hypothetical in-search
+lines where the source switches are affected, and there the pessimism is
+self-limiting (the attracted mon usually cannot force the source out). This
+matches the confusion / partial-trap no-expiry approximation class already
+accepted in this engine (live state exact; in-search future duration a
+pessimistic bound). The alternative — minimal source-tracking + clear-on-leave —
+buys exactness on a singleton at the cost of new cross-side world state and a
+parser-tracked source id; not justified now, revisit if post-fix sweeps show
+attract above singleton rates.
+
+Regression gates (all in the dedicated `.venv-attract`, never the shared venv):
+`scripts/attract_differential.py` is the residual-order-caliber ground-truth
+gate — it drives two curated gen3 Custom Game scenarios (free attract; Thunder
+Wave + attract composition) through the real Node sim over 100 seeds and the
+patched engine, and asserts the branch probabilities match within 4σ, the
+`|-activate|…|move: Attract|[of]…` line appears every measured turn, and BOTH
+the move and immobilize branches (and, for para, both `cant Attract` and
+`cant par`) actually occur. Latest: free 50/50 engine vs 54/46 Showdown, para
+37.5/62.5 engine vs 42/58 Showdown, activate 100/100 both — PASS.
+`tests/test_engine_attract_immobilization.py` pins the instruction-generation
+output shape (exact 50/50 free split, empty-delta immobilized branch, 37.5%
+para-composition move probability, 100% move without the volatile) so a wheel
+rebuild cannot silently regress the immobilization back to a no-op.
+`golden_corpus_scenarios.py::attract_snorlax` exercises the world-construction
+path end-to-end (free + para composition on the search seat) in the fallback
+sweep: 3/3 decisions searched, 0 walls. Known encoder follow-up: the Attract
+*move* is outside the closed gen3 randbats vocab, so the scenario's
+`move_effect:attract` / `belief:possible_move:attract` tokens hash to the
+safety-net row (deterministic, graceful) — the move is used only because it is
+the sole way to place attract deterministically on the search seat; real games
+reach the volatile via Cute Charm, whose token IS enumerated.
+
 ## Confirmed engine contract 2: Hidden Power ids must be typed + base power
 
 The gen3 engine move table only accepts fully-qualified ids

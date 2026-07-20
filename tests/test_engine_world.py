@@ -452,6 +452,20 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertIn("flashfire", world.spec.side_one.volatile_statuses)
         self.assertIn("flashfire", world.spec.side_two.volatile_statuses)
 
+    def test_attract_volatile_is_supported_both_seats(self) -> None:
+        # Gen 3 infatuation runs until switch / source-leave (no countdown), so
+        # like flashfire it is a pure allow-list pass-through — no duration
+        # state. The volatile must land in the SideSpec so the patched engine
+        # (poke-engine-gen3-attract.patch) prices the 50%-per-turn move
+        # immobilization; pre-fix an attracted seat walled with
+        # ``volatile_unsupported: attract``.
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["volatiles"] = ["attract"]
+        payload["sides"]["p2"]["volatiles"] = ["attract"]
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertIn("attract", world.spec.side_one.volatile_statuses)
+        self.assertIn("attract", world.spec.side_two.volatile_statuses)
+
     def test_other_unsupported_volatiles_still_fail_closed(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["volatiles"] = ["confusion"]
