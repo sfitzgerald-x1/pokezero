@@ -615,9 +615,37 @@ class PublicBattleBeliefEngine:
                             ),
                         )
                 self._clear_sleep_clause_for(belief)
-                self._replace_belief(
-                    belief, status=None, sleep_turns=0, rest_sleep=False, sleep_skipped_turns=0
-                )
+                changes = self._status_cure_changes(belief)
+                if benched_target:
+                    # A benched cure (Heal Bell's per-mon ``[silent]`` -curestatus) publicly
+                    # and fully accounts for this off-field mon's status change, so retire its
+                    # switch-out status ledger. Otherwise a stale ``status_on_exit`` survives to
+                    # drive the Natural Cure re-entry inference (``_on_switch_in``) — the
+                    # amplifier that lets an already-cured benched mon re-enter mis-flagged.
+                    changes["status_on_exit"] = None
+                    changes["cure_all_count_on_exit"] = -1
+                self._replace_belief(belief, **changes)
+            return
+
+        if event_type == "-cureteam" and actor_slot:
+            # Aromatherapy cures EVERY living team member and (gen3 inherits the gen4 mod)
+            # emits a SINGLE ``|-cureteam|SOURCE`` line with NO per-mon ``-curestatus`` — it
+            # calls ``clearStatus()`` (silent), not ``cureStatus()``. Heal Bell DOES emit
+            # per-mon ``[silent]`` curestatus, which is why census #762 — exercising Heal Bell
+            # only — wrongly declared ``-cureteam`` dead code. The source ident is the active
+            # user, so its side is ``actor_slot``. Clear status + condition-suffix + sleep
+            # counters (and retire the switch-out ledger) for every LIVING member, mirroring
+            # ``clearStatus()``'s ``hp && status`` gate so unrelated members stay byte-identical.
+            for member in list(self._sides.get(actor_slot, [])):
+                if member.condition == "0 fnt":
+                    continue  # clearStatus() no-ops on a fainted (hp == 0) mon
+                if member.status is None and _status_token_from_condition(member.condition) is None:
+                    continue  # nothing to clear — do not churn an already-healthy member
+                self._clear_sleep_clause_for(member)
+                changes = self._status_cure_changes(member)
+                changes["status_on_exit"] = None
+                changes["cure_all_count_on_exit"] = -1
+                self._replace_belief(member, **changes)
             return
 
         if event_type == "cant" and raw_line and "|slp" in raw_line:
@@ -946,6 +974,17 @@ class PublicBattleBeliefEngine:
         species = _species_from_ident(target_ident)
         if species is None:
             return None
+        normalized = _normalize_species(species)
+        side = self._sides.get(showdown_slot, [])
+        if not any(_normalize_species(belief.species) == normalized for belief in side):
+            # No exact match: a cosmetic-forme benched mon serializes under its BASE name in
+            # the cure ident (gen3 randbats name an Unown-Z simply "Unown") while beliefs track
+            # the lettered forme from the switch details ("Unown-Z"). Redirect the cure onto the
+            # existing forme belief so its status still clears; without this the benched cure
+            # spawns a phantom base-species entry and the real forme keeps its stale status.
+            for belief in side:
+                if _base_species_id(belief.species) == normalized:
+                    return belief
         return self._upsert(showdown_slot=showdown_slot, species=species)
 
     @property
@@ -1031,6 +1070,24 @@ class PublicBattleBeliefEngine:
         for side, holder in list(self._sleep_clause_holder.items()):
             if holder == belief.key:
                 self._sleep_clause_holder[side] = None
+
+    def _status_cure_changes(self, belief: RevealedPokemonBelief) -> dict[str, Any]:
+        """Every belief field a full non-volatile status cure clears: the ``status``
+        itself, the sleep counters, AND the status suffix carried on ``condition`` (else
+        the encoder's condition-suffix status fallback silently re-derives the cleared
+        status — the training-encoder divergence this shared helper closes). Used by both
+        the per-mon ``-curestatus`` path and the team-wide ``-cureteam`` path so they clear
+        status + suffix + counters identically."""
+        changes: dict[str, Any] = {
+            "status": None,
+            "sleep_turns": 0,
+            "rest_sleep": False,
+            "sleep_skipped_turns": 0,
+        }
+        stripped = strip_condition_status(belief.condition)
+        if stripped != belief.condition:
+            changes["condition"] = stripped
+        return changes
 
     def _rule_out_items(
         self,
@@ -1490,6 +1547,25 @@ def _status_token_from_condition(condition: Optional[str]) -> Optional[str]:
     return parts[1]
 
 
+def strip_condition_status(condition: Optional[str]) -> Optional[str]:
+    """Drop the non-volatile status suffix (slp/par/brn/psn/tox/frz) from a condition
+    string, preserving the HP token and the ``fnt`` marker: ``'387/387 slp' -> '387/387'``,
+    ``'0 fnt' -> '0 fnt'``, ``'283/301' -> '283/301'``.
+
+    A cured mon whose ``condition`` still carries its old status suffix makes the
+    encoder's condition-suffix status fallback (showdown.py, ``status = belief.status
+    if belief.status is not None else condition.status``) silently re-derive the cleared
+    status. Every status-cure surface — per-mon ``-curestatus`` and team-wide
+    ``-cureteam`` on the belief side, and the public-condition update on the showdown
+    side — must strip it in lockstep with clearing ``belief.status``."""
+    if not condition:
+        return condition
+    parts = condition.split()
+    if not parts:
+        return condition
+    return " ".join([parts[0]] + [part for part in parts[1:] if part == "fnt"])
+
+
 def _called_move_source(raw_line: Optional[str]) -> Optional[str]:
     """Normalized caller move if a ``|move|`` line was invoked by another move, else None.
 
@@ -1595,6 +1671,13 @@ def _species_from_ident(ident: Optional[str]) -> Optional[str]:
         return None
     species = str(ident).split(":", 1)[-1].strip()
     return species or None
+
+
+def _base_species_id(species: str) -> str:
+    """Normalized BASE species id, forme suffix dropped: ``'Unown-Z' -> 'unown'``. Used only
+    to reconcile a cosmetic forme's base-name cure ident (gen3 randbats' Unown) with the
+    lettered-forme species the belief tracks."""
+    return _normalize_species(str(species).split("-", 1)[0])
 
 
 def _slot_from_ident(ident: Optional[str]) -> Optional[str]:

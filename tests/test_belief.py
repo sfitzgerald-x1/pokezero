@@ -481,6 +481,178 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIsNone(miltank.status)  # active user never had a status
         self.assertNotEqual(snorlax.revealed_ability, "Early Bird")  # no false Rest-wake pin
 
+    @staticmethod
+    def _encoded_status(belief: RevealedPokemonBelief) -> str:
+        """Replicate the encoder's status selection (showdown.py): belief.status, else the
+        condition-suffix fallback. This is exactly the categorical the opponent seat emits."""
+        if belief.status is not None:
+            return belief.status
+        parts = str(belief.condition or "").split()
+        return next((part for part in parts[1:] if part != "fnt"), "none")
+
+    def test_aromatherapy_cureteam_clears_benched_living_member_tox(self) -> None:
+        # gen3 Aromatherapy (inherits the gen4 mod) emits a SINGLE |-cureteam|SOURCE and NO
+        # per-mon -curestatus. A tox'd mon sent to the bench, then healed by an ally's
+        # Aromatherapy, must clear its status AND the condition-suffix the encoder falls back
+        # to — otherwise the opponent seat keeps encoding status:tox for a healthy mon.
+        engine = self.engine_from([
+            "|switch|p1a: Swampert|Swampert, L84|300/300",
+            "|switch|p2a: Vigoroth|Vigoroth, L84|301/301",
+            "|turn|1",
+            "|move|p1a: Swampert|Toxic|p2a: Vigoroth",
+            "|-status|p2a: Vigoroth|tox",
+            "|-damage|p2a: Vigoroth|283/301 tox|[from] psn",
+            "|turn|2",
+            "|switch|p2a: Blissey|Blissey, L82|300/300",
+            "|turn|3",
+            "|move|p2a: Blissey|Aromatherapy|p2a: Blissey",
+            "|-cureteam|p2a: Blissey|[from] move: Aromatherapy",
+        ])
+        vigoroth = self.opponent(engine, "Vigoroth")
+        self.assertIsNone(vigoroth.status)
+        self.assertNotIn("tox", str(vigoroth.condition).split())
+        self.assertEqual(self._encoded_status(vigoroth), "none")
+
+    def test_aromatherapy_cureteam_cross_seat_p1_source(self) -> None:
+        # Cross-seat: the same cure emitted for p1's team clears p1's benched member. The
+        # belief engine tracks both sides, so both seats' opponent-views are covered.
+        engine = self.engine_from([
+            "|switch|p1a: Vigoroth|Vigoroth, L84|301/301",
+            "|switch|p2a: Swampert|Swampert, L84|300/300",
+            "|turn|1",
+            "|move|p2a: Swampert|Toxic|p1a: Vigoroth",
+            "|-status|p1a: Vigoroth|tox",
+            "|-damage|p1a: Vigoroth|283/301 tox|[from] psn",
+            "|turn|2",
+            "|switch|p1a: Blissey|Blissey, L82|300/300",
+            "|turn|3",
+            "|move|p1a: Blissey|Aromatherapy|p1a: Blissey",
+            "|-cureteam|p1a: Blissey|[from] move: Aromatherapy",
+        ])
+        vigoroth = next(b for b in engine.snapshot().sides["p1"] if b.species == "Vigoroth")
+        self.assertIsNone(vigoroth.status)
+        self.assertNotIn("tox", str(vigoroth.condition).split())
+
+    def test_aromatherapy_cureteam_does_not_touch_opponent_or_healthy_members(self) -> None:
+        # Blast radius: p2's Aromatherapy must not clear p1's genuinely-tox'd active mon, and
+        # must leave an already-healthy own member byte-identical.
+        engine = self.engine_from([
+            "|switch|p1a: Swampert|Swampert, L84|300/300 tox",
+            "|switch|p2a: Vigoroth|Vigoroth, L84|283/301 tox",
+            "|turn|1",
+            "|-status|p1a: Swampert|tox",
+            "|switch|p2a: Blissey|Blissey, L82|300/300",
+            "|turn|2",
+            "|move|p2a: Blissey|Aromatherapy|p2a: Blissey",
+            "|-cureteam|p2a: Blissey|[from] move: Aromatherapy",
+        ])
+        swampert = next(b for b in engine.snapshot().sides["p1"] if b.species == "Swampert")
+        blissey = self.opponent(engine, "Blissey")
+        # p1's tox'd mon is on the OTHER side — the cure must not reach it.
+        self.assertEqual(swampert.status, "tox")
+        self.assertEqual(self._encoded_status(swampert), "tox")
+        # the healthy source is unchanged (no status, no suffix).
+        self.assertIsNone(blissey.status)
+
+    def test_chesto_rest_wake_clears_condition_status_suffix(self) -> None:
+        # Chesto Berry cures the Rest sleep via -curestatus. The status clears, but the
+        # condition string still read '523/523 slp' pre-fix, so the encoder's condition-suffix
+        # fallback re-derived status:slp for a status-free mon (cross-seat divergence).
+        engine = self.engine_from([
+            "|switch|p1a: Swampert|Swampert, L84|300/300",
+            "|switch|p2a: Snorlax|Snorlax, L82|200/523",
+            "|turn|1",
+            "|move|p2a: Snorlax|Rest|p2a: Snorlax",
+            "|-status|p2a: Snorlax|slp|[from] move: Rest",
+            "|-heal|p2a: Snorlax|523/523 slp|[silent]",
+            "|-enditem|p2a: Snorlax|Chesto Berry|[eat]",
+            "|-curestatus|p2a: Snorlax|slp|[msg]",
+        ])
+        snorlax = self.opponent(engine, "Snorlax")
+        self.assertIsNone(snorlax.status)
+        self.assertNotIn("slp", str(snorlax.condition).split())
+        self.assertEqual(self._encoded_status(snorlax), "none")
+
+    def test_natural_cure_switch_out_clears_suffix_and_stays_clear_on_reentry(self) -> None:
+        # Public Natural Cure switch-out cure: |-curestatus|...|[from] ability: Natural Cure is
+        # emitted BEFORE the |switch| (verified against the gen3 sim). The status clears but the
+        # condition-suffix was retained, so the benched (alive) mon encoded status:tox until a
+        # clean re-entry. The explicit ability tag must still pin Natural Cure.
+        lines = [
+            "|switch|p1a: Altaria|Altaria, L80|251/251",
+            "|switch|p2a: Blissey|Blissey, L80|539/539",
+            "|turn|1",
+            "|move|p2a: Blissey|Toxic|p1a: Altaria",
+            "|-status|p1a: Altaria|tox",
+            "|-damage|p1a: Altaria|236/251 tox|[from] psn",
+            "|turn|2",
+            "|-curestatus|p1a: Altaria|tox|[from] ability: Natural Cure",
+            "|switch|p1a: Swampert|Swampert, L80|291/291",
+        ]
+        engine = self.engine_from(lines)
+        altaria = next(b for b in engine.snapshot().sides["p1"] if b.species == "Altaria")
+        self.assertIsNone(altaria.status)
+        self.assertNotIn("tox", str(altaria.condition).split())
+        self.assertEqual(self._encoded_status(altaria), "none")
+        self.assertEqual(altaria.revealed_ability, "Natural Cure")
+        # Clean re-entry keeps it status-free.
+        engine2 = self.engine_from(lines + [
+            "|turn|3",
+            "|switch|p1a: Altaria|Altaria, L80|236/251",
+        ])
+        altaria2 = next(b for b in engine2.snapshot().sides["p1"] if b.species == "Altaria")
+        self.assertIsNone(altaria2.status)
+        self.assertEqual(self._encoded_status(altaria2), "none")
+        self.assertEqual(altaria2.revealed_ability, "Natural Cure")
+
+    def test_silent_benched_heal_bell_cure_clears_condition_suffix(self) -> None:
+        # Heal Bell's per-mon |-curestatus|p2: X|slp|[silent] on a BENCHED mon whose condition
+        # carried a suffix from a pre-switch residual: status + suffix + switch-out ledger clear.
+        engine = self.engine_from([
+            "|switch|p1a: Swampert|Swampert, L84|300/300",
+            "|switch|p2a: Aggron|Aggron, L80|280/280",
+            "|turn|1",
+            "|move|p1a: Swampert|Toxic|p2a: Aggron",
+            "|-status|p2a: Aggron|tox",
+            "|-damage|p2a: Aggron|262/280 tox|[from] psn",
+            "|turn|2",
+            "|switch|p2a: Miltank|Miltank, L82|300/300",
+            "|move|p2a: Miltank|Heal Bell|p2a: Miltank",
+            "|-activate|p2a: Miltank|move: Heal Bell",
+            "|-curestatus|p2: Aggron|tox|[silent]",
+        ])
+        aggron = self.opponent(engine, "Aggron")
+        self.assertIsNone(aggron.status)
+        self.assertNotIn("tox", str(aggron.condition).split())
+        self.assertEqual(self._encoded_status(aggron), "none")
+        self.assertIsNone(aggron.status_on_exit)  # switch-out ledger retired
+
+    def test_silent_benched_cure_clears_cosmetic_forme_mon(self) -> None:
+        # gen3 randbats name a cosmetic forme by its BASE species: an Unown-Z serializes as
+        # ``p2: Unown`` in the benched cure ident while the belief tracks the lettered forme
+        # from the switch details. The species-resolution must reconcile the two, else the
+        # cure spawns a phantom base entry and the real forme keeps its stale tox.
+        engine = self.engine_from([
+            "|switch|p1a: Armaldo|Armaldo, L80|300/300",
+            "|switch|p2a: Unown|Unown-Z|258/258",
+            "|turn|1",
+            "|move|p1a: Armaldo|Toxic|p2a: Unown",
+            "|-status|p2a: Unown|tox",
+            "|-damage|p2a: Unown|242/258 tox|[from] psn",
+            "|turn|2",
+            "|switch|p2a: Chimecho|Chimecho, L89|260/260",
+            "|move|p2a: Chimecho|Heal Bell|p2a: Chimecho",
+            "|-activate|p2a: Chimecho|move: Heal Bell",
+            "|-curestatus|p2: Unown|tox|[silent]",
+        ])
+        species = [b.species for b in engine.snapshot().sides["p2"]]
+        self.assertIn("Unown-Z", species)
+        self.assertNotIn("Unown", species)  # no phantom base-species entry
+        unown = self.opponent(engine, "Unown-Z")
+        self.assertIsNone(unown.status)
+        self.assertNotIn("tox", str(unown.condition).split())
+        self.assertEqual(self._encoded_status(unown), "none")
+
     def test_active_target_curestatus_still_resolves_to_active_mon(self) -> None:
         # Control: an active-target cure (position-lettered ident) keeps the unchanged shared path,
         # including the 1-turn Rest-wake Early Bird identification.

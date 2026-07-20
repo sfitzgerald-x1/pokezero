@@ -25,7 +25,13 @@ from .actions import (
     is_move_action,
     is_switch_action,
 )
-from .belief import PlayerBeliefView, PokemonSetSource, PublicBattleBeliefEngine, RevealedPokemonBelief
+from .belief import (
+    PlayerBeliefView,
+    PokemonSetSource,
+    PublicBattleBeliefEngine,
+    RevealedPokemonBelief,
+    strip_condition_status,
+)
 from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
@@ -1572,6 +1578,12 @@ def _update_public_pokemon_condition(
     if len(parts) < 3:
         return
     event_type = parts[1] if len(parts) > 1 else ""
+    if event_type == "-cureteam":
+        # Aromatherapy's ``|-cureteam|SOURCE`` clears the non-volatile status of every
+        # LIVING member on the source's side and carries no per-mon ``-curestatus`` — so
+        # the active-only path below never fires. Strip the status suffix team-wide.
+        _apply_public_cureteam_condition(parts, public_active, public_revealed)
+        return
     if event_type not in {"-damage", "-heal", "-sethp", "-status", "-curestatus", "faint"}:
         return
     ident = parts[2]
@@ -1612,6 +1624,38 @@ def _updated_public_condition(
     if event_type == "-curestatus" and hp:
         return hp
     return None
+
+
+def _apply_public_cureteam_condition(
+    parts: Sequence[str],
+    public_active: dict[str, ShowdownPokemon],
+    public_revealed: dict[str, list[ShowdownPokemon]],
+) -> None:
+    """Aromatherapy's ``|-cureteam|SOURCE`` clears the status of EVERY living member on
+    the source's side. The ident is the active user, so strip the non-volatile status
+    suffix from that side's active mon AND every revealed benched mon (the team-wide
+    analogue of the ``-curestatus`` active-only strip). A fainted mon's ``0 fnt``
+    condition is preserved unchanged by ``strip_condition_status``."""
+    slot = _slot_from_ident(parts[2]) if len(parts) > 2 else None
+    if slot is None:
+        return
+    active = public_active.get(slot)
+    if active is not None:
+        stripped = strip_condition_status(active.condition)
+        if stripped != active.condition:
+            public_active[slot] = replace(active, condition=stripped)
+    active_now = public_active.get(slot)
+    revealed = public_revealed.get(slot)
+    if not revealed:
+        return
+    updated_list: list[ShowdownPokemon] = []
+    for pokemon in revealed:
+        if active_now is not None and _same_public_pokemon(pokemon, active_now):
+            updated_list.append(active_now)
+            continue
+        stripped = strip_condition_status(pokemon.condition)
+        updated_list.append(replace(pokemon, condition=stripped) if stripped != pokemon.condition else pokemon)
+    public_revealed[slot] = updated_list
 
 
 def _side_conditions_from_counts(side_condition_counts: Mapping[str, Mapping[str, int]]) -> dict[str, set[str]]:
@@ -1753,10 +1797,12 @@ def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], tur
 
 
 def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
-    """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| lines.
+    """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
+    |-cureteam| lines.
 
     A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
-    status clears it. The counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    status — per-mon (`-curestatus`) or team-wide (`-cureteam`/Aromatherapy) — clears it. The
+    counter is also reset on switch (Gen 3 behavior) in the parse loop.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -1766,7 +1812,9 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
         return
     if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
         toxic_stage[slot] = 1
-    elif event_type == "-curestatus":
+    elif event_type in {"-curestatus", "-cureteam"}:
+        # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
+        # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
         toxic_stage[slot] = 0
 
 
