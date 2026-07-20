@@ -45,6 +45,7 @@ checkout — it is **not** bundled in the engine repo). `SHOWDOWN_ROOT` =
 | Distinct moves | **125** (112 normal + 13 `hiddenpower<type>`) | `gen3_randbat_entities(root)["moves"]` |
 | Randbat abilities | **71** (**≤2 per species**) | union of `sets[*]["abilities"]` |
 | Items | 13 | union of the variant item sets |
+| Exact variants | **1,748** | complete `(species, role, level, four moves, ability, item)` source tuples |
 
 `sets.json` shape: `{species_id: {"level": int, "sets": [{"role","movepool":[move_id…],
 "abilities":[display_name…],"preferredTypes":[…]}]}}`. Species-level candidate/variant universe
@@ -243,13 +244,144 @@ If desired, additionally cover the Pokédex abilities the generator never rolls 
 species) using node slot data — purely a *defensive* encoder check for states the model does not
 see in training. Keep separate from the reachable-set coverage report so the two are not conflated.
 
+### 7.4 Exact-variant lane (optional, stronger tuple guarantee)
+
+The atom sweep proves every individual source fact reaches the encoder, but it
+does not prove every exact **combination** of role, moves, ability, and item.
+Run the opt-in `--exact-variants` mode when that stronger guarantee is needed:
+
+```sh
+POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+  uv run python scripts/coverage_enumeration_audit.py \
+    --exact-variants \
+    --json /tmp/pokezero-exact-variant-audit.json \
+    --coverage-json /tmp/pokezero-exact-variant-ledger.json
+```
+
+This mode bypasses greedy drafting and pairs every source variant exactly once
+into deterministic 1v1 fixtures. At the current source hash, 1,748 variants
+produce 874 fixtures. Because each fixture is audited from both seats, every
+variant is checked through its self-known encodable facts (including level) and
+as the opponent's true surviving belief candidate. `role` is a source-selection
+constraint rather than a direct observation feature, but remains part of the
+candidate `variant_id` identity. The ledger adds `variants`, per-variant first
+coverage, and an explicit `uncovered.variants` set; completion requires it to
+be empty alongside the atom sets. It remains static tuple coverage, not an
+exhaustive move-use or multi-turn interaction sweep.
+
+### 7.5 Bounded exact-variant depth run (planned, do not launch before fixes land)
+
+After all encoder and belief fixes under test have landed in one fresh image,
+run a bounded dynamic extension over the same exact-variant universe. This is
+not a replacement for random deep-line games: it is a deterministic way to
+exercise post-action request, belief-pruning, PP, action-token, and
+perspective surfaces for every source tuple.
+
+**Preflight contract:** rebuild Showdown, record the source hash, verify the
+image includes every intended fix, and reserve a new output directory. Do not
+reuse the 874-fixture static audit evidence as proof of this dynamic run. The
+dynamic run must pin **observation schema v3** and stamp that schema in every
+summary, ledger, and failure artifact: its no-op checks are invalid under the
+current checkpoint-free v2.2 default. If the audit CLI cannot explicitly select
+v3, it is a preflight failure, not permission to fall back to the default.
+
+Use eight independent shard workers, each with a distinct summary/ledger path
+and the shared failure directory below:
+
+```sh
+for shard in 0 1 2 3 4 5 6 7; do
+  POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+    uv run python scripts/coverage_enumeration_audit.py \
+      --exact-variants \
+      --observation-schema v3 \
+      --depth-rounds 8 \
+      --shard "$shard/8" \
+      --no-universal-lane \
+      --failure-dir "$OUT/failures" \
+      --json "$OUT/audit-$shard.json" \
+      --coverage-json "$OUT/ledger-$shard.json" &
+done
+wait
+```
+
+`--depth-rounds` is deliberately bounded: it scripts legal moves in source
+order, then after every action re-runs the live differential oracle,
+perspective check, action-token identity check, and true-variant-survival
+check. It also records the post-action protocol-tag census in the shard audit
+JSON. That census is evidence for the v3 silent-noop sweep's adjudication
+table, not a replacement for its exhaustive static reachability/handler diff:
+a deterministic 1v1 path can miss event subtypes and six-mon interactions. A
+terminal game simply stops early; it is reported as bounded depth, not
+misrepresented as a complete move-use proof.
+
+The runner writes no protocol trace for a successful fixture. If a fixture has
+a finding or execution exception, it writes exactly one reproducible JSON file
+under `$OUT/failures/`, containing the source tuple, seed, executed moves,
+the full protocol trace, terminal state, and only that fixture's findings.
+Workers continue after a failed fixture in depth mode, so one bad variant does
+not discard coverage of the remaining source universe. Inspect the failure
+directory first; aggregate summaries are for counts and ledger completion.
+
+After all workers finish, merge the eight coverage ledgers and require an empty
+`uncovered.variants` set:
+
+```sh
+uv run python scripts/merge_coverage_ledgers.py \
+  --input "$OUT"/ledger-{0,1,2,3,4,5,6,7}.json \
+  --output "$OUT/ledger-merged.json"
+```
+
+Any nonzero worker exit, nonempty failure directory, or nonempty merged
+uncovered set is a failed audit and must be triaged before treating the run as
+clean. In exact-variant mode, the merged ledger additionally requires every
+planned fixture to complete; atom coverage alone cannot hide a dropped tuple.
+
+### 7.6 Curated party and silent-noop interaction lane (planned, separate from tuple depth)
+
+The exact-variant depth lane is intentionally 1v1: it exhaustively validates
+every source tuple, but cannot create a party lifecycle. Do **not** inflate it
+into arbitrary 3v3 permutations. Reuse the existing scripted interaction
+registry in `golden_corpus_scenarios.interaction_registry_specs()` as the
+party-mode lane, with its encoded assertions and live protocol evidence
+recorded in `docs/validated_interactions.md` and
+`docs/protocol_coverage_matrix.md`.
+
+That registry already covers the high-value party mechanics: a 3v2
+Spikes-stack-and-switch sequence, Intimidate/Trace on entry, drag reset,
+Baton Pass transfer, and the existing Trick/Knock-Off, berry, Wish, RestTalk,
+and recharge scenarios. Re-running those fixtures is a local, minutes-scale
+regression lane; it is not part of the 874-fixture parallel job and does not
+change the tuple ledger.
+
+Before calling the interaction lane complete, add targeted scenarios or
+assertions for the remaining silent-noop-prone boundaries:
+
+| Scenario / assertion | Required shape | Required observation contract |
+| --- | --- | --- |
+| Natural Cure switch lifecycle | Status a Natural Cure mon, voluntarily switch it out, then inspect both public views and the re-entry state. | Status and toxic-stage state clear; any sleep-clause holder derived from the cured mon clears too. |
+| Second-sleep / Yawn block | Establish one non-Rest opponent sleeper, then attempt a second sleep and a pending Yawn resolution under the clause. | The action is retained as a failed action rather than conflated with no action; v3 fail and sleep-clause fields remain side-relative. |
+| Toxic into an already-statused target | Apply Toxic, then attempt Toxic again while the target still has a nonvolatile status. | The second action emits/records the failure path and cannot look identical to a skipped turn. |
+| Protect lifetime | Use Protect on one turn and inspect the following decision boundary. | Its same-turn evidence is retained in the transition surface, with no stale permanent volatile on the next turn. |
+
+The v3 silent-noop sweep remains the authority for reachability, handler
+coverage, and accepted-loss decisions. This lane supplies live, party-shaped
+repros for its adjudicated rows; it must not use absence from the finite
+scenario set as evidence that a protocol event is unreachable.
+
+The interaction lane must also run under an explicit v3 spec, rather than the
+checkpoint-free default. Its manifest records the scenario ids, source hash,
+observation schema, and the silent-noop verdict-table revision it exercised.
+That provenance lets a later schema change rerun only the affected scenarios
+without misrepresenting older v2.2 evidence as coverage of v3 fields.
+
 ## 8. Orchestration & budget
 
 Deterministic and embarrassingly parallel across games (~220 draft games + a small gap-fill set,
-each 1–few boundaries). Shard across workers; merge the per-shard `DeepLineAuditReport`/`Acc`
+or 874 exact-variant games, each 1–few boundaries). Shard across workers; merge the per-shard `DeepLineAuditReport`/`Acc`
 accumulators and the coverage ledgers. CLI shape mirrors the existing harnesses: `--showdown-root`,
 `--json PATH` (findings; exit 1 iff any real-bug signature), `--coverage-json PATH` (the ledger),
-`--pass {A,B,both}`, `--gap-fill`, `--use-moves` (§7.1), `--shard i/N`.
+`--pass {A,B,both}`, `--gap-fill`, `--exact-variants`, `--observation-schema v3`,
+`--use-moves` (§7.1), `--shard i/N`.
 
 ## 9. Deliverable
 

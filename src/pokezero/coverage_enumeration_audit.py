@@ -18,7 +18,7 @@ from .randbat import Gen3RandbatSource, Gen3RandbatVariant
 from .showdown_fixture import FixturePokemon, pack_team
 
 
-PLAN_SCHEMA_VERSION = "gen3-randbat-coverage-plan-v1"
+PLAN_SCHEMA_VERSION = "gen3-randbat-coverage-plan-v2"
 OBSERVATION_FORMAT_ID = "gen3randombattle"
 
 
@@ -150,6 +150,7 @@ class CoveragePlan:
     expected_ability_pairs: tuple[tuple[str, str], ...]
     expected_moves: tuple[str, ...]
     expected_items: Mapping[str, str]
+    expected_variants: tuple[str, ...]
     games: tuple[CoverageGame, ...]
 
     def games_for_shard(self, *, shard_index: int, shard_count: int) -> tuple[CoverageGame, ...]:
@@ -167,10 +168,12 @@ class CoveragePlan:
         ability_first: dict[tuple[str, str], str] = {}
         move_first: dict[str, str] = {}
         item_first: dict[str, str] = {}
+        variant_first: dict[str, str] = {}
         for game in selected:
             for selection in game.selections():
                 species_first.setdefault(selection.species_id, game.game_id)
                 ability_first.setdefault((selection.species_id, selection.ability_id), game.game_id)
+                variant_first.setdefault(selection.variant_id, game.game_id)
                 for move in selection.moves:
                     move_first.setdefault(normalize_coverage_move(move), game.game_id)
                 item_first.setdefault(selection.item_id, game.game_id)
@@ -183,6 +186,7 @@ class CoveragePlan:
         )
         missing_moves = sorted(set(self.expected_moves) - set(move_first))
         missing_items = sorted(set(expected_item_ids) - set(item_first))
+        missing_variants = sorted(set(self.expected_variants) - set(variant_first))
         return {
             "schema_version": PLAN_SCHEMA_VERSION,
             "source_metadata": dict(self.source_metadata),
@@ -196,6 +200,7 @@ class CoveragePlan:
                 ],
                 "moves": list(self.expected_moves),
                 "items": [self.expected_items[item_id] for item_id in expected_item_ids],
+                "variants": list(self.expected_variants),
             },
             "first_coverage": {
                 "species": dict(sorted(species_first.items())),
@@ -208,14 +213,16 @@ class CoveragePlan:
                     self.expected_items.get(item_id, item_id): game_id
                     for item_id, game_id in sorted(item_first.items())
                 },
+                "variants": dict(sorted(variant_first.items())),
             },
             "uncovered": {
                 "species": missing_species,
                 "ability_pairs": missing_abilities,
                 "moves": missing_moves,
                 "items": [self.expected_items[item_id] for item_id in missing_items],
+                "variants": missing_variants,
             },
-            "complete": not (missing_species or missing_abilities or missing_moves or missing_items),
+            "complete": not (missing_species or missing_abilities or missing_moves or missing_items or missing_variants),
         }
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -235,6 +242,7 @@ def build_coverage_plan(
     source_items: Sequence[str] | None = None,
     passes: Sequence[str] = ("A", "B"),
     gap_fill: bool = True,
+    exact_variants: bool = False,
     seed_start: int = 9_300_000,
 ) -> CoveragePlan:
     """Build a deterministic complete-coverage fixture plan.
@@ -267,24 +275,37 @@ def build_coverage_plan(
         expected_items=expected_items,
     )
 
+    all_variants = tuple(
+        variant
+        for species_id in expected_species
+        for variant in variants_by_species[species_id]
+    )
     expected_abilities = _expected_ability_pairs(
         variants_by_species,
         expected_species,
-        normalized_passes,
+        ("A", "B") if exact_variants else normalized_passes,
     )
     uncovered_moves = set(expected_moves)
     uncovered_items = set(expected_items)
-    draft: list[CoverageSelection] = []
-    for pass_name in normalized_passes:
-        ability_slot = 0 if pass_name == "A" else 1
-        for species_id in expected_species:
-            variants = variants_by_species[species_id]
-            abilities = sorted({variant.ability for variant in variants}, key=normalize_id)
-            target_ability = abilities[min(ability_slot, len(abilities) - 1)]
-            candidates = tuple(variant for variant in variants if variant.ability == target_ability)
-            selected = _best_variant(candidates, uncovered_moves, uncovered_items)
-            draft.append(CoverageSelection.from_variant(selected, pass_name=pass_name))
-            _consume_variant(selected, uncovered_moves, uncovered_items)
+    if exact_variants:
+        draft = [
+            CoverageSelection.from_variant(variant, pass_name="exact-variant")
+            for variant in all_variants
+        ]
+        for variant in all_variants:
+            _consume_variant(variant, uncovered_moves, uncovered_items)
+    else:
+        draft = []
+        for pass_name in normalized_passes:
+            ability_slot = 0 if pass_name == "A" else 1
+            for species_id in expected_species:
+                variants = variants_by_species[species_id]
+                abilities = sorted({variant.ability for variant in variants}, key=normalize_id)
+                target_ability = abilities[min(ability_slot, len(abilities) - 1)]
+                candidates = tuple(variant for variant in variants if variant.ability == target_ability)
+                selected = _best_variant(candidates, uncovered_moves, uncovered_items)
+                draft.append(CoverageSelection.from_variant(selected, pass_name=pass_name))
+                _consume_variant(selected, uncovered_moves, uncovered_items)
 
     games: list[CoverageGame] = []
     for pair_index in range(0, len(draft), 2):
@@ -293,21 +314,20 @@ def build_coverage_plan(
         game_index = len(games) + 1
         games.append(
             CoverageGame(
-                game_id=f"draft-{p1.pass_name.lower()}-{game_index:03d}",
+                game_id=(
+                    f"variant-{game_index:04d}"
+                    if exact_variants
+                    else f"draft-{p1.pass_name.lower()}-{game_index:03d}"
+                ),
                 seed=seed_start + game_index - 1,
                 pass_name=p1.pass_name,
-                purpose="draft",
+                purpose="exact-variant" if exact_variants else "draft",
                 p1=p1,
                 p2=p2,
             )
         )
 
-    if gap_fill:
-        all_variants = tuple(
-            variant
-            for species_id in expected_species
-            for variant in variants_by_species[species_id]
-        )
+    if gap_fill and not exact_variants:
         anchor = CoverageSelection.from_variant(all_variants[0], pass_name="anchor")
         while uncovered_moves or uncovered_items:
             selected = _best_variant(all_variants, uncovered_moves, uncovered_items)
@@ -349,10 +369,11 @@ def build_coverage_plan(
         expected_ability_pairs=expected_abilities,
         expected_moves=expected_moves,
         expected_items=expected_items,
+        expected_variants=tuple(variant.variant_id for variant in all_variants) if exact_variants else (),
         games=tuple(games),
     )
-    if gap_fill and not plan.coverage_ledger()["complete"]:
-        raise AssertionError("gap-fill produced an incomplete coverage plan")
+    if (gap_fill or exact_variants) and not plan.coverage_ledger()["complete"]:
+        raise AssertionError("coverage plan is incomplete")
     return plan
 
 
@@ -386,9 +407,11 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
     if not isinstance(schema_version, str) or not isinstance(source_metadata, Mapping) or not isinstance(expected, Mapping):
         raise ValueError("coverage ledger is missing schema_version, source_metadata, or expected universe")
 
-    first_coverage: dict[str, dict[str, str]] = {
-        "species": {}, "ability_pairs": {}, "moves": {}, "items": {}
-    }
+    expected_variants = expected.get("variants", ())
+    if not isinstance(expected_variants, (list, tuple)):
+        raise ValueError("coverage ledger expected variants must be a sequence")
+    coverage_kinds = ("species", "ability_pairs", "moves", "items", "variants")
+    first_coverage: dict[str, dict[str, str]] = {kind: {} for kind in coverage_kinds}
     games_selected = 0
     games_total = 0
     for payload in payloads:
@@ -405,6 +428,10 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
             raise ValueError("coverage ledger is missing first_coverage")
         for kind, output in first_coverage.items():
             values = raw_first.get(kind)
+            # A v1-only merge has no optional exact-variant lane. Mixed v1/v2
+            # merges intentionally fail the schema guard above.
+            if kind == "variants" and "variants" not in expected and values is None:
+                continue
             if not isinstance(values, Mapping):
                 raise ValueError(f"coverage ledger first_coverage is missing {kind}")
             for atom, game_id in values.items():
@@ -423,10 +450,15 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
     }
     expected_moves = {str(move) for move in expected.get("moves", ())}
     item_labels = {normalize_id(str(item)): str(item) for item in expected.get("items", ())}
+    expected_variant_ids = {str(variant_id) for variant_id in expected_variants}
     missing_species = sorted(expected_species - set(first_coverage["species"]))
     missing_pairs = sorted(expected_pairs - set(first_coverage["ability_pairs"]))
     missing_moves = sorted(expected_moves - set(first_coverage["moves"]))
     missing_items = sorted(set(item_labels) - {normalize_id(item) for item in first_coverage["items"]})
+    missing_variants = sorted(expected_variant_ids - set(first_coverage["variants"]))
+    # Exact-variant mode promises every source tuple was materialized. Atom-only
+    # coverage can legitimately finish once every required atom is observed.
+    requires_every_fixture = bool(expected_variant_ids)
     return {
         "schema_version": schema_version,
         "source_metadata": dict(source_metadata),
@@ -439,8 +471,12 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
             "ability_pairs": missing_pairs,
             "moves": missing_moves,
             "items": [item_labels[item_id] for item_id in missing_items],
+            "variants": missing_variants,
         },
-        "complete": not (missing_species or missing_pairs or missing_moves or missing_items),
+        "complete": (
+            (not requires_every_fixture or games_selected == games_total)
+            and not (missing_species or missing_pairs or missing_moves or missing_items or missing_variants)
+        ),
     }
 
 
