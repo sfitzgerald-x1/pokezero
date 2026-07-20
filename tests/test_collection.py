@@ -701,6 +701,8 @@ class CollectionTest(unittest.TestCase):
                     "outcome": "searched",
                     "fallback": False,
                     "root_puct_total_visits": 11,
+                    "root_puct_cross_world_initial_value_batch_count": 0,
+                    "root_puct_cross_world_initial_value_batch_world_count": 0,
                     "root_puct_elapsed_seconds": 0.25,
                 }
             ],

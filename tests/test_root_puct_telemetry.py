@@ -235,6 +235,9 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(
             report["initial_value_batching"],
             {
+                "records": 2,
+                "records_with_counters": 2,
+                "complete": True,
                 "cross_world_initial_value_batch_count": 3,
                 "cross_world_initial_value_batch_world_count": 8,
             },
@@ -309,6 +312,16 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["schema_version"], ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION)
         self.assertEqual(report["policies"]["root-puct-120"]["decisions"], 1)
         self.assertEqual(report["policies"]["root-puct-120"]["visits"]["per_root_search_second"], 200.0)
+        self.assertEqual(
+            report["policies"]["root-puct-120"]["initial_value_batching"],
+            {
+                "records": 1,
+                "records_with_counters": 0,
+                "complete": False,
+                "cross_world_initial_value_batch_count": None,
+                "cross_world_initial_value_batch_world_count": None,
+            },
+        )
         with self.assertRaisesRegex(ValueError, "no Root-PUCT decision telemetry"):
             root_puct_benchmark_telemetry_report(payload, policy_ids=("missing",))
 

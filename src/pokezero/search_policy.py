@@ -973,8 +973,17 @@ class RootPUCTSearchPolicy:
                             puct_search_call_count += 1
                             puct_search_completed_call_seconds += puct_search_elapsed_seconds
                             puct_search_completed_call_count += 1
-                            cross_world_initial_value_batch_count += 1
-                            cross_world_initial_value_batch_world_count += len(batch_searches)
+                            # A grouped call may contain terminal worlds, which
+                            # do not contribute an initial value leaf. Count
+                            # only worlds that actually joined the evaluator
+                            # batch so telemetry proves executed batching.
+                            initial_batched_world_count = sum(
+                                search.initial_value_evaluation_count > 0
+                                for search in batch_searches
+                            )
+                            if initial_batched_world_count > 1:
+                                cross_world_initial_value_batch_count += 1
+                                cross_world_initial_value_batch_world_count += initial_batched_world_count
                             for sample_index, (scenario, scenario_search) in enumerate(
                                 zip(resolved_samples, batch_searches, strict=True)
                             ):

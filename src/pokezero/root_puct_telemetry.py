@@ -253,6 +253,12 @@ def root_puct_decision_telemetry(
         value = _nonnegative_int(metadata.get(field))
         if value is not None:
             payload[field] = value
+    # Fresh telemetry always states whether the grouped initial batch ran.
+    # Older persisted v1 records do not have these keys; aggregation preserves
+    # that distinction as incomplete coverage rather than treating them as
+    # verified zero-batch decisions.
+    for field in _INITIAL_VALUE_BATCHING_COUNT_NAMES:
+        payload.setdefault(field, 0)
     for field in ("root_puct_elapsed_seconds", "policy_elapsed_seconds"):
         value = _finite_nonnegative_float(metadata.get(field))
         if value is not None:
@@ -305,6 +311,7 @@ def summarize_root_puct_decision_telemetry(
     scenario_counts: dict[str, int] = {}
     materialization_counts = {name: 0 for name in _MATERIALIZATION_COUNT_NAMES.values()}
     initial_value_batching = {name: 0 for name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.values()}
+    initial_value_batching_records = 0
     for item in records:
         if item.get("outcome") == "fallback":
             category = str(item.get("fallback_category") or "unknown")
@@ -324,8 +331,16 @@ def summarize_root_puct_decision_telemetry(
         effective_total_visits += _nonnegative_int(item.get("root_puct_effective_total_visits")) or 0
         for field, name in _MATERIALIZATION_COUNT_NAMES.items():
             materialization_counts[name] += _nonnegative_int(item.get(field)) or 0
-        for field, name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.items():
-            initial_value_batching[name] += _nonnegative_int(item.get(field)) or 0
+        initial_batching_values = {
+            field: _nonnegative_int(item.get(field))
+            for field in _INITIAL_VALUE_BATCHING_COUNT_NAMES
+        }
+        if all(value is not None for value in initial_batching_values.values()):
+            initial_value_batching_records += 1
+            for field, name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.items():
+                value = initial_batching_values[field]
+                assert value is not None
+                initial_value_batching[name] += value
         for field in _SCALAR_COUNT_FIELDS:
             if not field.startswith("root_puct_opponent_action_"):
                 continue
@@ -370,7 +385,16 @@ def summarize_root_puct_decision_telemetry(
             for field, count in sorted(scenario_counts.items())
         },
         "materialization_counts": materialization_counts,
-        "initial_value_batching": initial_value_batching,
+        "initial_value_batching": {
+            "records": total,
+            "records_with_counters": initial_value_batching_records,
+            "complete": initial_value_batching_records == total,
+            **(
+                initial_value_batching
+                if initial_value_batching_records == total
+                else {name: None for name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.values()}
+            ),
+        },
         "scenario_failure_taxonomy": {
             _COUNTER_TAXONOMY_NAMES.get(
                 field,
