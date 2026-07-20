@@ -8,9 +8,12 @@
 # The vendored tree is fetched, never committed: third_party/poke-engine-src/ is
 # gitignored. Re-run this script after a clean checkout before building the crate.
 #
-# Patches applied (third_party/):
+# Patches applied (third_party/), IN ORDER:
 #   poke-engine-gen3-residual-order.patch — gen3 end-of-turn residual order fix
 #   (see setup_poke_engine.sh header and docs/engine_fidelity_findings.md).
+#   poke-engine-gen3-attract.patch — gen3 Attract 50% move-immobilization fix
+#   (see setup_poke_engine.sh header and docs/engine_fidelity_findings.md);
+#   authored against the residual-patched tree, applied AFTER residual-order.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -29,7 +32,7 @@ tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch; do
+for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 

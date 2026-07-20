@@ -1,0 +1,55 @@
+--- a/src/gen3/generate_instructions.rs	2026-07-19 19:07:10
++++ b/src/gen3/generate_instructions.rs	2026-07-19 19:08:02
+@@ -44,6 +44,7 @@
+ pub const BASE_CRIT_CHANCE: f32 = 1.0 / 16.0;
+ pub const MAX_SLEEP_TURNS: i8 = 4;
+ pub const HIT_SELF_IN_CONFUSION_CHANCE: f32 = 1.0 / 2.0;
++pub const ATTRACT_IMMOBILIZE_CHANCE: f32 = 1.0 / 2.0;
+ pub const CONSECUTIVE_PROTECT_CHANCE: f32 = 1.0 / 2.0;
+ pub const SIDE_CONDITION_DURATION: i8 = 5;
+ 
+@@ -1457,6 +1458,44 @@
+         incoming_instructions.update_percentage(1.0 - HIT_SELF_IN_CONFUSION_CHANCE);
+     }
+ 
++    // Attract (infatuation) move-time immobilization. Mirrors the CONFUSION
++    // self-hit chance branch directly above (a 50/50 CHANCE BRANCH split into two
++    // instruction outcomes weighted 0.5/0.5) so the exact-expectation backup and
++    // chance-node machinery price it exactly, as they already do for full
++    // paralysis and the confusion self-hit. Unlike confusion there is no
++    // self-damage: the immobilized branch is an empty-delta terminal (the move
++    // never executes), identical in shape to the fully-paralyzed branch pushed by
++    // the PARALYZE arm above.
++    //
++    // Ordering: Showdown gen3 resolves Attract's onBeforeMove at priority 2
++    // (data/moves.ts `attract` condition), which runs AFTER confusion (priority 3)
++    // and BEFORE paralysis (priority 1). Placing this check right after the
++    // CONFUSION branch reproduces the confusion->attract split exactly. Paralysis
++    // is resolved earlier in this function (engine convention: the status match
++    // runs first), so for a mon that is BOTH paralyzed and attracted the engine's
++    // internal immobilized-reason split differs from Showdown's, but the net
++    // "move executes" probability is identical (multiplication is commutative) and
++    // both immobilized branches carry the same empty delta -> the leaf-state
++    // distribution is exact; only the rendered cant-reason label (an events.rs
++    // concern) depends on which volatile is credited.
++    //
++    // Acts on volatile presence alone: Showdown only applies `attract` to a valid
++    // infatuation target, so its presence already implies a valid source/gender.
++    // The infatuation source is not tracked by the engine, so attract persists
++    // within the search horizon even if the source switches out (a bounded
++    // over-model in the immobilizing direction, opposite the prior total no-op);
++    // see docs/engine_fidelity_findings.md.
++    if attacking_side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::ATTRACT)
++    {
++        let mut immobilized_instruction = incoming_instructions.clone();
++        immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
++        final_instructions.push(immobilized_instruction);
++
++        incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
++    }
++
+     if attacking_side.side_conditions.protect > 0 {
+         if let Some(vs) = &attacker_choice.volatile_status {
+             if PROTECT_VOLATILES.contains(&vs.volatile_status) {
