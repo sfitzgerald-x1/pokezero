@@ -167,6 +167,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                         "outer_policy_residual_seconds": 0.01,
                         "adaptive_value_evaluation_count": 4,
                         "adaptive_cross_world_batched_leaf_count": 4,
+                        "adaptive_reused_root_branch_count": 3,
                     },
                 },
                 {
@@ -193,6 +194,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                         "outer_policy_residual_seconds": 0.03,
                         "adaptive_value_evaluation_count": 3,
                         "adaptive_cross_world_batched_leaf_count": 0,
+                        "adaptive_reused_root_branch_count": 2,
                     },
                     "counters": {
                         "root_puct_direct_materialization_rejection_categories": {
@@ -255,6 +257,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["timing_totals"]["puct_search_call_count"], 3)
         self.assertEqual(report["timing_totals"]["adaptive_value_evaluation_count"], 7)
         self.assertEqual(report["timing_totals"]["adaptive_cross_world_batched_leaf_count"], 4)
+        self.assertEqual(report["timing_totals"]["adaptive_reused_root_branch_count"], 5)
         self.assertAlmostEqual(report["timing_totals"]["outer_policy_residual_seconds"], 0.04)
         self.assertAlmostEqual(report["timing_totals"]["total_seconds"], 0.60)
 
