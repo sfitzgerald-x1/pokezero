@@ -138,10 +138,16 @@ paired-search result has been claimed yet.
 
 ### W4 — Search cost at M (50M) and L (200M) scale
 
-1. Per-decision search cost with M and L checkpoints on eval GPUs: forward
-   latency, visits/sec, achievable extra-visits within realistic per-turn
-   budgets (~2s aggressive, ~10s ladder-like). Deliverable: feasible search
-   budget per scale — how much search the big models actually get.
+1. Per-decision search cost with M and L checkpoints on the validated W5
+   direct-materialization, initial/adaptive-batched, adaptive-branch-reuse
+   path: forward latency, visits/sec, achievable extra-visits within realistic
+   per-turn budgets (~2s aggressive, ~10s ladder-like). Run the S/M mechanics
+   profile CPU-first: batch-one inference is a small fraction of the current
+   search wall and does not justify reserving a GPU. An L-scale profile may
+   request exactly one GPU only if its CPU profile establishes that forward
+   latency is material; it must not reserve a multi-GPU node. Deliverable:
+   feasible search budget per scale — how much search the big models actually
+   get.
 2. Framing: compute allocation — strong prior with few visits vs weaker prior
    with many; the per-scale W2 curve says where search adds most. Optional,
    only if M-scale feasible budget is nontrivial: one paired probe at M with
