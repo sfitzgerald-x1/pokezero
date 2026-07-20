@@ -202,3 +202,14 @@ schema/parity smoke, not meaningful coverage for those stateful switch chains.
    future exhaustive component sweep would need generated fixtures or direct
    source-derived starts for every catalog member; it is not implied by this
    read-only deep-line run.
+
+## Runner Provenance
+
+Future persistent deep-line random shards suppress the seven signatures already
+triaged above: self-known ability/item, self Transform identity, the two
+`-cureteam` status surfaces, Forecast `-formechange` identity, and the
+downstream candidate-count increase. This changes only audit-artifact signal to
+noise; it does not hide the defects or alter the encoder. The immutable shard
+already in flight retains its original configuration, while later shards will
+continue to record newly discovered signatures without repeated copies of the
+known set.
