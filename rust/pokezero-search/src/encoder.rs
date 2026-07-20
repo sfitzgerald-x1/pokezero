@@ -619,6 +619,13 @@ impl<'a> MonToken<'a> {
     fn ability(&self) -> Option<&str> {
         as_str(get(self.entry, "ability"))
     }
+    /// The request-known CURRENT-held item (`ShowdownPokemon.item`) — the self-side source for the
+    /// self token's item bucket / revealed-item flag (`showdown._encode_pokemon_tokens`, the
+    /// `role == "self"` branch). Empty once the request shows the mon holding nothing (Knock Off /
+    /// Trick / consumed berry), which is how not-currently-held surfaces for free.
+    fn item(&self) -> Option<&str> {
+        as_str(get(self.entry, "item"))
+    }
     fn stats(&self) -> Option<&Value> {
         let stats = get(self.entry, "stats");
         if stats.is_object() {
@@ -1396,14 +1403,50 @@ fn encode_pokemon_tokens(
             None => candidate.condition(),
         });
         let revealed_moves = belief.map(|b| b.revealed_moves()).unwrap_or_default();
-        let revealed_ability = belief.and_then(|b| b.revealed_ability());
-        let revealed_item = belief.and_then(|b| b.revealed_item());
-        let possible_abilities = belief
-            .map(|b| b.possible("possible_abilities"))
-            .unwrap_or_default();
-        let possible_items = belief
-            .map(|b| b.possible("possible_items"))
-            .unwrap_or_default();
+        // #767: our own mons carry no set-source belief (they are fully known by design), so the
+        // belief-derived reveals are empty and the self-token item/ability buckets +
+        // NUMERIC_REVEALED_ITEM/ABILITY would encode NOTHING — the policy could not condition on
+        // its OWN current item or ability. Populate them straight from the request-known candidate
+        // fields (exactly how self stats/details already flow, direct from the request row, not
+        // through the belief engine), as zero-uncertainty singletons (NUMERIC_UNCERTAINTY is
+        // already 0.0 for self below). CURRENT-held semantics come for free: candidate.item is
+        // empty once the request shows the mon holding nothing (Knock Off / Trick / consumed berry
+        // / White Herb), so a stripped mon encodes not-currently-held (revealed_item -> None ->
+        // NUMERIC_REVEALED_ITEM 0.0, empty bucket) while its still-known ability stays encoded.
+        // Mirrors showdown._encode_pokemon_tokens' `if role == "self"` branch; nothing not
+        // request-known is exposed and the opponent path is untouched.
+        let (revealed_ability, revealed_item, possible_abilities, possible_items) = match role {
+            Role::SelfTeam => {
+                let revealed_ability = candidate.ability().filter(|s| !s.is_empty());
+                let revealed_item = candidate.item().filter(|s| !s.is_empty());
+                let possible_abilities = revealed_ability
+                    .map(|a| vec![a.to_string()])
+                    .unwrap_or_default();
+                let possible_items = revealed_item.map(|i| vec![i.to_string()]).unwrap_or_default();
+                (
+                    revealed_ability,
+                    revealed_item,
+                    possible_abilities,
+                    possible_items,
+                )
+            }
+            Role::Opponent => {
+                let revealed_ability = belief.and_then(|b| b.revealed_ability());
+                let revealed_item = belief.and_then(|b| b.revealed_item());
+                let possible_abilities = belief
+                    .map(|b| b.possible("possible_abilities"))
+                    .unwrap_or_default();
+                let possible_items = belief
+                    .map(|b| b.possible("possible_items"))
+                    .unwrap_or_default();
+                (
+                    revealed_ability,
+                    revealed_item,
+                    possible_abilities,
+                    possible_items,
+                )
+            }
+        };
         let possible_moves = belief
             .map(|b| b.possible("possible_moves"))
             .unwrap_or_default();
@@ -1414,11 +1457,25 @@ fn encode_pokemon_tokens(
             Role::SelfTeam => 0.0,
             Role::Opponent => belief.map(|b| b.uncertainty()).unwrap_or(1.0),
         };
-        let transformed = belief
+        // #766: a transformed mon (Ditto) fights as its target — encode species/types/base stats
+        // from the copied identity so the model sees the effective battler, not Ditto's base
+        // 48-across. The Transform flag lives in whichever per-mon ledger tracks this side's exact
+        // state: the OPPONENT passes its set-source belief (carrying the flag) as `belief`, but the
+        // SELF side passes only the exact belief (its set-source belief is None by design), so for
+        // our own transformed Ditto `belief` is None and the copied identity would never surface
+        // (self token stuck on ditto/Normal/48-across). Fall back to the exact belief when the
+        // set-source belief lacks the flag. For the opponent both maps resolve to the same entry,
+        // so this is a no-op there; a non-transformed self mon is likewise unchanged. Mirrors
+        // showdown._encode_pokemon_tokens' transform_belief resolution.
+        let transform_belief = match belief {
+            Some(b) if b.transformed() => Some(b),
+            _ => exact,
+        };
+        let transformed = transform_belief
             .map(|b| b.transformed() && b.transform_species().is_some())
             .unwrap_or(false);
         let enc_species = if transformed {
-            belief
+            transform_belief
                 .and_then(|b| b.transform_species())
                 .unwrap_or(species.as_str())
                 .to_string()
