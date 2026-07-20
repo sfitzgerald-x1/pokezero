@@ -123,6 +123,23 @@ def _available_scenarios(*, include_interaction_registry: bool) -> dict[str, obj
     return scenarios
 
 
+def _requested_scenario_names(
+    *,
+    named_scenarios: Iterable[str],
+    include_all_scenarios: bool,
+    include_interaction_registry: bool,
+) -> tuple[dict[str, object], set[str]]:
+    """Resolve CLI selectors while keeping the party registry explicitly opt-in."""
+
+    selected = _available_scenarios(include_interaction_registry=include_interaction_registry)
+    names = set(named_scenarios)
+    if include_all_scenarios:
+        names.update(selected)
+    elif include_interaction_registry:
+        names.update(spec.name for spec in interaction_registry_specs())
+    return selected, names
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -176,10 +193,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         for seed in range(args.seed_start, args.seed_start + args.random_games):
             _audit_game(env, seed=seed, report=report, max_rounds=args.max_rounds)
-        selected = _available_scenarios(include_interaction_registry=args.interaction_registry)
-        names = set(args.scenario)
-        if args.scenarios:
-            names.update(selected)
+        selected, names = _requested_scenario_names(
+            named_scenarios=args.scenario,
+            include_all_scenarios=args.scenarios,
+            include_interaction_registry=args.interaction_registry,
+        )
         unknown = sorted(names - set(selected))
         if unknown:
             parser.error(f"unknown scenario(s): {', '.join(unknown)}")
