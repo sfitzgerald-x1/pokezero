@@ -370,15 +370,19 @@ class TransitionKindLockstepTest(unittest.TestCase):
 
 class DurationTrackingTest(unittest.TestCase):
     def test_move_weather_counts_down_and_upkeep_does_not_reset(self) -> None:
+        # Real Showdown emits one |-weather|<id>|[upkeep] at the END of every turn the weather is
+        # up (before the next |turn| marker). The countdown is driven by those upkeep ticks, and an
+        # [upkeep] line must NOT be mistaken for a fresh set that resets the counter (audit #9).
         state = _state([
             "|move|p1a: Charizard|Rain Dance|p1a: Charizard",
             "|-weather|RainDance",
+            "|-weather|RainDance|[upkeep]",  # end of turn 1: first tick consumed at the set turn
             "|turn|2",
-            "|-weather|RainDance|[upkeep]",
+            "|-weather|RainDance|[upkeep]",  # end of turn 2: second tick
             "|turn|3",
         ])
         self.assertEqual(state.weather, "raindance")
-        self.assertEqual(state.weather_turns_remaining, 3)  # 5 - (turn 3 - set turn 1)
+        self.assertEqual(state.weather_turns_remaining, 3)  # 5 - 2 observed upkeep ticks
         self.assertFalse(state.weather_permanent)
 
     def test_ability_weather_is_permanent(self) -> None:

@@ -563,6 +563,12 @@ class ShowdownReplayState:
     # and whether it came from an ability (|-weather|...|[from] ability: — permanent in gen 3).
     weather_set_turn: Optional[int] = None
     weather_from_ability: bool = False
+    # Count of end-of-turn ``|-weather|<id>|[upkeep]`` ticks observed since the current weather was
+    # set. Move weather runs a 5-turn countdown and the first tick fires at the END of the set turn,
+    # before the next request is issued, so the first post-resolution observation already reflects it
+    # (deep-line audit #9). Remaining move-weather turns = 5 - this count. Reset on set/clear; unused
+    # for permanent ability weather (which short-circuits to the pinned duration).
+    weather_upkeeps: int = 0
     # Set-turn per side for the deterministic 5-turn side conditions (Reflect / Light Screen /
     # Safeguard / Mist), keyed by normalized condition id.
     side_condition_set_turns: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
@@ -702,6 +708,7 @@ class _ReplayParser:
         self.winner: Optional[str] = None
         self.weather_set_turn: Optional[int] = None
         self.weather_from_ability: bool = False
+        self.weather_upkeeps: int = 0
         self.side_condition_set_turns: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.wish_set_turns: dict[str, int] = {}
         self.leech_seed_source_sides: dict[str, str] = {}
@@ -741,6 +748,7 @@ class _ReplayParser:
         parser.winner = snapshot.winner
         parser.weather_set_turn = snapshot.weather_set_turn
         parser.weather_from_ability = snapshot.weather_from_ability
+        parser.weather_upkeeps = snapshot.weather_upkeeps
         parser.side_condition_set_turns = {
             slot: dict(snapshot.side_condition_set_turns.get(slot, {})) for slot in ("p1", "p2")
         }
@@ -984,11 +992,18 @@ class _ReplayParser:
         if not identifier or identifier == "none":
             self.weather_set_turn = None
             self.weather_from_ability = False
+            self.weather_upkeeps = 0
             return
         if "[upkeep]" in line:
+            # Each end-of-turn upkeep consumes one move-weather duration tick, mirroring
+            # Showdown's weatherState.duration countdown. The first tick fires at the END of the
+            # set turn (before the next request), so the first post-resolution observation must
+            # already reflect it — otherwise the counter reads one turn stale (audit #9).
+            self.weather_upkeeps += 1
             return
         self.weather_set_turn = self.turn_number
         self.weather_from_ability = "[from] ability:" in line
+        self.weather_upkeeps = 0
 
     def _update_timed_side_conditions(self, parts: Sequence[str]) -> None:
         """Record the set turn of the deterministic 5-turn side conditions per side."""
@@ -1097,6 +1112,7 @@ class _ReplayParser:
             winner=self.winner,
             weather_set_turn=self.weather_set_turn,
             weather_from_ability=self.weather_from_ability,
+            weather_upkeeps=self.weather_upkeeps,
             side_condition_set_turns={
                 slot: dict(turns) for slot, turns in self.side_condition_set_turns.items()
             },
@@ -1284,8 +1300,12 @@ def _weather_duration_features(replay: ShowdownReplayState) -> tuple[int, bool]:
         return _TIMED_CONDITION_DURATION, True
     if replay.weather_set_turn is None:
         return 0, False
-    elapsed = replay.turn_number - replay.weather_set_turn
-    return max(0, _TIMED_CONDITION_DURATION - elapsed), False
+    # Move weather counts down one tick per end-of-turn upkeep. The observation boundary always
+    # sits after the set turn's own upkeep, so the elapsed count must come from the upkeep ticks
+    # actually observed rather than the whole-turn difference (which is one short at the set turn,
+    # before |turn|N+1 is fed — audit #9). This matches the bridge weatherState.duration at every
+    # boundary from set to expiry, including a mid-turn switch on the set turn (0 upkeeps → full 5).
+    return max(0, _TIMED_CONDITION_DURATION - replay.weather_upkeeps), False
 
 
 def _timed_condition_turns(replay: ShowdownReplayState, slot: str) -> dict[str, int]:

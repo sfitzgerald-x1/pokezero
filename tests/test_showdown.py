@@ -30,11 +30,14 @@ from pokezero.showdown import (
     NUMERIC_SELF_HP_COST,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
+    NUMERIC_WEATHER_PERMANENT,
+    NUMERIC_WEATHER_TURNS,
     CATEGORY_PRIMARY,
     CATEGORY_TYPE_1,
     CATEGORY_MOVE_CATEGORY,
     NUMERIC_BASE_POWER,
     _ReplayParser,
+    _weather_duration_features,
     _actual_stats_from_request_row,
     _encode_move_mechanics,
     _hidden_power_variant_from_name,
@@ -1244,6 +1247,72 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_weather_none_clears(self) -> None:
         state = self._replay_with(["|-weather|RainDance", "|-weather|none"])
         self.assertIsNone(state.weather)
+
+    def _encoded_weather(self, extra_lines: list[str]) -> tuple[float, float]:
+        """(weather_turns column, weather_permanent column) for the injected weather lines."""
+        state = self._replay_with(extra_lines)
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
+        field = observation.numeric_features[FIELD_TOKEN_OFFSET]
+        return field[NUMERIC_WEATHER_TURNS], field[NUMERIC_WEATHER_PERMANENT]
+
+    def test_move_weather_countdown_consumes_set_turn_upkeep_at_first_boundary(self) -> None:
+        # Audit #9: the first post-resolution decision after a fresh move-weather line already
+        # sits AFTER the set turn's end-of-turn |-weather|...|[upkeep] tick, so it must encode
+        # four remaining turns (matching the bridge weatherState.duration of 4), not the full five.
+        start = parse_showdown_replay(["|-weather|RainDance", "|-weather|RainDance|[upkeep]"])
+        self.assertEqual(_weather_duration_features(start), (4, False))
+        self.assertAlmostEqual(self._encoded_weather(
+            ["|-weather|RainDance", "|-weather|RainDance|[upkeep]"]
+        )[0], 4 / 5)
+        # One later boundary: a second upkeep tick -> three remaining (bridge duration 3).
+        later = parse_showdown_replay(
+            ["|-weather|RainDance", "|-weather|RainDance|[upkeep]", "|turn|2",
+             "|-weather|RainDance|[upkeep]"]
+        )
+        self.assertEqual(_weather_duration_features(later), (3, False))
+
+    def test_move_weather_before_any_upkeep_is_full_five(self) -> None:
+        # Before the set turn's upkeep fires (e.g. a mid-turn forced switch on the set turn), the
+        # bridge still reports the full duration 5 -- the fix must NOT over-consume here.
+        fresh = parse_showdown_replay(["|-weather|RainDance"])
+        self.assertEqual(_weather_duration_features(fresh), (5, False))
+        self.assertAlmostEqual(self._encoded_weather(["|-weather|RainDance"])[0], 5 / 5)
+
+    def test_move_weather_recast_countdown_after_expiry(self) -> None:
+        # A second Rain Dance after the first expires must restart the countdown and again consume
+        # the recast set turn's upkeep at the first post-resolution boundary (bridge duration 4).
+        recast_prefix = [
+            "|-weather|RainDance", "|-weather|RainDance|[upkeep]", "|turn|2",
+            "|-weather|RainDance|[upkeep]", "|turn|3", "|-weather|RainDance|[upkeep]", "|turn|4",
+            "|-weather|RainDance|[upkeep]", "|turn|5", "|-weather|none", "|turn|6",
+            "|-weather|RainDance", "|-weather|RainDance|[upkeep]",
+        ]
+        recast_first = parse_showdown_replay(recast_prefix)
+        self.assertEqual(recast_first.weather, "raindance")
+        self.assertEqual(_weather_duration_features(recast_first), (4, False))
+        # One later recast boundary -> three remaining (bridge duration 3).
+        recast_later = parse_showdown_replay(
+            recast_prefix + ["|turn|7", "|-weather|RainDance|[upkeep]"]
+        )
+        self.assertEqual(_weather_duration_features(recast_later), (3, False))
+
+    def test_permanent_ability_weather_is_unchanged_by_upkeeps(self) -> None:
+        # Gen 3 ability weather (Sand Stream) is permanent (bridge duration 0). The upkeep counter
+        # must never bleed into its encoding: it stays pinned at the full five and flagged permanent
+        # across any number of upkeep ticks -- byte-identical to the pre-fix short-circuit.
+        for upkeeps in range(4):
+            lines = ["|-weather|Sandstorm|[from] ability: Sand Stream|[of] p1a: Tyranitar"]
+            lines += ["|-weather|Sandstorm|[upkeep]"] * upkeeps
+            state = parse_showdown_replay(lines)
+            self.assertEqual(_weather_duration_features(state), (5, True))
+        turns, permanent = self._encoded_weather(
+            ["|-weather|Sandstorm|[from] ability: Sand Stream|[of] p1a: Tyranitar",
+             "|-weather|Sandstorm|[upkeep]", "|-weather|Sandstorm|[upkeep]"]
+        )
+        self.assertAlmostEqual(turns, 5 / 5)
+        self.assertAlmostEqual(permanent, 1.0)
 
     def test_boosts_accumulate_on_active_mon(self) -> None:
         state = self._replay_with(
