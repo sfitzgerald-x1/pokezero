@@ -1259,7 +1259,11 @@ pub struct FoldStateInner {
 }
 
 impl FoldStateInner {
-    fn initial(perspective_slot: u8, merged_tail_limit: usize, action_tail_limit: usize) -> Self {
+    pub(crate) fn initial(
+        perspective_slot: u8,
+        merged_tail_limit: usize,
+        action_tail_limit: usize,
+    ) -> Self {
         FoldStateInner {
             perspective_slot,
             merged_tail_limit,

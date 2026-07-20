@@ -821,7 +821,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
                     );
-                    let meta = crate::leaf::evolve_leaf_meta(&parent_meta, &rendered.lines);
+                    let meta = crate::leaf::evolve_leaf_meta(
+                        &parent_meta,
+                        &rendered.lines,
+                        leaf_ctx.meta_ctx(),
+                    );
                     let encoded = match leaf_ctx.encode_leaf(
                         leaf,
                         &fold,

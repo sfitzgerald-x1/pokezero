@@ -4,7 +4,8 @@ Random-seed games only exercise edge cases by luck. This module scripts
 `gen3customgame` games (via ``BattleStartOverride``) that deterministically
 reach the positions the belief/mask edge-case matrix cares about — Truant
 loafing phases, Transform, Encore locks, Hyper Beam recharge, Baton Pass
-boundaries, Wish, sand + Shedinja, RestTalk, screens, toxic stalls — and
+boundaries, Wish, sand + Shedinja, RestTalk, screens, toxic stalls, Ghost
+Curse — and
 captures them through the exact same corpus machinery as the random games
 (same schema; scenario identity carried in ``battle_id``, no schema change).
 
@@ -181,6 +182,19 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
             (_mon("Starmie", ("Surf", "Recover", "Psychic", "Rapid Spin"), ability="Natural Cure"), blissey),
             p1_prefs=(("toxic",), ("protect",), ("earthquake",)),
             p2_prefs=(("recover", "surf"),),
+        ),
+        # Ghost-typed Curse (live-protocol shape: |move| with explicit target,
+        # |-start|target|Curse|[of] user, bare self |-damage| HP cut; a
+        # repeat lands the already-cursed fail form). Keeps the renderer's
+        # Ghost/non-Ghost Curse split and the leaf CURSE volatile placement
+        # exercised; Seismic Toss into Gengar also pins the Normal-immunity
+        # render.
+        ScenarioSpec(
+            "ghost_curse",
+            (_mon("Gengar", ("Curse", "Shadow Ball", "Thunderbolt", "Protect"), ability="Levitate"), swampert),
+            (blissey, swampert),
+            p1_prefs=(("curse",), ("curse",), ("shadowball",)),
+            p2_prefs=(("seismictoss", "softboiled"),),
         ),
     )
 
