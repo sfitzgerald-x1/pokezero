@@ -174,6 +174,31 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(replay.public_active["p1"].condition, "250/250 par")
         self.assertEqual(replay.public_revealed["p2"][0].condition, "180/220 brn")
 
+    def test_cureteam_strips_status_suffix_team_wide_and_resets_toxic_stage(self) -> None:
+        # Aromatherapy emits a single |-cureteam|SOURCE (no per-mon -curestatus). The public
+        # condition update must strip the status suffix from the source's active mon AND every
+        # revealed benched mon on that side, and reset that side's toxic ramp.
+        replay = parse_showdown_replay(
+            [
+                "|switch|p1a: Swampert|Swampert, L84|300/300",
+                "|switch|p2a: Vigoroth|Vigoroth, L84|301/301",
+                "|-status|p2a: Vigoroth|tox",
+                "|-damage|p2a: Vigoroth|283/301 tox|[from] psn",
+                "|switch|p2a: Blissey|Blissey, L82|300/300",
+                "|-status|p2a: Blissey|brn",
+                "|-damage|p2a: Blissey|280/300 brn",
+                "|move|p2a: Blissey|Aromatherapy|p2a: Blissey",
+                "|-cureteam|p2a: Blissey|[from] move: Aromatherapy",
+            ]
+        )
+        # Active source (Blissey): burn suffix stripped.
+        self.assertEqual(replay.public_active["p2"].condition, "280/300")
+        # Benched revealed Vigoroth: tox suffix stripped.
+        vigoroth = next(p for p in replay.public_revealed["p2"] if p.species == "Vigoroth")
+        self.assertEqual(vigoroth.condition, "283/301")
+        # Toxic ramp on the cured side reset; the opponent side untouched.
+        self.assertEqual(replay.toxic_stage["p2"], 0)
+
     def test_timestamp_lines_are_not_normalized_into_public_events(self) -> None:
         replay = parse_showdown_replay(
             [
