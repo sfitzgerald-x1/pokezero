@@ -81,3 +81,18 @@ encoder (`rust/pokezero-search`) mirrors it and the golden corpus is
 regenerated at v3. Until then the corpus stays on v2.2 and the gate is
 unaffected (v2.2 output unchanged). The new generation run launches only
 after both sides agree.
+
+## Review dispositions (2026-07-20, post-implementation Opus review: SHIP)
+
+- **Fail on switch rows is INTENDED.** A blocked switch-in Intimidate (Clear
+  Body / Hyper Cutter / White Smoke) emits `-fail` inside the switch window,
+  so a switch sub-block can carry `fail=True`. Kept deliberately: it is
+  deterministic, public, disambiguated by the sub-block kind, and publicly
+  reveals the opponent's ability class — informative signal, not noise.
+- **Known accepted loss (v3-only, rare):** a Baton Pass completion switch is
+  collapsed into `baton_pass_species` during turn-merging, dropping a
+  `fail=True` from a BP-into-Clear-Body Intimidate block. To revisit at the
+  Rust-mirror/corpus-regeneration milestone with a scenario test; either
+  preserve fail onto the collapse or re-accept the loss explicitly.
+- Golden-corpus tooling migrated to the schema-family membership tuple so a
+  future default-schema bump cannot silently disable turn-merged capture.

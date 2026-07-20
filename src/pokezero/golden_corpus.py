@@ -82,6 +82,7 @@ from .policy import PolicyContext, PolicyDecision, RandomLegalPolicy, SimpleLega
 from .public_decision_corpus import sha256_file
 from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .showdown import OBSERVATION_SCHEMA_VERSION_V2_2
+from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from .showdown_fixture import FixturePokemon, pack_team
 
 GOLDEN_CORPUS_SCHEMA_VERSION = "pokezero.golden-encoder-corpus.v2"
@@ -1041,7 +1042,7 @@ def generate_golden_corpus(
     config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
     env = LocalShowdownEnv(config)
     turn_merged_active = (
-        config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        config.observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     )
     collected: list[GoldenGame] = []
     belief_hash: str | None = None
