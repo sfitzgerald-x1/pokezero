@@ -23,3 +23,23 @@
              flags: Flags {
                  contact: true,
                  protect: true,
+@@ -20651,6 +20665,19 @@
+ pub fn undo_physical_special_split(moves: &mut HashMap<Choices, Choice>) {
+     for (_, choice) in moves.iter_mut() {
+         if choice.category == MoveCategory::Status {
++            continue;
++        }
++        // pokezero gen3 (and gen2+) Struggle fix: Struggle is TYPELESS for type
++        // effectiveness (see the STRUGGLE entry above) but stays a PHYSICAL
++        // damaging move in every generation. The pre-split re-derivation below
++        // keys category off move_type, and TYPELESS falls into the Special
++        // catch-all — which would silently flip Struggle to Special (tracking
++        // SpA/SpD and dodging the physical burn-halving in gen3 damage_calc).
++        // Skip Struggle so its explicit Physical category from the MOVES table is
++        // preserved, exactly as Status moves are skipped above. gen1 Struggle is
++        // Normal-typed and already lands in the Physical arm, so this is a no-op
++        // there; no other move is affected.
++        if choice.move_id == Choices::STRUGGLE {
+             continue;
+         }
+         match choice.move_type {
