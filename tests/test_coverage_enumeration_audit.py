@@ -15,8 +15,10 @@ from pokezero.coverage_enumeration_audit import (
     build_coverage_plan,
     merge_coverage_ledgers,
     normalize_coverage_move,
+    require_matching_audit_provenance,
 )
 from pokezero.deep_line_audit import DeepLineAuditReport
+import pokezero.deep_line_audit as deep_line_audit
 from pokezero.randbat import (
     Gen3RandbatSource,
     Gen3RandbatSpeciesUniverse,
@@ -216,6 +218,27 @@ class CoverageEnumerationPlanTests(unittest.TestCase):
             normalize_coverage_move("hiddenpowergrass"),
         )
 
+    def test_audit_provenance_rejects_missing_and_mixed_shards(self) -> None:
+        baseline = {
+            "public_repo_commit": "commit-a",
+            "showdown_source_hash": "source-a",
+            "observation_schema": "pokezero.observation.v3",
+            "image_digest": "registry/pokezero@sha256:abc",
+        }
+        self.assertEqual(
+            require_matching_audit_provenance(({"audit_provenance": baseline},)),
+            baseline,
+        )
+        with self.assertRaisesRegex(ValueError, "no audit_provenance"):
+            require_matching_audit_provenance(({},))
+        with self.assertRaisesRegex(ValueError, "differs from shard 0"):
+            require_matching_audit_provenance(
+                (
+                    {"audit_provenance": baseline},
+                    {"audit_provenance": {**baseline, "image_digest": "registry/pokezero@sha256:def"}},
+                )
+            )
+
 
 class CoverageEnumerationDriverTests(unittest.TestCase):
     @staticmethod
@@ -229,6 +252,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
         code = self._cli_error(
             "--json", "/tmp/coverage-audit.json",
             "--coverage-json", "/tmp/coverage-ledger.json",
+            "--observation-schema", "v3",
             "--exact-variants",
             "--pass", "A",
         )
@@ -239,12 +263,14 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
         missing_exact = self._cli_error(
             "--json", "/tmp/coverage-audit.json",
             "--coverage-json", "/tmp/coverage-ledger.json",
+            "--observation-schema", "v3",
             "--depth-rounds", "1",
             "--failure-dir", "/tmp/coverage-failures",
         )
         missing_failure_dir = self._cli_error(
             "--json", "/tmp/coverage-audit.json",
             "--coverage-json", "/tmp/coverage-ledger.json",
+            "--observation-schema", "v3",
             "--exact-variants",
             "--depth-rounds", "1",
         )
@@ -256,10 +282,39 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
         code = self._cli_error(
             "--json", "/tmp/coverage-audit.json",
             "--coverage-json", "/tmp/coverage-ledger.json",
+            "--observation-schema", "v3",
             "--failure-dir", "/tmp/coverage-failures",
         )
 
         self.assertEqual(code, 2)
+
+    def test_cli_requires_explicit_v3_schema(self) -> None:
+        missing = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+        )
+        wrong = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+            "--observation-schema", "v2.2",
+        )
+
+        self.assertEqual(missing, 2)
+        self.assertEqual(wrong, 2)
+
+    def test_protocol_signature_keeps_omission_prone_subtypes(self) -> None:
+        self.assertEqual(
+            deep_line_audit._canonical_protocol_signature(
+                "|-activate|p1a: Gengar|ability: Cursed Body".split("|")
+            ),
+            "-activate:abilitycursedbody",
+        )
+        self.assertEqual(
+            deep_line_audit._canonical_protocol_signature(
+                "|cant|p2a: Snorlax|slp".split("|")
+            ),
+            "cant:slp",
+        )
 
     def test_depth_lane_preserves_submitted_moves_when_a_fixture_errors(self) -> None:
         selection = CoverageSelection(
@@ -359,6 +414,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             )
 
         self.assertEqual(dict(report.protocol_events), {"move": 1, "-fail": 1})
+        self.assertEqual(dict(report.protocol_signatures), {"-fail:movetoxic": 1, "move:movea": 1})
         audit_boundary.assert_not_called()
 
     def test_non_depth_lane_does_not_require_protocol_telemetry(self) -> None:
@@ -454,6 +510,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             )
 
         self.assertEqual(dict(report.protocol_events), {"move": 2, "-fail": 1})
+        self.assertEqual(dict(report.protocol_signatures), {"-fail:movetoxic": 1, "move:movea": 2})
         self.assertEqual(audit_boundary.call_count, 2)
 
     def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:

@@ -251,6 +251,10 @@ class DeepLineAuditReport:
     protocol_ordered_pairs: Counter[tuple[str, str]] = field(default_factory=Counter)
     protocol_ordered_triples: Counter[tuple[str, str, str]] = field(default_factory=Counter)
     protocol_events: Counter[str] = field(default_factory=Counter)
+    # Top-level tags identify broad protocol coverage; this companion census
+    # preserves the subtype/reason carried by omission-prone tags such as
+    # -activate, cant, and -fail.
+    protocol_signatures: Counter[str] = field(default_factory=Counter)
     candidate_count_history: dict[tuple[str, str], int] = field(default_factory=dict)
     current_game_id: str | None = None
     suppressed_kinds: frozenset[str] = frozenset()
@@ -412,6 +416,7 @@ class DeepLineAuditReport:
             "findings": [finding.to_json_dict() for finding in self.findings],
             "suppressed_finding_counts": dict(sorted(self.suppressed_findings.items())),
             "protocol_events": dict(sorted(self.protocol_events.items())),
+            "protocol_signatures": dict(sorted(self.protocol_signatures.items())),
             "protocol_cooccurrences": [
                 {"events": list(events), "count": count}
                 for events, count in sorted(
@@ -701,7 +706,51 @@ def census_protocol_cooccurrences(
             continue
         if event not in {"request", "upkeep", "t:", "player"}:
             current.append(event)
+            report.protocol_signatures[_canonical_protocol_signature(parts)] += 1
     _record_turn_cooccurrence(current, report)
+
+
+_SIGNATURE_PAYLOAD_EVENTS = frozenset(
+    {
+        "move",
+        "cant",
+        "-activate",
+        "-fail",
+        "-start",
+        "-end",
+        "-singleturn",
+        "-mustrecharge",
+        "-notarget",
+        "-sethp",
+        "-weather",
+        "-status",
+        "-curestatus",
+    }
+)
+
+
+def _canonical_protocol_signature(parts: Sequence[str]) -> str:
+    """Return a stable tag-plus-meaningful-payload protocol census key.
+
+    The static omission inventory distinguishes subtypes such as ``cant``
+    reasons and ``-activate`` identifiers.  Counting only ``parts[1]`` here
+    would make their real occurrence frequency invisible.  Names, slots,
+    targets, and ``[from]`` annotations stay out of the key because they do
+    not identify the protocol semantic being consumed.
+    """
+
+    event = parts[1] if len(parts) > 1 else ""
+    if not event or event not in _SIGNATURE_PAYLOAD_EVENTS:
+        return event
+    # Most protocol events place their semantic identifier after the target;
+    # weather is field-scoped and carries it directly as the first payload.
+    payload_index = 2 if event == "-weather" else 3
+    if len(parts) <= payload_index:
+        return event
+    payload = parts[payload_index].strip()
+    if not payload or payload.startswith("["):
+        return event
+    return f"{event}:{_normalize_identifier(payload)}"
 
 
 def _record_turn_cooccurrence(events: Sequence[str], report: DeepLineAuditReport) -> None:
