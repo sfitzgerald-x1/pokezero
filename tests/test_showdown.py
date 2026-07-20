@@ -958,6 +958,94 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(reset.self_toxic_stage, 0)
 
+    @staticmethod
+    def _tox_pivot_lines(mon: str, *, extra: list[str] | None = None) -> list[str]:
+        """A badly-poisoned mon (active-slot prefix ``mon``, e.g. 'p1a') that escalates, pivots
+        OUT (counter reset to 0, Gen 3) and back IN carrying ``tox`` only in the switch condition
+        with no fresh ``|-status|`` — mirrors the live Tauros/Milotic capture. Gen 3 residual damage
+        is ``max(1, floor(285/16)) * stage`` = ``17 * stage`` (17, 34, 51 → stage 1, 2, 3)."""
+        foe = "p2a" if mon.startswith("p1") else "p1a"
+        return [
+            f"|switch|{mon}: Tauros|Tauros, L80, M|285/285",
+            f"|switch|{foe}: Milotic|Milotic, L80, F|317/317",
+            "|turn|1",
+            f"|-status|{mon}: Tauros|tox",
+            f"|-damage|{mon}: Tauros|268/285 tox|[from] psn",  # 17 = stage 1
+            "|upkeep",
+            "|turn|2",
+            f"|-damage|{mon}: Tauros|234/285 tox|[from] psn",  # 34 = stage 2
+            "|upkeep",
+            "|turn|3",
+            f"|switch|{mon}: Zapdos|Zapdos, L78|301/301",  # Tauros leaves: counter reset to 0
+            "|upkeep",
+            "|turn|4",
+            f"|switch|{mon}: Tauros|Tauros, L80, M|234/285 tox",  # RE-ENTRY, no |-status|
+            f"|-damage|{mon}: Tauros|217/285 tox|[from] psn",  # 17 = stage 1 RESTART (re-seed)
+            "|upkeep",
+            "|turn|5",
+            *(extra or []),
+        ]
+
+    def test_toxic_ramp_reseeds_from_public_damage_after_pivot_both_seats(self) -> None:
+        # After a pivot the ramp is re-derived from the PUBLIC end-of-turn residual (the exact
+        # counter is hidden but round(16 * damage/maxhp) recovers it), so a re-entered tox mon
+        # shows the true escalating stage instead of a stuck 0. Tracked identically for both seats.
+        for mon, side in (("p1a", "p1"), ("p2a", "p2")):
+            with self.subTest(seat=side):
+                # At the turn-5 decision point the mon has re-entered and taken one residual: the
+                # ramp restarted at stage 1 (turn 4 damage) and the |turn|5 escalation lifts it to
+                # the stage 2 that lands this turn — where the pre-fix encoder read a stuck 0.
+                at5 = parse_showdown_replay(self._tox_pivot_lines(mon))
+                self.assertEqual(at5.toxic_stage[side], 2)
+                # And it keeps climbing: one more residual (34 = stage 2) + escalation → stage 3.
+                at6 = parse_showdown_replay(
+                    self._tox_pivot_lines(
+                        mon,
+                        extra=[
+                            f"|-damage|{mon}: Tauros|183/285 tox|[from] psn",  # 34 = stage 2
+                            "|upkeep",
+                            "|turn|6",
+                        ],
+                    )
+                )
+                self.assertEqual(at6.toxic_stage[side], 3)
+
+    def test_toxic_ramp_reseed_encodes_correct_stage_on_active_token(self) -> None:
+        # End-to-end proof the re-seed reaches the observation column: encode from the FOE's seat
+        # (p1 tracking p2's re-entered Tauros) and read NUMERIC_TOXIC_STAGE off its active token.
+        from pokezero.showdown import NUMERIC_ACTIVE
+
+        replay = parse_showdown_replay(self._tox_pivot_lines("p2a"))
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        opp_active = next(
+            opponent_offset + i
+            for i in range(OPPONENT_POKEMON_TOKEN_COUNT)
+            if observation.numeric_features[opponent_offset + i][NUMERIC_ACTIVE] == 1.0
+        )
+        self.assertAlmostEqual(
+            observation.numeric_features[opp_active][NUMERIC_TOXIC_STAGE], 2 / 15
+        )
+
+    def test_regular_poison_residual_never_seeds_toxic_ramp(self) -> None:
+        # A regular-poison (`psn`, flat 1/8) residual also emits `[from] psn`, but its condition
+        # carries no `tox` token, so it must NOT touch the toxic ramp (no false stage from 1/8).
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Tauros|Tauros, L80, M|285/285",
+                "|switch|p2a: Milotic|Milotic, L80, F|317/317",
+                "|turn|1",
+                "|-status|p1a: Tauros|psn",
+                "|-damage|p1a: Tauros|250/285 psn|[from] psn",  # 35 = 1/8, regular poison
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        self.assertEqual(state.toxic_stage["p1"], 0)
+
     def test_future_sight_cleared_when_it_lands(self) -> None:
         landed = self._replay_with(
             [

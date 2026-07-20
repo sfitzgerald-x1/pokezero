@@ -822,6 +822,9 @@ class _ReplayParser:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
             self.pending_baton_pass.discard(_slot_from_ident(parts[2]))
+        # Re-seed the toxic ramp from the PUBLIC end-of-turn residual BEFORE the condition update
+        # overwrites the pre-damage HP (needed to measure the residual's magnitude).
+        self._reseed_toxic_stage_from_residual(parts)
         _update_public_pokemon_condition(parts, self.public_active, self.public_revealed)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
@@ -837,6 +840,51 @@ class _ReplayParser:
         _flag_baton_pass(parts, self.pending_baton_pass)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _reseed_toxic_stage_from_residual(self, parts: Sequence[str]) -> None:
+        """Recover the badly-poisoned (tox) ramp stage from the PUBLIC end-of-turn toxic residual.
+
+        A ``tox`` mon that switches out has its counter reset to 0 (Gen 3, ``tox.onSwitchIn`` sets
+        ``effectState.stage = 0``); on re-entry the ``tox`` rides only the switch-line condition
+        string with no fresh ``|-status|``, so ``_update_toxic_stage`` never re-seeds and the
+        per-``|turn|`` escalation (gated on ``if stage``) can never lift it off 0 — the encoder
+        would emit the contradictory ``status:tox`` + ``toxic_stage == 0`` for the whole stint.
+
+        The exact counter is hidden, but it is publicly derivable: Gen 3 badly-poison damage is
+        ``clampIntRange(maxhp/16, 1) * stage`` (the sim ``stage++``s to 1 on the first residual
+        after re-entry, so the ramp restarts at 1 and climbs 1, 2, 3 …), so the observed residual
+        fraction gives ``stage = round(16 * damage / maxhp)``. Re-deriving here fixes the pivot,
+        the forced re-entry (Roar/Whirlwind ``|drag|``), and a mon first observed already-``tox``
+        (replay import / mid-battle observe start) uniformly, for both seats. Regular (non-badly)
+        poison also emits ``[from] psn`` but is a flat 1/8 with no ramp — gated out by the
+        residual's own status token, which is ``tox`` only for badly-poisoned mons.
+        """
+
+        if (parts[1] if len(parts) > 1 else "") != "-damage" or len(parts) < 4:
+            return
+        # The tox clock's residual is tagged exactly ``[from] psn`` (no ``[of]`` source field).
+        if not any(field.strip() == "[from] psn" for field in parts[4:]):
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.toxic_stage:
+            return
+        new_condition = parts[3]
+        # Only a BADLY-poisoned residual ramps; a plain ``psn`` residual carries no ``tox`` token.
+        if "tox" not in new_condition.split():
+            return
+        active = self.public_active.get(slot)
+        prev_condition = active.condition if active is not None and active.ident == parts[2] else None
+        prev_hp, prev_max = _hp_numerator_denominator(prev_condition)
+        cur_hp, cur_max = _hp_numerator_denominator(new_condition)
+        max_hp = prev_max or cur_max
+        if prev_hp is None or cur_hp is None or not max_hp:
+            return
+        damage = prev_hp - cur_hp
+        if damage <= 0:
+            return
+        # round(16 * damage_fraction) recovers the sim's stage for every reachable stage (1..14;
+        # a mon never survives to stage 15). Clamp to [1, 15]: a tox residual is always >= stage 1.
+        self.toxic_stage[slot] = min(15, max(1, round(16 * damage / max_hp)))
 
     def _prune_direct_materialization_blockers(self) -> None:
         """Keep Baton Pass blockers only while their public volatile still exists."""
@@ -1906,6 +1954,23 @@ def _max_hp_from_condition(condition: str | None) -> int | None:
         return None
     _, _, denominator = head.partition("/")
     return int(denominator) if denominator.isdigit() and int(denominator) > 0 else None
+
+
+def _hp_numerator_denominator(condition: str | None) -> tuple[int | None, int | None]:
+    """Current and max HP from a condition head like '180/250 tox'; (None, None) for '0 fnt'/absent.
+
+    Works for both absolute HP (own/omniscient stream) and the percentage form (``85/100``); the
+    caller derives the toxic-residual fraction from the pair, so either scale recovers the stage.
+    """
+    if not condition:
+        return None, None
+    head = condition.split()[0]
+    if "/" not in head:
+        return None, None
+    numerator, _, denominator = head.partition("/")
+    current = int(numerator) if numerator.isdigit() else None
+    maximum = int(denominator) if denominator.isdigit() and int(denominator) > 0 else None
+    return current, maximum
 
 
 def _opponent_team_from_public_state(

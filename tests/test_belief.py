@@ -383,6 +383,72 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIsNone(dodrio.status)
         self.assertEqual(dodrio.revealed_ability, "Early Bird")
 
+    def test_sleep_talk_skipped_turns_refunded_on_pivot(self) -> None:
+        # gen3 refunds Sleep-Talk/Snore turns on switch-in (`slp.onSwitchIn`: `time += skippedTime`)
+        # — those turns did not advance the wake timer once the mon pivots. pokezero ticks
+        # `sleep_turns` on every `|cant|slp` (Sleep-Talk turns included) and must subtract the
+        # skipped turns when the sleeper returns, so the count matches the sim.
+        base = [
+            "|switch|p1a: Vaporeon|Vaporeon, L80|400/400",
+            "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+            "|turn|1",
+            "|move|p2a: Snorlax|Rest|p2a: Snorlax",
+            "|-status|p2a: Snorlax|slp|[from] move: Rest",
+            "|upkeep",
+            "|turn|2",
+            "|cant|p2a: Snorlax|slp",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon|[from]Sleep Talk",
+            "|upkeep",
+            "|turn|3",
+            "|cant|p2a: Snorlax|slp",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon|[from]Sleep Talk",
+            "|upkeep",
+            "|turn|4",
+            "|switch|p2a: Gengar|Gengar, L80|300/300",  # sleeper pivots OUT
+            "|upkeep",
+            "|turn|5",
+        ]
+        # Two Sleep-Talk turns accrued: sleep_turns == 2, and both are skippedTime.
+        before = self.opponent(self.engine_from(base), "Snorlax")
+        self.assertEqual(before.sleep_turns, 2)
+        self.assertEqual(before.sleep_skipped_turns, 2)
+        # On re-entry (still asleep) gen3 refunds the two skipped turns → true progress is 0.
+        after = self.opponent(
+            self.engine_from(
+                base + ["|switch|p2a: Snorlax|Snorlax, L80|450/500 slp", "|upkeep", "|turn|6"]
+            ),
+            "Snorlax",
+        )
+        self.assertEqual(after.sleep_turns, 0)
+        self.assertEqual(after.sleep_skipped_turns, 0)
+
+    def test_sleep_talk_skip_reset_by_a_plain_sleep_turn(self) -> None:
+        # skippedTime only covers the TRAILING contiguous Sleep-Talk run: a plain sleep turn
+        # (`|cant|slp` with no sleepUsable move) resets it to 0 in the sim, so a later pivot
+        # refunds nothing for the earlier Sleep-Talk turn.
+        engine = self.engine_from([
+            "|switch|p1a: Vaporeon|Vaporeon, L80|400/400",
+            "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+            "|turn|1",
+            "|move|p2a: Snorlax|Rest|p2a: Snorlax",
+            "|-status|p2a: Snorlax|slp|[from] move: Rest",
+            "|upkeep",
+            "|turn|2",
+            "|cant|p2a: Snorlax|slp",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon|[from]Sleep Talk",
+            "|upkeep",
+            "|turn|3",
+            "|cant|p2a: Snorlax|slp",  # plain sleep turn: no move follows → skip resets to 0
+            "|upkeep",
+            "|turn|4",
+        ])
+        snorlax = self.opponent(engine, "Snorlax")
+        self.assertEqual(snorlax.sleep_turns, 2)
+        self.assertEqual(snorlax.sleep_skipped_turns, 0)
+
     def test_shed_skin_activate_confirms_ability(self) -> None:
         # ``|-activate|<holder>|ability: Shed Skin`` is Shed Skin's ONLY public tell
         # (abilities.ts shedskin onResidual). It must confirm the ability on the
