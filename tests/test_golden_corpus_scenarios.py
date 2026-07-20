@@ -80,6 +80,43 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         # The Baton Pass boundary must search straight through.
         self.assertEqual(report["baton_pass_boundary"]["fallback_decisions"], 0)
 
+    def test_trap_and_volatile_scenarios_search(self) -> None:
+        # Walls-audit acceptance: the trapped-flag and
+        # destinybond/confusion/partiallytrapped scenarios must SEARCH — zero
+        # request-flag walls (no scripted charge-turn shapes here) and zero
+        # volatile_unsupported walls for the allow-listed ids.
+        from pokezero.golden_corpus_scenarios import run_scenario_fallback_sweep
+
+        specs = {s.name: s for s in scenario_specs()}
+        chosen = [
+            specs["shadowtag_wobbuffet"],
+            specs["wrap_partialtrap"],
+            specs["confusion_lifecycle"],
+            specs["destinybond_reflection"],
+        ]
+        report = run_scenario_fallback_sweep(
+            showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+            or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+            specs=chosen,
+        )
+        for name, stats in report.items():
+            self.assertEqual(sum(stats["unmapped_choices"].values()), 0, name)
+            self.assertGreater(stats["searched_decisions"], 0, name)
+            failures = stats["world_failure_reasons"]
+            self.assertEqual(
+                [k for k in failures if "self_request_state_unsupported" in k], [], (name, failures)
+            )
+            self.assertEqual(
+                [
+                    k
+                    for k in failures
+                    if "volatile_unsupported" in k
+                    and any(v in k for v in ("confusion", "destinybond", "partiallytrapped"))
+                ],
+                [],
+                (name, failures),
+            )
+
     def test_scenario_corpus_generates_and_verifies(self) -> None:
         from pokezero.golden_corpus import verify_golden_corpus
         from pokezero.golden_corpus_scenarios import generate_scenario_corpus, scenario_specs as _specs

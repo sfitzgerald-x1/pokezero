@@ -95,6 +95,13 @@ class SideSpec:
     substitute_health: int = 0
     # This side must choose a replacement (its active fainted mid/end of turn).
     force_switch: bool = False
+    # External "this side cannot switch" override (engine ``Side.force_trapped``:
+    # only ever externally provided, never changed by the engine). Used when a
+    # server-truth trap has no cause the engine can re-derive from the
+    # constructed state (e.g. Spider Web / Mean Look-class volatiles the public
+    # parser does not track). Pessimistic-only deeper in the tree: the side
+    # stays trapped even after the in-world trapper leaves.
+    force_trapped: bool = False
     # Pending Wish as (turns_counter, heal_amount); (0, 0) = none. The engine
     # decrements the counter each end-of-turn and heals when it reaches zero.
     wish: tuple[int, int] = (0, 0)
@@ -252,6 +259,10 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
         raise TypeError(f"{path}.force_switch must be a bool, got {type(side.force_switch).__name__}")
     if side.force_switch:
         kwargs["force_switch"] = True
+    if not isinstance(side.force_trapped, bool):
+        raise TypeError(f"{path}.force_trapped must be a bool, got {type(side.force_trapped).__name__}")
+    if side.force_trapped:
+        kwargs["force_trapped"] = True
     if side.baton_passing:
         kwargs["baton_passing"] = True
     if side.slow_uturn_move:

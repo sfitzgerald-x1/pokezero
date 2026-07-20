@@ -12,7 +12,9 @@ construct · **NOTE** = residual risk documented.
 
 | Edge case (legacy handling) | New-construct verdict | Test |
 |---|---|---|
-| `maybeTrapped` mask divergence (obs mask fail-closes; engine-equivalence spike allows) | SAFE-CLOSED — any raised self request flag fails construction closed; the engine derives its own trapping. NOTE: a future native mask must pick the observation convention (fail-closed) explicitly | `test_fail_closed_taxonomy` (request flags) |
+| `maybeTrapped` mask divergence (obs mask fail-closes; engine-equivalence spike allows) | REVISED (walls audit 2026-07-19) — WORLD CONSTRUCTION fails open with no restriction: each sampled world's own opponent ability decides trapping in-engine. The OBSERVATION mask remains the sole fail-closed action authority (`showdown._switching_allowed` drops all switches on trapped/maybeTrapped; `engine_search._map_choices` clamps search output to mask-legal candidates — an open world shapes values but can never emit an unoffered action). NOTE unchanged: a future native mask must pick the observation convention (fail-closed) explicitly | `test_maybe_trapped_constructs_without_restriction` |
+| `trapped` request flag (server truth: Shadow Tag / Arena Trap / Magnet Pull / partial trap / Spider Web-class) | FIXED-NOW (walls audit 2026-07-19) — was a blanket construction wall (45.9% of the 100-seed band's fallbacks). Now fails open: native causes re-derive in-world (sampled trap ability, seeded `partiallytrapped` — gen3/state.rs `Side::trapped`); when THIS world shows NO native cause the self side gets the engine's external `force_trapped` (pessimistic-only catch-all — a trapped mon can never escape in search). Locked pseudo-move shapes (empty request move list: recharge / two-turn charge) stay closed: forced 1-action turns, a world would mis-model the charge. `maybeDisabled`/`maybeLocked` (Imprison-only, absent from pool) still fail closed | trapped-flag tests ×5 + `shadowtag_wobbuffet`/`wrap_partialtrap` scenarios |
+| Confusion / Destiny Bond volatiles (unseeded family B) | FIXED-NOW (walls audit 2026-07-19) — allow-listed, seeded verbatim: `destinybond` engine-exact (KO reflection, removal on next non-DB move, preserved on consecutive DB); `confusion` engine-native 50/50 self-hit + exact Gen 3 self-damage, hidden 2-5-turn countdown has no engine counterpart → documented no-expiry pessimistic approximation (sleep precedent). `attract` stays FAIL-CLOSED: the engine accepts but wholesale-ignores the volatile (inert no-op, not a duration gap) — owner decision pending (inert allow-list vs vendored-engine patch vs stay closed) | `confusion_lifecycle`/`destinybond_reflection` scenarios + allow-list tests |
 | Toxic counter −1 residual-boundary offset | HANDLED — the payload applies the offset (`_materialization_toxic_stage`); construct consumes it verbatim | `test_toxic_stage_maps_to_toxic_count` + `test_local_showdown` offset tests |
 | Transform (Ditto): copied identity, revert-on-switch, PP suppression | FIXED (prior change this branch): both seats fail closed; revert clears the block | live Ditto tests ×2 + revert assertion |
 | **Shedinja fixed HP = 1** | **FIXED-NOW** — construct computed maxhp 164 via the raw formula; a "1/1" condition fraction-scaled to an unkillable 164-HP Shedinja (silent wrongness). Base-HP-1 pin now mirrors the generator | `test_shedinja_maxhp_is_pinned_to_one` |
@@ -24,7 +26,7 @@ construct · **NOTE** = residual risk documented.
 | Struggle / recharge pseudo-moves vs self-moveset guard | HANDLED — pp-less request rows never enter `known_pp` (reviewer-verified vs Showdown source); cannot false-fire | #707 review evidence |
 | Locked moves (Thrash/Outrage, `[from] lockedmove`) | SAFE-CLOSED — `lockedmove` volatile not in allow-list; belief PP semantics live upstream | allow-list default |
 | Trap abilities (Wobbuffet/Dugtrio/Magneton/Nosepass) | HANDLED — engine models gen3 ability trapping natively; sampled singleton abilities reproduce it (POC review verified) | POC review probe |
-| Mean Look / partial trap (`-activate move: Wrap` shape, audit bug C2) | SAFE-CLOSED — arrives as unsupported volatile → fail-close | allow-list default |
+| Mean Look / partial trap (`-activate move: Wrap` shape, audit bug C2) | REVISED (walls audit 2026-07-19) — `partiallytrapped` allow-listed: engine-native switch restriction, 1/16 max-HP residual, trapper-switch release (hidden 2-5-turn duration = no-expiry approximation). SELF-side Mean Look / Spider Web (victim volatile not parser-tracked) covered via the `trapped` flag + `force_trapped` catch-all. OPPONENT-side Mean Look / Spider Web remains a PRE-EXISTING silent optimistic under-model (worlds let the victim switch; unchanged by this fix — follow-up: track the `-activate\|<mon>\|trapped` shape → per-side force_trapped) | `wrap_partialtrap` scenario + allow-list tests |
 | Sleep Clause holder | N/A — sampling never invents a second sleeper (hidden mons sample healthy; statuses copied only from public rows) | — |
 | Sleep/rest counters, Early Bird | NOTE — `approximate_sleep_turns` opt-in flattens Rest (documented tradeoff); exact fix = public counter plumbing | flag tests |
 | Natural Cure / Lum non-proc pruning / Shield Dust / Intimidate elimination | N/A — belief-side candidate pruning, upstream of sampling; consumed via candidate variants | belief tests |
@@ -49,6 +51,13 @@ construct · **NOTE** = residual risk documented.
   enters unharmed; optimistic, fail-soft, documented.
 - Opponent PP exemption stands until PP modeling adopts the belief ledger.
 - Sleep/rest approximation per the POC tradeoffs doc.
+- Confusion / partial-trap no-expiry approximation (walls audit): the server's
+  hidden 2-5-turn counters have no gen3 engine counterpart, so seeded worlds
+  hold the volatile until switch/release — pessimistic-only, sleep precedent.
+- Opponent-side Mean Look / Spider Web: the victim's `trapped` volatile is not
+  parser-tracked, so worlds where WE trap the opponent still let it switch —
+  pre-existing optimistic under-model, unchanged by the walls fix (the SELF
+  side is covered via the request flag + `force_trapped`).
 - A future NATIVE legal-mask implementation (the crate) must adopt the
   observation mask's fail-closed `maybeTrapped` convention — the
   engine-equivalence spike's permissive convention is the wrong reference.

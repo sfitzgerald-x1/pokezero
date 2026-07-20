@@ -187,6 +187,55 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
             p1_prefs=(("toxic",), ("protect",), ("earthquake",)),
             p2_prefs=(("recover", "surf"),),
         ),
+        # Family A/B fallback-wall scenarios (walls audit 2026-07-19): the
+        # ``trapped`` request flag and the destinybond/confusion/
+        # partiallytrapped volatiles must SEARCH, not wall. The sweep gate
+        # asserts zero self_request_state_unsupported and zero
+        # volatile_unsupported for these ids (attract stays fail-closed by
+        # design pending an owner decision — engine ignores the volatile).
+        #
+        # Wobbuffet Shadow Tag: every p1 move request carries trapped=True
+        # while Wobbuffet is in; its Destiny Bond set reproduces the
+        # compound wall (flag raise used to mask the destinybond volatile).
+        ScenarioSpec(
+            "shadowtag_wobbuffet",
+            (_mon("Snorlax", ("Body Slam", "Shadow Ball", "Earthquake", "Curse"), ability="Immunity"), swampert),
+            (_mon("Wobbuffet", ("Destiny Bond", "Counter", "Mirror Coat", "Safeguard"), ability="Shadow Tag"), swampert),
+            p1_prefs=(("shadowball", "bodyslam"),),
+            p2_prefs=(("destinybond",), ("counter",)),
+        ),
+        # Wrap: trapped=True + the partiallytrapped volatile on the victim —
+        # the flag must re-derive NATIVELY from the seeded volatile (no
+        # force_trapped), with the 1/16 residual and trapper-switch release.
+        ScenarioSpec(
+            "wrap_partialtrap",
+            (swampert, blissey),
+            (_mon("Shuckle", ("Wrap", "Toxic", "Protect", "Rest"), ability="Sturdy"), blissey),
+            p1_prefs=(("earthquake",),),
+            p2_prefs=(("wrap",),),
+        ),
+        # Confusion lifecycle: inflict (|-start|), per-turn |-activate|,
+        # self-hit damage, public snap-out (|-end|), cleared on switch. The
+        # seeded world holds confusion with no duration entry (documented
+        # no-expiry approximation).
+        ScenarioSpec(
+            "confusion_lifecycle",
+            (swampert, blissey),
+            (_mon("Gengar", ("Confuse Ray", "Shadow Ball", "Thunderbolt", "Protect"), ability="Levitate"), blissey),
+            p1_prefs=(("surf", "icebeam"),),
+            p2_prefs=(("confuseray",), ("shadowball",)),
+        ),
+        # Destiny Bond KO-reflection: holder re-casts DB every turn, so the
+        # volatile is PRESERVED across consecutive DB uses (gens 2-6 rule)
+        # and the eventual KO drags the attacker down with it.
+        ScenarioSpec(
+            "destinybond_reflection",
+            (_mon("Snorlax", ("Shadow Ball", "Body Slam", "Earthquake", "Curse"), ability="Immunity"), swampert),
+            (_mon("Gengar", ("Destiny Bond", "Shadow Ball", "Thunderbolt", "Protect"),
+                  ability="Levitate", level=70), swampert),
+            p1_prefs=(("shadowball",),),
+            p2_prefs=(("destinybond",),),
+        ),
         # Ghost-typed Curse (live-protocol shape: |move| with explicit target,
         # |-start|target|Curse|[of] user, bare self |-damage| HP cut; a
         # repeat lands the already-cursed fail form). Keeps the renderer's

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from dataclasses import replace as dc_replace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -92,6 +93,12 @@ def _payload(dex: ShowdownDex, **overrides):
         "selfRequestKind": "move",
         "selfTeamOrder": ["Swampert", "Starmie"],
         "selfActiveRequestState": {"trapped": False, "maybeTrapped": False, "maybeDisabled": False, "maybeLocked": False},
+        # Real payloads always carry the request's active move rows; an EMPTY
+        # list is the locked pseudo-move shape (recharge / two-turn charge).
+        "selfActiveMoves": [
+            {"id": "earthquake", "pp": 12, "maxpp": 16, "disabled": False},
+            {"id": "icebeam", "pp": 16, "maxpp": 16, "disabled": False},
+        ],
         "selfBenchedMoveHistory": False,
         "sides": {
             "p1": {
@@ -285,9 +292,9 @@ class BattleSpecConstructionTests(unittest.TestCase):
         expired = _payload(self.dex, weather="raindance", weatherSetTurn=1, weatherFromAbility=False)
         self._assert_reason(expired, "weather_turns_inconsistent")
 
-        trapped = _payload(self.dex)
-        trapped["selfActiveRequestState"] = {"trapped": True}
-        self._assert_reason(trapped, "self_request_state_unsupported")
+        maybe_disabled = _payload(self.dex)
+        maybe_disabled["selfActiveRequestState"] = {"maybeDisabled": True}
+        self._assert_reason(maybe_disabled, "self_request_state_unsupported")
 
         screen_no_set_turn = _payload(self.dex)
         screen_no_set_turn["sides"]["p2"]["sideConditionSetTurns"] = {}
@@ -317,6 +324,87 @@ class BattleSpecConstructionTests(unittest.TestCase):
         payload = _payload(self.dex)
         payload["sides"]["p1"]["pokemon"][0]["condition"] = "200/999"
         self._assert_reason(payload, "self_maxhp_mismatch")
+
+    def _override_with_p2_lead_ability(self, ability: str) -> BattleStartOverride:
+        return BattleStartOverride(
+            player_teams={
+                "p1": pack_team(_team(_SWAMPERT, _STARMIE)),
+                "p2": pack_team(_team(dc_replace(_SNORLAX, ability=ability), _STARMIE)),
+            },
+        )
+
+    def test_trapped_fails_open_with_force_trapped_catch_all(self) -> None:
+        # Opponent Snorlax/Immunity exhibits NO native trap cause: the self
+        # side must carry the engine's external force_trapped override — a
+        # trapped mon can never escape in search.
+        payload = _payload(self.dex, selfActiveRequestState={"trapped": True})
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertTrue(world.spec.side_one.force_trapped)
+        self.assertFalse(world.spec.side_two.force_trapped)
+
+    def test_trapped_native_shadow_tag_world_skips_force_trapped(self) -> None:
+        payload = _payload(self.dex, selfActiveRequestState={"trapped": True})
+        override = self._override_with_p2_lead_ability("Shadow Tag")
+        world = battle_spec_from_payload(payload, override, dex=self.dex)
+        self.assertFalse(world.spec.side_one.force_trapped)
+
+    def test_trapped_native_partialtrap_volatile_skips_force_trapped(self) -> None:
+        payload = _payload(self.dex, selfActiveRequestState={"trapped": True})
+        payload["sides"]["p1"]["volatiles"] = ["partiallytrapped"]
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertFalse(world.spec.side_one.force_trapped)
+        self.assertIn("partiallytrapped", tuple(world.spec.side_one.volatile_statuses))
+
+    def test_trapped_native_cause_conditions_mirror_engine_model(self) -> None:
+        # Grounded Swampert: Arena Trap re-derives natively. Non-Steel
+        # Swampert: Magnet Pull does NOT — the catch-all must kick in.
+        payload = _payload(self.dex, selfActiveRequestState={"trapped": True})
+        arena = battle_spec_from_payload(
+            payload, self._override_with_p2_lead_ability("Arena Trap"), dex=self.dex
+        )
+        self.assertFalse(arena.spec.side_one.force_trapped)
+        magnet = battle_spec_from_payload(
+            payload, self._override_with_p2_lead_ability("Magnet Pull"), dex=self.dex
+        )
+        self.assertTrue(magnet.spec.side_one.force_trapped)
+
+    def test_trapped_with_locked_pseudo_move_stays_closed(self) -> None:
+        # Recharge / two-turn-charge turns: forced 1-action decisions where a
+        # constructed world would mis-model the in-flight charge.
+        payload = _payload(self.dex, selfActiveRequestState={"trapped": True}, selfActiveMoves=[])
+        self._assert_reason(payload, "self_request_state_unsupported")
+
+    def test_maybe_trapped_constructs_without_restriction(self) -> None:
+        # World construction fails open; the fail-closed OBSERVATION mask
+        # (showdown._switching_allowed) remains the sole action authority.
+        payload = _payload(self.dex, selfActiveRequestState={"maybeTrapped": True})
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertFalse(world.spec.side_one.force_trapped)
+        self.assertFalse(world.spec.side_two.force_trapped)
+
+    def test_maybe_disabled_and_maybe_locked_stay_closed(self) -> None:
+        for flag in ("maybeDisabled", "maybeLocked"):
+            payload = _payload(self.dex, selfActiveRequestState={flag: True, "trapped": True})
+            self._assert_reason(payload, "self_request_state_unsupported")
+
+    def test_allow_listed_volatiles_seed_verbatim_without_durations(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["destinybond", "confusion", "partiallytrapped"]
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        side = world.spec.side_two
+        self.assertEqual(
+            set(side.volatile_statuses), {"destinybond", "confusion", "partiallytrapped"}
+        )
+        # No duration entries: confusion/partialtrap are the documented
+        # no-expiry approximation; destinybond has no duration at all.
+        self.assertEqual(dict(side.volatile_status_durations), {})
+
+    def test_attract_stays_fail_closed(self) -> None:
+        # Engine accepts but wholesale-ignores attract (inert no-op) — stays
+        # closed pending the owner decision.
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["attract"]
+        self._assert_reason(payload, "volatile_unsupported")
 
     def test_force_switch_boundary_constructs_with_flag(self) -> None:
         payload = _payload(self.dex, selfRequestKind="force-switch")
@@ -401,8 +489,10 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertIn("flashfire", world.spec.side_two.volatile_statuses)
 
     def test_other_unsupported_volatiles_still_fail_closed(self) -> None:
+        # ``confusion`` moved onto the allow-list (walls audit) — use a
+        # volatile that genuinely stays unsupported to keep the invariant.
         payload = _payload(self.dex)
-        payload["sides"]["p2"]["volatiles"] = ["confusion"]
+        payload["sides"]["p2"]["volatiles"] = ["taunt"]
         self._assert_reason(payload, "volatile_unsupported")
 
     def test_anti_leakage_opponent_facts_come_only_from_inputs(self) -> None:

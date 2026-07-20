@@ -134,6 +134,26 @@ class BuildPokeEngineStateTest(unittest.TestCase):
         self.assertEqual(member.item, "charcoal")
         self.assertEqual(member.nature, "adamant")
 
+    def test_force_trapped_forwarded_only_when_set(self) -> None:
+        engine = fake_construction_module()
+        base = minimal_gen3_fixture()
+        bare = build_poke_engine_state(base, module=engine)
+        self.assertFalse(hasattr(bare.kwargs["side_one"], "force_trapped"))
+
+        trapped = build_poke_engine_state(
+            replace(base, side_one=replace(base.side_one, force_trapped=True)),
+            module=engine,
+        )
+        self.assertIs(trapped.kwargs["side_one"].force_trapped, True)
+        self.assertFalse(hasattr(trapped.kwargs["side_two"], "force_trapped"))
+
+    def test_force_trapped_wrong_type_raises_type_error(self) -> None:
+        engine = fake_construction_module()
+        base = minimal_gen3_fixture()
+        spec = replace(base, side_one=replace(base.side_one, force_trapped="yes"))
+        with self.assertRaises(TypeError):
+            build_poke_engine_state(spec, module=engine)
+
     def test_side_conditions_built_via_engine_type(self) -> None:
         engine = fake_construction_module()
         base = minimal_gen3_fixture()

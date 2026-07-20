@@ -30,7 +30,7 @@ for poke-engine's construction conventions; no code is copied from it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -54,16 +54,42 @@ _WEATHER_IDS = {
     "hail": "hail",
 }
 
-# Public volatile ids this construction expresses exactly today. Everything
-# else fails closed (substitute needs public sub-health bookkeeping; confusion
-# and kin need duration state the public replay does not carry yet).
-# ``flashfire`` needs neither: the parser sets it on the public ``-start``
-# line and clears it on ``-end``/switch, and the engine models it as
-# until-switch (1.5x own-fire boost; the immunity lives in the ability hook,
-# so the volatile alone is boost-only — never wrong, at worst incomplete if a
-# sampled world lacked the ability, which cannot happen for the mono-ability
-# Gen 3 randbats carriers nor for the request-known self side).
-_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire"})
+# Public volatile ids this construction expresses today, seeded verbatim from
+# the payload. Everything else fails closed (substitute needs public
+# sub-health bookkeeping). One id per line so parallel additions merge textually.
+_SUPPORTED_VOLATILES = frozenset({
+    "leechseed",
+    # ``flashfire`` (PR #746): the parser sets it on the public ``-start`` line
+    # and clears it on ``-end``/switch, and the engine models it as until-switch
+    # (1.5x own-fire boost; the immunity lives in the ability hook, so the
+    # volatile alone is boost-only — never wrong, at worst incomplete if a
+    # sampled world lacked the ability, which cannot happen for the mono-ability
+    # Gen 3 randbats carriers nor for the request-known self side).
+    "flashfire",
+    # Engine-exact: KO reflection drags the attacker to 0; removed when the
+    # holder uses any non-DB move and PRESERVED on consecutive DB (the
+    # documented gens-2-6 rule). No duration state exists or is needed.
+    "destinybond",
+    # Engine-native 50/50 self-hit branch with the exact Gen 3 self-damage
+    # formula. The server's hidden 2-5 turn countdown has NO engine
+    # counterpart (VolatileStatusDurations.confusion exists but gen3 never
+    # reads it), so a seeded world holds confusion until switch — the same
+    # documented pessimistic no-expiry approximation class as
+    # ``approximate_sleep_turns`` (live state exact; in-search future
+    # duration = upper bound). Deliberately NO duration entry.
+    "confusion",
+    # Engine-native: switch restriction, 1/16 max-HP end-of-turn residual,
+    # released when the TRAPPER switches. Hidden 2-5 turn duration -> same
+    # pessimistic no-expiry approximation as confusion. Also what lets the
+    # ``trapped`` request flag re-derive natively for Wrap-class victims.
+    "partiallytrapped",
+    # NOT listed — "attract": the engine ACCEPTS the volatile but ignores it
+    # wholesale (zero behavioral references in the gen3 generator; a seeded
+    # attract is a byte-identical no-op, not a duration gap). Whether to
+    # allow-list it as a documented inert under-model, patch the vendored
+    # engine, or keep it closed is a pending owner decision — fail closed
+    # (status quo) until that lands.
+})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {
@@ -317,13 +343,56 @@ def battle_spec_from_payload(
             )
         self_baton_passing = True
     request_state = payload.get("selfActiveRequestState")
-    if isinstance(request_state, Mapping):
-        raised = sorted(flag for flag, value in request_state.items() if value)
-        if raised:
-            raise EngineWorldUnsupported(
-                "self_request_state_unsupported",
-                f"self active request flags {raised} constrain legality beyond this construction",
-            )
+    raised_flags = (
+        sorted(flag for flag, value in request_state.items() if value)
+        if isinstance(request_state, Mapping)
+        else []
+    )
+    # Per-flag policy (walls audit, 2026-07-19):
+    #
+    # - ``maybeDisabled`` / ``maybeLocked``: keep failing closed. Imprison is
+    #   the only Gen 3 source and it is absent from the randbats pool — the
+    #   raise is unreachable free insurance, and the engine has no
+    #   hidden-disable concept to express it with.
+    unsupported_flags = [f for f in raised_flags if f in ("maybeDisabled", "maybeLocked")]
+    if unsupported_flags:
+        raise EngineWorldUnsupported(
+            "self_request_state_unsupported",
+            f"self active request flags {unsupported_flags} (of {raised_flags}) "
+            "constrain legality beyond this construction",
+        )
+    # - ``trapped`` (server truth "you cannot switch"): fail OPEN. Every
+    #   non-forced cause observed in the audit band is either natively
+    #   re-derived by the constructed world (opponent Shadow Tag / Arena
+    #   Trap / Magnet Pull via the sampled ability; partial trap via the now
+    #   allow-listed ``partiallytrapped`` volatile — gen3/state.rs:428-451)
+    #   or covered by the engine's external ``Side.force_trapped`` field,
+    #   which is applied below as a catch-all whenever no native cause is
+    #   visible (Spider Web / Mean Look-class volatiles the parser does not
+    #   track). A mon must NEVER be able to escape in search when it could
+    #   not in reality. The one shape kept closed: an empty request move
+    #   list (recharge / two-turn-charge pseudo-move turns) — a forced
+    #   1-action decision where the wall is costless and a constructed
+    #   world would mis-model the in-flight charge.
+    self_trapped = "trapped" in raised_flags
+    if self_trapped and not payload.get("selfActiveMoves"):
+        raise EngineWorldUnsupported(
+            "self_request_state_unsupported",
+            f"self active request flags {raised_flags} with a locked pseudo-move "
+            "(empty request move list): forced charge/recharge turn stays fail-closed",
+        )
+    # - ``maybeTrapped`` ("you MIGHT not be able to switch"): fail open for
+    #   WORLD CONSTRUCTION ONLY, with no restriction — each sampled world's
+    #   own opponent ability decides trapping in-engine, which is exactly
+    #   what belief-world search is for. The standing fail-closed
+    #   OBSERVATION-MASK convention (docs/belief_edge_case_matrix.md row 1)
+    #   is untouched: mask derivation lives upstream in
+    #   ``showdown.py`` ``_switching_allowed`` (drops ALL switches when
+    #   trapped/maybeTrapped), and ``engine_search._map_choices`` clamps
+    #   search output to mask-legal candidates — an open world can shape
+    #   values but can never emit an unoffered action. No ``force_trapped``
+    #   here: it would contradict sampled worlds whose ability does not
+    #   trap, and the rule must not lean on today's mono-ability pool.
 
     turn = payload.get("turn")
     if not isinstance(turn, int):
@@ -378,6 +447,17 @@ def battle_spec_from_payload(
                 "self_world_mismatch",
                 f"request team {sorted(order_ids)} != sampled world {sorted(party_species[self_player])}",
             )
+
+    if self_trapped:
+        # Server-truth trap: prefer the native derivation (no deep-tree cost —
+        # the trap correctly lifts in-world when its cause goes away). Only
+        # when this sampled world exhibits NO native cause is the engine's
+        # external ``force_trapped`` set, so the searched mon can never
+        # escape a trap the server says is real (Spider Web / Mean Look-class
+        # causes the public parser does not track).
+        opponent_slot = "p2" if self_player == "p1" else "p1"
+        if not _native_trap_cause_visible(built_sides[self_player], built_sides[opponent_slot]):
+            built_sides[self_player] = replace(built_sides[self_player], force_trapped=True)
 
     weather, weather_turns = _weather_fields(payload)
     spec = BattleSpec(
@@ -457,6 +537,35 @@ def _reject_unsupported_globals(payload: Mapping[str, Any]) -> None:
     future_sight = payload.get("futureSight")
     if isinstance(future_sight, Mapping) and any(int(v) for v in future_sight.values()):
         raise EngineWorldUnsupported("future_sight_pending", "a Future Sight strike is pending")
+
+
+def _native_trap_cause_visible(self_side: SideSpec, opponent_side: SideSpec) -> bool:
+    """Whether THIS sampled world already re-derives the server's trap.
+
+    Mirrors the engine's own trapping model (gen3/state.rs:428-451
+    ``Side::trapped``): the self side carries ``partiallytrapped``, or the
+    sampled opponent active's ability traps under the engine's conditions —
+    Shadow Tag unconditionally, Arena Trap against a grounded mon
+    (non-Flying, non-Levitate — ``is_grounded``, state.rs:263-268), Magnet
+    Pull against a Steel type. Anything outside this model needs the
+    ``force_trapped`` catch-all instead.
+    """
+
+    if "partiallytrapped" in tuple(self_side.volatile_statuses):
+        return True
+    self_active = self_side.pokemon[self_side.active_index]
+    opponent_active = opponent_side.pokemon[opponent_side.active_index]
+    opponent_ability = normalize_id(opponent_active.ability or "")
+    if opponent_ability == "shadowtag":
+        return True
+    self_types = tuple(normalize_id(str(t)) for t in self_active.types)
+    if opponent_ability == "arenatrap":
+        grounded = "flying" not in self_types and normalize_id(self_active.ability or "") != "levitate"
+        if grounded:
+            return True
+    if opponent_ability == "magnetpull" and "steel" in self_types:
+        return True
+    return False
 
 
 def _wish_set_turn(payload: Mapping[str, Any], slot: str) -> int | None:
