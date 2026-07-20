@@ -362,6 +362,90 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             stable_category_id("belief:possible_move:psychic"),
         )
 
+    def test_removed_or_consumed_item_encodes_as_not_currently_held(self) -> None:
+        # Regression (training-data-corruption guard): NUMERIC_REVEALED_ITEM is a CURRENT-held
+        # signal, not a "was ever revealed" flag. A Knock Off / consumed berry leaves belief with
+        # revealed_item still NAMING the item (it pins the opponent's set) but item_removed=True —
+        # the mon holds nothing now. The encoder previously read `revealed_item` alone, so a
+        # removed/eaten item stayed encoded as still-held (=1.0), corrupting self-play training at
+        # high incidence (Leftovers is the default Gen 3 item; Knock Off is common; all pinch/status
+        # berries). The current-held column must go to 0 on removal/consumption WHILE the possible_item
+        # set-identity columns keep the reveal (so set inference survives the item leaving the field).
+        from pokezero.showdown import (
+            CATEGORY_BELIEF_ITEM_OFFSET,
+            CATEGORY_PRIMARY,
+            NUMERIC_POSSIBLE_ITEM_COUNT,
+            NUMERIC_REVEALED_ITEM,
+        )
+
+        vocab = build_category_vocabulary(
+            [
+                "request_kind:move", "stats", "transition:self", "transition:opponent",
+                "species:Charizard", "species:Snorlax",
+                "belief:possible_item:leftovers", "belief:possible_item:salacberry",
+            ]
+        )
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        snorlax_species = vocab.encode("species:Snorlax")
+
+        def snorlax_token(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(
+                state, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC
+            )
+            idx = next(
+                opponent_offset + i
+                for i in range(OPPONENT_POKEMON_TOKEN_COUNT)
+                if obs.categorical_ids[opponent_offset + i][CATEGORY_PRIMARY] == snorlax_species
+            )
+            return obs.numeric_features[idx], obs.categorical_ids[idx]
+
+        base = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Charizard|Charizard, L78|100/100",
+            "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            "|turn|1",
+            "|-damage|p2a: Snorlax|90/100",
+            "|-heal|p2a: Snorlax|100/100|[from] item: Leftovers",  # Leftovers revealed, HELD
+            "|turn|2",
+        ]
+        # Sanity: while the item is genuinely held, current-held is 1.0.
+        held_num, held_cat = snorlax_token(base)
+        self.assertEqual(held_num[NUMERIC_REVEALED_ITEM], 1.0)
+        self.assertEqual(held_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:leftovers"))
+        self.assertEqual(held_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)
+
+        # Knock Off: the item is publicly gone (item_removed). Current-held -> 0.0, but the
+        # possible_item set-identity column and count MUST still name Leftovers (set inference kept).
+        knocked = base + [
+            "|move|p1a: Charizard|Knock Off|p2a: Snorlax",
+            "|-enditem|p2a: Snorlax|Leftovers|[from] move: Knock Off|[of] p1a: Charizard",
+            "|turn|3",
+        ]
+        ko_num, ko_cat = snorlax_token(knocked)
+        self.assertEqual(ko_num[NUMERIC_REVEALED_ITEM], 0.0)  # <-- the guard: NOT still-held
+        self.assertEqual(ko_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:leftovers"))
+        self.assertEqual(ko_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)  # set inference preserved
+
+        # Consumed berry (-enditem [eat], no [from] move): same current-held semantics.
+        ate = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Charizard|Charizard, L78|100/100",
+            "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            "|turn|1",
+            "|-damage|p2a: Snorlax|20/100",
+            "|-enditem|p2a: Snorlax|Salac Berry|[eat]",
+            "|-boost|p2a: Snorlax|spe|1|[from] item: Salac Berry",
+            "|turn|2",
+        ]
+        eat_num, eat_cat = snorlax_token(ate)
+        self.assertEqual(eat_num[NUMERIC_REVEALED_ITEM], 0.0)  # consumed berry is not held
+        self.assertEqual(eat_cat[CATEGORY_BELIEF_ITEM_OFFSET], vocab.encode("belief:possible_item:salacberry"))
+        self.assertEqual(eat_num[NUMERIC_POSSIBLE_ITEM_COUNT], 1.0)  # eaten item still pins the set
+
     @unittest.skipUnless(
         Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",

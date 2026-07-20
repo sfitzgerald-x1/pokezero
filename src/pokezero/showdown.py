@@ -2282,6 +2282,14 @@ def _encode_pokemon_tokens(
         revealed_moves = belief.revealed_moves if belief is not None else ()
         revealed_ability = belief.revealed_ability if belief is not None else None
         revealed_item = belief.revealed_item if belief is not None else None
+        # CURRENT-held: True once the mon has publicly parted with its item — Knock Off /
+        # a Trick that returned nothing / a consumed berry or White Herb. belief.item_removed
+        # is the audited "holds nothing now" flag (belief.py sets it on every such surface).
+        # revealed_item keeps NAMING the (now-gone) item so the possible_item set-identity
+        # columns below still narrow the opponent's set; only the current-possession signal
+        # (NUMERIC_REVEALED_ITEM) reflects the removal. Unaudited 0-occurrence mutations
+        # (Thief/Covet: item_mutated without item_removed) stay fail-closed as still-held.
+        item_removed = belief.item_removed if belief is not None else False
         possible_abilities = belief.possible_abilities if belief is not None else ()
         possible_items = belief.possible_items if belief is not None else ()
         possible_moves = belief.possible_moves if belief is not None else ()
@@ -2345,7 +2353,7 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_ITEM_COUNT, float(len(item_feature_values)))
         _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_MOVE_COUNT, float(len(possible_moves)))
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ABILITY, 1.0 if revealed_ability else 0.0)
-        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
+        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if (revealed_item and not item_removed) else 0.0)
         # ---- spec v2 per-mon blocks. ----
         exact = _belief_for_species(exact_beliefs_by_species, candidate.species)
         if masks.exact_state:
