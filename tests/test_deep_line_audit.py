@@ -1,3 +1,7 @@
+from contextlib import redirect_stderr
+import importlib.util
+import io
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 
@@ -12,6 +16,14 @@ from pokezero.deep_line_audit import (
     census_protocol_cooccurrences,
 )
 from pokezero.showdown import parse_showdown_replay
+
+
+_CLI_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "deep_line_audit.py"
+_CLI_SPEC = importlib.util.spec_from_file_location("deep_line_audit_cli_test", _CLI_MODULE_PATH)
+if _CLI_SPEC is None or _CLI_SPEC.loader is None:  # pragma: no cover - importlib invariant
+    raise RuntimeError(f"could not import deep-line audit driver from {_CLI_MODULE_PATH}")
+deep_line_audit_cli = importlib.util.module_from_spec(_CLI_SPEC)
+_CLI_SPEC.loader.exec_module(deep_line_audit_cli)
 
 
 class DeepLineAuditReportTest(unittest.TestCase):
@@ -183,6 +195,24 @@ class DeepLineAuditReportTest(unittest.TestCase):
         self.assertEqual(coverage["unobserved_component_counts"]["ability"], 1)
         self.assertIn("return", report.randbat_observed_components["move"])
         self.assertNotIn("return102", report.randbat_observed_components["move"])
+
+
+class DeepLineAuditDriverTests(unittest.TestCase):
+    @staticmethod
+    def _cli_error(*arguments: str) -> int:
+        with redirect_stderr(io.StringIO()):
+            with unittest.TestCase().assertRaises(SystemExit) as raised:
+                deep_line_audit_cli.main(arguments)
+        return raised.exception.code
+
+    def test_cli_requires_explicit_v3_schema(self) -> None:
+        missing = self._cli_error("--json", "/tmp/deep-line-audit.json")
+        wrong = self._cli_error(
+            "--json", "/tmp/deep-line-audit.json", "--observation-schema", "v2.2"
+        )
+
+        self.assertEqual(missing, 2)
+        self.assertEqual(wrong, 2)
 
 
 if __name__ == "__main__":
