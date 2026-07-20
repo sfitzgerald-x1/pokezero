@@ -533,9 +533,27 @@ class PublicBattleBeliefEngine:
             return
 
         if event_type == "-curestatus" and target_slot:
-            belief = self._target_belief(target_slot, target_ident)
+            # Heal Bell / Aromatherapy cure EVERY team member; a benched ally serializes without a
+            # position letter (``|-curestatus|p2: Snorlax|par``), so ``_target_belief`` — which
+            # returns the ACTIVE mon whenever one is present — would misattribute the cure to the
+            # active mon and leave the benched ally's status stale. Resolve the benched ally by
+            # species instead. Active-target cures keep their position letter and take the
+            # unchanged shared path below (no change to active-target behavior).
+            benched_target = target_ident is not None and not _ident_has_position(target_ident)
+            if benched_target:
+                belief = self._benched_target_belief(target_slot, target_ident)
+            else:
+                belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
-                if belief.status == "slp" and belief.rest_sleep and belief.sleep_turns == 1:
+                # The 1-turn-Rest-wake Early Bird identification only applies to an ACTIVE mon
+                # waking from Rest; a benched ally cleared by a team cure is not a Rest wake, and
+                # its sleep_turns never ticked, so gate the pin to the active-target path.
+                if (
+                    not benched_target
+                    and belief.status == "slp"
+                    and belief.rest_sleep
+                    and belief.sleep_turns == 1
+                ):
                     # Rest sleeps exactly 2 turns in gen 3; a 1-turn Rest wake is deterministic
                     # Early Bird identification (5 reachable carriers) — EXCEPT a Shed Skin
                     # carrier that Rests and procs its 33% cure on the first upkeep also wakes in
@@ -854,6 +872,21 @@ class PublicBattleBeliefEngine:
         active = self._active_belief(showdown_slot)
         if active is not None:
             return active
+        species = _species_from_ident(target_ident)
+        if species is None:
+            return None
+        return self._upsert(showdown_slot=showdown_slot, species=species)
+
+    def _benched_target_belief(
+        self,
+        showdown_slot: str,
+        target_ident: Optional[str],
+    ) -> RevealedPokemonBelief | None:
+        """Resolve a benched target (no position letter) by species, NOT the active mon.
+
+        Used only for the ``-curestatus`` team-cure (Heal Bell / Aromatherapy) path, where a cured
+        benched ally is identified purely by species. Species Clause makes this unambiguous, and a
+        statused benched mon was necessarily seen on the field, so it already exists in beliefs."""
         species = _species_from_ident(target_ident)
         if species is None:
             return None
@@ -1484,6 +1517,14 @@ def _slot_from_ident(ident: Optional[str]) -> Optional[str]:
         return None
     match = re.match(r"^(p[12])", str(ident))
     return match.group(1) if match else None
+
+
+def _ident_has_position(ident: Optional[str]) -> bool:
+    """True for an ACTIVE-slot ident (``p2a: Snorlax``); False for a benched ident (``p2: Snorlax``).
+
+    Showdown appends a field-position letter (``a`` in singles) only to on-field Pokemon; a benched
+    mon referenced by a team-wide effect (Heal Bell curing every ally) carries just ``pN:``."""
+    return bool(re.match(r"^p[12][a-z]", str(ident or "")))
 
 
 def _opponent_slot(showdown_slot: str) -> str:
