@@ -482,15 +482,28 @@ class PublicBattleBeliefEngine:
                 # discarded on switch-out — never the real set's ledger); Struggle has no PP.
                 if belief.transformed:
                     return
-                if caller in _CALLER_MOVES:
+                # Sleep Talk (unlike Metronome/Assist/Nature Power/...) can only call the mon's OWN
+                # set members, so the executed callee is a GENUINE reveal even though it spends no PP
+                # of its own. The other _CALLER_MOVES call random, non-set moves — those never reveal.
+                sleep_talk_called = caller == "sleeptalk"
+                if caller in _CALLER_MOVES and not sleep_talk_called:
                     # The called execution spends no PP of its own; the caller was already
                     # charged on its own |move| line (Showdown always emits it first).
                     return
-                if _called_move_source(raw_line) == "lockedmove":
+                if caller == "lockedmove":
                     # Locked continuations (Solar Beam release) already paid on initiation.
                     # _called_move_source normalizes both the spaced and unspaced [from] forms.
                     return
-                if move_id != "struggle":
+                if move_id == "struggle":
+                    # Struggle is a forced pseudo-move, never a set member (cf. showdown.py's
+                    # exclusion from the determinized move list). Recording it as revealed makes the
+                    # belief inconsistent with every real variant, collapsing the mon to the
+                    # max-entropy fallback (full pool, uncertainty 1.0) and wiping a hard-won endgame
+                    # read for the rest of the game. It spends none of the mon's own PP either.
+                    return
+                # A Sleep-Talk-called move spends none of the callee's PP (the Sleep Talk |move| line
+                # already charged the caller); everything else that reaches here charges normally.
+                if not sleep_talk_called:
                     foe_targeted = bool(target_slot) and target_slot != actor_slot
                     belief = self._charge_move_use(belief, move_id, foe_targeted=foe_targeted)
                 revealed_moves = _append_unique(belief.revealed_moves, str(primary))
