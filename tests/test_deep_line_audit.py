@@ -223,6 +223,14 @@ class DeepLineAuditDriverTests(unittest.TestCase):
         self.assertFalse(interaction_names & default.keys())
         self.assertTrue(interaction_names <= expanded.keys())
 
+        selected, requested = deep_line_audit_cli._requested_scenario_names(
+            named_scenarios=(),
+            include_all_scenarios=False,
+            include_interaction_registry=True,
+        )
+        self.assertEqual(selected.keys(), expanded.keys())
+        self.assertEqual(requested, interaction_names)
+
 
 if __name__ == "__main__":
     unittest.main()
