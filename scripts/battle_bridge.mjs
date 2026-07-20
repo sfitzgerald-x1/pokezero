@@ -523,6 +523,9 @@ function applyPublicState(snapshot, publicState) {
         sideId,
         leechSeedSourceSides,
       );
+      if (row.currentItem !== undefined) {
+        applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
+      }
       serializedSide.pokemon[index].lastMove = null;
       serializedSide.pokemon[index].lastMoveUsed = null;
       serializedSide.pokemon[index].attackedBy = [];
@@ -661,7 +664,7 @@ const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "m
 // These conditions are persistent, public flags. They neither carry an unknown duration nor
 // require a source/target relationship to reproduce their Gen 3 mechanics.
 const STATIC_PUBLIC_VOLATILES = new Set([
-  "focusenergy", "ingrain", "mudsport", "watersport",
+  "flashfire", "focusenergy", "ingrain", "mudsport", "watersport",
 ]);
 
 function applyPublicWeather(field, publicState) {
@@ -918,6 +921,27 @@ function applyKnownMoveState(pokemon, moves) {
     slot.disabled = Boolean(state.disabled);
     slot.used = state.pp < state.maxpp;
   }
+}
+
+function applyKnownCurrentItem(pokemon, rawItem, sideId, species) {
+  if (typeof rawItem !== "string" || !rawItem.trim()) {
+    throw new Error(`Materialize received an invalid current item for ${sideId} ${species}.`);
+  }
+  const item = normalizeId(rawItem);
+  if (!item) {
+    throw new Error(`Materialize received an invalid current item for ${sideId} ${species}.`);
+  }
+  // Keep `set.item` unchanged: it records the sampled battle-start assignment. The live
+  // simulator represents a post-Trick holder by changing only this current-item state.
+  pokemon.item = item;
+  pokemon.itemState = {
+    id: item,
+    effectOrder: 0,
+    target: `[Pokemon:${sideId}a]`,
+  };
+  pokemon.lastItem = "";
+  pokemon.usedItemThisTurn = false;
+  pokemon.itemKnockedOff = false;
 }
 
 function applySelfActiveRequestState(pokemon, state) {
