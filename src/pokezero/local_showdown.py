@@ -1551,10 +1551,29 @@ class LocalShowdownEnv:
 
     def _winner_slot(self, winner_name: str) -> PlayerId | None:
         self._sync_incremental_state()
-        for slot, name in self._parser.players.items():
-            if name == winner_name:
-                return slot
-        return None
+        players = self._parser.players
+        # Defensive hardening (audit: reward-FINDINGS.md "Latent risk"). A real
+        # ``|win|<name>`` must resolve to exactly one seat. Two seats sharing a
+        # username would make the first-match below attribute every win to the
+        # first slot (silent, catastrophic mis-attribution of the value target);
+        # an unmapped winner name would silently downgrade a real win to a 0/0
+        # draw. Both are impossible in default self-play (distinct
+        # "PokeZero p1"/"PokeZero p2", players map populated at battle start), so
+        # assert them — a future same-username or unmapped-name config then fails
+        # loudly instead of corrupting the reward label. Assert-only: no value
+        # change on the reachable path.
+        p1_name = players.get("p1")
+        p2_name = players.get("p2")
+        assert p1_name is None or p1_name != p2_name, (
+            "player usernames must be distinct to attribute a win to a seat; both "
+            f"p1 and p2 are {p1_name!r}"
+        )
+        slot = next((s for s, name in players.items() if name == winner_name), None)
+        assert slot is not None, (
+            f"|win|{winner_name!r} did not resolve to a player slot; "
+            f"players={dict(players)!r}"
+        )
+        return slot
 
     def _rewards(self) -> dict[PlayerId, float]:
         if self._terminal is None:
