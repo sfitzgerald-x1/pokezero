@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.coverage_enumeration_audit import (
+    CoverageGame,
     CoverageSelection,
     build_coverage_plan,
     merge_coverage_ledgers,
@@ -183,6 +184,25 @@ class CoverageEnumerationPlanTests(unittest.TestCase):
         self.assertEqual(merged["uncovered"]["variants"], [])
         self.assertEqual(merged["first_coverage"]["variants"], plan.coverage_ledger()["first_coverage"]["variants"])
 
+    def test_merged_ledger_requires_every_selected_game_to_complete(self) -> None:
+        plan = self._plan(exact_variants=True)
+        interrupted = dict(plan.coverage_ledger())
+        interrupted["games_selected"] = 1
+
+        merged = merge_coverage_ledgers((interrupted,))
+
+        self.assertFalse(merged["complete"])
+        self.assertEqual(merged["uncovered"], {"species": [], "ability_pairs": [], "moves": [], "items": [], "variants": []})
+
+    def test_atom_only_ledger_keeps_atom_coverage_completion_semantics(self) -> None:
+        plan = self._plan()
+        atom_complete = dict(plan.coverage_ledger())
+        atom_complete["games_selected"] = 1
+
+        merged = merge_coverage_ledgers((atom_complete,))
+
+        self.assertTrue(merged["complete"])
+
     def test_rejects_expected_atoms_without_a_materializable_source_variant(self) -> None:
         with self.assertRaisesRegex(ValueError, "lack a materializable source-variant carrier"):
             self._plan(source_moves=("movea", "missingmove"))
@@ -231,6 +251,57 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
 
         self.assertEqual(missing_exact, 2)
         self.assertEqual(missing_failure_dir, 2)
+
+    def test_failure_directory_requires_depth_mode(self) -> None:
+        code = self._cli_error(
+            "--json", "/tmp/coverage-audit.json",
+            "--coverage-json", "/tmp/coverage-ledger.json",
+            "--failure-dir", "/tmp/coverage-failures",
+        )
+
+        self.assertEqual(code, 2)
+
+    def test_depth_lane_preserves_submitted_moves_when_a_fixture_errors(self) -> None:
+        selection = CoverageSelection(
+            species="Alpha",
+            ability="Ability A",
+            item="Leftovers",
+            level=80,
+            moves=("movea",),
+            variant_id="alpha-a",
+            source_set_id="alpha",
+            pass_name="A",
+        )
+        game = CoverageGame(
+            game_id="variant-0001",
+            seed=1,
+            p1=selection,
+            p2=selection,
+            pass_name="both",
+            purpose="exact-variant",
+        )
+
+        def fail_step(_actions: dict[str, int]) -> None:
+            raise RuntimeError("bridge fault")
+
+        env = SimpleNamespace(
+            terminal=lambda: None,
+            requested_players=lambda: ("p1", "p2"),
+            observe=lambda _player_id: SimpleNamespace(legal_action_mask=(True,)),
+            step=fail_step,
+        )
+
+        with self.assertRaises(coverage_audit_cli._MoveUseLaneError) as raised:
+            coverage_audit_cli._run_move_use_lane(
+                env,
+                game=game,
+                report=DeepLineAuditReport(),
+                max_rounds=1,
+                depth_rounds=1,
+            )
+
+        self.assertIsInstance(raised.exception.cause, RuntimeError)
+        self.assertEqual(raised.exception.move_use, {"p1": ["movea"], "p2": ["movea"]})
 
     def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:
         """Trace must split its public copied fact from its native source atom."""

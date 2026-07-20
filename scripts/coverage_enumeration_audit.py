@@ -332,6 +332,15 @@ def _first_legal(observation) -> int | None:
     return next((index for index, allowed in enumerate(observation.legal_action_mask) if allowed), None)
 
 
+class _MoveUseLaneError(RuntimeError):
+    """Preserve already-submitted moves if a bounded depth fixture fails."""
+
+    def __init__(self, cause: Exception, move_use: Mapping[str, list[str]]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.move_use = {player_id: list(moves) for player_id, moves in move_use.items()}
+
+
 def _audit_true_variant_survival(
     env: LocalShowdownEnv,
     *,
@@ -417,30 +426,31 @@ def _run_move_use_lane(
     selections = {"p1": game.p1, "p2": game.p2}
     next_move_index = {"p1": 0, "p2": 0}
     used: dict[str, list[str]] = {"p1": [], "p2": []}
-    for _ in range(max_rounds):
-        if env.terminal() is not None:
-            break
-        requested = env.requested_players()
-        if not requested:
-            break
-        observations = {}
-        actions: dict[str, int] = {}
-        for player_id in requested:
-            observation = env.observe(player_id)
-            observations[player_id] = observation
-            desired = next_move_index[player_id]
-            if desired < len(selections[player_id].moves) and observation.legal_action_mask[desired]:
-                actions[player_id] = desired
-                used[player_id].append(normalize_coverage_move(selections[player_id].moves[desired]))
-                next_move_index[player_id] += 1
-            else:
-                legal = _first_legal(observation)
-                if legal is None:
-                    return used
-                actions[player_id] = legal
-        env.step(actions)
-        if depth_rounds and env.terminal() is None:
-            _audit_depth_boundary(env, game=game, report=report)
+    try:
+        for _ in range(max_rounds):
+            if env.terminal() is not None:
+                break
+            requested = env.requested_players()
+            if not requested:
+                break
+            actions: dict[str, int] = {}
+            for player_id in requested:
+                observation = env.observe(player_id)
+                desired = next_move_index[player_id]
+                if desired < len(selections[player_id].moves) and observation.legal_action_mask[desired]:
+                    actions[player_id] = desired
+                    used[player_id].append(normalize_coverage_move(selections[player_id].moves[desired]))
+                    next_move_index[player_id] += 1
+                else:
+                    legal = _first_legal(observation)
+                    if legal is None:
+                        return used
+                    actions[player_id] = legal
+            env.step(actions)
+            if depth_rounds and env.terminal() is None:
+                _audit_depth_boundary(env, game=game, report=report)
+    except Exception as exc:
+        raise _MoveUseLaneError(exc, used) from exc
     return used
 
 
@@ -728,6 +738,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("--depth-rounds requires --exact-variants")
     if args.depth_rounds and args.failure_dir is None:
         parser.error("--depth-rounds requires --failure-dir so only failing fixtures retain traces")
+    if args.failure_dir is not None and not args.depth_rounds:
+        parser.error("--failure-dir is only supported with --depth-rounds")
 
     preliminary = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
     root = preliminary.resolved_showdown_root()
@@ -762,8 +774,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         for game in selected_games:
             findings_before = len(report.findings)
+            game_exception: Exception | None = None
+            game_move_use: dict[str, list[str]] = {"p1": [], "p2": []}
             try:
-                move_use[game.game_id] = _run_game(
+                game_move_use = _run_game(
                     env,
                     game=game,
                     report=report,
@@ -772,18 +786,15 @@ def main(argv: Iterable[str] | None = None) -> int:
                     max_move_rounds=args.depth_rounds or args.max_move_rounds,
                     depth_rounds=args.depth_rounds,
                 )
+                move_use[game.game_id] = game_move_use
                 completed.append(game)
-                if args.failure_dir is not None and len(report.findings) > findings_before:
-                    failure_artifacts.append(
-                        _write_failure_artifact(
-                            args.failure_dir,
-                            env=env,
-                            game=game,
-                            findings=report.findings[findings_before:],
-                            move_use=move_use[game.game_id],
-                        )
-                    )
             except Exception as exc:  # Preserve partial evidence for a fixture execution failure.
+                if isinstance(exc, _MoveUseLaneError):
+                    game_exception = exc.cause
+                    game_move_use = exc.move_use
+                else:
+                    game_exception = exc
+                move_use[game.game_id] = game_move_use
                 _record(
                     report,
                     kind="coverage_fixture_execution",
@@ -791,22 +802,34 @@ def main(argv: Iterable[str] | None = None) -> int:
                     turn=0,
                     column="fixture",
                     expected="successful deterministic custom-game materialization",
-                    actual=type(exc).__name__,
-                    detail=str(exc),
+                    actual=type(game_exception).__name__,
+                    detail=str(game_exception),
                 )
-                if args.failure_dir is not None:
+            if args.failure_dir is not None and len(report.findings) > findings_before:
+                try:
                     failure_artifacts.append(
                         _write_failure_artifact(
                             args.failure_dir,
                             env=env,
                             game=game,
                             findings=report.findings[findings_before:],
-                            move_use=move_use.get(game.game_id, {"p1": [], "p2": []}),
-                            exception=exc,
+                            move_use=game_move_use,
+                            exception=game_exception,
                         )
                     )
-                if not args.depth_rounds:
-                    break
+                except Exception as artifact_exc:
+                    _record(
+                        report,
+                        kind="coverage_failure_artifact_write",
+                        player_id="system",
+                        turn=0,
+                        column="failure_artifact",
+                        expected="writable failure artifact",
+                        actual=type(artifact_exc).__name__,
+                        detail=str(artifact_exc),
+                    )
+            if game_exception is not None and not args.depth_rounds:
+                break
         if args.universal_lane:
             universal_moves = _run_universal_move_lane(
                 env,

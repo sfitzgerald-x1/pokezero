@@ -456,6 +456,9 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
     missing_moves = sorted(expected_moves - set(first_coverage["moves"]))
     missing_items = sorted(set(item_labels) - {normalize_id(item) for item in first_coverage["items"]})
     missing_variants = sorted(expected_variant_ids - set(first_coverage["variants"]))
+    # Exact-variant mode promises every source tuple was materialized. Atom-only
+    # coverage can legitimately finish once every required atom is observed.
+    requires_every_fixture = bool(expected_variant_ids)
     return {
         "schema_version": schema_version,
         "source_metadata": dict(source_metadata),
@@ -470,7 +473,10 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
             "items": [item_labels[item_id] for item_id in missing_items],
             "variants": missing_variants,
         },
-        "complete": not (missing_species or missing_pairs or missing_moves or missing_items or missing_variants),
+        "complete": (
+            (not requires_every_fixture or games_selected == games_total)
+            and not (missing_species or missing_pairs or missing_moves or missing_items or missing_variants)
+        ),
     }
 
 

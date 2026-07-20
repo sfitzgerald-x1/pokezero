@@ -308,7 +308,7 @@ misrepresented as a complete move-use proof.
 The runner writes no protocol trace for a successful fixture. If a fixture has
 a finding or execution exception, it writes exactly one reproducible JSON file
 under `$OUT/failures/`, containing the source tuple, seed, executed moves,
-post-failure protocol lines, terminal state, and only that fixture's findings.
+the full protocol trace, terminal state, and only that fixture's findings.
 Workers continue after a failed fixture in depth mode, so one bad variant does
 not discard coverage of the remaining source universe. Inspect the failure
 directory first; aggregate summaries are for counts and ledger completion.
@@ -324,7 +324,8 @@ uv run python scripts/merge_coverage_ledgers.py \
 
 Any nonzero worker exit, nonempty failure directory, or nonempty merged
 uncovered set is a failed audit and must be triaged before treating the run as
-clean.
+clean. In exact-variant mode, the merged ledger additionally requires every
+planned fixture to complete; atom coverage alone cannot hide a dropped tuple.
 
 ## 8. Orchestration & budget
 
