@@ -180,9 +180,10 @@ decision (3.42 s search wall per searched decision, ~216k model evals,
 lossy renders 0.12%), prior fallbacks 0, unmapped choices 0, live-fold
 cross-check 394/394 clean. Fallback rate 15.2% — every one
 `no_worlds_constructed` from the PRE-EXISTING fail-closed world walls
-(public_effect_blocked: Trick/Knock-Off item mutation + Transform;
-self_request_state_unsupported; flashfire volatile), concentrated in
-battles 7010/7013; the PAIRED hp_fraction CONTROL on the same seeds reads
+(per-battle composition, corrected from the logs in
+docs/belief_edge_case_matrix.md: a genuine Trick swap 48/60 on 7013,
+request-state flags 7/60 on 7010, flashfire 5/60 on 7005/7014); the
+PAIRED hp_fraction CONTROL on the same seeds reads
 15.9% with the same reasons on the same battles, so the new pipeline's own
 taxonomy (crate_search / root_inputs / live_fold / choices_unmapped) is
 EMPTY and the historical 0.0% simply does not reproduce on today's
@@ -193,9 +194,38 @@ Remaining = the 200-seed paired read + follow-ups
 (opponent priors spec'd in docs/crate_search_design.md; Tier-2 overlay at
 live boundaries; batch/virtual-loss re-pricing under real observation
 costs — see docs/leaf_observation_column_map.md "Remaining"; the
-determinized-world fallback walls above — the belief_view Knock-Off
-removal/Trick swap distinction the blocked-slot comment already
-enumerates is the highest-leverage one).
+determinized-world fallback walls below).
+**Knock-Off removal recovery LANDED (2026-07-19 EOD)** — belief_view
+gained the removal/swap distinction the blocked-slot comment enumerated:
+`item_removed` marks a mon whose held item was publicly STRIPPED (Knock
+Off, or an item-taking Trick that returned nothing) — publicly ITEMLESS
+is exactly representable, so engine_search routes those to a
+`removed_item_species` signal and engine_world clears the sampled item;
+a live swap (the holder carries an item that is not the sampled
+assignment) stays fail-closed. Same-seed paired re-run on the landed
+code: model arm 334/394 searched, 15.2%, per-battle composition
+identical to the corrected attribution (7013 Trick 48/60 BY DESIGN,
+7010 request flags 7/60, 7005/7014 flashfire 5/60), fold cross-check
+394/394, prior fallbacks 0; hp control 69/462 = 14.9%. NO rate change
+on this band — as the corrected attribution predicted — and the new
+`removed_item_decisions` telemetry (bench reports now carry per-game
+fallback/world-failure deltas) reads 0 across all 15 games and across a
+110-game hp-mode scan of seeds 7015-7124 (walls there: request-state,
+Transform-Ditto on 7059/7073/7118, flashfire, and singleton
+attract/destinybond/confusion volatiles — background rates 3.4%/7.0%
+per 50/60-game band; organic Knock-Off walls need OUR policy to click
+Knock Off, hence rare).
+The removal path itself is proven end-to-end: a live-sim test
+(`KnockOffRemovalLiveTests`: real protocol → belief flags → signals →
+constructed world with the item cleared) and a directed paired repro on
+the same post-Knock-Off state — pre-fix 0 searched / 1 fallback
+(public_effect_blocked ×8 world attempts), landed 1 searched / 0
+fallbacks / removed_item_decisions=1. Wall leverage, re-ranked from the
+measured composition: (1) Trick-swap current-item override — post-swap
+the CURRENT item is publicly revealed by the |-item| line, so worlds
+could substitute it instead of failing closed (all 48/60 of 7013);
+(2) request-state flags (7010); (3) seeding the publicly-derivable
+flashfire/confusion volatiles (same shape as Truant/MUSTRECHARGE).
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep
