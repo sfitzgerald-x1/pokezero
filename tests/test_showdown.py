@@ -202,6 +202,52 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         # Toxic ramp on the cured side reset; the opponent side untouched.
         self.assertEqual(replay.toxic_stage["p2"], 0)
 
+    def test_benched_heal_bell_curestatus_strips_off_field_ally_and_leaves_others(self) -> None:
+        # Heal Bell (unlike Aromatherapy's team-wide -cureteam) emits a per-mon [silent]
+        # -curestatus for EACH cured member: the active user carries a field-position letter
+        # (p2a: Miltank) and every benched ally is POSITION-LESS (p2: Aggron). The active-only
+        # public-condition path resolves public_active[slot] (the active Miltank), so without the
+        # benched branch the off-field ally's status suffix in public_revealed never clears — the
+        # parser-surface sibling of the belief engine's benched -curestatus handling (#771). Guard
+        # both directions: the benched ally clears, but the ACTIVE-target cure, healthy same-side
+        # members, and the OPPONENT side stay exactly as before.
+        replay = parse_showdown_replay(
+            [
+                "|switch|p1a: Swampert|Swampert, L84|300/300",
+                "|switch|p2a: Aggron|Aggron, L80|280/280",
+                "|turn|1",
+                "|move|p1a: Swampert|Toxic|p2a: Aggron",
+                "|-status|p2a: Aggron|tox",
+                "|-damage|p2a: Aggron|262/280 tox|[from] psn",
+                "|move|p2a: Aggron|Toxic|p1a: Swampert",
+                "|-status|p1a: Swampert|tox",
+                "|-damage|p1a: Swampert|283/300 tox|[from] psn",
+                "|turn|2",
+                "|switch|p2a: Snorlax|Snorlax, L82|400/400",
+                "|turn|3",
+                "|switch|p2a: Miltank|Miltank, L82|300/300",
+                "|-status|p2a: Miltank|par",
+                "|turn|4",
+                "|move|p2a: Miltank|Heal Bell|p2a: Miltank",
+                "|-activate|p2a: Miltank|move: Heal Bell",
+                "|-curestatus|p2a: Miltank|par|[silent]",
+                "|-curestatus|p2: Aggron|tox|[silent]",
+            ]
+        )
+        # Benched ally (Aggron): tox suffix stripped — the fix (fails on origin/main: "262/280 tox").
+        aggron = next(p for p in replay.public_revealed["p2"] if p.species == "Aggron")
+        self.assertEqual(aggron.condition, "262/280")
+        # ACTIVE-target cure (Miltank, position-bearing ident): par stripped on the unchanged path.
+        self.assertEqual(replay.public_active["p2"].condition, "300/300")
+        # Healthy same-side member (Snorlax): no phantom status, untouched.
+        snorlax = next(p for p in replay.public_revealed["p2"] if p.species == "Snorlax")
+        self.assertEqual(snorlax.condition, "400/400")
+        # NO OVER-CLEARING: the OPPONENT side's genuinely-toxic mon keeps its status suffix.
+        self.assertEqual(replay.public_active["p1"].condition, "283/300 tox")
+        # Cured side's toxic ramp reset; the opponent side's ramp is untouched.
+        self.assertEqual(replay.toxic_stage["p2"], 0)
+        self.assertEqual(replay.toxic_stage["p1"], 4)
+
     def test_timestamp_lines_are_not_normalized_into_public_events(self) -> None:
         replay = parse_showdown_replay(
             [

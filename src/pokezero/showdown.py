@@ -1741,6 +1741,18 @@ def _update_public_pokemon_condition(
     slot = _slot_from_ident(ident)
     if slot is None:
         return
+    if event_type == "-curestatus" and not _ident_has_position(ident):
+        # A benched ally cured by a team-wide effect (Heal Bell's per-mon ``[silent]``
+        # -curestatus, ident ``p2: Snorlax``) serializes WITHOUT a field-position letter.
+        # The active-only path below resolves ``public_active[slot]`` — the ACTIVE mon
+        # (e.g. Miltank), whose ident never equals the benched ident — so it early-returns
+        # and the benched ally's status suffix in ``public_revealed`` stays stale. Resolve
+        # the benched mon by species instead and strip its suffix. This is the parser-surface
+        # sibling of the belief engine's benched -curestatus handling (#771's
+        # ``_benched_target_belief``); ACTIVE-target cures keep their position letter and take
+        # the unchanged path below.
+        _apply_public_benched_curestatus_condition(ident, slot, public_revealed)
+        return
     active = public_active.get(slot)
     if active is None or active.ident != ident:
         return
@@ -1775,6 +1787,46 @@ def _updated_public_condition(
     if event_type == "-curestatus" and hp:
         return hp
     return None
+
+
+def _apply_public_benched_curestatus_condition(
+    ident: str,
+    slot: str,
+    public_revealed: dict[str, list[ShowdownPokemon]],
+) -> None:
+    """Clear the non-volatile status suffix of the single BENCHED ally named by a team-wide
+    ``-curestatus`` (Heal Bell's per-mon ``[silent]`` form, ident ``p2: Snorlax``). The ident
+    carries no field-position letter, so the active-only ``-curestatus`` path cannot resolve it;
+    match by species in ``public_revealed`` and strip the suffix via ``strip_condition_status``
+    (the same shared helper #771's ``-cureteam`` path uses), mirroring
+    ``_apply_public_cureteam_condition``'s per-member strip. A fainted ally's ``0 fnt`` is
+    preserved unchanged by ``strip_condition_status``; a healthy ally is left byte-identical.
+
+    Species clause makes the name unique within a randbats side, so at most one row matches.
+    A cosmetic-forme ally serializes under its BASE name in the cure ident (gen3 randbats name
+    an Unown-Z simply ``Unown``) while the revealed row keeps the lettered forme — the
+    base-name fallback keeps the parser surface in step with the belief engine's forme-tolerant
+    benched resolution (#771's ``_base_species_id``)."""
+    revealed = public_revealed.get(slot)
+    if not revealed:
+        return
+    target = _normalize_name(_species_from_ident(ident))
+
+    def _matches(species: str | None) -> bool:
+        normalized = _normalize_name(species)
+        return normalized == target or _normalize_name(str(species or "").split("-", 1)[0]) == target
+
+    updated_list: list[ShowdownPokemon] = []
+    changed = False
+    for pokemon in revealed:
+        if _matches(pokemon.species):
+            stripped = strip_condition_status(pokemon.condition)
+            if stripped != pokemon.condition:
+                pokemon = replace(pokemon, condition=stripped)
+                changed = True
+        updated_list.append(pokemon)
+    if changed:
+        public_revealed[slot] = updated_list
 
 
 def _apply_public_cureteam_condition(
@@ -3962,6 +4014,15 @@ def _species_from_ident(ident: str) -> str:
 def _slot_from_ident(ident: str) -> str | None:
     match = re.match(r"^(p[12])", ident.strip())
     return match.group(1) if match else None
+
+
+def _ident_has_position(ident: str | None) -> bool:
+    """True for an ACTIVE-slot ident (``p2a: Snorlax``); False for a benched ident (``p2: Snorlax``).
+
+    Showdown appends a field-position letter (``a`` in singles) only to on-field Pokemon; a benched
+    mon referenced by a team-wide effect (Heal Bell curing every ally) carries just ``pN:``. Mirrors
+    ``belief._ident_has_position`` so the parser and belief surfaces classify cure idents identically."""
+    return bool(re.match(r"^p[12][a-z]", str(ident or "")))
 
 
 def _normalize_name(value: str | None) -> str:
