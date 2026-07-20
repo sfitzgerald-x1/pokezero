@@ -5,7 +5,7 @@ Random-seed games only exercise edge cases by luck. This module scripts
 reach the positions the belief/mask edge-case matrix cares about — Truant
 loafing phases, Transform, Encore locks, Hyper Beam recharge, Baton Pass
 boundaries, Wish, sand + Shedinja, RestTalk, screens, toxic stalls, Ghost
-Curse — and
+Curse, Trick exchanges, berry consumption — and
 captures them through the exact same corpus machinery as the random games
 (same schema; scenario identity carried in ``battle_id``, no schema change).
 
@@ -253,6 +253,49 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
             p2_prefs=(("earthquake",),),
             seed=91007,
             max_decision_rounds=5,
+        ),
+        # --- item-state scenarios (Trick-swap current-item override + berry
+        # consumption; protocol shapes probed verbatim 2026-07-19). Post-fix
+        # these must SEARCH: the exchange's two -item lines confirm both mons'
+        # CURRENT items, and an eaten berry clears the sampled item. ---
+        ScenarioSpec(
+            "trick_swap_exchange",
+            # p1 direction: our Alakazam Tricks its Choice Band onto the
+            # opponent's Furret and receives the Petaya Berry (full swap: one
+            # |-item|...|[from] move: Trick per mon).
+            (_mon("Alakazam", ("Trick", "Psychic", "Thunder Punch", "Fire Punch"),
+                  ability="Synchronize", item="Choice Band"), swampert),
+            (_mon("Furret", ("Return", "Shadow Ball", "Brick Break", "Quick Attack"),
+                  ability="Run Away", item="Petaya Berry"), blissey),
+            p1_prefs=(("trick",), ("psychic",)),
+            p2_prefs=(("quickattack",),),
+        ),
+        ScenarioSpec(
+            "trick_berry_pinch",
+            # p2 direction + the seed-7013 shape: the scripted opponent Tricks
+            # a Petaya Berry onto OUR mon, then Seismic-Tosses it to pinch —
+            # the Tricked berry is eaten (override -> removal transition on
+            # the self seat; the tricker holds our Leftovers on the opponent
+            # seat). Scripted as p2 so the engine-search sweep exercises it
+            # deterministically.
+            (_mon("Furret", ("Return", "Shadow Ball", "Brick Break", "Quick Attack"),
+                  ability="Run Away"), swampert),
+            (_mon("Blissey", ("Trick", "Seismic Toss", "Soft-Boiled", "Ice Beam"),
+                  ability="Natural Cure", item="Petaya Berry"), swampert),
+            p1_prefs=(("quickattack",),),
+            p2_prefs=(("trick",),) + (("seismictoss",),) * 9,
+        ),
+        ScenarioSpec(
+            "berry_eat_chesto",
+            # Public consumption without any mutation: the opponent's Snorlax
+            # Rest-eats its Chesto Berry — the item is publicly GONE and the
+            # sampled world must stop handing it back (repeated rest prefs so
+            # the eat lands whenever the first damage arrives).
+            (swampert, blissey),
+            (_mon("Snorlax", ("Body Slam", "Rest", "Curse", "Shadow Ball"),
+                  ability="Immunity", item="Chesto Berry"), blissey),
+            p1_prefs=(("earthquake",),),
+            p2_prefs=(("curse",), ("rest",), ("bodyslam",), ("rest",), ("bodyslam",), ("rest",)),
         ),
     )
 

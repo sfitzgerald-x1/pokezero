@@ -1752,6 +1752,7 @@ def _revealed_pokemon_from_payload(payload: Any) -> RevealedPokemonBelief | None
         ruled_out_items=_moves_from_payload(payload.get("ruled_out_items")),
         item_mutated=bool(payload.get("item_mutated")),
         item_removed=bool(payload.get("item_removed")),
+        current_public_item=_optional_text(payload.get("current_public_item")),
         candidate_set_count=_optional_int(payload.get("candidate_set_count")),
         uncertainty=_optional_float(payload.get("uncertainty"), default=1.0),
         possible_abilities=_moves_from_payload(payload.get("possible_abilities")),

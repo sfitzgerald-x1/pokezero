@@ -236,6 +236,48 @@ in-branch screen set-turns + measured fail-form renders + Ghost-Curse
 placement + Flash Fire first-activation `-start` landed; the accepted
 residual classes are enumerated in docs/leaf_observation_column_map.md
 "Accepted encoding divergences (by design)" — the eval go/no-go ledger.
+**Trick-swap current-item override + berry-consumption state LANDED
+(2026-07-20)** — item walls are gone. In gen3 a successful Trick is
+FULLY public: `data/moves.ts` trick onHit emits, per mon, either
+`|-item|SLOT|ITEM|[from] move: Trick` (naming the holder's resulting
+CURRENT item) or `|-enditem|SLOT|ITEM|[silent]|[from] move: Trick`
+(received nothing → publicly itemless) — live-probed both directions and
+both one-sided cases. Belief gained `current_public_item` (set ONLY by
+the audited Trick `-item` line, holder identified from the line; cleared
+by any later `-enditem`); engine_search emits `current_item_overrides`
+(species → protocol-confirmed current item, BOTH seats — the self side
+never walled, its world team was silently stale) next to
+`removed_item_species`; engine_world substitutes the named item (spread
+and moves stay the sampled assignment's; removal+override on one mon =
+`item_state_conflict`, fail-closed). Berry consumption (`[eat]`, White
+Herb shapes) now sets `item_removed` WITHOUT `item_mutated` — the eaten
+item still pins variant matching — so worlds stop handing eaten berries
+back (same-family gap, owner-observed). Compositions proven: Trick→KO
+and Trick→eat end in removal; KO→Trick is unreachable in gen3 (the
+gen≤4 `itemKnockedOff` gate in `takeItem` — probed: `|-fail|`).
+Hardening per the #741 review: `-item`/`-enditem` from any UNAUDITED
+move source (a pool change to Thief/Covet) marks the mutation with no
+confirmed current item → fail-closed block, never a silent plain
+reveal; `removed_item_decisions`/`item_override_decisions` counters are
+telemetry-only (can co-occur per decision). Remaining fail-closed:
+unaudited mutation sources, contradictory item state, pre-override
+serialized payloads (no `current_public_item` key).
+Same-seed bench re-runs (base = #744 main): MODEL arm 351/363 searched,
+**3.3%** fallback (was 60/394 = 15.2%): 7013 48 → **0** (overrides=13
+then removed=12 as the Tricked Petaya was eaten — the exact predicted
+override→removal transition), 7010 request flags 7 → 7 (unchanged),
+7005/7014 flashfire 5 → 5 (unchanged — the parallel absorb PR's wall),
+zero `public_effect_blocked` anywhere, fold cross-check 363/363 clean,
+prior fallbacks 0, unmapped 0. Paired HP control on the same seeds:
+main 66/423 = 15.6% (7013 = 44 item-wall fallbacks) → branch 22/389 =
+**5.7%** (7013 = 0; only 7010's 22 request-flag fallbacks remain,
+identical count+reasons to main). Organic telemetry on the band:
+removed_item_decisions 51 (berry eats now surface everywhere),
+item_override_decisions 13. Scenario sweep: trick_swap_exchange /
+trick_berry_pinch / berry_eat_chesto all SEARCH (0 fallbacks, 0
+public_effect_blocked; override and consumption-removal telemetry
+asserted >0). Full suite: failure set bit-identical to clean
+origin/main (the same 9 pre-existing).
 Speed POC complete; scenario corpus suite complete.
 Multi-ply decision/chance tree per the search-tree contract LANDED in the
 crate (exact-expectation backup, plies-1-2 damage branching + deep

@@ -502,9 +502,12 @@ class ExactStateLedgerTest(unittest.TestCase):
         # pruning frozen post-mutation: no Leftovers rule-out despite a damaged, heal-free turn
         self.assertNotIn("leftovers", blissey.ruled_out_items)
         # A swap, not a removal: the mon HOLDS an item that is not the sampled
-        # assignment — determinized worlds cannot express it (stays fail-closed).
+        # assignment. The -item line names the current item, so worlds can
+        # substitute it (the Trick-swap current-item override).
         self.assertFalse(blissey.item_removed)
         self.assertFalse(blissey.to_overlay_payload()["item_removed"])
+        self.assertEqual(blissey.current_public_item, "Choice Band")
+        self.assertEqual(blissey.to_overlay_payload()["current_public_item"], "Choice Band")
 
     def test_knock_off_marks_removal_not_just_mutation(self) -> None:
         engine = self.engine_from([
@@ -540,10 +543,14 @@ class ExactStateLedgerTest(unittest.TestCase):
         blissey = self.opponent(engine, "Blissey")
         self.assertTrue(blissey.item_mutated)
         self.assertTrue(blissey.item_removed)
+        self.assertIsNone(blissey.current_public_item)
 
     def test_trick_after_knock_off_clears_the_removal(self) -> None:
         # Once a later Trick hands the knocked-off mon an item again, it holds
-        # something that is not the sampled assignment: back to fail-closed.
+        # something that is not the sampled assignment — with the current item
+        # protocol-named (override-eligible). Defensive only: the real gen3
+        # sim REFUSES to Trick with a knocked-off mon involved (gen<=4
+        # itemKnockedOff gate; probed: |move|...|Trick||[still] + |-fail|).
         engine = self.engine_from([
             "|switch|p1a: Tyranitar|Tyranitar, L74|340/340",
             "|switch|p2a: Blissey|Blissey, L80|600/600",
@@ -563,6 +570,209 @@ class ExactStateLedgerTest(unittest.TestCase):
         blissey = self.opponent(engine, "Blissey")
         self.assertTrue(blissey.item_mutated)
         self.assertFalse(blissey.item_removed)
+        self.assertEqual(blissey.current_public_item, "Choice Band")
+
+    @staticmethod
+    def self_side(engine: PublicBattleBeliefEngine, species: str) -> RevealedPokemonBelief:
+        for belief in engine.snapshot().sides["p1"]:
+            if belief.species == species:
+                return belief
+        raise AssertionError(f"no belief for {species}")
+
+    def test_trick_full_swap_confirms_current_item_on_both_mons(self) -> None:
+        # Verbatim gen3 protocol (live probe 2026-07-19): a both-items Trick
+        # emits ONE -item line per mon, each naming the mon's CURRENT item —
+        # the exchange is fully public on both halves.
+        engine = self.engine_from([
+            "|switch|p1a: Alakazam|Alakazam, L80|219/219",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Alakazam|Trick|p2a: Furret",
+            "|-activate|p1a: Alakazam|move: Trick|[of] p2a: Furret",
+            "|-item|p2a: Furret|Choice Band|[from] move: Trick",
+            "|-item|p1a: Alakazam|Petaya Berry|[from] move: Trick",
+            "|upkeep",
+        ])
+        furret = self.opponent(engine, "Furret")
+        self.assertTrue(furret.item_mutated)
+        self.assertFalse(furret.item_removed)
+        self.assertEqual(furret.current_public_item, "Choice Band")
+        alakazam = self.self_side(engine, "Alakazam")
+        self.assertTrue(alakazam.item_mutated)
+        self.assertFalse(alakazam.item_removed)
+        self.assertEqual(alakazam.current_public_item, "Petaya Berry")
+
+    def test_trick_give_half_silent_enditem_is_a_removal(self) -> None:
+        # Verbatim: Trick into an itemless target — the giver's half is a
+        # [silent] -enditem naming the item it handed away; the giver is now
+        # publicly itemless.
+        engine = self.engine_from([
+            "|switch|p1a: Alakazam|Alakazam, L80|219/219",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Alakazam|Trick|p2a: Furret",
+            "|-activate|p1a: Alakazam|move: Trick|[of] p2a: Furret",
+            "|-item|p2a: Furret|Choice Band|[from] move: Trick",
+            "|-enditem|p1a: Alakazam|Choice Band|[silent]|[from] move: Trick",
+            "|upkeep",
+        ])
+        alakazam = self.self_side(engine, "Alakazam")
+        self.assertTrue(alakazam.item_mutated)
+        self.assertTrue(alakazam.item_removed)
+        self.assertIsNone(alakazam.current_public_item)
+        furret = self.opponent(engine, "Furret")
+        self.assertEqual(furret.current_public_item, "Choice Band")
+
+    def test_trick_take_half_silent_enditem_is_a_removal(self) -> None:
+        # Verbatim: an item-taking Trick (itemless user) — the victim's half
+        # is a [silent] -enditem; the victim is publicly itemless and the
+        # taker's -item names its new current item.
+        engine = self.engine_from([
+            "|switch|p1a: Alakazam|Alakazam, L80|219/219",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Alakazam|Trick|p2a: Furret",
+            "|-activate|p1a: Alakazam|move: Trick|[of] p2a: Furret",
+            "|-enditem|p2a: Furret|Leftovers|[silent]|[from] move: Trick",
+            "|-item|p1a: Alakazam|Leftovers|[from] move: Trick",
+            "|upkeep",
+        ])
+        furret = self.opponent(engine, "Furret")
+        self.assertTrue(furret.item_mutated)
+        self.assertTrue(furret.item_removed)
+        self.assertIsNone(furret.current_public_item)
+        alakazam = self.self_side(engine, "Alakazam")
+        self.assertEqual(alakazam.current_public_item, "Leftovers")
+
+    def test_berry_eat_marks_removed_without_mutation(self) -> None:
+        # Verbatim pinch-berry eat: the item is publicly GONE (worlds must not
+        # hand it back), but it was the original assignment — no mutation, and
+        # revealed_item keeps pinning variant matching.
+        engine = self.engine_from([
+            "|switch|p1a: Blissey|Blissey, L80|539/539",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Blissey|Seismic Toss|p2a: Furret",
+            "|-damage|p2a: Furret|27/267",
+            "|-enditem|p2a: Furret|Petaya Berry|[eat]",
+            "|-boost|p2a: Furret|spa|1|[from] item: Petaya Berry",
+            "|upkeep",
+        ])
+        furret = self.opponent(engine, "Furret")
+        self.assertFalse(furret.item_mutated)
+        self.assertTrue(furret.item_removed)
+        self.assertIsNone(furret.current_public_item)
+        self.assertEqual(furret.revealed_item, "Petaya Berry")
+        payload = furret.to_overlay_payload()
+        self.assertTrue(payload["item_removed"])
+        self.assertIsNone(payload["current_public_item"])
+
+    def test_chesto_rest_eat_marks_removed(self) -> None:
+        # Verbatim Chesto-Rest consumption on the SELF side.
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|387/387",
+            "|switch|p2a: Blissey|Blissey, L80|539/539",
+            "|turn|1",
+            "|move|p2a: Blissey|Seismic Toss|p1a: Snorlax",
+            "|-damage|p1a: Snorlax|307/387",
+            "|move|p1a: Snorlax|Rest|p1a: Snorlax",
+            "|-status|p1a: Snorlax|slp|[from] move: Rest",
+            "|-heal|p1a: Snorlax|387/387 slp|[silent]",
+            "|-enditem|p1a: Snorlax|Chesto Berry|[eat]",
+            "|-curestatus|p1a: Snorlax|slp|[msg]",
+            "|upkeep",
+        ])
+        snorlax = self.self_side(engine, "Snorlax")
+        self.assertFalse(snorlax.item_mutated)
+        self.assertTrue(snorlax.item_removed)
+        self.assertEqual(snorlax.revealed_item, "Chesto Berry")
+
+    def test_tricked_berry_eaten_becomes_a_removal(self) -> None:
+        # The seed-7013 composition: Trick puts a Petaya on the mon (override
+        # state), the mon later eats it at pinch — final public state is
+        # itemless (removal wins; the override must not linger).
+        engine = self.engine_from([
+            "|switch|p1a: Alakazam|Alakazam, L80|219/219",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Alakazam|Trick|p2a: Furret",
+            "|-activate|p1a: Alakazam|move: Trick|[of] p2a: Furret",
+            "|-item|p2a: Furret|Petaya Berry|[from] move: Trick",
+            "|-item|p1a: Alakazam|Leftovers|[from] move: Trick",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Alakazam|Seismic Toss|p2a: Furret",
+            "|-damage|p2a: Furret|27/267",
+            "|-enditem|p2a: Furret|Petaya Berry|[eat]",
+            "|-boost|p2a: Furret|spa|1|[from] item: Petaya Berry",
+            "|upkeep",
+        ])
+        furret = self.opponent(engine, "Furret")
+        self.assertTrue(furret.item_mutated)  # Trick history stands
+        self.assertTrue(furret.item_removed)  # ... but it now holds nothing
+        self.assertIsNone(furret.current_public_item)
+
+    def test_trick_then_knock_off_removal_wins(self) -> None:
+        # Verbatim composition: the Tricked item is knocked off — removal ends
+        # the override.
+        engine = self.engine_from([
+            "|switch|p1a: Alakazam|Alakazam, L80|219/219",
+            "|switch|p2a: Furret|Furret, L80|267/267",
+            "|turn|1",
+            "|move|p1a: Alakazam|Trick|p2a: Furret",
+            "|-activate|p1a: Alakazam|move: Trick|[of] p2a: Furret",
+            "|-item|p2a: Furret|Choice Band|[from] move: Trick",
+            "|-item|p1a: Alakazam|Petaya Berry|[from] move: Trick",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Alakazam|Knock Off|p2a: Furret",
+            "|-damage|p2a: Furret|243/267",
+            "|-enditem|p2a: Furret|Choice Band|[from] move: Knock Off|[of] p1a: Alakazam",
+            "|upkeep",
+        ])
+        furret = self.opponent(engine, "Furret")
+        self.assertTrue(furret.item_mutated)
+        self.assertTrue(furret.item_removed)
+        self.assertIsNone(furret.current_public_item)
+        # The self half of the original exchange is untouched by the Knock Off.
+        alakazam = self.self_side(engine, "Alakazam")
+        self.assertEqual(alakazam.current_public_item, "Petaya Berry")
+
+    def test_unexpected_enditem_move_source_fails_closed(self) -> None:
+        # Hardening (PR #741 review): a pool change to Thief/Covet must not be
+        # silently treated as a plain reveal (worlds would hand the stolen
+        # item back). Unaudited -enditem move sources mark the mutation with
+        # no removal and no confirmed current item -> construction blocks.
+        engine = self.engine_from([
+            "|switch|p1a: Sneasel|Sneasel, L80|250/250",
+            "|switch|p2a: Blissey|Blissey, L80|539/539",
+            "|turn|1",
+            "|move|p1a: Sneasel|Covet|p2a: Blissey",
+            "|-damage|p2a: Blissey|500/539",
+            "|-enditem|p2a: Blissey|Leftovers|[from] move: Covet|[of] p1a: Sneasel",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        self.assertFalse(blissey.item_removed)
+        self.assertIsNone(blissey.current_public_item)
+
+    def test_unexpected_item_move_source_fails_closed(self) -> None:
+        # The receiving half of an unaudited item-moving move (the Covet/Thief
+        # stealer's -item line): mutation with NO confirmed current item.
+        engine = self.engine_from([
+            "|switch|p1a: Sneasel|Sneasel, L80|250/250",
+            "|switch|p2a: Blissey|Blissey, L80|539/539",
+            "|turn|1",
+            "|move|p2a: Blissey|Thief|p1a: Sneasel",
+            "|-damage|p1a: Sneasel|220/250",
+            "|-item|p2a: Blissey|Quick Claw|[from] move: Thief|[of] p1a: Sneasel",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        self.assertFalse(blissey.item_removed)
+        self.assertIsNone(blissey.current_public_item)
 
     def test_mudshot_shield_dust_identification_requires_clean_hit(self) -> None:
         class DustSource(FakeSetSource):

@@ -263,6 +263,7 @@ def battle_spec_from_payload(
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
+    current_item_overrides: Mapping[str, Mapping[str, str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
     rng: Any | None = None,
@@ -273,12 +274,17 @@ def battle_spec_from_payload(
     ``local_showdown._public_materialization_payload`` (or a test literal of
     the same shape); ``override`` supplies both sides' belief-sampled packed
     teams. ``removed_item_species`` names, per slot, normalized species whose
-    held item was publicly stripped (Knock Off / an item-taking Trick) — the
-    built world clears the sampled set's item for them, because the current
-    public item state is exactly "no item" while the sampled item only
-    reflects the set's battle-start assignment. Raises
-    :class:`EngineWorldUnsupported` whenever the position holds public state
-    this construction cannot express exactly.
+    held item is publicly gone (Knock Off / an item-taking Trick / a public
+    consumption) — the built world clears the sampled set's item for them,
+    because the current public item state is exactly "no item" while the
+    sampled item only reflects the set's battle-start assignment.
+    ``current_item_overrides`` maps, per slot, species -> the CURRENT item the
+    protocol positively revealed on them (a Trick swap's ``-item`` line) — the
+    built world substitutes it for the sampled assignment's item (spread,
+    moves and ability keep the sampled assignment's values: Trick moves only
+    the item). A species named by BOTH signals is contradictory belief state
+    and fails closed. Raises :class:`EngineWorldUnsupported` whenever the
+    position holds public state this construction cannot express exactly.
     """
 
     _reject_unsupported_globals(payload)
@@ -364,6 +370,10 @@ def battle_spec_from_payload(
                 normalize_id(str(species))
                 for species in (removed_item_species or {}).get(slot, ())
             ),
+            current_item_overrides={
+                normalize_id(str(species)): normalize_id(str(item))
+                for species, item in ((current_item_overrides or {}).get(slot) or {}).items()
+            },
             must_recharge=slot in (recharging_slots or ()),
             truant_loafs=slot in (truant_slots or ()),
             rng=rng,
@@ -403,6 +413,7 @@ def world_battle_spec(
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
+    current_item_overrides: Mapping[str, Mapping[str, str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
     rng: Any | None = None,
@@ -427,6 +438,7 @@ def world_battle_spec(
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
         removed_item_species=removed_item_species,
+        current_item_overrides=current_item_overrides,
         recharging_slots=recharging_slots,
         truant_slots=truant_slots,
         rng=rng,
@@ -505,6 +517,7 @@ def _build_side_spec(
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
     removed_item_species: frozenset[str] = frozenset(),
+    current_item_overrides: Mapping[str, str] | None = None,
     must_recharge: bool = False,
     truant_loafs: bool = False,
     baton_passing: bool = False,
@@ -514,6 +527,17 @@ def _build_side_spec(
     blockers = side_payload.get("materializationBlockers")
     if blockers:
         raise EngineWorldUnsupported("materialization_blocker", f"{slot}: {', '.join(map(str, blockers))}")
+
+    item_overrides = dict(current_item_overrides or {})
+    conflicted = sorted(removed_item_species & set(item_overrides))
+    if conflicted:
+        # One signal says "publicly holds nothing", the other "publicly holds
+        # X": contradictory belief state for the same mon. Never guess which
+        # is right — a wrong item in a searched world is silent wrongness.
+        raise EngineWorldUnsupported(
+            "item_state_conflict",
+            f"side {slot!r}: {conflicted} carry both a removal and a current-item override",
+        )
 
     rows = side_payload.get("pokemon")
     if not isinstance(rows, Sequence) or isinstance(rows, str):
@@ -539,6 +563,7 @@ def _build_side_spec(
             self_benched_move_history=self_benched_move_history,
             approximate_sleep_turns=approximate_sleep_turns,
             item_removed=species_id in removed_item_species,
+            item_override=item_overrides.get(species_id),
         )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
@@ -758,6 +783,7 @@ def _build_pokemon_spec(
     self_benched_move_history: bool = False,
     approximate_sleep_turns: bool = False,
     item_removed: bool = False,
+    item_override: str | None = None,
 ) -> PokemonSpec:
     species_id = _engine_species_id(normalize_id(mon.species))
     info = dex.species_info(species_id)
@@ -819,11 +845,17 @@ def _build_pokemon_spec(
         moves=moves,
         status=status,
         ability=normalize_id(mon.ability) if mon.ability else None,
-        # A publicly-stripped item (Knock Off / an item-taking Trick) is a fact
-        # about the CURRENT battle state; the sampled item is the set's
-        # battle-start assignment. Stats above deliberately keep the original
-        # assignment's spread — only the held item is gone.
-        item=None if item_removed else (normalize_id(mon.item) if mon.item else None),
+        # The CURRENT public item state beats the sampled battle-start
+        # assignment: a publicly-stripped/consumed item is gone
+        # (item_removed), and a Trick-swapped mon holds exactly the item the
+        # protocol named (item_override). Stats above deliberately keep the
+        # original assignment's spread — Trick moves only the item. The two
+        # signals are mutually exclusive (item_state_conflict guard upstream).
+        item=(
+            item_override
+            if item_override
+            else (None if item_removed else (normalize_id(mon.item) if mon.item else None))
+        ),
         weight_kg=info.weight_kg if info.weight_kg > 0 else None,
     )
 
