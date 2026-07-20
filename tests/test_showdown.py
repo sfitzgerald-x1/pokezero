@@ -702,6 +702,45 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
 
     @unittest.skipUnless(
         Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex",
+    )
+    def test_struggle_action_token_encodes_typeless(self) -> None:
+        # Gen 3 correctness: Struggle is TYPELESS (neutral vs all types — it HITS Ghosts — and grants
+        # no STAB), matching the engine fix (poke-engine-gen3-struggle-typeless.patch). The Showdown
+        # dex still records Struggle as Normal-type, which made the SELF forced-Struggle action token
+        # encode `type:Normal` — telling the policy/value net that Struggle is Ghost-immune and Rock/
+        # Steel-resisted, corrupting PP-exhaustion lines. Post-fix the move-type token is the enumerated
+        # typeless `type:???` (the same token gen3 Curse uses). Damage class (Physical) and base power
+        # (50) are unchanged, so the fix is value-only / checkpoint-compatible.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.showdown import (
+            CATEGORY_MOVE_CATEGORY,
+            _CATEGORICAL_FEATURE_COUNT,
+            _V2_1_NUMERIC_FEATURE_COUNT,
+        )
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+
+        def encode(move_name: str) -> tuple[str, str, float]:
+            cat_row = [""] * _CATEGORICAL_FEATURE_COUNT
+            num_row = [0.0] * _V2_1_NUMERIC_FEATURE_COUNT
+            _encode_move_mechanics(cat_row, num_row, dex, move_name, user_types=("normal", "typeless"))
+            return cat_row[CATEGORY_TYPE_1], cat_row[CATEGORY_MOVE_CATEGORY], num_row[NUMERIC_BASE_POWER]
+
+        struggle_type, struggle_cat, struggle_bp = encode("struggle")
+        self.assertEqual(struggle_type, "type:???")
+        self.assertNotEqual(struggle_type, "type:Normal")
+        # Category + base power unchanged (checkpoint-compatible; only the move-type cell moves).
+        self.assertEqual(struggle_cat, "move_category:Physical")
+        self.assertAlmostEqual(struggle_bp, 50.0 / 200.0, places=6)
+        # Control: a genuine Normal move (Tackle) still encodes type:Normal — only Struggle changed.
+        self.assertEqual(encode("tackle")[0], "type:Normal")
+        # Struggle mirrors gen3 Curse, whose dex type is already "???".
+        self.assertEqual(encode("curse")[0], "type:???")
+
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
         "requires a real Gen 3 Showdown checkout for the dex + vocab",
     )
     def test_transformed_ditto_encodes_target_stats_but_original_hp(self) -> None:

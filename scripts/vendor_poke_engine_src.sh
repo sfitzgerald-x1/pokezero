@@ -14,6 +14,11 @@
 #   poke-engine-gen3-attract.patch — gen3 Attract 50% move-immobilization fix
 #   (see setup_poke_engine.sh header and docs/engine_fidelity_findings.md);
 #   authored against the residual-patched tree, applied AFTER residual-order.
+#   poke-engine-gen3-struggle-typeless.patch — gen3 Struggle is TYPELESS (neutral
+#   vs all types incl. Ghost, no STAB), per real Gen II+ mechanics; upstream
+#   defines Struggle as Normal-type, which wrongly made gen3 Struggle immune vs
+#   Ghost and resisted by Rock/Steel. Compile-time gated so gen1 stays Normal;
+#   authored against the attract-patched tree, applied AFTER attract.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -32,7 +37,7 @@ tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch; do
+for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 

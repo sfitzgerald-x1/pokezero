@@ -1,0 +1,25 @@
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -16364,7 +16364,21 @@
+             move_id: Choices::STRUGGLE,
+             base_power: 50.0,
+             category: MoveCategory::Physical,
+-            move_type: PokemonType::NORMAL,
++            // pokezero gen3 (and gen2+) fix: Struggle is TYPELESS from Generation
++            // II onward — neutral vs every type (it HITS Ghosts) and grants no
++            // STAB. Only in Generation I is Struggle a genuine Normal-type move
++            // (resisted by Rock/Steel, immune vs Ghost). The MOVES map is built
++            // per-compiled-gen (choices.rs is shared but each binary sets exactly
++            // one gen feature), so this compile-time gate keeps gen1 correct while
++            // making gen3 — the only gen this crate builds — typeless. The gen3
++            // type chart maps TYPELESS -> 1.0 vs all and stab_modifier returns 1.0
++            // for TYPELESS (see src/gen3/damage_calc.rs), so no downstream change
++            // is needed. Mirrors how gen3 Curse is TYPELESS.
++            move_type: if cfg!(feature = "gen1") {
++                PokemonType::NORMAL
++            } else {
++                PokemonType::TYPELESS
++            },
+             flags: Flags {
+                 contact: true,
+                 protect: true,

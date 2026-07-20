@@ -1882,10 +1882,21 @@ fn encode_move_mechanics(
         return Ok(());
     };
     let base_power = resolve_move_base_power(info, user_hp_fraction);
+    // Struggle is TYPELESS from Generation II onward: neutral vs every type (it
+    // HITS Ghosts) and grants no STAB. The Showdown dex still records Struggle as
+    // Normal-type, so emit the enumerated typeless token `type:???` directly, in
+    // byte-parity with the Python reference encoder (_encode_move_mechanics) and
+    // mirroring gen3 Curse (dex type already "???"). Matches the engine fix
+    // (third_party/poke-engine-gen3-struggle-typeless.patch).
+    let move_type_token = if info.id == "struggle" {
+        "???"
+    } else {
+        info.move_type.as_str()
+    };
     grid.set_cat(
         token,
         layout.cat_col("CATEGORY_TYPE_1")?,
-        format!("type:{}", info.move_type),
+        format!("type:{move_type_token}"),
     );
     grid.set_cat(
         token,
