@@ -575,6 +575,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--coverage-json", type=Path, required=True, help="Write coverage ledger JSON here.")
     parser.add_argument("--pass", dest="coverage_pass", choices=("A", "B", "both"), default="both")
     parser.add_argument("--gap-fill", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--exact-variants",
+        action="store_true",
+        help="Audit every exact source variant in paired 1v1 fixtures, not only atom coverage.",
+    )
     parser.add_argument("--use-moves", action="store_true", help="Run the optional best-effort move-reveal lane.")
     parser.add_argument("--universal-lane", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-move-rounds", type=int, default=8)
@@ -586,6 +591,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error("--max-move-rounds must be positive")
     if args.max_games is not None and args.max_games < 1:
         parser.error("--max-games must be positive when provided")
+    if args.exact_variants and args.coverage_pass != "both":
+        parser.error("--exact-variants covers every reachable ability and requires --pass both")
 
     preliminary = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
     root = preliminary.resolved_showdown_root()
@@ -598,6 +605,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         source_items=entities["items"],
         passes=_passes(args.coverage_pass),
         gap_fill=args.gap_fill,
+        exact_variants=args.exact_variants,
         seed_start=args.seed_start,
     )
     shard_index, shard_count = args.shard

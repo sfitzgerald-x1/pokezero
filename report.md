@@ -26,6 +26,7 @@ are not patched in this audit branch.
 | Scripted mechanic chains | 18 existing `gen3customgame` scenarios, 405 decisions | 17 findings: 15 confirmed encoder divergences across Transform and Chesto-Rest; 2 perspective views of the same underlying defects. |
 | Protocol co-occurrence census | Captured for every completed audited game plus seven public protocol cuts | Committed fold sample has 0 Intimidate, 0 Sand Stream, and 0 Baton Pass occurrences across five retained fold rows. New cuts cover all three ordered chains. |
 | Deterministic source breadth | 220 source-derived `gen3customgame` 1v1 fixtures, encoded as `gen3randombattle` observations | All 220 species, all 235 reachable species-ability pairs, all 125 movepool moves, and all 13 source items exercised through the production encoder with no uncovered atom and no oracle finding. |
+| Exact source variants | 874 source-derived `gen3customgame` 1v1 fixtures, encoded from both seats | All 1,748 complete `(species, role, level, moves, ability, item)` source tuples exercised as self-known and true opponent belief candidates, with no uncovered variant and no oracle finding. |
 | Universal move mini-lane | Deterministic mechanics fixtures for `struggle`, `recharge`, and generic `hiddenpower` | All three surfaced their expected action-token identity; Struggle also executed as a protocol move and Recharge as a protocol `cant` event. |
 
 ## Commands And Evidence
@@ -79,6 +80,24 @@ The committed machine-readable evidence is
 `docs/audit_artifacts/coverage-enumeration-ledger-754b71cfed643fa0.json`.
 The live run also checked 3,495 public candidate-variant records for configured
 source-universe membership.
+
+```sh
+POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+  uv run python scripts/coverage_enumeration_audit.py \
+    --exact-variants \
+    --json /tmp/pokezero-exact-variant-audit.json \
+    --coverage-json /tmp/pokezero-exact-variant-ledger.json
+```
+
+Result: 874/874 exact-variant fixtures completed against the same source hash
+with zero oracle findings. The v2 ledger records first coverage for all 1,748
+source variants and has empty uncovered sets for variants as well as the 220
+species, 235 reachable species-ability pairs, 125 moves, and 13 items. Every
+fixture is audited from both player perspectives, so each exact tuple is tested
+both as self-known state and as the opponent's true surviving candidate. The
+committed evidence is
+`docs/audit_artifacts/coverage-exact-variant-audit-754b71cfed643fa0.json` and
+`docs/audit_artifacts/coverage-exact-variant-ledger-754b71cfed643fa0.json`.
 
 ```sh
 uv run python scripts/deep_line_audit.py \
@@ -307,6 +326,10 @@ known set.
   empty coverage-ledger sets for 220 species, 235 reachable species-ability
   pairs, 125 source moves, and 13 source items. The committed JSON artifacts
   preserve the machine-readable evidence and per-atom first coverage.
+- Exact-tuple enumeration: the opt-in exact-variant lane completed 874/874
+  fixtures, checked all 1,748 source tuples from both player perspectives, and
+  produced an empty `uncovered.variants` set. This is stronger static coverage,
+  but still does not claim exhaustive multi-turn interaction coverage.
 - Verification: the merged-main focused audit suite passed 17 tests. Full
   `unittest` discovery with the fresh Showdown root runs 90 tests but retains
   one pre-existing, environment-sensitive bootstrap expectation: it assumes

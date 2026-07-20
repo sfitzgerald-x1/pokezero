@@ -45,6 +45,7 @@ checkout — it is **not** bundled in the engine repo). `SHOWDOWN_ROOT` =
 | Distinct moves | **125** (112 normal + 13 `hiddenpower<type>`) | `gen3_randbat_entities(root)["moves"]` |
 | Randbat abilities | **71** (**≤2 per species**) | union of `sets[*]["abilities"]` |
 | Items | 13 | union of the variant item sets |
+| Exact variants | **1,748** | complete `(species, role, level, four moves, ability, item)` source tuples |
 
 `sets.json` shape: `{species_id: {"level": int, "sets": [{"role","movepool":[move_id…],
 "abilities":[display_name…],"preferredTypes":[…]}]}}`. Species-level candidate/variant universe
@@ -243,13 +244,36 @@ If desired, additionally cover the Pokédex abilities the generator never rolls 
 species) using node slot data — purely a *defensive* encoder check for states the model does not
 see in training. Keep separate from the reachable-set coverage report so the two are not conflated.
 
+### 7.4 Exact-variant lane (optional, stronger tuple guarantee)
+
+The atom sweep proves every individual source fact reaches the encoder, but it
+does not prove every exact **combination** of role, moves, ability, and item.
+Run the opt-in `--exact-variants` mode when that stronger guarantee is needed:
+
+```sh
+POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+  uv run python scripts/coverage_enumeration_audit.py \
+    --exact-variants \
+    --json /tmp/pokezero-exact-variant-audit.json \
+    --coverage-json /tmp/pokezero-exact-variant-ledger.json
+```
+
+This mode bypasses greedy drafting and pairs every source variant exactly once
+into deterministic 1v1 fixtures. At the current source hash, 1,748 variants
+produce 874 fixtures. Because each fixture is audited from both seats, every
+variant is checked both as a self-known tuple and as the opponent's true
+surviving belief candidate. The ledger adds `variants`, per-variant first
+coverage, and an explicit `uncovered.variants` set; completion requires it to
+be empty alongside the atom sets. It remains static tuple coverage, not an
+exhaustive move-use or multi-turn interaction sweep.
+
 ## 8. Orchestration & budget
 
 Deterministic and embarrassingly parallel across games (~220 draft games + a small gap-fill set,
-each 1–few boundaries). Shard across workers; merge the per-shard `DeepLineAuditReport`/`Acc`
+or 874 exact-variant games, each 1–few boundaries). Shard across workers; merge the per-shard `DeepLineAuditReport`/`Acc`
 accumulators and the coverage ledgers. CLI shape mirrors the existing harnesses: `--showdown-root`,
 `--json PATH` (findings; exit 1 iff any real-bug signature), `--coverage-json PATH` (the ledger),
-`--pass {A,B,both}`, `--gap-fill`, `--use-moves` (§7.1), `--shard i/N`.
+`--pass {A,B,both}`, `--gap-fill`, `--exact-variants`, `--use-moves` (§7.1), `--shard i/N`.
 
 ## 9. Deliverable
 
