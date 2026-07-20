@@ -68,7 +68,9 @@ from .public_decision_corpus import (
     PublicDecisionCorpusWriter,
     PublicResolvedActionRound,
     public_corpus_manifest,
+    public_decision_records_from_trajectory,
 )
+from .encoding_collision_audit import CollisionSketchWriter, collision_sketch_manifest
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .rollout import RolloutConfig
@@ -875,6 +877,46 @@ class ControlledFoulPlayCaptureResult:
                 str(self.public_corpus_path) if self.public_corpus_path is not None else None
             ),
             "captured_public_decisions": self.captured_public_decisions,
+        }
+        return payload
+
+
+@dataclass(frozen=True)
+class ControlledFoulPlayCollisionSketchResult:
+    """Compact public-only collision capture plus the benchmark that generated it."""
+
+    benchmark: ControlledFoulPlayBenchmarkResult
+    output_path: Path
+    pool_id: str
+    checkpoint_sha256: str
+    belief_set_source_hash: str | None
+    observation_schema_version: str | None
+    captured_games: int
+    skipped_capped_games: int
+    skipped_tied_games: int
+    captured_decisions: int
+    resumed_decisions: int
+    captured_new_decisions: int
+    recovered_trailing_partial: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = self.benchmark.to_dict()
+        payload["collision_sketch_capture"] = {
+            "out": str(self.output_path),
+            "pool_id": self.pool_id,
+            "sides": "p1-only",
+            "policy_mode": "raw",
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "belief_set_source_hash": self.belief_set_source_hash,
+            "observation_schema_version": self.observation_schema_version,
+            "captured_games": self.captured_games,
+            "skipped_capped_games": self.skipped_capped_games,
+            "skipped_tied_games": self.skipped_tied_games,
+            "captured_decisions": self.captured_decisions,
+            "resumed_decisions": self.resumed_decisions,
+            "captured_new_decisions": self.captured_new_decisions,
+            "recovered_trailing_partial": self.recovered_trailing_partial,
+            "foulplay_search_time_ms": self.benchmark.config.search_time_ms,
         }
         return payload
 
@@ -1709,6 +1751,123 @@ async def capture_controlled_foulplay_rollouts(
         skipped_tied_games=skipped_tied_games,
         public_corpus_path=public_corpus_out,
         captured_public_decisions=captured_public_decisions,
+    )
+    if capture_progress_callback is not None:
+        capture_progress_callback({"status": "complete", **result.to_dict()})
+    return result
+
+
+async def capture_controlled_foulplay_collision_sketch(
+    config: ControlledFoulPlayConfig,
+    *,
+    out_path: Path,
+    pool_id: str = "controlled-foulplay-collision",
+    capture_progress_callback: ControlledFoulPlayCaptureProgressCallback | None = None,
+) -> ControlledFoulPlayCollisionSketchResult:
+    """Capture compact public collision evidence without retaining model tensors.
+
+    The resulting sketch has only input/public fingerprints and deterministic
+    replay locators. It is intentionally not a training rollout or a full
+    public-decision corpus, so large coverage samples remain storage-bounded.
+    """
+
+    if config.policy_mode != "raw":
+        raise ValueError("collision sketch capture requires policy_mode='raw'.")
+    if config.pokezero_player != "p1":
+        raise ValueError("collision sketch capture requires pokezero_player='p1'.")
+    if config.opponent_legal_mask_mode != "hidden":
+        raise ValueError("collision sketch capture requires opponent_legal_mask_mode='hidden'.")
+    if not pool_id.strip():
+        raise ValueError("pool_id must be non-empty.")
+
+    source = _resolved_belief_set_source(config)
+    belief_set_source_hash = source.metadata.source_hash if source is not None else None
+    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+    capture_manifest = public_corpus_manifest(
+        checkpoint_sha256=checkpoint_sha256 or "missing-checkpoint",
+        belief_set_source_hash=belief_set_source_hash,
+        capture_config=_public_corpus_capture_config(config),
+    )
+    # A retry replays the same deterministic seed band. The writer keeps prior
+    # valid rows and only appends decision locators that the replay had not yet
+    # reached, so a transient pod loss cannot discard a large sketch shard.
+    writer = CollisionSketchWriter(
+        out_path,
+        manifest=collision_sketch_manifest(capture_manifest=capture_manifest),
+        resume=True,
+    )
+    captured_games = 0
+    skipped_capped_games = 0
+    skipped_tied_games = 0
+    captured_new_decisions = 0
+    observation_schema_version: str | None = None
+
+    def progress_payload(*, status: str) -> dict[str, Any]:
+        return {
+            "status": status,
+            "collision_sketch_capture": {
+                "out": str(out_path),
+                "pool_id": pool_id,
+                "sides": "p1-only",
+                "policy_mode": "raw",
+                "checkpoint_sha256": checkpoint_sha256,
+                "belief_set_source_hash": belief_set_source_hash,
+                "observation_schema_version": observation_schema_version,
+                "captured_games": captured_games,
+                "skipped_capped_games": skipped_capped_games,
+                "skipped_tied_games": skipped_tied_games,
+                "captured_decisions": writer.record_count,
+                "resumed_decisions": writer.resumed_record_count,
+                "captured_new_decisions": captured_new_decisions,
+                "recovered_trailing_partial": writer.recovered_trailing_partial,
+                "foulplay_search_time_ms": config.search_time_ms,
+            },
+        }
+
+    def capture(trajectory: BattleTrajectory) -> None:
+        nonlocal captured_games, skipped_capped_games, skipped_tied_games
+        nonlocal captured_new_decisions, observation_schema_version
+        if trajectory.terminal is None:
+            raise RuntimeError("collision sketch capture requires a terminal trajectory")
+        if trajectory.terminal.winner is None:
+            if trajectory.terminal.capped:
+                skipped_capped_games += 1
+            else:
+                skipped_tied_games += 1
+            if capture_progress_callback is not None:
+                capture_progress_callback(progress_payload(status="running"))
+            return
+        records = public_decision_records_from_trajectory(trajectory, acting_player="p1")
+        if not records:
+            raise RuntimeError("collision sketch capture produced no p1 decision records")
+        current_schema = records[0].observation.schema_version
+        if observation_schema_version is None:
+            observation_schema_version = current_schema
+        elif observation_schema_version != current_schema:
+            raise RuntimeError("collision sketch capture observation schema drifted within one pool")
+        captured_new_decisions += writer.append_trajectory(records)
+        captured_games += 1
+        if capture_progress_callback is not None:
+            capture_progress_callback(progress_payload(status="running"))
+
+    try:
+        benchmark = await run_controlled_foulplay_benchmark(config, trajectory_callback=capture)
+    finally:
+        writer.close()
+    result = ControlledFoulPlayCollisionSketchResult(
+        benchmark=benchmark,
+        output_path=out_path,
+        pool_id=pool_id,
+        checkpoint_sha256=checkpoint_sha256 or "missing-checkpoint",
+        belief_set_source_hash=belief_set_source_hash,
+        observation_schema_version=observation_schema_version,
+        captured_games=captured_games,
+        skipped_capped_games=skipped_capped_games,
+        skipped_tied_games=skipped_tied_games,
+        captured_decisions=writer.record_count,
+        resumed_decisions=writer.resumed_record_count,
+        captured_new_decisions=captured_new_decisions,
+        recovered_trailing_partial=writer.recovered_trailing_partial,
     )
     if capture_progress_callback is not None:
         capture_progress_callback({"status": "complete", **result.to_dict()})

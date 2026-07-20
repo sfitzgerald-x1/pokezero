@@ -101,11 +101,16 @@ spurious collision. They should be parsed public facts plus a canonical
 history signature, not a raw-line comparison subject to formatting changes.
 
 Groups with distinct public fingerprints are concrete conflation candidates.
-Filter only through a versioned, documented whitelist of intentional
-abstractions, initially HP quantization, tendency bucketing, and transition
-window truncation. Every remaining group records representative state pairs,
-the differing public facts, frequency, schema version, corpus provenance, and
-whitelist classification. This is the primary catch-all for tag-subtype and
+The 100k-state first pass writes a compact public collision sketch (input hash,
+public fingerprint, and deterministic replay locator), not repeated model
+tensors or complete public-state payloads. This keeps broad capture
+storage-bounded. Candidate locators are then replayed to hydrate the exact
+public-field differences before whitelist adjudication. Filter only through a
+versioned, documented whitelist of intentional abstractions, initially HP
+quantization, tendency bucketing, and transition window truncation. Every
+remaining hydrated group records representative state pairs, the differing
+public facts, frequency, schema version, corpus provenance, and whitelist
+classification. This is the primary catch-all for tag-subtype and
 argument-level omissions that a dispatch-table sweep cannot find.
 
 ### Layer 4: counterfactual harm probes

@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
-from pokezero.encoding_collision_audit import EncodingCollisionAudit
+from pokezero.encoding_collision_audit import (
+    CollisionSketchWriter,
+    EncodingCollisionAudit,
+    audit_collision_sketches,
+    collision_sketch_manifest,
+)
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3
 from pokezero.public_decision_corpus import (
     PublicActionIdentifier,
@@ -104,6 +111,59 @@ class EncodingCollisionAuditTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "requires schema"):
             audit.add(legacy)
+
+    def test_compact_sketch_reports_collision_without_model_tensors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "collision-sketch.jsonl"
+            manifest = collision_sketch_manifest(
+                capture_manifest={
+                    "opponent_legal_mask_mode": "hidden",
+                    "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+                }
+            )
+            with CollisionSketchWriter(path, manifest=manifest) as writer:
+                writer.append_record(_record(state={"turn_number": 2, "weather": "sunnyday"}))
+                writer.append_record(_record(state={"turn_number": 2, "weather": "raindance"}))
+
+            rows = path.read_text(encoding="utf-8")
+            self.assertNotIn("numeric_features", rows)
+            self.assertNotIn("categorical_ids", rows)
+            self.assertNotIn("acting_player_state", rows)
+            payload = audit_collision_sketches([path])
+
+        self.assertEqual(payload["records_scanned"], 2)
+        self.assertEqual(payload["collision_group_count"], 1)
+        self.assertEqual(payload["actionable_collision_group_count"], 1)
+        collision = payload["collision_groups"][0]
+        self.assertTrue(collision["requires_public_replay_hydration"])
+        self.assertTrue(collision["actionable"])
+        self.assertIn("seed", collision["base"]["locator"])
+
+    def test_compact_sketch_resume_preserves_valid_records_and_recovers_partial_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "collision-sketch.jsonl"
+            manifest = collision_sketch_manifest(
+                capture_manifest={
+                    "opponent_legal_mask_mode": "hidden",
+                    "root_noise": {"enabled": False, "root_dirichlet_alpha": None},
+                }
+            )
+            first = _record(state={"turn_number": 2, "weather": "sunnyday"})
+            second = _record(state={"turn_number": 2, "weather": "raindance"})
+            with CollisionSketchWriter(path, manifest=manifest) as writer:
+                writer.append_record(first)
+            with path.open("ab") as handle:
+                handle.write(b'{"record_type":"sketch"')
+
+            with CollisionSketchWriter(path, manifest=manifest, resume=True) as writer:
+                self.assertEqual(writer.resumed_record_count, 1)
+                self.assertTrue(writer.recovered_trailing_partial)
+                self.assertEqual(writer.append_record(first), 0)
+                self.assertEqual(writer.append_record(second), 1)
+                self.assertEqual(writer.record_count, 2)
+
+            payload = audit_collision_sketches([path])
+        self.assertEqual(payload["records_scanned"], 2)
 
 
 if __name__ == "__main__":
