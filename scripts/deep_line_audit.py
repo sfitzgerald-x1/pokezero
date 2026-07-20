@@ -8,9 +8,13 @@ to triage, never an automatic encoder edit.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import os
 import random
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -31,6 +35,28 @@ from pokezero.golden_corpus_scenarios import (  # noqa: E402
 )
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noqa: E402
 from pokezero.observation import ObservationFeatureMasks  # noqa: E402
+from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
+from pokezero.showdown import observation_schema_version_from_choice, observation_spec_for_schema  # noqa: E402
+
+
+def _current_commit() -> str | None:
+    try:
+        return subprocess.check_output(
+            ("git", "-C", str(ROOT), "rev-parse", "HEAD"), text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, path)
 
 
 def _first_legal(observation, rng: random.Random) -> int | None:
@@ -85,8 +111,15 @@ def _audit_scenario(env: LocalShowdownEnv, spec, report: DeepLineAuditReport) ->
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", type=Path, default=None)
+    parser.add_argument(
+        "--observation-schema",
+        choices=("v3",),
+        required=True,
+        help="Audit v3 observations only; default-schema fallback is forbidden.",
+    )
     parser.add_argument("--random-games", type=int, default=8)
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--max-rounds", type=int, default=250)
@@ -100,10 +133,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         help="Record but do not fail on a known finding kind (repeatable).",
     )
     parser.add_argument("--json", type=Path, required=True)
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(command_arguments)
     if args.random_games < 0 or args.max_rounds < 1 or args.seed_start < 0:
         parser.error("--random-games and --seed-start must be non-negative; --max-rounds must be positive")
 
+    observation_schema = observation_schema_version_from_choice(args.observation_schema)
+    if observation_schema is None:  # Defensive: parser requires a concrete v3 choice.
+        raise AssertionError("deep-line audit requires an explicit observation schema")
     masks = ObservationFeatureMasks(tier2_residuals=False, tier2_investment=False)
     config = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True, feature_masks=masks)
     from pokezero.randbat_vocab import gen3_category_vocabulary
@@ -112,6 +148,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         showdown_root=args.showdown_root,
         set_belief_source=True,
         feature_masks=masks,
+        observation_spec=observation_spec_for_schema(observation_schema),
         category_vocab=gen3_category_vocabulary(
             config.resolved_showdown_root(), include_turn_merged=True
         ),
@@ -136,8 +173,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     finally:
         env.close()
 
-    args.json.parent.mkdir(parents=True, exist_ok=True)
-    args.json.write_text(json.dumps(report.to_json_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    source = load_gen3_randbat_source_cached(config.resolved_showdown_root())
+    payload = report.to_json_dict()
+    payload["audit_provenance"] = {
+        "schema_version": "pokezero.deep-line-audit-provenance.v1",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "public_repo_commit": _current_commit(),
+        "showdown_source_hash": source.metadata.source_hash,
+        "observation_schema": observation_schema,
+        "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
+        "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+    }
+    _write_json_atomic(args.json, payload)
     print(
         f"deep-line audit: decisions={report.decisions_checked} turn20+={report.turn_20_plus_decisions} "
         f"findings={len(report.findings)}"
