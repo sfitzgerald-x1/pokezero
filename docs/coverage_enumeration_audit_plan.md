@@ -302,7 +302,11 @@ wait
 `--depth-rounds` is deliberately bounded: it scripts legal moves in source
 order, then after every action re-runs the live differential oracle,
 perspective check, action-token identity check, and true-variant-survival
-check. A terminal game simply stops early; it is reported as bounded depth, not
+check. It also records the post-action protocol-tag census in the shard audit
+JSON. That census is evidence for the v3 silent-noop sweep's adjudication
+table, not a replacement for its exhaustive static reachability/handler diff:
+a deterministic 1v1 path can miss event subtypes and six-mon interactions. A
+terminal game simply stops early; it is reported as bounded depth, not
 misrepresented as a complete move-use proof.
 
 The runner writes no protocol trace for a successful fixture. If a fixture has

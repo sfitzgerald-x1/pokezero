@@ -289,6 +289,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             requested_players=lambda: ("p1", "p2"),
             observe=lambda _player_id: SimpleNamespace(legal_action_mask=(True,)),
             step=fail_step,
+            protocol_lines=(),
         )
 
         with self.assertRaises(coverage_audit_cli._MoveUseLaneError) as raised:
@@ -302,6 +303,158 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
 
         self.assertIsInstance(raised.exception.cause, RuntimeError)
         self.assertEqual(raised.exception.move_use, {"p1": ["movea"], "p2": ["movea"]})
+
+    def test_depth_lane_censuses_post_action_protocol_tags(self) -> None:
+        selection = CoverageSelection(
+            species="Alpha",
+            ability="Ability A",
+            item="Leftovers",
+            level=80,
+            moves=("movea",),
+            variant_id="alpha-a",
+            source_set_id="alpha",
+            pass_name="A",
+        )
+        game = CoverageGame(
+            game_id="variant-0001",
+            seed=1,
+            p1=selection,
+            p2=selection,
+            pass_name="both",
+            purpose="exact-variant",
+        )
+
+        class ProtocolEnv:
+            def __init__(self) -> None:
+                self.protocol_lines: tuple[str, ...] = ()
+                self._terminal = None
+
+            def terminal(self):
+                return self._terminal
+
+            @staticmethod
+            def requested_players():
+                return ("p1", "p2")
+
+            @staticmethod
+            def observe(_player_id: str):
+                return SimpleNamespace(legal_action_mask=(True,))
+
+            def step(self, _actions: dict[str, int]) -> None:
+                self.protocol_lines = (
+                    "|move|p1a: Alpha|Move A|p2a: Alpha",
+                    "|-fail|p2a: Alpha|move: Toxic",
+                    "|turn|2",
+                )
+                self._terminal = SimpleNamespace()
+
+        report = DeepLineAuditReport()
+        with patch.object(coverage_audit_cli, "_audit_depth_boundary") as audit_boundary:
+            coverage_audit_cli._run_move_use_lane(
+                ProtocolEnv(),
+                game=game,
+                report=report,
+                max_rounds=1,
+                depth_rounds=1,
+            )
+
+        self.assertEqual(dict(report.protocol_events), {"move": 1, "-fail": 1})
+        audit_boundary.assert_not_called()
+
+    def test_non_depth_lane_does_not_require_protocol_telemetry(self) -> None:
+        selection = CoverageSelection(
+            species="Alpha",
+            ability="Ability A",
+            item="Leftovers",
+            level=80,
+            moves=("movea",),
+            variant_id="alpha-a",
+            source_set_id="alpha",
+            pass_name="A",
+        )
+        game = CoverageGame(
+            game_id="variant-0001",
+            seed=1,
+            p1=selection,
+            p2=selection,
+            pass_name="both",
+            purpose="exact-variant",
+        )
+        env = SimpleNamespace(
+            terminal=lambda: None,
+            requested_players=lambda: ("p1", "p2"),
+            observe=lambda _player_id: SimpleNamespace(legal_action_mask=(True,)),
+            step=lambda _actions: None,
+        )
+
+        report = DeepLineAuditReport()
+        coverage_audit_cli._run_move_use_lane(
+            env,
+            game=game,
+            report=report,
+            max_rounds=1,
+            depth_rounds=0,
+        )
+
+        self.assertEqual(dict(report.protocol_events), {})
+
+    def test_depth_lane_censuses_each_round_without_double_counting(self) -> None:
+        selection = CoverageSelection(
+            species="Alpha",
+            ability="Ability A",
+            item="Leftovers",
+            level=80,
+            moves=("movea",),
+            variant_id="alpha-a",
+            source_set_id="alpha",
+            pass_name="A",
+        )
+        game = CoverageGame(
+            game_id="variant-0001",
+            seed=1,
+            p1=selection,
+            p2=selection,
+            pass_name="both",
+            purpose="exact-variant",
+        )
+
+        class TwoRoundEnv:
+            def __init__(self) -> None:
+                self.protocol_lines: tuple[str, ...] = ()
+                self.round = 0
+
+            @staticmethod
+            def terminal():
+                return None
+
+            @staticmethod
+            def requested_players():
+                return ("p1", "p2")
+
+            @staticmethod
+            def observe(_player_id: str):
+                return SimpleNamespace(legal_action_mask=(True,))
+
+            def step(self, _actions: dict[str, int]) -> None:
+                self.round += 1
+                self.protocol_lines += (
+                    "|move|p1a: Alpha|Move A|p2a: Alpha",
+                    *(("|-fail|p2a: Alpha|move: Toxic",) if self.round == 1 else ()),
+                    f"|turn|{self.round + 1}",
+                )
+
+        report = DeepLineAuditReport()
+        with patch.object(coverage_audit_cli, "_audit_depth_boundary") as audit_boundary:
+            coverage_audit_cli._run_move_use_lane(
+                TwoRoundEnv(),
+                game=game,
+                report=report,
+                max_rounds=2,
+                depth_rounds=2,
+            )
+
+        self.assertEqual(dict(report.protocol_events), {"move": 2, "-fail": 1})
+        self.assertEqual(audit_boundary.call_count, 2)
 
     def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:
         """Trace must split its public copied fact from its native source atom."""

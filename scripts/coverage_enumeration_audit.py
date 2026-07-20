@@ -29,6 +29,7 @@ from pokezero.deep_line_audit import (  # noqa: E402
     DeepLineAuditReport,
     audit_live_decision,
     audit_perspective_pair,
+    census_protocol_cooccurrences,
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.dex import normalize_id  # noqa: E402
@@ -446,7 +447,14 @@ def _run_move_use_lane(
                     if legal is None:
                         return used
                     actions[player_id] = legal
+            protocol_start = len(env.protocol_lines) if depth_rounds else 0
             env.step(actions)
+            if depth_rounds:
+                # The v3 silent-noop sweep owns the exhaustive static inventory.
+                # This live census records which protocol tags the exact-variant
+                # fixtures actually exercised, without treating absence as proof
+                # that a reachable event is harmless or unreachable.
+                census_protocol_cooccurrences(env.protocol_lines[protocol_start:], report=report)
             if depth_rounds and env.terminal() is None:
                 _audit_depth_boundary(env, game=game, report=report)
     except Exception as exc:
