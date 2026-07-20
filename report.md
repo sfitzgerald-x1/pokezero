@@ -1,6 +1,6 @@
 # Deep-Line Encoder Audit Report
 
-**Status:** In progress
+**Status:** Deep-line phase complete; deterministic coverage-enumeration phase pending.
 **Scope:** Read-only audit of the production Python observation encoder. This
 branch contains audit tooling and regression coverage only; it does not modify
 encoder, belief, transition, or engine-search behavior.
@@ -16,7 +16,7 @@ are not patched in this audit branch.
 
 | Lane | Coverage | Current result |
 | --- | --- | --- |
-| Live decision differential | Four full random Gen 3 randbats, 762 decision boundaries | 606 turn-20+ boundaries. No incremental-vs-batch or snapshot-vs-live divergence; live checks confirmed systematic self-fact, cure, and item-pruning defects. |
+| Live decision differential | Four local random Gen 3 randbats plus a persistent run of 100 random games and seven protocol cuts: 17,963 decision boundaries total | 14,027 persistent-run boundaries were turn 20+. The shard reproduced the known self-fact, stale-cure, Transform, and candidate-pruning roots at scale, and found one new move-weather countdown defect below. |
 | Incremental vs batch | Included at every audited boundary | No mismatch in the smoke run. |
 | Snapshot vs live | Included at every audited boundary | No mismatch in the smoke run. |
 | Perspective symmetry | Included whenever both seats request an action | No mismatch in the corrected random smoke. |
@@ -47,6 +47,14 @@ than a claim that random play exercised every species, move, ability, item, or
 variant. The one-game source smoke covered 155 candidate variants with zero
 membership mismatches, while its self-request sample covered 12/220 species,
 12/1,748 exact variants, 29/125 moves, 11/71 abilities, and 5/13 items.
+
+The persistent long run completed 100 random games plus seven protocol cuts and
+17,963 decision boundaries, including 14,027 at turn 20 or later. Its immutable image predated the later
+source-coverage manifest and default finding suppression, so the long artifact
+does not make a source-coverage claim and contains repeated copies of the
+already-triaged signatures. Triage grouped those copies by root cause rather
+than treating their raw count as separate defects. The next source-derived
+enumeration audit is the required exhaustive breadth complement.
 
 ```sh
 uv run python scripts/deep_line_audit.py \
@@ -100,6 +108,7 @@ schema/parity smoke, not meaningful coverage for those stateful switch chains.
 | Resolved audit false positive | Raw bridge matching initially selected the wrong Pokemon for duplicate species, cosmetic Unown forms, transformed Pokemon, and force-switch request boundaries. | Identity-aware matching reduced scripted findings from 574 to 17, all attributable to confirmed defects below. | Preserve source-metadata matching and request-aware active handling in the audit harness. No production change. |
 | Resolved audit false positive | `status:tox => toxic_stage >= 1` is not valid at the decision immediately after a poisoned Pokemon switches in. | Random seed 3 reached turn 88 with a freshly switched-in, poisoned Delcatty and a correct zero Toxic stage; Gen 3 increments after the next residual. | Retain numeric bounds, but do not infer a Toxic stage solely from current status. No production change. |
 | Resolved audit-manifest defect | Self requests spell dynamic-power moves as `return102`/`frustrationNN`, while the set universe uses `return`/`frustration`. | Independent review reproduced a source variant that was not counted as observed when only its request-side Return spelling differed. | Normalize dynamic-power request IDs before source-component and exact-variant coverage accounting. No production change. |
+| Confirmed at scale | The long shard emitted 421,594 raw findings because its image predated default suppression. | 420,691 are already-triaged direct signatures; the remaining bridge/status/species/boost/perspective rows collapse to the existing stale-cure, Forecast, and Transform roots, except for the four Rain Dance timing rows below. | Preserve root-cause deduplication; use the new runner defaults for any future depth shard. |
 | Under investigation | Scripted custom-game moves and items can be outside the closed random-battle category vocabulary. | The scenario run emitted OOV-vocabulary warnings for custom-only fixtures such as `attract` and `safeguard`. | Keep this separate from the randbat encoder audit; confirm whether it affects only custom-game test fixtures before reporting a production issue. |
 
 ## Confirmed Encoder Bugs
@@ -193,15 +202,53 @@ schema/parity smoke, not meaningful coverage for those stateful switch chains.
 | Classification | Confirmed belief-pruning bug. The candidate-count increase is a downstream symptom, not a separate root cause. |
 | Required fix | Apply pinch non-proc pruning only when the action-phase HP snapshot crossed or was already below the threshold at a point where the berry could have activated; do not prune solely from residual-end HP. Add a Toxic-residual Petaya regression that verifies no rule-out and monotone candidates. |
 
-## Remaining Work
+### 9. Move-Weather Counter Is One Turn Stale After Rain Dance
 
-1. Scale the long-game random-battle shard with turn-20+ weighting using a persistent job, while suppressing already-confirmed signatures from the triage summary.
-2. Complete protocol co-occurrence coverage and identify any blind high-frequency chains, especially Intimidate/Sand Stream/Baton Pass switch-ins missing from the committed corpus sample.
-3. Synthesize final incidence, verification evidence, and the permanent audit-gate recommendation from the completed shard artifacts.
-4. Treat the source manifest as the explicit boundary of sampled coverage. A
-   future exhaustive component sweep would need generated fixtures or direct
-   source-derived starts for every catalog member; it is not implied by this
-   read-only deep-line run.
+| Property | Evidence |
+| --- | --- |
+| Trigger | Rain Dance resolves, residual upkeep completes, and the next decision is requested. Reproduced locally from random seed 112 at turns 45 and 51. |
+| Divergent surface | On the first post-resolution decision, the bridge reports four of five weather turns remaining (`duration: 4`), while `field.weather_turns` encodes the full five turns (`1.0`). A second Rain Dance reproduction encodes four turns while the bridge reports three. |
+| Long-shard incidence | Four decision boundaries across three random seeds (112 twice, 124, and 152) in 17,963 audited boundaries. |
+| Root cause | `_weather_duration_features()` subtracts only whole replay-turn differences from `weather_set_turn`. The observation boundary occurs after the set turn's upkeep, which already consumes the first duration tick. |
+| Training impact | Yes, at low incidence. The policy receives an overlong move-weather horizon, which can distort timing-sensitive rain decisions and weather-dependent move/ability evaluation. |
+| Classification | Confirmed encoder bug. |
+| Required fix | Define move-weather remaining turns at the post-upkeep request boundary: consume the first tick when calculating the first observation after a fresh `-weather` line. Add start and recast Rain Dance regressions that compare encoded `weather_turns` with the bridge duration. |
+
+## Deep-Line Disposition
+
+The depth-focused audit is complete. Its persistent run covered 100 random
+battles plus seven public protocol cuts, checking 17,963 decision boundaries
+(14,027 at turn 20 or later). It verified no incremental-vs-batch or
+snapshot-vs-live divergence in the focused local smoke, reproduced eight
+pre-existing encoder/belief defects at real-game depth, and identified the new
+post-resolution move-weather countdown defect above.
+
+Protocol event-type coverage in the persistent artifact included 7,951
+`switch`, 1,106 `-ability`, and 1,545 `-weather` events. Its event-type
+co-occurrence census observed 67 `-ability`/`switch` and 62
+`-weather`/`switch` turn groups. Event types alone cannot identify a particular
+ability or move, so the explicit Intimidate, Sand Stream, and Baton Pass public
+protocol cuts remain the semantic coverage for those chains; all three ran
+without a new root cause.
+
+Recommended permanent gate: retain the live differential, public bridge field
+oracle, raw request action/PP oracle, candidate monotonicity, snapshot/live,
+and perspective checks; run the deterministic mechanic and protocol cuts on
+encoder/belief changes; and use a persistent turn-20+-weighted random shard
+with known signatures suppressed for broad accumulation coverage. The runner
+now applies that suppression by default for future shards. No production
+encoder fix is included in this read-only audit branch.
+
+This result does **not** claim exhaustive atom coverage. The next
+source-derived enumeration audit must deterministically visit every Gen 3
+randbat species, reachable ability, and movepool move before the overall report
+can be finished.
+
+## Next Phase
+
+The follow-on deterministic coverage-enumeration audit is the remaining work.
+It will replace sampled component accounting with guaranteed source-derived
+coverage, then append its findings and completion evidence to this report.
 
 ## Runner Provenance
 
