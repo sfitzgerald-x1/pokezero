@@ -121,7 +121,7 @@ class SpecTableTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"v2.*v2\.1|v2\.1.*v2"):
             observation_spec_for_schema("pokezero.observation.v1")
         with self.assertRaisesRegex(ValueError, "No replay observation spec"):
-            observation_spec_for_schema("pokezero.observation.v3")
+            observation_spec_for_schema("pokezero.observation.v99")
 
 
 class DualEncodeTest(unittest.TestCase):
@@ -163,7 +163,7 @@ class DualEncodeTest(unittest.TestCase):
         from dataclasses import replace
 
         state = _state([])
-        bad_spec = replace(V2_1_REPLAY_OBSERVATION_SPEC, schema_version="pokezero.observation.v3")
+        bad_spec = replace(V2_1_REPLAY_OBSERVATION_SPEC, schema_version="pokezero.observation.v99")
         with self.assertRaisesRegex(ValueError, "unsupported spec schema"):
             _encode(state, bad_spec)
 
