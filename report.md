@@ -1,6 +1,6 @@
 # Deep-Line Encoder Audit Report
 
-**Status:** Deep-line phase complete; deterministic coverage-enumeration phase pending.
+**Status:** Deep-line phase complete; deterministic coverage-enumeration implementation and full local source sweep complete. Final artifact capture, review, and report close-out remain.
 **Scope:** Read-only audit of the production Python observation encoder. This
 branch contains audit tooling and regression coverage only; it does not modify
 encoder, belief, transition, or engine-search behavior.
@@ -25,6 +25,8 @@ are not patched in this audit branch.
 | Source-distribution manifest | Configured Gen 3 randbat universe versus components disclosed in sampled self requests; every public opponent candidate variant is source-checked | One-game smoke checked 155 candidate variants with no membership mismatch. It observed 12/220 species, 12/1,748 exact variants, 29/125 moves, 11/71 abilities, and 5/13 items: useful provenance and coverage accounting, explicitly not an exhaustive universe sweep. |
 | Scripted mechanic chains | 18 existing `gen3customgame` scenarios, 405 decisions | 17 findings: 15 confirmed encoder divergences across Transform and Chesto-Rest; 2 perspective views of the same underlying defects. |
 | Protocol co-occurrence census | Captured for every completed audited game plus seven public protocol cuts | Committed fold sample has 0 Intimidate, 0 Sand Stream, and 0 Baton Pass occurrences across five retained fold rows. New cuts cover all three ordered chains. |
+| Deterministic source breadth | 220 source-derived `gen3customgame` 1v1 fixtures, encoded as `gen3randombattle` observations | All 220 species, all 235 reachable species-ability pairs, all 125 movepool moves, and all 13 source items exercised through the production encoder with no uncovered atom and no oracle finding. |
+| Universal move mini-lane | Deterministic mechanics fixtures for `struggle`, `recharge`, and generic `hiddenpower` | All three surfaced their expected action-token identity; Struggle also executed as a protocol move and Recharge as a protocol `cant` event. |
 
 ## Commands And Evidence
 
@@ -55,6 +57,28 @@ does not make a source-coverage claim and contains repeated copies of the
 already-triaged signatures. Triage grouped those copies by root cause rather
 than treating their raw count as separate defects. The next source-derived
 enumeration audit is the required exhaustive breadth complement.
+
+```sh
+# Build a clean Showdown checkout first, then point the audit at that checkout.
+node build
+POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
+  uv run python scripts/coverage_enumeration_audit.py \
+    --json /tmp/pokezero-coverage-enumeration-audit.json \
+    --coverage-json /tmp/pokezero-coverage-enumeration-ledger.json
+```
+
+Result: 220/220 planned fixture games completed against source hash
+`754b71cfed643fa0`, with zero oracle findings. The execution ledger has empty
+uncovered sets for 220 species, 235 reachable species-ability pairs, 125 source
+movepool moves, and 13 source items. The bounded universal lane also executed
+real Struggle and Recharge transitions and verified generic Hidden Power action
+identity. The source plan used no gap-fill fixtures on this source revision:
+the two deterministic variant passes covered all required atoms directly.
+The committed machine-readable evidence is
+`docs/audit_artifacts/coverage-enumeration-audit-754b71cfed643fa0.json` and
+`docs/audit_artifacts/coverage-enumeration-ledger-754b71cfed643fa0.json`.
+The live run also checked 3,495 public candidate-variant records for configured
+source-universe membership.
 
 ```sh
 uv run python scripts/deep_line_audit.py \
@@ -110,6 +134,7 @@ schema/parity smoke, not meaningful coverage for those stateful switch chains.
 | Resolved audit-manifest defect | Self requests spell dynamic-power moves as `return102`/`frustrationNN`, while the set universe uses `return`/`frustration`. | Independent review reproduced a source variant that was not counted as observed when only its request-side Return spelling differed. | Normalize dynamic-power request IDs before source-component and exact-variant coverage accounting. No production change. |
 | Confirmed at scale | The long shard emitted 421,594 raw findings because its image predated default suppression. | 420,691 are already-triaged direct signatures; the remaining bridge/status/species/boost/perspective rows collapse to the existing stale-cure, Forecast, and Transform roots, except for the four Rain Dance timing rows below. | Preserve root-cause deduplication; use the new runner defaults for any future depth shard. |
 | Under investigation | Scripted custom-game moves and items can be outside the closed random-battle category vocabulary. | The scenario run emitted OOV-vocabulary warnings for custom-only fixtures such as `attract` and `safeguard`. | Keep this separate from the randbat encoder audit; confirm whether it affects only custom-game test fixtures before reporting a production issue. |
+| Resolved coverage-audit false positive | Trace emits a public copied current ability at switch-in while retaining the native source ability in its candidate universe. | Four initial breadth alerts were Gardevoir/Porygon2 copying Keen Eye or Water Absorb. `candidate_variants` and `possible_abilities` correctly retained native Trace; only the visible current-ability bucket changed. | Audit native ability on the source candidate surface and the copied ability on the public categorical surface. No production change. |
 
 ## Confirmed Encoder Bugs
 
@@ -239,16 +264,25 @@ with known signatures suppressed for broad accumulation coverage. The runner
 now applies that suppression by default for future shards. No production
 encoder fix is included in this read-only audit branch.
 
-This result does **not** claim exhaustive atom coverage. The next
-source-derived enumeration audit must deterministically visit every Gen 3
-randbat species, reachable ability, and movepool move before the overall report
-can be finished.
+The depth-only result did **not** claim exhaustive atom coverage. The completed
+source-derived enumeration sweep now supplies that breadth evidence: every Gen
+3 randbat species, reachable ability, source movepool move, and source item has
+been exercised through the production encoder. It does not replace deep-line
+coverage of multi-turn mechanic chains; the two lanes remain complementary.
 
-## Next Phase
+## Coverage Enumeration Disposition
 
-The follow-on deterministic coverage-enumeration audit is the remaining work.
-It will replace sampled component accounting with guaranteed source-derived
-coverage, then append its findings and completion evidence to this report.
+The deterministic breadth lane is implemented and locally validated against a
+fresh Showdown build. Its planner fails closed when any expected source move or
+item lacks a materializable source-variant carrier; its ledger records a
+first-covering game and an explicit uncovered set for species, ability pairs,
+moves, and items. The completed source revision required no gap-fill games, but
+gap-fill remains mandatory behavior if a future source update leaves an atom
+uncovered by the two main passes.
+
+No new encoder or belief bug was confirmed by the exhaustive static source
+sweep. Final close-out requires committing the generated JSON evidence,
+independent review, and the permanent-gate/report completion audit.
 
 ## Runner Provenance
 

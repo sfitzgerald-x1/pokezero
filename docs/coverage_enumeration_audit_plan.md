@@ -4,7 +4,7 @@
 **Status:** plan for a follow-on audit that complements `docs/deep_line_audit_plan.md`.
 **Relationship to the deep-line plan:** the deep-line plan chases **depth** (multi-turn,
 multi-mechanic state-accumulation lines). This plan chases **breadth** — it guarantees that
-**every** catalog atom (each species, each reachable ability, each move) is exercised through
+**every** catalog atom (each species, each reachable ability, each move, and each item) is exercised through
 the production observation encoder at least twice, deterministically, rather than relying on the
 random generator to sample it. It directly closes the deep-line plan's stated blind spot
 ("Won't catch: bugs gated on rare *species/moves* absent from the sample") and the report's own
@@ -159,34 +159,34 @@ for pass_idx, ability_slot in ((A, 0), (B, 1)):
 
 ## 4. The move census and moveset assignment
 
-Goal: exercise all 125 movepool moves through the encoder. Each mon has **2 visits × 4 move slots
+Goal: exercise all 125 movepool moves and all 13 source items through the encoder. Each mon has **2 visits × 4 move slots
 = 8 move-slots**; the catalog has 220 mons × 8 = 1 760 slots for 125 moves — ample capacity, so
 the draft can cover nearly all 125 and gap-fill is a small safety net.
 
 **Draft moveset assignment (`draft_moveset`) — deterministic global greedy set-cover:**
-iterate species in the draft order; for each of a mon's 2 visits, fill its 4 slots by first
-choosing globally-**uncovered** moves from that mon's movepool (marking them covered), then filling
-any remaining slots with already-covered movepool moves (prefer STAB / a legal `_valid_gen3_move_combo`
-set for realism, but membership is the only hard requirement). This deterministically maximizes
-draft-time move coverage. Track `move_first_covered_by[move] = game_id`.
+iterate species in the draft order; for each of a mon's 2 visits, choose a valid source variant
+for the pass's target ability which maximizes globally-**uncovered** moves, then uncovered items,
+with a stable variant-id tiebreak. This preserves an actual randbat variant while deterministically
+maximizing draft-time move/item coverage. Track both
+`move_first_covered_by[move] = game_id` and `item_first_covered_by[item] = game_id`.
 
-**Coverage ledger:** after the draft, compute `covered = ∪ drafted movesets`, `missing = 125 −
-covered`. Report per-move first-covering game and the (expected-small) missing set.
+**Coverage ledger:** after the draft, compute covered and missing sets for both moves and items.
+Report a first-covering game for every atom. Items are a hard target, not a reporting-only
+statistic: both `missing_moves` and `missing_items` must be empty in a completed audit.
 
 ## 5. The gap-fill — the "second draft" for missing moves
 
-For each move in `missing` (deterministic order):
+For each remaining uncovered move or item (deterministic order):
 
-1. Pick a valid carrier `sp = min(inv[move])` (deterministic; prefer a carrier not yet saturated).
-2. Build a `FixturePokemon(sp, moves=[move, +3 filler from sp's movepool], ability=reachable[0],
-   item=…, level=sets.json[sp]["level"])`. Membership is sufficient; a legal 4-combo is preferred
-   but not required.
-3. Run a 1v1 game (opponent = any simple mon), encode, assert, mark the move covered.
+1. Pick a valid **source variant** which covers the most remaining moves/items, with a stable
+   variant-id tiebreak. A missing item must select a variant carrying that exact source item.
+2. Run that valid variant in a 1v1 game (opponent = any valid source variant), encode, assert,
+   and mark every move/item on both fixture mons covered.
 
-Loop until `missing == ∅`. Because every movepool move has ≥1 carrier, 100% move coverage is
-achievable; if a move remains uncovered, that is itself a finding (a broken carrier relation).
-Log every engineered game and the move it targets — **no silent coverage caps** (state exactly
-what, if anything, could not be covered and why).
+Loop until both missing sets are empty. Because every movepool move and source item has at least
+one source-variant carrier, 100% coverage is achievable; if either atom kind remains uncovered,
+that is itself a finding (a broken carrier relation). Log every engineered game and its target
+atoms — **no silent coverage caps** (state exactly what, if anything, could not be covered and why).
 
 ## 6. What each boundary asserts (reuse the merged oracle)
 
@@ -257,8 +257,8 @@ accumulators and the coverage ledgers. CLI shape mirrors the existing harnesses:
    the enumeration/draft/census/gap-fill logic emitting `BattleStartOverride`s and consuming the
    reused asserter. This is the **only** new code.
 2. A **coverage report artifact** (JSON): per-(species×ability) status (target 100% of reachable
-   pairs), per-move first-covering game, the uncovered set (target ∅ for movepool moves), items
-   exercised, and the universal-move mini-lane result.
+   pairs), per-move and per-item first-covering game, the uncovered sets (target ∅ for both
+   movepool moves and source items), and the universal-move mini-lane result.
 3. A **ranked flagged-inconsistency list** — each finding with the triggering atom (species,
    ability, move), the divergent column(s), oracle-vs-encoder values, a minimal repro,
    TRAINING-AFFECTING yes/no + incidence, and a classification.
