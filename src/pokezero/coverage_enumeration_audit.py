@@ -428,8 +428,8 @@ def merge_coverage_ledgers(ledgers: Iterable[Mapping[str, Any]]) -> dict[str, An
             raise ValueError("coverage ledger is missing first_coverage")
         for kind, output in first_coverage.items():
             values = raw_first.get(kind)
-            # Pre-v2 ledgers have no optional exact-variant lane and can still
-            # be merged as atom-only coverage evidence.
+            # A v1-only merge has no optional exact-variant lane. Mixed v1/v2
+            # merges intentionally fail the schema guard above.
             if kind == "variants" and "variants" not in expected and values is None:
                 continue
             if not isinstance(values, Mapping):

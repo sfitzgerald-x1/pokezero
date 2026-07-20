@@ -261,8 +261,10 @@ POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
 This mode bypasses greedy drafting and pairs every source variant exactly once
 into deterministic 1v1 fixtures. At the current source hash, 1,748 variants
 produce 874 fixtures. Because each fixture is audited from both seats, every
-variant is checked both as a self-known tuple and as the opponent's true
-surviving belief candidate. The ledger adds `variants`, per-variant first
+variant is checked through its self-known encodable facts (including level) and
+as the opponent's true surviving belief candidate. `role` is a source-selection
+constraint rather than a direct observation feature, but remains part of the
+candidate `variant_id` identity. The ledger adds `variants`, per-variant first
 coverage, and an explicit `uncovered.variants` set; completion requires it to
 be empty alongside the atom sets. It remains static tuple coverage, not an
 exhaustive move-use or multi-turn interaction sweep.
