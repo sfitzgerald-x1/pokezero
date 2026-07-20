@@ -2477,8 +2477,24 @@ def _encode_pokemon_tokens(
         # the copied identity so the model sees the effective battler, not Ditto's base 48-across.
         # Transform copies everything EXCEPT HP and level, so base HP stays the original's (a
         # transformed Ditto is still frail) and level comes from the original's details.
-        transformed = belief is not None and belief.transformed and bool(belief.transform_species)
-        enc_species = belief.transform_species if transformed else candidate.species
+        #
+        # The Transform flag lives in whichever per-mon ledger tracks this side's exact state. The
+        # OPPONENT passes its set-source belief as ``beliefs_by_species`` (carrying the flag), but
+        # the SELF side passes only ``exact_beliefs_by_species`` — its ``beliefs_by_species`` is
+        # None by design — so ``belief`` is None for our own transformed Ditto and the copied
+        # identity would never surface (self token stuck on ditto/Normal/48-across while the belief
+        # engine correctly holds transform_species). Fall back to the exact belief when the
+        # set-source belief lacks the flag. For the opponent both maps resolve to the same object,
+        # so this is a no-op there; a non-transformed self mon is likewise unchanged.
+        transform_belief = belief
+        if not (transform_belief is not None and transform_belief.transformed):
+            transform_belief = _belief_for_species(exact_beliefs_by_species, candidate.species)
+        transformed = (
+            transform_belief is not None
+            and transform_belief.transformed
+            and bool(transform_belief.transform_species)
+        )
+        enc_species = transform_belief.transform_species if transformed else candidate.species
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{enc_species}")
         _encode_species_type_categories(categorical_ids[token_index], dex, enc_species)
         # In-battle LIVE retype (Castform Forecast forme / Kecleon Color Change): override ONLY the

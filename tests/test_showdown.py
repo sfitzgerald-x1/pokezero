@@ -660,6 +660,193 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(num[ditto_idx][NUMERIC_ACTIVE], 0.0)
         self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)  # Ditto again, not Snorlax
 
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_self_ditto_transform_surfaces_target_identity(self) -> None:
+        # SELF-side Ditto: OUR Ditto Transforms into the opponent's Charizard. The self token must
+        # surface the COPIED identity (species/types/base stats) exactly like the opponent path,
+        # keeping Ditto's own base HP (Transform never copies HP). Pre-fix the self token was stuck
+        # on ditto/Normal/48-across because the transform flag lives in the self EXACT belief but the
+        # species/type/base-stat surface only consulted the (self-side None) set-source belief. The
+        # opponent Charizard token and the benched non-transformed self mon must be unaffected.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import (
+            CATEGORY_PRIMARY, CATEGORY_TYPE_1, CATEGORY_TYPE_2, NUMERIC_ACTIVE,
+        )
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+
+        def self_request(active_ident: str, active_species: str) -> str:
+            # A minimal move-request carrying our two-mon side. A transformed Ditto's request keeps
+            # its details=="Ditto" (Showdown never rewrites the species), so candidate.species stays
+            # ditto — exactly the case where the copied identity must come from the belief ledger.
+            payload = {
+                "active": [{"moves": [
+                    {"move": "Transform", "id": "transform", "pp": 5, "maxpp": 5,
+                     "target": "normal", "disabled": False}
+                ]}],
+                "side": {"name": "Us", "id": "p1", "pokemon": [
+                    {"ident": "p1a: Ditto", "details": "Ditto, L78", "condition": "100/100",
+                     "active": active_ident == "Ditto",
+                     "stats": {"atk": 100, "def": 100, "spa": 100, "spd": 100, "spe": 100},
+                     "moves": ["transform"], "baseAbility": "limber", "item": "quickclaw",
+                     "ability": "limber"},
+                    {"ident": "p1: Swampert", "details": "Swampert, L78", "condition": "100/100",
+                     "active": active_ident == "Swampert",
+                     "stats": {"atk": 150, "def": 150, "spa": 130, "spd": 130, "spe": 100},
+                     "moves": ["surf"], "baseAbility": "torrent", "item": "leftovers",
+                     "ability": "torrent"},
+                ]},
+            }
+            return "|request|" + json.dumps(payload)
+
+        def self_tokens(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(
+                state, category_vocab=vocab, dex=dex, spec=V2_1_REPLAY_OBSERVATION_SPEC
+            )
+            self_off = FIELD_TOKEN_COUNT
+            num = [obs.numeric_features[self_off + i] for i in range(SELF_POKEMON_TOKEN_COUNT)]
+            cat = [obs.categorical_ids[self_off + i] for i in range(SELF_POKEMON_TOKEN_COUNT)]
+            opp_off = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+            opp_num = [obs.numeric_features[opp_off + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)]
+            opp_cat = [obs.categorical_ids[opp_off + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)]
+            return num, cat, opp_num, opp_cat
+
+        base = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            "|switch|p2a: Charizard|Charizard, L78|100/100",
+            "|turn|1",
+            "|move|p1a: Ditto|Transform|p2a: Charizard",
+            "|-transform|p1a: Ditto|p2a: Charizard",
+            self_request("Ditto", "Ditto"),
+            "|turn|2",
+        ]
+
+        def active_row(num, cat):
+            idx = next(i for i, row in enumerate(num) if row[NUMERIC_ACTIVE] == 1.0)
+            return num[idx], cat[idx], idx
+
+        # --- FIRST transform: self Ditto fights as Charizard. ---
+        num, cat, opp_num, opp_cat = self_tokens(base)
+        srow, scat, sidx = active_row(num, cat)
+        self.assertEqual(scat[CATEGORY_PRIMARY], vocab.encode("species:Charizard"))
+        self.assertEqual(scat[CATEGORY_TYPE_1], vocab.encode("type:Fire"))
+        self.assertEqual(scat[CATEGORY_TYPE_2], vocab.encode("type:Flying"))
+        self.assertAlmostEqual(srow[NUMERIC_BASE_ATK], 84 / 200)   # Charizard (copied)
+        self.assertAlmostEqual(srow[NUMERIC_BASE_DEF], 78 / 200)
+        self.assertAlmostEqual(srow[NUMERIC_BASE_SPA], 109 / 200)
+        self.assertAlmostEqual(srow[NUMERIC_BASE_SPD], 85 / 200)
+        self.assertAlmostEqual(srow[NUMERIC_BASE_SPE], 100 / 200)
+        self.assertAlmostEqual(srow[NUMERIC_BASE_HP], 48 / 200)    # Ditto's HP (NOT copied)
+        # The benched, non-transformed self mon (Swampert) is unaffected.
+        swampert_idx = next(
+            i for i, row in enumerate(cat)
+            if row[CATEGORY_PRIMARY] == vocab.encode("species:Swampert")
+        )
+        self.assertNotEqual(swampert_idx, sidx)
+        self.assertAlmostEqual(num[swampert_idx][NUMERIC_BASE_ATK], 110 / 200)  # Swampert's own
+        # The opponent Charizard token is unchanged (the opponent path already worked).
+        opp_idx = next(i for i, row in enumerate(opp_num) if row[NUMERIC_ACTIVE] == 1.0)
+        self.assertEqual(opp_cat[opp_idx][CATEGORY_PRIMARY], vocab.encode("species:Charizard"))
+        self.assertEqual(opp_cat[opp_idx][CATEGORY_TYPE_1], vocab.encode("type:Fire"))
+
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_self_ditto_retransform_after_switch(self) -> None:
+        # Codex's full chain: OUR Ditto Transforms, switches out (reverts), switches back in, and
+        # Transforms AGAIN. The switch-out reset must clear the copied identity and the re-transform
+        # must re-apply it — every transformed self decision, not just the first.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import CATEGORY_PRIMARY, CATEGORY_TYPE_1, NUMERIC_ACTIVE
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+
+        def self_request(active: str) -> str:
+            payload = {
+                "active": [{"moves": [
+                    {"move": "Transform" if active == "Ditto" else "Surf",
+                     "id": "transform" if active == "Ditto" else "surf",
+                     "pp": 5, "maxpp": 5, "target": "normal", "disabled": False}
+                ]}],
+                "side": {"name": "Us", "id": "p1", "pokemon": [
+                    {"ident": "p1a: Ditto", "details": "Ditto, L78", "condition": "100/100",
+                     "active": active == "Ditto",
+                     "stats": {"atk": 100, "def": 100, "spa": 100, "spd": 100, "spe": 100},
+                     "moves": ["transform"], "baseAbility": "limber", "item": "quickclaw",
+                     "ability": "limber"},
+                    {"ident": "p1: Swampert", "details": "Swampert, L78", "condition": "100/100",
+                     "active": active == "Swampert",
+                     "stats": {"atk": 150, "def": 150, "spa": 130, "spd": 130, "spe": 100},
+                     "moves": ["surf"], "baseAbility": "torrent", "item": "leftovers",
+                     "ability": "torrent"},
+                ]},
+            }
+            return "|request|" + json.dumps(payload)
+
+        def self_active(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(
+                state, category_vocab=vocab, dex=dex, spec=V2_1_REPLAY_OBSERVATION_SPEC
+            )
+            self_off = FIELD_TOKEN_COUNT
+            num = [obs.numeric_features[self_off + i] for i in range(SELF_POKEMON_TOKEN_COUNT)]
+            cat = [obs.categorical_ids[self_off + i] for i in range(SELF_POKEMON_TOKEN_COUNT)]
+            idx = next(i for i, row in enumerate(num) if row[NUMERIC_ACTIVE] == 1.0)
+            return num[idx], cat[idx]
+
+        transform1 = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            "|switch|p2a: Charizard|Charizard, L78|100/100",
+            "|turn|1",
+            "|move|p1a: Ditto|Transform|p2a: Charizard",
+            "|-transform|p1a: Ditto|p2a: Charizard",
+        ]
+        # Ditto pivots out to Swampert (reverts on the bench), then Swampert pivots back to Ditto.
+        reverted = transform1 + [
+            "|turn|2",
+            "|switch|p1a: Swampert|Swampert, L78|100/100",
+            "|turn|3",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            self_request("Ditto"),
+            "|turn|4",
+        ]
+        retransformed = reverted[:-1] + [
+            "|move|p1a: Ditto|Transform|p2a: Charizard",
+            "|-transform|p1a: Ditto|p2a: Charizard",
+            self_request("Ditto"),
+            "|turn|4",
+        ]
+
+        # After switch-back-in, before the second Transform: reverted to plain Ditto.
+        rnum, rcat = self_active(reverted)
+        self.assertEqual(rcat[CATEGORY_PRIMARY], vocab.encode("species:Ditto"))
+        self.assertEqual(rcat[CATEGORY_TYPE_1], vocab.encode("type:Normal"))
+        self.assertAlmostEqual(rnum[NUMERIC_BASE_ATK], 48 / 200)  # Ditto's own, not Charizard's
+
+        # Re-transform: the copied Charizard identity is surfaced again.
+        tnum, tcat = self_active(retransformed)
+        self.assertEqual(tcat[CATEGORY_PRIMARY], vocab.encode("species:Charizard"))
+        self.assertEqual(tcat[CATEGORY_TYPE_1], vocab.encode("type:Fire"))
+        self.assertAlmostEqual(tnum[NUMERIC_BASE_ATK], 84 / 200)  # Charizard (copied)
+        self.assertAlmostEqual(tnum[NUMERIC_BASE_HP], 48 / 200)   # Ditto's HP (NOT copied)
+
     def test_revealed_moves_survive_bucket_truncation(self) -> None:
         # A revealed (ground-truth) move must never be evicted by the encoder's alphabetical
         # sort+truncate, even when possible_moves alone would overflow the 16 buckets and the
