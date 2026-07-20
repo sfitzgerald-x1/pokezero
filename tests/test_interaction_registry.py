@@ -196,9 +196,8 @@ class RegistryEncodingTests(unittest.TestCase):
         rounds = self._drive("counter_mirrorcoat")["p1"]
         self.assertGreaterEqual(len(rounds), 1)
 
-    # --- BUG-FOUND (flagged; expected to FAIL until the encoder is fixed) --
-    @unittest.expectedFailure
-    def test_castform_forecast_retype_BUG(self) -> None:
+    # --- FIXED: in-battle retype now reflected in the type slots (see PR: in-battle-retype). --
+    def test_castform_forecast_retype(self) -> None:
         # p1 sets sun -> p2 Castform Forecast-changes to Castform-Sunny (Fire).
         # Observe from p1 (Castform = opponent-active) AFTER the sun is up.
         rounds = self._drive("castform_forecast_formechange")["p1"]
@@ -207,12 +206,11 @@ class RegistryEncodingTests(unittest.TestCase):
         fire = self.vocab.encode("type:Fire")
         self.assertEqual(
             self._type1(obs, tok), fire,
-            "BUG: -formechange retype not encoded (encodes base Normal). "
+            "-formechange retype must encode the forme's type (Castform-Sunny -> Fire). "
             "See docs/validated_interactions.md.",
         )
 
-    @unittest.expectedFailure
-    def test_colorchange_kecleon_retype_BUG(self) -> None:
+    def test_colorchange_kecleon_retype(self) -> None:
         # p2 Alakazam Psychic hits p1 Kecleon -> Color Change to Psychic type.
         rounds = self._drive("colorchange_kecleon")["p1"]
         obs = rounds[-1]
@@ -220,7 +218,7 @@ class RegistryEncodingTests(unittest.TestCase):
         psychic = self.vocab.encode("type:Psychic")
         self.assertEqual(
             self._type1(obs, tok), psychic,
-            "BUG: typechange retype not encoded (encodes base Normal). "
+            "typechange retype must encode the payload type (Color Change -> Psychic). "
             "See docs/validated_interactions.md.",
         )
 

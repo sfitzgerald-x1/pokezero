@@ -525,6 +525,13 @@ class ShowdownPokemon:
     # Actual computed stats {hp, atk, def, spa, spd, spe} — known only for the player's own team
     # (from the request); None for opponent mons, whose actual stats are hidden.
     stats: Optional[Mapping[str, int]] = None
+    # In-battle LIVE type override for an active mon whose type is retyped by an effect the
+    # species token cannot express (Castform Forecast `-formechange`, Kecleon Color Change
+    # `typechange`). Unresolved discriminated source: ``"type:<T>"`` (payload already a type)
+    # or ``"forme:<Forme>"`` (resolve to the forme's type via the dex at encode time). None for
+    # every mon at base type. Set only on the CURRENTLY-ACTIVE mon (reverts on switch-out); the
+    # species token stays the base species (retyped formes are OOV for the species vocab).
+    live_type_source: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -566,6 +573,11 @@ class ShowdownReplayState:
     # A declared Baton Pass creates a public forced-switch boundary. The incoming Pokemon must
     # inherit boosts and transferable volatiles when that boundary is resolved.
     pending_baton_pass: tuple[str, ...] = ()
+    # Per-side in-battle LIVE type override for the currently-active mon (Castform Forecast
+    # `-formechange`, Kecleon Color Change `typechange`). Value is the unresolved discriminated
+    # source (``"type:<T>"`` / ``"forme:<Forme>"``); None/absent means base type. Cleared on
+    # switch-out/drag (both effects revert on leaving the field).
+    live_type_override: Mapping[str, Optional[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -688,6 +700,9 @@ class _ReplayParser:
         self.wish_set_turns: dict[str, int] = {}
         self.leech_seed_source_sides: dict[str, str] = {}
         self._pending_leech_seed_source_sides: dict[str, str] = {}
+        # Per-side live type override for the active mon (Castform Forecast / Kecleon Color
+        # Change). Unresolved discriminated source ("type:<T>" / "forme:<Forme>"); None = base.
+        self.live_type_override: dict[str, Optional[str]] = {"p1": None, "p2": None}
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
@@ -727,6 +742,9 @@ class _ReplayParser:
         parser.leech_seed_source_sides = dict(snapshot.leech_seed_source_sides)
         parser._pending_leech_seed_source_sides = dict(snapshot.pending_leech_seed_source_sides)
         parser.pending_baton_pass = set(snapshot.pending_baton_pass)
+        parser.live_type_override = {
+            slot: snapshot.live_type_override.get(slot) for slot in ("p1", "p2")
+        }
         return parser
 
     def feed(self, lines: Sequence[str]) -> None:
@@ -805,6 +823,11 @@ class _ReplayParser:
                     self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
+                # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
+                # the mon that just left the slot: both revert to base type on switch-out, and a
+                # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
+                # no stale override survives onto the replacement.
+                self.live_type_override[pokemon.showdown_slot] = None
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
@@ -840,6 +863,7 @@ class _ReplayParser:
         self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
+        self._update_live_type_override(parts)
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
@@ -999,6 +1023,47 @@ class _ReplayParser:
             if slot is not None:
                 self.wish_set_turns.pop(slot, None)
 
+    def _update_live_type_override(self, parts: Sequence[str]) -> None:
+        """Track the active mon's LIVE type for retypes the species token cannot express.
+
+        Two gen3 in-battle retypes are mono-type and revert on switch-out:
+        - ``|-formechange|<ident>|<forme>|...`` — Castform Forecast (Sunny->Fire, Rainy->Water,
+          Snowy->Ice, weather-clear->base Normal). Stored UNRESOLVED as ``forme:<forme>`` (the
+          forme's type is resolved from the dex at encode time; a ``-formechange`` back to the
+          base forme clears the override).
+        - ``|-start|<ident>|typechange|<type>|...`` — Kecleon Color Change (payload IS the new
+          type). Stored as ``type:<type>``; a matching ``|-end|<ident>|typechange`` clears it.
+
+        Switch-out/drag clearing is handled in the switch block (both effects revert on leaving
+        the field, and a Baton Pass brings in a different mon at base type).
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type == "-formechange" and len(parts) >= 4:
+            slot = _slot_from_ident(parts[2])
+            if slot not in self.live_type_override:
+                return
+            forme = parts[3].strip()
+            active = self.public_active.get(slot)
+            base_species = active.species if active is not None else _species_from_ident(parts[2])
+            if _normalize_identifier(forme) == _normalize_identifier(base_species or ""):
+                # Reverted to the base forme (Forecast drops the forme when weather clears).
+                self.live_type_override[slot] = None
+            else:
+                self.live_type_override[slot] = f"forme:{forme}"
+            return
+        if event_type == "-start" and len(parts) >= 5 and _normalize_identifier(parts[3]) == "typechange":
+            slot = _slot_from_ident(parts[2])
+            if slot not in self.live_type_override:
+                return
+            type_payload = parts[4].strip()
+            if type_payload:
+                self.live_type_override[slot] = f"type:{type_payload}"
+            return
+        if event_type == "-end" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "typechange":
+            slot = _slot_from_ident(parts[2])
+            if slot in self.live_type_override:
+                self.live_type_override[slot] = None
+
     def snapshot(self) -> ShowdownReplayState:
         return ShowdownReplayState(
             battle_id=self.battle_id,
@@ -1033,6 +1098,7 @@ class _ReplayParser:
             leech_seed_source_sides=dict(self.leech_seed_source_sides),
             pending_leech_seed_source_sides=dict(self._pending_leech_seed_source_sides),
             pending_baton_pass=tuple(sorted(self.pending_baton_pass)),
+            live_type_override=dict(self.live_type_override),
         )
 
 
@@ -1066,6 +1132,21 @@ def detect_showdown_slot(
     if configured_showdown_slot in {"p1", "p2"}:
         return configured_showdown_slot
     raise ValueError("Unable to detect Showdown slot from player_name or configured_showdown_slot.")
+
+
+def _apply_live_type_override(
+    team: tuple[ShowdownPokemon, ...], source: str | None
+) -> tuple[ShowdownPokemon, ...]:
+    """Stamp the active mon of ``team`` with a live type override source (no-op when None).
+
+    Only the currently-active mon retypes (Castform Forecast / Kecleon Color Change revert on
+    switch-out), so the override is applied to the ``active`` member only.
+    """
+    if not source:
+        return team
+    return tuple(
+        replace(mon, live_type_source=source) if mon.active else mon for mon in team
+    )
 
 
 def normalize_for_player(
@@ -1116,6 +1197,11 @@ def normalize_for_player(
         # state survives for the next ingested event.
         belief_view = belief_engine.resolved_player_view(showdown_slot)
     opponent_team = _merge_opponent_belief_facts(opponent_team, belief_view)
+    # Stamp the active mon on each side with any live type override (Castform Forecast forme /
+    # Kecleon Color Change) so the encoder overrides its type slots. Keyed per showdown slot; the
+    # override is cleared on switch-out so only the currently-active mon ever carries one.
+    self_team = _apply_live_type_override(self_team, replay.live_type_override.get(showdown_slot))
+    opponent_team = _apply_live_type_override(opponent_team, replay.live_type_override.get(opponent_slot))
     recent_events = tuple(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
@@ -2178,6 +2264,50 @@ def _species_info_base_fallback(dex: "ShowdownDex | None", species: str | None):
     return None
 
 
+# Explicit forme->type fallback for `-formechange` retypes whose forme is ABSENT from the dex
+# (the Unown-cosmetic situation). Castform's weather formes ARE present in the gen3 dex
+# (Castform-Sunny=Fire, -Rainy=Water, -Snowy=Ice), so the dex path is taken and this map is a
+# fail-safe only; base Castform is Normal.
+_FORMECHANGE_TYPE_FALLBACK = {
+    "castformsunny": "Fire",
+    "castformrainy": "Water",
+    "castformsnowy": "Ice",
+    "castform": "Normal",
+}
+
+
+def _resolve_live_type_slots(
+    source: str | None, dex: "ShowdownDex | None"
+) -> tuple[str, str | None] | None:
+    """Resolve a ``ShowdownPokemon.live_type_source`` discriminant to (type1, type2 or None).
+
+    ``type:<T>`` payloads (Color Change ``typechange``) already carry the type. ``forme:<Forme>``
+    payloads (Castform Forecast) resolve to the forme's type from the dex first (Castform formes
+    are real dex entries, like Deoxys), falling back to the explicit map for a dex-absent forme.
+    Returns None when unresolvable (leaves the base dex type untouched). Both live retypes are
+    mono-type; the ``/``-split tolerates a hypothetical dual-type payload defensively.
+    """
+    if not source:
+        return None
+    kind, _, payload = source.partition(":")
+    payload = payload.strip()
+    if not payload:
+        return None
+    if kind == "type":
+        types = [segment.strip() for segment in payload.split("/") if segment.strip()]
+        if not types:
+            return None
+        return types[0], (types[1] if len(types) > 1 else None)
+    if kind == "forme":
+        info = _species_info_base_fallback(dex, payload) if dex is not None else None
+        if info is not None and info.types:
+            return info.types[0], (info.types[1] if len(info.types) > 1 else None)
+        mapped = _FORMECHANGE_TYPE_FALLBACK.get(_normalize_identifier(payload))
+        if mapped:
+            return mapped, None
+    return None
+
+
 def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", species: str | None) -> None:
     """Set the two type slots for a Pokemon token from the dex (no-op without a dex)."""
     if dex is None or not species:
@@ -2351,6 +2481,19 @@ def _encode_pokemon_tokens(
         enc_species = belief.transform_species if transformed else candidate.species
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{enc_species}")
         _encode_species_type_categories(categorical_ids[token_index], dex, enc_species)
+        # In-battle LIVE retype (Castform Forecast forme / Kecleon Color Change): override ONLY the
+        # type slots from the retype payload, keeping the base species token (retyped formes are
+        # OOV for the species vocab). Set only on the active mon (see _apply_live_type_override).
+        if candidate.live_type_source:
+            resolved = _resolve_live_type_slots(candidate.live_type_source, dex)
+            if resolved is not None:
+                override_type1, override_type2 = resolved
+                _set_category(categorical_ids[token_index], CATEGORY_TYPE_1, f"type:{override_type1}")
+                _set_category(
+                    categorical_ids[token_index],
+                    CATEGORY_TYPE_2,
+                    f"type:{override_type2}" if override_type2 else "",
+                )
         _encode_pokemon_stats(numeric_features[token_index], dex, enc_species, candidate.details)
         if transformed and dex is not None:
             original = dex.species_info(candidate.species)
