@@ -279,7 +279,11 @@ perspective surfaces for every source tuple.
 
 **Preflight contract:** rebuild Showdown, record the source hash, verify the
 image includes every intended fix, and reserve a new output directory. Do not
-reuse the 874-fixture static audit evidence as proof of this dynamic run.
+reuse the 874-fixture static audit evidence as proof of this dynamic run. The
+dynamic run must pin **observation schema v3** and stamp that schema in every
+summary, ledger, and failure artifact: its no-op checks are invalid under the
+current checkpoint-free v2.2 default. If the audit CLI cannot explicitly select
+v3, it is a preflight failure, not permission to fall back to the default.
 
 Use eight independent shard workers, each with a distinct summary/ledger path
 and the shared failure directory below:
@@ -289,6 +293,7 @@ for shard in 0 1 2 3 4 5 6 7; do
   POKEZERO_SHOWDOWN_ROOT="$POKEZERO_SHOWDOWN_ROOT" \
     uv run python scripts/coverage_enumeration_audit.py \
       --exact-variants \
+      --observation-schema v3 \
       --depth-rounds 8 \
       --shard "$shard/8" \
       --no-universal-lane \
@@ -331,13 +336,52 @@ uncovered set is a failed audit and must be triaged before treating the run as
 clean. In exact-variant mode, the merged ledger additionally requires every
 planned fixture to complete; atom coverage alone cannot hide a dropped tuple.
 
+### 7.6 Curated party and silent-noop interaction lane (planned, separate from tuple depth)
+
+The exact-variant depth lane is intentionally 1v1: it exhaustively validates
+every source tuple, but cannot create a party lifecycle. Do **not** inflate it
+into arbitrary 3v3 permutations. Reuse the existing scripted interaction
+registry in `golden_corpus_scenarios.interaction_registry_specs()` as the
+party-mode lane, with its encoded assertions and live protocol evidence
+recorded in `docs/validated_interactions.md` and
+`docs/protocol_coverage_matrix.md`.
+
+That registry already covers the high-value party mechanics: a 3v2
+Spikes-stack-and-switch sequence, Intimidate/Trace on entry, drag reset,
+Baton Pass transfer, and the existing Trick/Knock-Off, berry, Wish, RestTalk,
+and recharge scenarios. Re-running those fixtures is a local, minutes-scale
+regression lane; it is not part of the 874-fixture parallel job and does not
+change the tuple ledger.
+
+Before calling the interaction lane complete, add targeted scenarios or
+assertions for the remaining silent-noop-prone boundaries:
+
+| Scenario / assertion | Required shape | Required observation contract |
+| --- | --- | --- |
+| Natural Cure switch lifecycle | Status a Natural Cure mon, voluntarily switch it out, then inspect both public views and the re-entry state. | Status and toxic-stage state clear; any sleep-clause holder derived from the cured mon clears too. |
+| Second-sleep / Yawn block | Establish one non-Rest opponent sleeper, then attempt a second sleep and a pending Yawn resolution under the clause. | The action is retained as a failed action rather than conflated with no action; v3 fail and sleep-clause fields remain side-relative. |
+| Toxic into an already-statused target | Apply Toxic, then attempt Toxic again while the target still has a nonvolatile status. | The second action emits/records the failure path and cannot look identical to a skipped turn. |
+| Protect lifetime | Use Protect on one turn and inspect the following decision boundary. | Its same-turn evidence is retained in the transition surface, with no stale permanent volatile on the next turn. |
+
+The v3 silent-noop sweep remains the authority for reachability, handler
+coverage, and accepted-loss decisions. This lane supplies live, party-shaped
+repros for its adjudicated rows; it must not use absence from the finite
+scenario set as evidence that a protocol event is unreachable.
+
+The interaction lane must also run under an explicit v3 spec, rather than the
+checkpoint-free default. Its manifest records the scenario ids, source hash,
+observation schema, and the silent-noop verdict-table revision it exercised.
+That provenance lets a later schema change rerun only the affected scenarios
+without misrepresenting older v2.2 evidence as coverage of v3 fields.
+
 ## 8. Orchestration & budget
 
 Deterministic and embarrassingly parallel across games (~220 draft games + a small gap-fill set,
 or 874 exact-variant games, each 1–few boundaries). Shard across workers; merge the per-shard `DeepLineAuditReport`/`Acc`
 accumulators and the coverage ledgers. CLI shape mirrors the existing harnesses: `--showdown-root`,
 `--json PATH` (findings; exit 1 iff any real-bug signature), `--coverage-json PATH` (the ledger),
-`--pass {A,B,both}`, `--gap-fill`, `--exact-variants`, `--use-moves` (§7.1), `--shard i/N`.
+`--pass {A,B,both}`, `--gap-fill`, `--exact-variants`, `--observation-schema v3`,
+`--use-moves` (§7.1), `--shard i/N`.
 
 ## 9. Deliverable
 
