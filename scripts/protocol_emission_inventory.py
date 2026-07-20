@@ -63,6 +63,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         public_root=ROOT,
         observed_audits=args.observed_audit,
     )
+    for entry in payload["observed"]["audit_provenance"]:
+        provenance = entry["audit_provenance"]
+        if provenance.get("observation_schema") != observation_schema:
+            parser.error(f"observed audit has a non-v3 schema: {entry['path']}")
+        if provenance.get("showdown_source_hash") != source.metadata.source_hash:
+            parser.error(f"observed audit source hash differs from --showdown-root: {entry['path']}")
     payload["audit_provenance"] = {
         "schema_version": "pokezero.protocol-emission-inventory-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),

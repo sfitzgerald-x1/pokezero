@@ -9,6 +9,7 @@ from pokezero.protocol_emission_inventory import (
     build_protocol_inventory,
     discover_consumer_dispatches,
     discover_engine_emissions,
+    load_observed_audit_provenance,
     load_observed_signatures,
 )
 
@@ -60,7 +61,14 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             showdown, public = self._fixture_roots(root)
             observed = root / "observed.json"
             observed.write_text(
-                json.dumps({"protocol_signatures": {"-fail": 3, "-activate:movebide": 2, "-mystery": 5}}),
+                json.dumps({
+                    "protocol_signatures": {"-fail": 3, "-activate:movebide": 2, "-mystery": 5},
+                    "audit_provenance": {
+                        "observation_schema": "pokezero.observation.v3",
+                        "showdown_source_hash": "fixture-source",
+                        "image_digest": "fixture-image",
+                    },
+                }),
                 encoding="utf-8",
             )
             report = build_protocol_inventory(
@@ -75,6 +83,7 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertEqual(report["differential"]["observed_but_unconsumed"], [{"tag": "-mystery", "count": 5}])
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
+        self.assertEqual(report["observed"]["audit_provenance"][0]["audit_provenance"]["image_digest"], "fixture-image")
 
     def test_consumer_discovery_only_counts_event_type_comparisons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -95,6 +104,13 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             path.write_text(json.dumps({"protocol_signatures": {"-fail": -1}}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "negative count"):
                 load_observed_signatures((path,))
+
+    def test_observed_provenance_loader_rejects_missing_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "missing.json"
+            path.write_text(json.dumps({"protocol_signatures": {}}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing audit_provenance"):
+                load_observed_audit_provenance((path,))
 
 
 if __name__ == "__main__":
