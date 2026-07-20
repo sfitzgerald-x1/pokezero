@@ -155,6 +155,17 @@ def _dex_payload(showdown_root: str) -> dict[str, Any]:
         }
         for key, info in dex.species.items()
     }
+    # ``base_power`` is exported as the STATIC dex value, NOT ``resolve_move_base_power``-resolved.
+    # Variable-power moves resolve at ENCODE time in the Rust crate, exactly mirroring Python:
+    #   - Hidden Power's type/base power is PER-MON (the acting mon's typed request move, e.g.
+    #     "hiddenpowerice"), so it can never be a static table keyed by the generic "hiddenpower"
+    #     id — the crate resolves the typed variant and looks IT up (encoder.rs::self_move_mechanics_id).
+    #   - Return/Frustration (static happiness base power 102/1) could be baked in here, but MUST NOT
+    #     be: this same ``base_power`` field is read raw (``base_power > 0``) by the Tier-2
+    #     physical-attack heuristic (encoder.rs mirroring showdown._is_physical_attack), where the
+    #     static 0 for Return is load-bearing for byte-parity. So the happiness constant lives ONLY
+    #     in encoder.rs::resolve_move_base_power (mirroring dex._HAPPINESS_BASE_POWER), never here.
+    # Reversal/Flail/Eruption/Water Spout are likewise static here and HP-fraction-resolved at encode.
     moves = {
         key: {
             "name": info.name,
