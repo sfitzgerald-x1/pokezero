@@ -301,6 +301,7 @@ class DeepLineAuditReport:
         self.protocol_ordered_pairs.update(other.protocol_ordered_pairs)
         self.protocol_ordered_triples.update(other.protocol_ordered_triples)
         self.protocol_events.update(other.protocol_events)
+        self.protocol_signatures.update(other.protocol_signatures)
         self.suppressed_findings.update(other.suppressed_findings)
         if self.randbat_source_metadata is None:
             self.randbat_source_metadata = other.randbat_source_metadata

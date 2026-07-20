@@ -54,11 +54,14 @@ class DeepLineAuditReportTest(unittest.TestCase):
         second = DeepLineAuditReport(games_audited=2)
         first.protocol_ordered_pairs[("move", "-damage")] = 3
         second.protocol_ordered_pairs[("move", "-damage")] = 4
+        first.protocol_signatures["cant:slp"] = 2
+        second.protocol_signatures["cant:slp"] = 5
 
         first.merge(second)
 
         self.assertEqual(first.games_audited, 3)
         self.assertEqual(first.protocol_ordered_pairs[("move", "-damage")], 7)
+        self.assertEqual(first.protocol_signatures["cant:slp"], 7)
 
     def test_bridge_compact_form_id_matches_public_vocabulary_spelling(self) -> None:
         vocab = CategoryVocabulary(tokens=("species:deoxys-speed", "species:deoxys"))
