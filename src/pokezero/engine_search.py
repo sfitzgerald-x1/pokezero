@@ -66,9 +66,11 @@ class EngineSearchFallbackWarning(UserWarning):
     be attributable through the fallback/world-failure reason taxonomy —
     benches report the rate and the reasons rather than hiding either.
     (The one-time 0.0% bench rate does not hold on all seed trajectories:
-    battles where the opponent publicly Tricks/Knock-Offs an item or
-    Transforms fail worlds closed for the rest of the battle by design —
-    both leaf-eval modes hit the same wall on the same battles.)
+    battles where the opponent publicly Transforms, or holds an item Trick
+    swapped onto it, fail worlds closed for the rest of the battle by
+    design — both leaf-eval modes hit the same wall on the same battles.
+    Knock-Off REMOVALS no longer wall: the belief_view removal/swap
+    distinction lets sampled worlds express "publicly holds no item".)
     """
 
 
@@ -167,6 +169,10 @@ class EngineMctsStats:
     decisions: int = 0
     searched_decisions: int = 0
     fallback_decisions: int = 0
+    # Decisions where the removal signal fired (an opposing mon's item is
+    # publicly stripped): worlds constructed with that item cleared instead of
+    # failing closed. Localizes which battles exercise the removal path.
+    removed_item_decisions: int = 0
     worlds_attempted: int = 0
     worlds_searched: int = 0
     total_iterations: int = 0
@@ -189,6 +195,7 @@ class EngineMctsStats:
             "searched_decisions": self.searched_decisions,
             "fallback_decisions": self.fallback_decisions,
             "fallback_rate": self.fallback_decisions / self.decisions if self.decisions else 0.0,
+            "removed_item_decisions": self.removed_item_decisions,
             "worlds_attempted": self.worlds_attempted,
             "worlds_searched": self.worlds_searched,
             "total_iterations": self.total_iterations,
@@ -290,7 +297,9 @@ class EngineMctsPolicy:
             live_fold = self._advance_live_fold(context)
             if live_fold is None and self._config.leaf_eval == "model":
                 return self._fallback(context, rng, "live_fold_broken")
-        blocked_slots, encored_moves = self._public_effect_signals(context)
+        blocked_slots, encored_moves, removed_item_species = self._public_effect_signals(context)
+        if removed_item_species:
+            self.stats.removed_item_decisions += 1
         recharging_slots = self._recharging_slots(context)
         truant_slots = self._truant_loaf_slots(context)
 
@@ -323,6 +332,7 @@ class EngineMctsPolicy:
                     approximate_substitute_health=self._config.approximate_substitute_health,
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
+                    removed_item_species=removed_item_species,
                     recharging_slots=recharging_slots,
                     truant_slots=truant_slots,
                     rng=rng,
@@ -794,7 +804,7 @@ class EngineMctsPolicy:
 
     def _public_effect_signals(
         self, context: PolicyContext
-    ) -> tuple[dict[str, str], dict[str, str]]:
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, tuple[str, ...]]]:
         """Public-information signals engine_world cannot see in the payload.
 
         - blocked_slots: the opponent's active is publicly Transformed (the
@@ -803,13 +813,21 @@ class EngineMctsPolicy:
           closed rather than search a silently wrong world.
         - encored_moves: the opponent's publicly-observed last move, consumed
           by engine_world only when that side carries the encore volatile.
+        - removed_item_species: per slot, species whose held item was publicly
+          STRIPPED (Knock Off, or a Trick that took the item and returned
+          none) and not replaced since — the current public item state is
+          exactly "no item", which the sampled world expresses by clearing
+          the sampled set's item. Only true swaps (``item_mutated`` without
+          ``item_removed``: the holder carries an item that is not the
+          sampled assignment) stay fail-closed.
         """
 
         blocked: dict[str, str] = {}
         encored: dict[str, str] = {}
+        removed: dict[str, tuple[str, ...]] = {}
         metadata = context.observation.metadata
         if not isinstance(metadata, Mapping):
-            return blocked, encored
+            return blocked, encored, removed
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
         belief_view = metadata.get("belief_view")
         opponents = belief_view.get("opponent_pokemon") if isinstance(belief_view, Mapping) else None
@@ -818,14 +836,16 @@ class EngineMctsPolicy:
             if not isinstance(mon, Mapping):
                 continue
             if mon.get("item_mutated"):
-                # Trick/Knock Off mutated the held item: the sampled set's item
-                # no longer matches the current holder (rule-outs stay frozen
-                # to the ORIGINAL assignment upstream). Pool scope: 6 sets set
-                # this flag (4 Knock Off + 2 Trick). Knock Off removals ARE
-                # representable (item publicly None) — recovering them needs a
-                # belief_view field distinguishing removal from swap; until
-                # then fail closed over constructing wrong items.
-                blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
+                if mon.get("item_removed"):
+                    species_id = normalize_id(str(mon.get("species") or ""))
+                    if species_id:
+                        removed[opponent_slot] = removed.get(opponent_slot, ()) + (species_id,)
+                else:
+                    # A live Trick swap: the current holder's item is not the
+                    # sampled set's item and rule-outs stay frozen to the
+                    # ORIGINAL assignment upstream — no sampled world can
+                    # express it, so construction fails closed.
+                    blocked[opponent_slot] = f"item mutated on {mon.get('species')}"
             if not mon.get("active"):
                 continue
             active_species = str(mon.get("species") or "") or None
@@ -844,7 +864,7 @@ class EngineMctsPolicy:
                 if move is not None:
                     encored[opponent_slot] = move
                     break
-        return blocked, encored
+        return blocked, encored, removed
 
     def _map_choices(
         self, context: PolicyContext, aggregated: Mapping[str, float]
@@ -1092,15 +1112,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for offset in range(args.games):
             seed = args.seed_start + offset
+            decisions_before = policy.stats.decisions
+            fallbacks_before = policy.stats.fallback_decisions
+            removed_before = policy.stats.removed_item_decisions
+            fallback_reasons_before = Counter(policy.stats.fallback_reasons)
+            world_failures_before = Counter(policy.stats.world_failure_reasons)
             result = driver.run(seed=seed, battle_id=f"engine-mcts-bench-{seed}")
             won = result.terminal.winner == "p1"
             wins += int(won)
+            game_fallbacks = policy.stats.fallback_decisions - fallbacks_before
             games.append({
                 "seed": seed,
                 "winner": result.terminal.winner,
                 "decision_rounds": result.decision_round_count,
+                # Per-battle attribution: fallback walls cluster per battle
+                # (an item mutation or Transform fails worlds closed for the
+                # REST of that battle), so per-seed deltas are the surface
+                # that localizes them.
+                "decisions": policy.stats.decisions - decisions_before,
+                "fallback_decisions": game_fallbacks,
+                "removed_item_decisions": policy.stats.removed_item_decisions - removed_before,
+                "fallback_reasons": dict(
+                    Counter(policy.stats.fallback_reasons) - fallback_reasons_before
+                ),
+                "world_failure_reasons": dict(
+                    Counter(policy.stats.world_failure_reasons) - world_failures_before
+                ),
             })
-            print(f"seed {seed}: winner={result.terminal.winner} rounds={result.decision_round_count}")
+            print(
+                f"seed {seed}: winner={result.terminal.winner} rounds={result.decision_round_count}"
+                + (f" fallbacks={game_fallbacks}" if game_fallbacks else "")
+            )
     finally:
         env.close()
 

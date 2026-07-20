@@ -501,6 +501,68 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertEqual(blissey.revealed_item, "Choice Band")
         # pruning frozen post-mutation: no Leftovers rule-out despite a damaged, heal-free turn
         self.assertNotIn("leftovers", blissey.ruled_out_items)
+        # A swap, not a removal: the mon HOLDS an item that is not the sampled
+        # assignment — determinized worlds cannot express it (stays fail-closed).
+        self.assertFalse(blissey.item_removed)
+        self.assertFalse(blissey.to_overlay_payload()["item_removed"])
+
+    def test_knock_off_marks_removal_not_just_mutation(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L74|340/340",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Knock Off|p2a: Blissey",
+            "|-damage|p2a: Blissey|580/600",
+            "|-enditem|p2a: Blissey|Leftovers|[from] move: Knock Off|[of] p1a: Tyranitar",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        # The removal distinction: current public item state is "holds nothing",
+        # which a determinized world CAN express by clearing the sampled item.
+        self.assertTrue(blissey.item_removed)
+        # The -enditem line names the removed item: the original assignment stays known.
+        self.assertEqual(blissey.revealed_item, "Leftovers")
+        self.assertTrue(blissey.to_overlay_payload()["item_removed"])
+
+    def test_trick_that_takes_without_giving_is_a_removal(self) -> None:
+        # Trick against an itemless partner: the victim's item is taken and
+        # nothing replaces it — same representable end state as Knock Off.
+        engine = self.engine_from([
+            "|switch|p1a: Kecleon|Kecleon, L80|300/300",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Kecleon|Trick|p2a: Blissey",
+            "|-activate|p1a: Kecleon|move: Trick|[of] p2a: Blissey",
+            "|-enditem|p2a: Blissey|Leftovers|[from] move: Trick",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        self.assertTrue(blissey.item_removed)
+
+    def test_trick_after_knock_off_clears_the_removal(self) -> None:
+        # Once a later Trick hands the knocked-off mon an item again, it holds
+        # something that is not the sampled assignment: back to fail-closed.
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L74|340/340",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Knock Off|p2a: Blissey",
+            "|-damage|p2a: Blissey|580/600",
+            "|-enditem|p2a: Blissey|Leftovers|[from] move: Knock Off|[of] p1a: Tyranitar",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p1a: Kecleon|Kecleon, L80|300/300",
+            "|turn|3",
+            "|move|p1a: Kecleon|Trick|p2a: Blissey",
+            "|-activate|p1a: Kecleon|move: Trick|[of] p2a: Blissey",
+            "|-item|p2a: Blissey|Choice Band|[from] move: Trick",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        self.assertFalse(blissey.item_removed)
 
     def test_mudshot_shield_dust_identification_requires_clean_hit(self) -> None:
         class DustSource(FakeSetSource):
