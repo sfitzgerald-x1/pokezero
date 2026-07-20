@@ -2620,7 +2620,15 @@ def _encode_move_mechanics(
     if move is None:
         return
     base_power = resolve_move_base_power(move, user_hp_fraction)
-    _set_category(cat_row, CATEGORY_TYPE_1, f"type:{move.type}")
+    # Struggle is TYPELESS from Generation II onward: neutral vs every type (it
+    # HITS Ghosts) and grants no STAB. The Showdown dex still records Struggle as
+    # Normal-type, so emit the enumerated typeless token `type:???` directly —
+    # mirroring gen3 Curse, whose dex type is already "???". Category (Physical)
+    # and base power (50) are unchanged. This aligns the SELF forced-Struggle
+    # action token with the engine fix that makes gen3 Struggle PokemonType::TYPELESS
+    # (third_party/poke-engine-gen3-struggle-typeless.patch).
+    move_type = "???" if move.id == "struggle" else move.type
+    _set_category(cat_row, CATEGORY_TYPE_1, f"type:{move_type}")
     _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"move_category:{move.gen3_category}")
     _set_category(cat_row, CATEGORY_MOVE_PRIORITY, f"move_priority:{move.priority}")
     _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(base_power) / 200.0))
