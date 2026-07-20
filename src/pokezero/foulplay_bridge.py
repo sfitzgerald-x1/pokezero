@@ -58,7 +58,7 @@ from .neural_policy import (
 )
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
-    OBSERVATION_SCHEMA_VERSION_V2_2,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     PokeZeroObservationV0,
 )
@@ -1455,7 +1455,7 @@ async def run_controlled_foulplay_benchmark(
     vocab = gen3_category_vocabulary(
         config.showdown_root,
         include_turn_merged=(
-            observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+            observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         ),
     )
     dex = load_showdown_dex_cached(config.showdown_root)
@@ -2860,7 +2860,7 @@ async def _handle_decision_boundary(
             state,
             player,
             set_source=belief_set_source,
-            include_turn_merged=observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+            include_turn_merged=observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
         )
         for player in requested_players
     }

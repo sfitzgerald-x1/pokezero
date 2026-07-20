@@ -161,11 +161,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # train cross-checks them against the model config.
     collect_selfplay_cache.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2"),
+        choices=("v2.1", "v2.2", "v3"),
         default=None,
         help=(
-            "Observation schema for a FRESH (checkpoint-less) collect: v2.1 or "
-            "v2.2 (default; turn-merged transition tokens; also flips the schema-derived vocabulary). "
+            "Observation schema for a FRESH (checkpoint-less) collect: v2.1, "
+            "v2.2 (default; turn-merged transition tokens; also flips the schema-derived vocabulary), "
+            "or v3 (turn-merged + the appended fail-bit and public sleep-clause columns). "
             "With a neural: policy the checkpoint's stamped schema wins and an explicitly "
             "disagreeing flag hard-fails (mask-conflict semantics). Recorded in cache "
             "metadata for the train-side cross-check."

@@ -25,7 +25,7 @@ from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .category_vocab import CategoryVocabulary
 from .dex import load_showdown_dex_cached
 from .local_showdown import LocalShowdownEnv, LocalShowdownSnapshot
-from .observation import PokeZeroObservationV0
+from .observation import PokeZeroObservationV0, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from .randbat import canonical_gen3_randbat_species_id
 from .randbat_vocab import gen3_category_vocabulary
 from .belief import PublicBattleBeliefEngine
@@ -1386,7 +1386,10 @@ def _audit_incremental_vs_batch(
         configured_showdown_slot=player_id,
         format_id=snapshot.observation_format_id,
         set_source=env._belief_set_source,
-        include_turn_merged=(env.config.observation_spec.schema_version == "pokezero.observation.v2.2"),
+        include_turn_merged=(
+            env.config.observation_spec.schema_version
+            in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+        ),
     )
     batch = observation_from_player_state(
         state,
@@ -1591,7 +1594,10 @@ def _match_serialized_pokemon(
 def _category_vocab_for_env(env: LocalShowdownEnv) -> CategoryVocabulary:
     return env.config.category_vocab or gen3_category_vocabulary(
         env.config.resolved_showdown_root(),
-        include_turn_merged=(env.config.observation_spec.schema_version == "pokezero.observation.v2.2"),
+        include_turn_merged=(
+            env.config.observation_spec.schema_version
+            in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+        ),
     )
 
 

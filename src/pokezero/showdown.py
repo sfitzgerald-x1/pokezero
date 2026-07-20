@@ -41,6 +41,7 @@ from .observation import (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
     OPPONENT_POKEMON_TOKEN_COUNT,
     STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
@@ -407,15 +408,50 @@ NUMERIC_TM2_SELF_HP_COST = TURN_MERGED_NUMERIC_BASE + 14
 TURN_MERGED_NUMERIC_EXTRA = 15
 _V2_2_NUMERIC_FEATURE_COUNT = TURN_MERGED_NUMERIC_BASE + TURN_MERGED_NUMERIC_EXTRA
 
+# ---- observation spec v3 additions (docs/observation_v3_spec.md; appended numerics only,
+# no new categorical columns — both changes are numeric bits, so the categorical census is
+# v2.2's unchanged). Every v2/v2.1/v2.2 column keeps its position and its write gates; the
+# v3 columns sit ABOVE the v2.2 census, so all three legacy modes stay byte-frozen. ----
+V3_NUMERIC_BASE = _V2_2_NUMERIC_FEATURE_COUNT
+# Change 1 — the ``-fail`` transition event, mirroring the miss bit's emission convention
+# exactly (numeric 0/1 on the action transition row, one column per turn-merged sub-block,
+# laid out as an adjacent first/second pair like the v2.2 SELF_HP_COST twins). Window-scoped
+# (no side condition — the engine's ``-fail`` argument slot is effect-dependent); with the
+# miss bit a silent no-op disambiguates: miss = accuracy miss, fail = move failed, neither =
+# genuinely event-less resolution.
+NUMERIC_TT_FAIL = V3_NUMERIC_BASE + 0
+NUMERIC_TM2_FAIL = V3_NUMERIC_BASE + 1
+# Change 2 — public sleep-clause block bits on the FIELD token (predictive current-state,
+# SEPARATE from the change-1 history marker by owner decision — conflating them would make
+# the fail marker wrong for most fails). BLOCKS_SELF: an opposing mon is currently asleep
+# from a sleep OUR side induced, so our sleep-inducing moves will fail; BLOCKS_OPP is the
+# symmetric bit (feeds the opponent-action head). Derived ONLY from public protocol lines
+# (the _ReplayParser induced-sleep tracker — attribution rule: a ``-status … slp`` line
+# without the ``[from] move: Rest`` tag is opponent-induced; cleared on ``-curestatus``/
+# faint, NOT on switch-out), unlike the belief-engine-fed v2 bits at columns 44/45 which
+# ride the checkpoint-latched exact_state mask. Gen3 Standard has no Freeze Clause Mod, so
+# there is deliberately no freeze twin (it would be a dead column).
+NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF = V3_NUMERIC_BASE + 2
+NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_NUMERIC_BASE + 3
+V3_NUMERIC_EXTRA = 4
+_V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
+_V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
+
 V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_V2_2_CATEGORICAL_FEATURE_COUNT,
     numeric_feature_count=_V2_2_NUMERIC_FEATURE_COUNT,
     schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
 )
+V3_REPLAY_OBSERVATION_SPEC = ObservationSpec(
+    categorical_feature_count=_V3_CATEGORICAL_FEATURE_COUNT,
+    numeric_feature_count=_V3_NUMERIC_FEATURE_COUNT,
+    schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+)
 REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
     OBSERVATION_SCHEMA_VERSION_V2: V2_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V2_2: V2_2_REPLAY_OBSERVATION_SPEC,
+    OBSERVATION_SCHEMA_VERSION_V3: V3_REPLAY_OBSERVATION_SPEC,
 }
 DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
 # Encode-time census FLOOR per schema (#512 review, MED-LOW defense-in-depth): a spec
@@ -438,11 +474,13 @@ _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2: _CATEGORICAL_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V2_1: _CATEGORICAL_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_CATEGORICAL_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V3: _V3_CATEGORICAL_FEATURE_COUNT,
 }
 _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2: 119,
     OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
     OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_NUMERIC_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V3: _V3_NUMERIC_FEATURE_COUNT,
 }
 
 
@@ -452,6 +490,7 @@ _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
 OBSERVATION_SCHEMA_CLI_CHOICES: Mapping[str, str] = {
     "v2.1": OBSERVATION_SCHEMA_VERSION_V2_1,
     "v2.2": OBSERVATION_SCHEMA_VERSION_V2_2,
+    "v3": OBSERVATION_SCHEMA_VERSION_V3,
 }
 
 
@@ -590,6 +629,14 @@ class ShowdownReplayState:
     # source (``"type:<T>"`` / ``"forme:<Forme>"``); None/absent means base type. Cleared on
     # switch-out/drag (both effects revert on leaving the field).
     live_type_override: Mapping[str, Optional[str]] = field(default_factory=dict)
+    # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
+    # side, the set of enemy victims it has publicly put to sleep (victim keys
+    # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
+    # the ``[from] move: Rest`` tag ⇒ induced by the opposing side (in gen3 singles sleep is
+    # only ever opponent-induced or self-inflicted Rest, and Rest tags its line). Cleared on
+    # ``-curestatus … slp`` and faint; switch-out does NOT clear (sleep persists and is public
+    # on revealed mons). Derived ONLY from public protocol lines — no engine-side hidden state.
+    induced_sleep_victims: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -668,6 +715,13 @@ class PlayerRelativeBattleState:
     # Live sleep-clause consumption per side (from the belief engine's holders).
     self_sleep_clause_used: bool = False
     opponent_sleep_clause_used: bool = False
+    # ---- spec v3: public sleep-clause block bits (docs/observation_v3_spec.md change 2).
+    # Derived ONLY from public protocol lines (the _ReplayParser induced-sleep tracker),
+    # independent of the belief engine — encoded on the field token under schema >= v3 only.
+    # self_sleep_clause_blocks: an opposing mon is currently asleep from a sleep OUR side
+    # induced (our sleep-inducing moves will fail); opponent_* is the symmetric bit.
+    self_sleep_clause_blocks: bool = False
+    opponent_sleep_clause_blocks: bool = False
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -716,6 +770,9 @@ class _ReplayParser:
         # Per-side live type override for the active mon (Castform Forecast / Kecleon Color
         # Change). Unresolved discriminated source ("type:<T>" / "forme:<Forme>"); None = base.
         self.live_type_override: dict[str, Optional[str]] = {"p1": None, "p2": None}
+        # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
+        # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
+        self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
@@ -758,6 +815,9 @@ class _ReplayParser:
         parser.pending_baton_pass = set(snapshot.pending_baton_pass)
         parser.live_type_override = {
             slot: snapshot.live_type_override.get(slot) for slot in ("p1", "p2")
+        }
+        parser.induced_sleep_victims = {
+            slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
         }
         return parser
 
@@ -883,6 +943,7 @@ class _ReplayParser:
         _update_future_sight(parts, self.future_sight, self.turn_number)
         _update_toxic_stage(parts, self.toxic_stage)
         _flag_baton_pass(parts, self.pending_baton_pass)
+        self._update_induced_sleep(parts, line)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
 
@@ -1085,6 +1146,61 @@ class _ReplayParser:
             if slot in self.live_type_override:
                 self.live_type_override[slot] = None
 
+    @staticmethod
+    def _induced_sleep_victim_key(victim_slot: str, ident: str) -> str:
+        """Stable per-mon victim key: side + the ident's (nick)name, normalized.
+
+        The ident NAME (not the species) keys the victim because the clearing lines use it
+        too — including Heal Bell's benched ``|-curestatus|p2: Name|slp|[silent]`` form,
+        whose position-less ident cannot be species-resolved through ``public_active``.
+        Showdown nicknames are unique per team, so the key is collision-free per side.
+        """
+        return f"{victim_slot}:{_normalize_identifier(_species_from_ident(ident))}"
+
+    def _update_induced_sleep(self, parts: Sequence[str], line: str) -> None:
+        """Public sleep-clause tracker (spec v3 change 2, docs/observation_v3_spec.md).
+
+        Attribution rule (no move-window bookkeeping needed): in gen3 singles, sleep is only
+        ever (a) induced by the opposing side's move or (b) self-inflicted Rest, and Rest tags
+        its status line (``|-status|SLOT|slp|[from] move: Rest``) — so a ``-status … slp``
+        line WITHOUT the Rest tag was induced by the opposing side. The tracked victim clears
+        when it wakes (``-curestatus … slp``) or faints; switching out does NOT clear (sleep
+        persists and is public on revealed mons — Natural Cure resolves via the same
+        ``-curestatus`` line). Deliberately NO ability exclusion, per the spec: Showdown's
+        Sleep Clause Mod counts any non-ally-sourced sleep, Effect Spore included.
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type == "-status" and len(parts) >= 4 and parts[3].strip() == "slp":
+            victim_slot = _slot_from_ident(parts[2])
+            if victim_slot in {"p1", "p2"} and "move: Rest" not in line:
+                inducing_slot = opponent_showdown_slot(victim_slot)
+                self.induced_sleep_victims[inducing_slot].add(
+                    self._induced_sleep_victim_key(victim_slot, parts[2])
+                )
+            return
+        if event_type == "-cureteam" and len(parts) >= 3:
+            # Aromatherapy cures every living team member with a SINGLE ``|-cureteam|SOURCE``
+            # line and NO per-mon ``-curestatus`` (gen3 inherits the gen4 mod's silent
+            # clearStatus). The wake is still public, so clear every tracked victim on the
+            # cured (actor's) side — the spec's clear-on-wake rule through the only line the
+            # protocol emits for it.
+            cured_slot = _slot_from_ident(parts[2])
+            if cured_slot in {"p1", "p2"}:
+                prefix = f"{cured_slot}:"
+                for victims in self.induced_sleep_victims.values():
+                    for key in [key for key in victims if key.startswith(prefix)]:
+                        victims.discard(key)
+            return
+        clearing = (
+            event_type == "-curestatus" and len(parts) >= 4 and parts[3].strip() == "slp"
+        ) or (event_type == "faint" and len(parts) >= 3)
+        if clearing:
+            victim_slot = _slot_from_ident(parts[2])
+            if victim_slot in {"p1", "p2"}:
+                key = self._induced_sleep_victim_key(victim_slot, parts[2])
+                for victims in self.induced_sleep_victims.values():
+                    victims.discard(key)
+
     def snapshot(self) -> ShowdownReplayState:
         return ShowdownReplayState(
             battle_id=self.battle_id,
@@ -1121,6 +1237,10 @@ class _ReplayParser:
             pending_leech_seed_source_sides=dict(self._pending_leech_seed_source_sides),
             pending_baton_pass=tuple(sorted(self.pending_baton_pass)),
             live_type_override=dict(self.live_type_override),
+            induced_sleep_victims={
+                slot: tuple(sorted(victims))
+                for slot, victims in self.induced_sleep_victims.items()
+            },
         )
 
 
@@ -1285,6 +1405,8 @@ def normalize_for_player(
         opponent_wish_pending=_wish_pending(replay, opponent_slot),
         self_sleep_clause_used=sleep_clause_holders.get(showdown_slot) is not None,
         opponent_sleep_clause_used=sleep_clause_holders.get(opponent_slot) is not None,
+        self_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(showdown_slot)),
+        opponent_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(opponent_slot)),
     )
 
 
@@ -1349,8 +1471,11 @@ def observation_from_player_state(
     revealed-move PP-validity bits, the substitute HP fraction, and the per-mon pinned
     Tier-2 conclusions. A v2.2 spec keeps every v2.1 block and swaps the transition
     surface to TURN-MERGED tokens (state.turn_merged_tokens; one row per phase, two
-    ordered sub-blocks — budget counts THESE rows, i.e. whole turns). Anything else
-    refuses loudly here rather than encoding an undeclared hybrid.
+    ordered sub-blocks — budget counts THESE rows, i.e. whole turns). A v3 spec keeps
+    every v2.2 block (same turn-merged surface) and additionally writes the appended
+    fail-bit columns on transition rows plus the public sleep-clause block bits on the
+    field token (docs/observation_v3_spec.md). Anything else refuses loudly here rather
+    than encoding an undeclared hybrid.
     """
     if spec.schema_version not in REPLAY_OBSERVATION_SPECS_BY_SCHEMA:
         supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
@@ -1377,12 +1502,16 @@ def observation_from_player_state(
             f"{categorical_floor} categorical columns, got {spec.categorical_feature_count}. "
             "The categorical census is schema-keyed "
             f"({OBSERVATION_SCHEMA_VERSION_V2!r} and {OBSERVATION_SCHEMA_VERSION_V2_1!r}: "
-            f"{_CATEGORICAL_FEATURE_COUNT}; {OBSERVATION_SCHEMA_VERSION_V2_2!r}: "
+            f"{_CATEGORICAL_FEATURE_COUNT}; {OBSERVATION_SCHEMA_VERSION_V2_2!r} and "
+            f"{OBSERVATION_SCHEMA_VERSION_V3!r}: "
             f"{_V2_2_CATEGORICAL_FEATURE_COUNT}); a narrower spec would silently "
             "bounds-drop the schema's own categorical surface (v2.2's whole second "
             "sub-block) and encode an undeclared hybrid stamped with the wider version."
         )
-    schema_v2_2 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    schema_v3 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
+    # v3 carries every v2.2 block forward unchanged (same turn-merged transition surface);
+    # it only APPENDS the fail-bit and public-sleep-clause numeric columns.
+    schema_v2_2 = schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
     schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
     if schema_v2_2 and state.transition_tokens and not state.turn_merged_tokens:
@@ -1437,7 +1566,9 @@ def observation_from_player_state(
                 )
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
-    _encode_field_token(categorical_ids, numeric_features, state, masks=feature_masks)
+    _encode_field_token(
+        categorical_ids, numeric_features, state, masks=feature_masks, schema_v3=schema_v3
+    )
     # Exact-state per-mon fields come from the belief engine's ledgers for BOTH sides (it tracks
     # self and opponent); the opponent's belief-fact buckets keep their existing single source.
     self_exact_beliefs = {
@@ -1495,7 +1626,7 @@ def observation_from_player_state(
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
     if schema_v2_2:
         _encode_turn_merged_transition_tokens(
-            categorical_ids, numeric_features, state, spec, masks=feature_masks
+            categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v3=schema_v3
         )
     else:
         _encode_transition_tokens(
@@ -2207,6 +2338,7 @@ def _encode_field_token(
     state: PlayerRelativeBattleState,
     *,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+    schema_v3: bool = False,
 ) -> None:
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_PRIMARY, f"request_kind:{state.request_kind}")
     # Winner identity is deliberately NOT encoded: it is constant ("none") at every decision
@@ -2230,6 +2362,15 @@ def _encode_field_token(
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
     if masks.exact_state:
         _encode_field_exact_state(numeric_features[FIELD_TOKEN_OFFSET], state)
+    # Spec v3 change 2: the public sleep-clause block bits. Gated ONLY on the schema (not on
+    # masks.exact_state — that mask darkens the belief-engine-fed exact-state layer; these
+    # bits are a separate, purely public-protocol surface). The columns sit above the v2.2
+    # census, so every legacy mode stays byte-frozen.
+    if schema_v3:
+        if state.self_sleep_clause_blocks:
+            _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, 1.0)
+        if state.opponent_sleep_clause_blocks:
+            _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, 1.0)
 
 
 # (condition id, self numeric slot, opponent numeric slot) for the timed side conditions.
@@ -3161,6 +3302,7 @@ def _encode_turn_merged_transition_tokens(
     spec: ObservationSpec,
     *,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+    schema_v3: bool = False,
 ) -> None:
     """Encode the TURN-MERGED transition block (spec v2.2).
 
@@ -3236,6 +3378,11 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, first.investment)))
         if first.self_hp_cost:
             _set_numeric(num_row, NUMERIC_TT_SELF_HP_COST, min(1.0, first.self_hp_cost))
+        # Spec v3 change 1: the fail bit, mirroring the miss bit's write above (numeric 0/1,
+        # written when set) on a v3-only appended column. Schema-gated so v2.2 output stays
+        # byte-identical (the column does not even exist below the v3 census).
+        if schema_v3 and first.fail:
+            _set_numeric(num_row, NUMERIC_TT_FAIL, 1.0)
 
         second = token.second
         if second.status != _TM_SUB_BLOCK_ACTION:
@@ -3285,6 +3432,9 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TM2_INVESTMENT, max(-1.0, min(1.0, second.investment)))
         if second.self_hp_cost:
             _set_numeric(num_row, NUMERIC_TM2_SELF_HP_COST, min(1.0, second.self_hp_cost))
+        # Spec v3 change 1: the second-mover fail twin (mirrors NUMERIC_TM2_MISS's write).
+        if schema_v3 and second.fail:
+            _set_numeric(num_row, NUMERIC_TM2_FAIL, 1.0)
 
 
 def _tm_first_action_label(kind: str, action: str) -> str:
@@ -3868,7 +4018,7 @@ def _attention_mask(
     mask.extend([stats_visible] * spec.stats_token_count)
     transition_stream = (
         state.turn_merged_tokens
-        if spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        if spec.schema_version in (OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3)
         else state.transition_tokens
     )
     filled = min(

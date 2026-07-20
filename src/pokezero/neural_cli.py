@@ -62,8 +62,8 @@ from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
-    OBSERVATION_SCHEMA_VERSION_V2_2,
     TRANSITION_TOKEN_COUNT,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
 from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
 from .neural_policy import (
@@ -463,12 +463,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # different observation content — the #492 mismatch class).
     train.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2"),
+        choices=("v2.1", "v2.2", "v3"),
         default=None,
         help=(
-            "Observation schema for a FRESH train: v2.1 or v2.2 (default; turn-merged "
+            "Observation schema for a FRESH train: v2.1, v2.2 (default; turn-merged "
             "transition tokens; stamps the model config, sizes the widths, and flips the "
-            "schema-derived vocabulary). With --initial-checkpoint the checkpoint's stamped "
+            "schema-derived vocabulary), or v3 (turn-merged + the appended fail-bit and "
+            "public sleep-clause columns). With --initial-checkpoint the checkpoint's stamped "
             "schema wins and an explicitly disagreeing flag hard-fails (mask-conflict "
             "semantics)."
         ),
@@ -1817,12 +1818,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # see the same masked observations (never a train/eval mask mismatch).
     iterate.add_argument(
         "--observation-schema",
-        choices=("v2.1", "v2.2"),
+        choices=("v2.1", "v2.2", "v3"),
         default=None,
         help=(
-            "Observation schema for a FRESH iterate run: v2.1 or v2.2 (default; "
+            "Observation schema for a FRESH iterate run: v2.1, v2.2 (default; "
             "turn-merged transition tokens; sizes the model config, the env spec, and the "
-            "schema-derived vocabulary). On --resume the run's stored model config wins; a "
+            "schema-derived vocabulary), or v3 (turn-merged + the appended fail-bit and "
+            "public sleep-clause columns). On --resume the run's stored model config wins; a "
             "disagreeing explicit flag fails the model-config equality validation."
         ),
     )
@@ -2344,7 +2346,7 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
     observation_spec = observation_spec_from_model_config(result.model_config)
     vocab = gen3_category_vocabulary(
         args.showdown_root,
-        include_turn_merged=observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+        include_turn_merged=observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -2619,12 +2621,12 @@ def _require_cache_observation_schema_matches(paths, model_config) -> None:
     expected = model_config.observation_schema_version
     for cache_path, recorded in cache_observation_schemas_by_path(paths):
         if recorded is None:
-            if expected == OBSERVATION_SCHEMA_VERSION_V2_2:
+            if expected in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS:
                 raise ValueError(
                     f"training cache {cache_path} records no observation schema (legacy "
                     "collector) but this train run declares "
-                    f"{OBSERVATION_SCHEMA_VERSION_V2_2!r}; v2.2 (turn-merged) observations "
-                    "must come from a collector run with --observation-schema v2.2."
+                    f"{expected!r}; turn-merged observations must come from a collector "
+                    "run with a matching --observation-schema."
                 )
             continue
         if recorded != expected:
@@ -2861,7 +2863,7 @@ def _train(args: argparse.Namespace) -> int:
         category_vocab = gen3_category_vocabulary(
             args.showdown_root,
             oov_buckets=args.category_oov_buckets,
-            include_turn_merged=schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+            include_turn_merged=schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
         )
         model_config = TransformerPolicyConfig.compact_category(
             category_vocab=category_vocab.tokens,
@@ -5327,7 +5329,7 @@ def _iterate(args: argparse.Namespace) -> int:
     category_vocab = gen3_category_vocabulary(
         args.showdown_root,
         oov_buckets=args.category_oov_buckets,
-        include_turn_merged=iterate_schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+        include_turn_merged=iterate_schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
