@@ -1,0 +1,149 @@
+"""Run the read-only deep-line observation audit.
+
+The command drives both full random-battle games and deterministic scenario
+chains.  It writes a machine-readable report; a confirmed mismatch is a finding
+to triage, never an automatic encoder edit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+from pathlib import Path
+from typing import Iterable
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from pokezero.deep_line_audit import (  # noqa: E402
+    DeepLineAuditReport,
+    audit_live_decision,
+    audit_perspective_pair,
+    audit_protocol_cut_fixture,
+    census_protocol_cooccurrences,
+    protocol_cut_fixtures,
+)
+from pokezero.golden_corpus_scenarios import (  # noqa: E402
+    ScriptedPreferencePolicy,
+    scenario_specs,
+)
+from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noqa: E402
+from pokezero.observation import ObservationFeatureMasks  # noqa: E402
+
+
+def _first_legal(observation, rng: random.Random) -> int | None:
+    legal = [index for index, allowed in enumerate(observation.legal_action_mask) if allowed]
+    return rng.choice(legal) if legal else None
+
+
+def _audit_game(env: LocalShowdownEnv, *, seed: int, report: DeepLineAuditReport, max_rounds: int) -> None:
+    env.reset(seed=seed)
+    report.begin_game(f"random-seed-{seed}")
+    rng = random.Random(seed)
+    for _ in range(max_rounds):
+        if env.terminal() is not None:
+            break
+        requested = env.requested_players()
+        if not requested:
+            break
+        observations = {}
+        for player in requested:
+            observations[player] = env.observe(player)
+            # The audit function re-observes to exercise the live encoder path.
+            audit_live_decision(env, player, report=report)
+        if set(requested) == {"p1", "p2"}:
+            audit_perspective_pair(env, report=report)
+        actions = {player: _first_legal(observations[player], rng) for player in requested}
+        if any(action is None for action in actions.values()):
+            break
+        env.step({player: int(action) for player, action in actions.items()})
+    census_protocol_cooccurrences(env.snapshot().protocol_lines, report=report)
+
+
+def _audit_scenario(env: LocalShowdownEnv, spec, report: DeepLineAuditReport) -> None:
+    from pokezero.golden_corpus_scenarios import _scenario_override
+
+    env.reset_with_start_override(seed=spec.seed, start_override=_scenario_override(spec))
+    report.begin_game(f"scenario-{spec.name}")
+    policies = {"p1": ScriptedPreferencePolicy(spec.p1_prefs), "p2": ScriptedPreferencePolicy(spec.p2_prefs)}
+    for _ in range(spec.max_decision_rounds):
+        if env.terminal() is not None:
+            break
+        requested = env.requested_players()
+        if not requested:
+            break
+        actions = {}
+        for player in requested:
+            audit_live_decision(env, player, report=report)
+            actions[player] = policies[player].select_action(env.observe(player), rng=random.Random(spec.seed)).action_index
+        if set(requested) == {"p1", "p2"}:
+            audit_perspective_pair(env, report=report)
+        env.step(actions)
+    census_protocol_cooccurrences(env.snapshot().protocol_lines, report=report)
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--showdown-root", type=Path, default=None)
+    parser.add_argument("--random-games", type=int, default=8)
+    parser.add_argument("--seed-start", type=int, default=1)
+    parser.add_argument("--max-rounds", type=int, default=250)
+    parser.add_argument("--scenarios", action="store_true", help="Audit all deterministic chain scenarios.")
+    parser.add_argument("--protocol-fixtures", action="store_true", help="Audit minimal public protocol cuts.")
+    parser.add_argument("--scenario", action="append", default=[], help="Audit one named scenario (repeatable).")
+    parser.add_argument(
+        "--suppress-kind",
+        action="append",
+        default=[],
+        help="Record but do not fail on a known finding kind (repeatable).",
+    )
+    parser.add_argument("--json", type=Path, required=True)
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.random_games < 0 or args.max_rounds < 1 or args.seed_start < 0:
+        parser.error("--random-games and --seed-start must be non-negative; --max-rounds must be positive")
+
+    masks = ObservationFeatureMasks(tier2_residuals=False, tier2_investment=False)
+    config = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True, feature_masks=masks)
+    from pokezero.randbat_vocab import gen3_category_vocabulary
+
+    config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        set_belief_source=True,
+        feature_masks=masks,
+        category_vocab=gen3_category_vocabulary(
+            config.resolved_showdown_root(), include_turn_merged=True
+        ),
+    )
+    report = DeepLineAuditReport(suppressed_kinds=frozenset(args.suppress_kind))
+    env = LocalShowdownEnv(config)
+    try:
+        for seed in range(args.seed_start, args.seed_start + args.random_games):
+            _audit_game(env, seed=seed, report=report, max_rounds=args.max_rounds)
+        selected = {spec.name: spec for spec in scenario_specs()}
+        names = set(args.scenario)
+        if args.scenarios:
+            names.update(selected)
+        unknown = sorted(names - set(selected))
+        if unknown:
+            parser.error(f"unknown scenario(s): {', '.join(unknown)}")
+        for name in sorted(names):
+            _audit_scenario(env, selected[name], report)
+        if args.protocol_fixtures:
+            for fixture in protocol_cut_fixtures():
+                audit_protocol_cut_fixture(fixture, report=report)
+    finally:
+        env.close()
+
+    args.json.parent.mkdir(parents=True, exist_ok=True)
+    args.json.write_text(json.dumps(report.to_json_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        f"deep-line audit: decisions={report.decisions_checked} turn20+={report.turn_20_plus_decisions} "
+        f"findings={len(report.findings)}"
+    )
+    return 1 if report.findings else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
