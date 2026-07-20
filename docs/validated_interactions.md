@@ -16,7 +16,15 @@ and are asserted by `tests/test_interaction_registry.py` (live-gated on a built 
 checkout; well-formedness always runs). The two bugs are wired as `expectedFailure`
 asserting the CORRECT behavior — they flip to xpass the day the encoder is fixed.
 
-## 🔴 BUGS FOUND — in-battle retype family (loud flag)
+## ✅ FIXED (was: in-battle retype family — loud flag)
+
+**STATUS (2026-07-20): FIXED** by the `scott/in-battle-retype-fix` PR (In-battle retype
+encoder fix: Castform Forecast + Kecleon Color Change type slots). The parser now tracks a
+per-active-slot **live type override** and the encoder overrides the **type slots only** from
+the forme / `typechange` payload — the base species token is left unchanged (retyped Castform
+formes / Kecleon are OOV for the species vocab). Cleared on switch-out (both effects revert on
+leaving the field). The two registry tests below now pass as normal assertions (formerly
+`expectedFailure`). Audit detail is preserved unchanged for the record.
 
 Two **genuine encoder bugs**, same root cause. **Both species are in the gen3 randbats
 pool** (`castform`, `kecleon` in `sets.json`), so this is in-distribution, not a
@@ -24,8 +32,8 @@ customgame-only curiosity.
 
 | interaction | protocol shape (captured live) | expected encoding | verdict | scenario |
 |---|---|---|---|---|
-| **Castform Forecast retype** (the flagged case) | `\|-weather\|SunnyDay` then `\|-formechange\|p2a: Castform\|Castform-Sunny\|[msg]\|[from] ability: Forecast` | active-mon `CATEGORY_TYPE_1` = **Fire** (Rainy→Water, Snowy→Ice) while the forme holds | **BUG-FOUND** — encodes **Normal** (base). `showdown.py` never consumes `-formechange`; `public_active` species stays `"Castform"`; `_encode_species_type_categories` reads the base dex type. Wrong on **both** self and opponent tokens. | `castform_forecast_formechange` |
-| **Color Change retype** (Kecleon) | `\|-start\|p1a: Kecleon\|typechange\|Psychic\|[from] ability: Color Change` (payload = new type) | active-mon `CATEGORY_TYPE_1` = the last hit's type (here Psychic) | **BUG-FOUND** — encodes **Normal** (base). The `typechange` volatile's type payload is not written to the type slots. | `colorchange_kecleon` |
+| **Castform Forecast retype** (the flagged case) | `\|-weather\|SunnyDay` then `\|-formechange\|p2a: Castform\|Castform-Sunny\|[msg]\|[from] ability: Forecast` | active-mon `CATEGORY_TYPE_1` = **Fire** (Rainy→Water, Snowy→Ice) while the forme holds | **FIXED** (was BUG-FOUND — encoded **Normal**). `showdown.py` now consumes `-formechange`, tracks the forme's type in a live override, and encodes it into the type slots for **both** self and opponent tokens (forme resolved via the dex, like Deoxys; explicit map fallback). | `castform_forecast_formechange` |
+| **Color Change retype** (Kecleon) | `\|-start\|p1a: Kecleon\|typechange\|Psychic\|[from] ability: Color Change` (payload = new type) | active-mon `CATEGORY_TYPE_1` = the last hit's type (here Psychic) | **FIXED** (was BUG-FOUND — encoded **Normal**). The `typechange` payload type is now written to the type slots (mono-type; TYPE_2 padded), persisting until the next hit or switch-out. | `colorchange_kecleon` |
 
 **Repro (Castform):**
 ```
@@ -113,8 +121,11 @@ path rather than duplicating them.
 ## Registry summary
 
 - Rows verified this way: **VERIFIED-CORRECT = 26** (12 driven-live-here + 14
-  existing-scenario re-confirmations), **BUG-FOUND = 2** (Castform Forecast, Kecleon
-  Color Change — same root cause), **ACCEPTED-APPROX / N-A = 6**.
-- **Castform verdict: BUG-FOUND** — in-battle `-formechange` retype is not reflected in
-  the observation's type slots (encodes base Normal). Flagged here; fix deferred to a
-  separate PR.
+  existing-scenario re-confirmations), **BUG-FOUND (now FIXED) = 2** (Castform Forecast,
+  Kecleon Color Change — same root cause), **ACCEPTED-APPROX / N-A = 6**.
+- **Castform verdict: FIXED** (was BUG-FOUND) — in-battle `-formechange` / `typechange`
+  retype is now reflected in the observation's type slots via a per-active-slot live type
+  override (`scott/in-battle-retype-fix`); the base species token is left unchanged.
+  Note: the **Rust leaf encoder** (search path) still needs a separate retype realignment
+  (a search-side follow-up, like the Hidden Power Rust realignment #758) — the corpus
+  rust-parity gate is unaffected because the golden sample contains no retype states.
