@@ -1064,6 +1064,10 @@ class FlatBranchSearchTest(unittest.TestCase):
         )
         self.assertEqual(sum(result.timing.value_evaluation_count for result in results), 10)
         self.assertEqual(
+            [result.initial_value_evaluation_count for result in results],
+            [2, 2],
+        )
+        self.assertEqual(
             [result.timing.adaptive_value_evaluation_count for result in results],
             [3, 3],
         )
@@ -1251,6 +1255,7 @@ class FlatBranchSearchTest(unittest.TestCase):
         )
         self.assertEqual([result.total_visits for result in results], [5, 5])
         self.assertEqual([result.timing.value_evaluation_count for result in results], [0, 5])
+        self.assertEqual([result.initial_value_evaluation_count for result in results], [0, 2])
         self.assertEqual(
             [result.timing.adaptive_value_evaluation_count for result in results],
             [0, 3],

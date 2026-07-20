@@ -1787,6 +1787,10 @@ class PUCTBranchSearchResult:
     root_time_budget_seconds: float | None = None
     time_budget_exhausted: bool = False
     timing: RootPUCTSearchTiming = RootPUCTSearchTiming()
+    # The grouped initial sweep records this before adaptive visits begin so
+    # callers can distinguish a configured cross-world batch from worlds that
+    # actually contributed nonterminal value leaves to it.
+    initial_value_evaluation_count: int = 0
 
     @property
     def best_candidate(self) -> PUCTBranchSearchCandidate:
@@ -2371,6 +2375,7 @@ def puct_branch_search_group(
             _RestorablePrefix | None,
             _RootPUCTSearchTimingAccumulator,
             float,
+            int,
         ]
     ] = []
     value_offset = 0
@@ -2398,6 +2403,7 @@ def puct_branch_search_group(
                 prepared.restorable_prefix,
                 timing,
                 initial_elapsed_seconds + request_batch_seconds,
+                pending_count,
             )
         )
     assert value_offset == len(batch_values)
@@ -2420,7 +2426,14 @@ def puct_branch_search_group(
         )
 
     results: list[PUCTBranchSearchResult] = []
-    for request, value_search, restorable_prefix, timing, initial_elapsed_seconds in completed_value_searches:
+    for (
+        request,
+        value_search,
+        restorable_prefix,
+        timing,
+        initial_elapsed_seconds,
+        initial_value_evaluation_count,
+    ) in completed_value_searches:
         adaptive_bridge_timing_before = _bridge_timing_snapshot(env)
         adaptive_started_at = _timing_perf_counter()
         results.append(
@@ -2450,6 +2463,7 @@ def puct_branch_search_group(
                 bridge_timing_before=adaptive_bridge_timing_before,
                 timing_started_at=adaptive_started_at,
                 initial_elapsed_seconds=initial_elapsed_seconds,
+                initial_value_evaluation_count=initial_value_evaluation_count,
             )
         )
     return tuple(results)
@@ -2482,6 +2496,7 @@ def _finish_puct_branch_search(
     bridge_timing_before: Mapping[str, float | int] | None,
     timing_started_at: float,
     initial_elapsed_seconds: float | None = None,
+    initial_value_evaluation_count: int = 0,
 ) -> PUCTBranchSearchResult:
     """Run adaptive root visits after a completed mandatory value sweep."""
 
@@ -2646,6 +2661,7 @@ def _finish_puct_branch_search(
             if initial_elapsed_seconds is None
             else initial_elapsed_seconds + (_timing_perf_counter() - adaptive_started_at)
         ),
+        initial_value_evaluation_count=initial_value_evaluation_count,
     )
 
 
@@ -2658,6 +2674,7 @@ class _BatchedAdaptivePUCTState:
     restorable_prefix: _RestorablePrefix | None
     timing: _RootPUCTSearchTimingAccumulator
     initial_elapsed_seconds: float
+    initial_value_evaluation_count: int
     accumulators: dict[int, _PUCTRootAccumulator]
     prefix_history: tuple[PokeZeroObservationV0, ...]
     visit_budget: int | None
@@ -2696,6 +2713,7 @@ def _finish_puct_branch_search_group_batched_adaptive(
             _RestorablePrefix | None,
             _RootPUCTSearchTimingAccumulator,
             float,
+            int,
         ]
     ],
 ) -> tuple[PUCTBranchSearchResult, ...]:
@@ -2710,7 +2728,14 @@ def _finish_puct_branch_search_group_batched_adaptive(
     """
 
     states: list[_BatchedAdaptivePUCTState] = []
-    for request, value_search, restorable_prefix, timing, initial_elapsed_seconds in completed_value_searches:
+    for (
+        request,
+        value_search,
+        restorable_prefix,
+        timing,
+        initial_elapsed_seconds,
+        initial_value_evaluation_count,
+    ) in completed_value_searches:
         root_setup_started_at = _timing_perf_counter()
         legal_action_indices = tuple(candidate.action_index for candidate in value_search.candidates)
         if (
@@ -2771,6 +2796,7 @@ def _finish_puct_branch_search_group_batched_adaptive(
                 restorable_prefix=restorable_prefix,
                 timing=timing,
                 initial_elapsed_seconds=initial_elapsed_seconds,
+                initial_value_evaluation_count=initial_value_evaluation_count,
                 accumulators=accumulators,
                 prefix_history=prefix_history,
                 visit_budget=visit_budget,
@@ -2929,6 +2955,7 @@ def _finish_puct_branch_search_group_batched_adaptive(
                     + state.adaptive_elapsed_seconds
                     + finalization_seconds
                 ),
+                initial_value_evaluation_count=state.initial_value_evaluation_count,
             )
         )
     return tuple(results)

@@ -19,7 +19,10 @@ from .mcts_diagnostics import (
 )
 
 
-ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION = "pokezero.root_puct_decision_telemetry.v1"
+# v2 tightens the initial-batch counters to count only worlds that actually
+# entered the initial value evaluator. Keep old v1 records out of a v2 proof
+# rather than silently combining the two meanings.
+ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION = "pokezero.root_puct_decision_telemetry.v2"
 ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION = "pokezero.root_puct_telemetry_report.v1"
 
 _SCALAR_COUNT_FIELDS = (
@@ -30,6 +33,11 @@ _SCALAR_COUNT_FIELDS = (
     # versus the Tier 1 replay fallback.
     "root_puct_start_override_direct_materializations",
     "root_puct_start_override_replay_materializations",
+    # These counters prove that the initial root sweep actually formed a
+    # cross-world value batch, rather than only recording that the feature was
+    # configured. They contain no battle state and are safe to persist.
+    "root_puct_cross_world_initial_value_batch_count",
+    "root_puct_cross_world_initial_value_batch_world_count",
     "root_puct_opponent_action_scenario_count",
     "root_puct_opponent_action_scenarios_generated",
     "root_puct_opponent_action_scenarios_skipped",
@@ -206,6 +214,11 @@ _MATERIALIZATION_COUNT_NAMES = {
     "root_puct_start_override_replay_materializations": "replay",
 }
 
+_INITIAL_VALUE_BATCHING_COUNT_NAMES = {
+    "root_puct_cross_world_initial_value_batch_count": "cross_world_initial_value_batch_count",
+    "root_puct_cross_world_initial_value_batch_world_count": "cross_world_initial_value_batch_world_count",
+}
+
 _COUNTER_TAXONOMY_NAMES = {
     "root_puct_direct_materialization_rejection_categories": "direct_materialization_rejection_categories",
 }
@@ -243,6 +256,11 @@ def root_puct_decision_telemetry(
         value = _nonnegative_int(metadata.get(field))
         if value is not None:
             payload[field] = value
+    # Fresh v2 telemetry always states whether the grouped initial batch ran.
+    # Aggregation keeps v1 records out of this proof because their counters
+    # included terminal and single-world groups under the same field names.
+    for field in _INITIAL_VALUE_BATCHING_COUNT_NAMES:
+        payload.setdefault(field, 0)
     for field in ("root_puct_elapsed_seconds", "policy_elapsed_seconds"):
         value = _finite_nonnegative_float(metadata.get(field))
         if value is not None:
@@ -294,6 +312,9 @@ def summarize_root_puct_decision_telemetry(
     effective_total_visits = 0
     scenario_counts: dict[str, int] = {}
     materialization_counts = {name: 0 for name in _MATERIALIZATION_COUNT_NAMES.values()}
+    initial_value_batching = {name: 0 for name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.values()}
+    initial_value_batching_records = 0
+    initial_value_batching_current_schema_records = 0
     for item in records:
         if item.get("outcome") == "fallback":
             category = str(item.get("fallback_category") or "unknown")
@@ -313,6 +334,23 @@ def summarize_root_puct_decision_telemetry(
         effective_total_visits += _nonnegative_int(item.get("root_puct_effective_total_visits")) or 0
         for field, name in _MATERIALIZATION_COUNT_NAMES.items():
             materialization_counts[name] += _nonnegative_int(item.get(field)) or 0
+        current_initial_batch_schema = (
+            item.get("schema_version") == ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION
+        )
+        if current_initial_batch_schema:
+            initial_value_batching_current_schema_records += 1
+        initial_batching_values = {
+            field: _nonnegative_int(item.get(field))
+            for field in _INITIAL_VALUE_BATCHING_COUNT_NAMES
+        }
+        if current_initial_batch_schema and all(
+            value is not None for value in initial_batching_values.values()
+        ):
+            initial_value_batching_records += 1
+            for field, name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.items():
+                value = initial_batching_values[field]
+                assert value is not None
+                initial_value_batching[name] += value
         for field in _SCALAR_COUNT_FIELDS:
             if not field.startswith("root_puct_opponent_action_"):
                 continue
@@ -357,6 +395,19 @@ def summarize_root_puct_decision_telemetry(
             for field, count in sorted(scenario_counts.items())
         },
         "materialization_counts": materialization_counts,
+        "initial_value_batching": {
+            "records": total,
+            "records_with_current_schema": initial_value_batching_current_schema_records,
+            "records_with_counters": initial_value_batching_records,
+            # A malformed or older record makes the proof incomplete instead
+            # of summing a partial batch count that could look verified.
+            "complete": initial_value_batching_records == total,
+            **(
+                initial_value_batching
+                if initial_value_batching_records == total
+                else {name: None for name in _INITIAL_VALUE_BATCHING_COUNT_NAMES.values()}
+            ),
+        },
         "scenario_failure_taxonomy": {
             _COUNTER_TAXONOMY_NAMES.get(
                 field,

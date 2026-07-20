@@ -19,6 +19,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "root_puct_fallback_reason": "request mismatch carried private state: [secret]",
                 "root_puct_total_visits": 12,
                 "root_puct_effective_total_visits": 9,
+                "root_puct_cross_world_initial_value_batch_count": 2,
+                "root_puct_cross_world_initial_value_batch_world_count": 6,
                 "root_puct_elapsed_seconds": 0.25,
                 "policy_elapsed_seconds": 0.30,
                 "root_puct_timing": {
@@ -69,7 +71,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(
             telemetry,
             {
-                "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
                 "decision_index": 4,
                 "turn_index": 7,
                 "outcome": "fallback",
@@ -77,6 +79,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                 "fallback_category": "replay_request_mismatch",
                 "root_puct_total_visits": 12,
                 "root_puct_effective_total_visits": 9,
+                "root_puct_cross_world_initial_value_batch_count": 2,
+                "root_puct_cross_world_initial_value_batch_world_count": 6,
                 "root_puct_elapsed_seconds": 0.25,
                 "policy_elapsed_seconds": 0.30,
                 "full_decision_elapsed_seconds": 0.30,
@@ -145,12 +149,15 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         report = summarize_root_puct_decision_telemetry(
             (
                 {
+                    "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
                     "outcome": "searched",
                     "fallback": False,
                     "root_puct_total_visits": 10,
                     "root_puct_effective_total_visits": 8,
                     "root_puct_start_override_direct_materializations": 2,
                     "root_puct_start_override_replay_materializations": 1,
+                    "root_puct_cross_world_initial_value_batch_count": 2,
+                    "root_puct_cross_world_initial_value_batch_world_count": 6,
                     "root_puct_opponent_action_scenario_count": 2,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 1,
@@ -171,6 +178,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     },
                 },
                 {
+                    "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
                     "outcome": "fallback",
                     "fallback": True,
                     "fallback_category": "replay_request_mismatch",
@@ -178,6 +186,8 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                     "root_puct_effective_total_visits": 1,
                     "root_puct_start_override_direct_materializations": 1,
                     "root_puct_start_override_replay_materializations": 3,
+                    "root_puct_cross_world_initial_value_batch_count": 1,
+                    "root_puct_cross_world_initial_value_batch_world_count": 2,
                     "root_puct_opponent_action_scenario_count": 1,
                     "root_puct_opponent_action_scenarios_generated": 3,
                     "root_puct_opponent_action_scenarios_skipped": 2,
@@ -224,6 +234,17 @@ class RootPUCTTelemetryTest(unittest.TestCase):
             },
         )
         self.assertEqual(report["materialization_counts"], {"direct": 3, "replay": 4})
+        self.assertEqual(
+            report["initial_value_batching"],
+            {
+                "records": 2,
+                "records_with_current_schema": 2,
+                "records_with_counters": 2,
+                "complete": True,
+                "cross_world_initial_value_batch_count": 3,
+                "cross_world_initial_value_batch_world_count": 8,
+            },
+        )
         self.assertEqual(
             report["scenario_failure_taxonomy"],
             {
@@ -272,7 +293,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                             "root_puct_decision_telemetry_by_player": {
                                 "p1": [
                                     {
-                                        "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                                        "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
                                         "decision_index": 0,
                                         "turn_index": 0,
                                         "outcome": "searched",
@@ -294,6 +315,17 @@ class RootPUCTTelemetryTest(unittest.TestCase):
         self.assertEqual(report["schema_version"], ROOT_PUCT_TELEMETRY_REPORT_SCHEMA_VERSION)
         self.assertEqual(report["policies"]["root-puct-120"]["decisions"], 1)
         self.assertEqual(report["policies"]["root-puct-120"]["visits"]["per_root_search_second"], 200.0)
+        self.assertEqual(
+            report["policies"]["root-puct-120"]["initial_value_batching"],
+            {
+                "records": 1,
+                "records_with_current_schema": 1,
+                "records_with_counters": 0,
+                "complete": False,
+                "cross_world_initial_value_batch_count": None,
+                "cross_world_initial_value_batch_world_count": None,
+            },
+        )
         with self.assertRaisesRegex(ValueError, "no Root-PUCT decision telemetry"):
             root_puct_benchmark_telemetry_report(payload, policy_ids=("missing",))
 
@@ -328,7 +360,7 @@ class RootPUCTTelemetryTest(unittest.TestCase):
                             "root_puct_decision_telemetry_by_player": {
                                 "p1": [
                                     {
-                                        "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                                        "schema_version": ROOT_PUCT_DECISION_TELEMETRY_SCHEMA_VERSION,
                                         "decision_index": 0,
                                         "turn_index": 0,
                                         "outcome": "searched",
@@ -345,6 +377,30 @@ class RootPUCTTelemetryTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "incomplete .* missing root visit count"):
             root_puct_benchmark_telemetry_report(payload)
+
+    def test_summary_marks_prior_initial_batch_counter_semantics_incomplete(self) -> None:
+        report = summarize_root_puct_decision_telemetry(
+            (
+                {
+                    "schema_version": "pokezero.root_puct_decision_telemetry.v1",
+                    "outcome": "searched",
+                    "root_puct_cross_world_initial_value_batch_count": 4,
+                    "root_puct_cross_world_initial_value_batch_world_count": 9,
+                },
+            )
+        )
+
+        self.assertEqual(
+            report["initial_value_batching"],
+            {
+                "records": 1,
+                "records_with_current_schema": 0,
+                "records_with_counters": 0,
+                "complete": False,
+                "cross_world_initial_value_batch_count": None,
+                "cross_world_initial_value_batch_world_count": None,
+            },
+        )
 
     def test_benchmark_report_rejects_missing_root_puct_seat_telemetry(self) -> None:
         payload = {

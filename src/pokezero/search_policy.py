@@ -973,8 +973,17 @@ class RootPUCTSearchPolicy:
                             puct_search_call_count += 1
                             puct_search_completed_call_seconds += puct_search_elapsed_seconds
                             puct_search_completed_call_count += 1
-                            cross_world_initial_value_batch_count += 1
-                            cross_world_initial_value_batch_world_count += len(batch_searches)
+                            # A grouped call may contain terminal worlds, which
+                            # do not contribute an initial value leaf. Count
+                            # only worlds that actually joined the evaluator
+                            # batch so telemetry proves executed batching.
+                            initial_batched_world_count = sum(
+                                search.initial_value_evaluation_count > 0
+                                for search in batch_searches
+                            )
+                            if initial_batched_world_count > 1:
+                                cross_world_initial_value_batch_count += 1
+                                cross_world_initial_value_batch_world_count += initial_batched_world_count
                             for sample_index, (scenario, scenario_search) in enumerate(
                                 zip(resolved_samples, batch_searches, strict=True)
                             ):
@@ -1276,7 +1285,15 @@ class RootPUCTSearchPolicy:
                     context,
                     rng=rng,
                     reason=str(exc),
-                    extra_metadata=exc.metadata,
+                    extra_metadata={
+                        **dict(exc.metadata),
+                        "root_puct_cross_world_initial_value_batch_count": (
+                            cross_world_initial_value_batch_count
+                        ),
+                        "root_puct_cross_world_initial_value_batch_world_count": (
+                            cross_world_initial_value_batch_world_count
+                        ),
+                    },
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
@@ -1323,11 +1340,20 @@ class RootPUCTSearchPolicy:
                     if self.start_override_planner is not None
                     else None
                 )
+                fallback_metadata = {
+                    "root_puct_cross_world_initial_value_batch_count": (
+                        cross_world_initial_value_batch_count
+                    ),
+                    "root_puct_cross_world_initial_value_batch_world_count": (
+                        cross_world_initial_value_batch_world_count
+                    ),
+                    **dict(materialization_metadata or {}),
+                }
                 inner_fallback_decision = self._fallback(
                     context,
                     rng=rng,
                     reason=f"search failed: {exc}",
-                    extra_metadata=materialization_metadata,
+                    extra_metadata=fallback_metadata,
                     timing_started_at=timing_started_at,
                     neural_timing_before=neural_timing_before,
                     opponent_scenario_planning_seconds=opponent_scenario_planning_seconds,
