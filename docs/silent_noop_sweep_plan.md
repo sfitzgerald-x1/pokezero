@@ -44,6 +44,108 @@ with the accepted losses *written down* instead of latent.
    evidence), plus a single batched ADD proposal for owner sign-off.
    **One batch decision, then the schema freezes.**
 
+## Layered omission-detection program
+
+An encoder-consistency oracle cannot discover a fact that every encoder path
+omits: it can only prove that the encoder agrees with itself. Omission
+coverage therefore needs independent references which know more than the
+encoded observation. The four layers below are cumulative; a clean result in
+an earlier layer is not a waiver for a later one.
+
+### Layer 1: static emission inventory
+
+The emission inventory and handled-set diff above are the first layer. They
+are complete over **reachable top-level protocol event types**, and must be
+extended to canonical event signatures that include meaningful subtypes and
+arguments, not just a tag. For example, `-activate` identifiers and `cant`
+reasons are distinct signatures. This layer is authoritative for what the
+engine can emit, but cannot prove that a handler preserves an event's
+semantics, nor see engine state changes with no protocol line.
+
+### Layer 2: census differential
+
+Use the existing protocol census machinery as a risk-weighted differential,
+with canonical signatures rather than only top-level event tags. Collect:
+
+- `E`: reachable engine-emittable signatures from Layer 1.
+- `O`: signatures observed in bounded-depth fixtures, curated interaction
+  fixtures, and existing production self-play trajectory logs. Each observed
+  signature records its occurrence count and corpus provenance.
+- `C`: signatures that the observation, replay, and belief dispatch paths
+  actually consume.
+
+Report these cells explicitly:
+
+- `O - C`: observed-but-unconsumed candidates, ordered by real frequency.
+- `E - O`: emittable-but-unobserved signatures, which need a targeted fixture
+  or a reachability pruning decision.
+- `C - E`: stale, dead, or incorrectly classified handlers.
+
+This is a prioritization and fixture-planning tool, not evidence that an
+observed signature is semantically represented. A consumed line can still
+have an omitted subtype or argument.
+
+### Layer 3: encoding-collision audit
+
+Build a dedicated collision audit over approximately 100,000 decision states
+from existing trajectory captures. For each state, hash exactly the
+model-visible input arrays and masks: categorical ids, numeric values, token
+types, attention structure, and legal-action mask. Do not include debug
+metadata, raw protocol strings, timestamps, player names, or private request
+state in this hash.
+
+Within each byte-identical input group, compare canonical public-state and
+public-log fingerprints. Fingerprints must be perspective-stable and scoped
+to the same decision kind, so seat orientation or action type cannot create a
+spurious collision. They should be parsed public facts plus a canonical
+history signature, not a raw-line comparison subject to formatting changes.
+
+Groups with distinct public fingerprints are concrete conflation candidates.
+Filter only through a versioned, documented whitelist of intentional
+abstractions, initially HP quantization, tendency bucketing, and transition
+window truncation. Every remaining group records representative state pairs,
+the differing public facts, frequency, schema version, corpus provenance, and
+whitelist classification. This is the primary catch-all for tag-subtype and
+argument-level omissions that a dispatch-table sweep cannot find.
+
+### Layer 4: counterfactual harm probes
+
+Run a focused probe only for the Layer 1--3 shortlist. Construct a minimal
+public-state pair differing solely in the candidate fact, verify that the
+trained policy receives identical inputs (and therefore identical logits),
+then compare the simulator's action consequences or outcome distributions.
+The result turns a collision into an evidence-based `ADD` or
+`ACCEPTED-LOSS` verdict rather than a subjective schema preference. The
+Toxic no-op probe is the model for this stage; it is not a reason to generate
+one probe per mechanically possible event.
+
+### Silent engine-mutation lane
+
+Some relevant state transitions emit no public protocol line at all. They are
+outside all four log-based layers. Add a bounded, test-only simulator
+instrumentation pass that records state mutations and classifies each as
+protocol-backed or silent. For every reachable silent mutation, the belief
+layer must either track it, infer it from public deterministic information, or
+document it as provably untrackable/accepted loss. Natural Cure with
+`showCure=false` is the canonical example: the public line is absent, but the
+mono-ability randbat universe makes the cure inferable on switch-out.
+
+### Execution order and evidence
+
+1. Extend the current census to Layer 2 signatures and production-log
+   frequencies while completing the static Layer 1 table.
+2. Build Layer 3 before expanding a large fixture matrix; collision evidence
+   is the highest-leverage new omission detector.
+3. Run Layer 4 only on the resulting shortlist.
+4. Run the silent engine-mutation lane as a bounded companion audit.
+
+`docs/silent_noop_sweep_findings.md` must record, for every candidate: the
+canonical signature, reachability evidence, observed count and provenance,
+consuming handler, collision evidence, silent-mutation classification when
+applicable, harm-probe result, and final verdict. The existing protocol
+coverage matrix and validated-interaction registry are useful inputs to this
+record; neither substitutes for collision or silent-mutation evidence.
+
 ## Seed candidates (adjudicate, do not assume)
 
 - `cant` reasons: is WHY the opponent lost its turn (full para vs sleep vs
@@ -83,8 +185,11 @@ with the accepted losses *written down* instead of latent.
 - **v2.2 byte-identity is absolute** for any ADD — same dual-schema gating
   and byte-prefix tests as #779. All additions ride schema v3, pre-freeze
   only; after freeze, changes wait for v4.
-- Validation is local and minutes-scale: static inventory + targeted unit
-  probes with scripted logs; no cluster jobs.
+- Layers 1--2 are local and bounded. Layer 3 is a new CPU tool and may sample
+  existing captures, but must emit incremental artifacts and provenance rather
+  than require a new training run. Layer 4 runs only on a small shortlist;
+  the silent-mutation lane is bounded test instrumentation. No cluster-scale
+  collection is required for the plan.
 - Coordination: the Rust fold mirror implements against the FROZEN schema;
   regenerating the golden corpus at v3 happens once, after the freeze
   (spec §Coordination). The sweep must land its verdict table before that.
@@ -93,7 +198,9 @@ with the accepted losses *written down* instead of latent.
 
 ## Execution shape
 
-One agent, ~half a day: inventory + diff are mechanical; the conflation
-tests need the vendored engine open. Output is the findings doc and (if any
-ADDs survive) one implementation PR structured exactly like #779
-(spec-first, both fold paths, byte-identity tests, review).
+Layers 1--2 are mechanical inventory and census work. Layer 3 is the one
+substantive new tool and should be built before broad fixture expansion.
+Layers 4 and the silent-mutation lane are deliberately narrow adjudication
+passes. The output is the findings doc and, if any ADDs survive, one
+implementation PR structured exactly like #779 (spec-first, both fold paths,
+byte-identity tests, review).
