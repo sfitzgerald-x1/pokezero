@@ -55,9 +55,13 @@ experiment with its own paired evaluation.
   used to reset the env and replay the recorded prefix from the battle root per
   visit (the paused-search-era placeholder in `replay_branching.py`). Direct
   state construction now produces zero prefix replays in bounded telemetry. The
-  remaining measured branch bottleneck is player-view construction (2.61s per
-  searched decision); W5 is splitting it into normalization, encoding, and
-  belief-overlay work before selecting the next optimization.
+  latest strict CPU-only +120-visit read completed 136/136 direct
+  materializations with zero replay and zero fallback across 34 decisions. It
+  measured 5.19s mean / 5.57s p95 full-decision wall time and 97.9
+  visits/root-search-second. Value evaluation (4.49s per decision, including
+  3.50s of neural forwards) is now the dominant measured cost; observation
+  encoding (0.96s), materialization (0.44s), and bridge round trips (0.07s) are
+  secondary. This is mechanics telemetry, not a strength result.
 - Value-leaf calibration (Step 0) is a repeatable job. The 1M frozen isotonic
   leaf: Pearson 0.503, sign 0.758, ECE 0.063 — with a known weak late-game
   slice (phase ECE 0.089/0.054/0.136). Timing and hazard artifacts exist; no
@@ -96,12 +100,16 @@ strength. In order:
    Deliverable: **winrate vs seconds-per-turn curve** and its knee — "how far
    can we reasonably search" answered in points, not visits.
 
-**Execution status (2026-07-19):** the first two frontier W2 Jobs were
+**Execution status (2026-07-20):** the first two frontier W2 Jobs were
 intentionally retired before completion. They predated the validated CPU-thread
 and adaptive-batching W5 configuration, so their multi-hour partial rows are
 not the fast-path curve and must not select W3's knee. Their persisted artifacts
-remain diagnostic-only. Re-launch W2 after the current W5 telemetry fixes the
-next search configuration, then run the matching marker-backed W3 controller.
+remain diagnostic-only. The replacement five-point curve is now running with
+the validated strict direct-materialization, initial/adaptive-batched,
+adaptive-branch-reuse, eight-thread CPU profile. It uses fresh non-reserved
+probe seeds, the final 3M checkpoint, and its checkpoint-matched frozen leaf;
+the matching marker-backed W3 controller remains downstream of its selected
+knee.
 
 ### W3 — Frontier small checkpoint (v2.2 @ 3M)
 
@@ -261,6 +269,19 @@ classifying it.
    parser/belief sync, replay snapshotting, player-relative normalization, and
    post-normalization annotations; optimize only the dominant measured
    substage. No GPU expansion is justified by this CPU-side profile.
+   **Direct fast-path selection (2026-07-20):** the subsequent strict
+   CPU-only extra-120 telemetry read combined direct materialization, batched
+   initial root values, batched adaptive root values, and adaptive branch reuse.
+   Across 34 decisions it recorded 136/136 direct materializations, zero prefix
+   replays, and zero fallbacks. Full-decision wall time was 5.19s mean / 5.57s
+   p95, with 97.9 visits per root-search second. The stage ledger attributes
+   4.49s per decision to policy/value evaluation (3.50s neural forward), 0.96s
+   to observation encoding, 0.44s to materialization, 0.21s to simulator work,
+   0.07s to bridge round trips, and 0.02s residual. This establishes the
+   replacement W2 execution profile: CPU-only, eight Torch threads, strict
+   direct reconstruction, both value-batching modes, and adaptive branch reuse.
+   It is a bounded mechanics result, not a claim that any search budget improves
+   strength.
 2. **Tier 2 — direct state construction (implemented and primary-path
    validated):** `prepare_direct_materialization_prefix` and
    `LocalShowdownEnv.materialize_public_world` now start a fresh
