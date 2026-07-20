@@ -298,7 +298,9 @@ V3_EXTRA_CHARTS = [
         ("struggle / game", lambda r: r.get("struggle_per_game")),
     ]),
     ("status cure / natural cure (v3)", [
-        ("aromatherapy: avg mons cured", lambda r: r.get("aromatherapy_avg_cured")),
+        # Aromatherapy + Heal Bell grouped (mechanically identical); Heal Bell dominates the gen3
+        # randbats usage (~11x Aromatherapy), so the label names both rather than the rarer move.
+        ("party status-cure (Aromatherapy+Heal Bell): avg mons cured", lambda r: r.get("aromatherapy_avg_cured")),
         ("NC switch-in on status / game", lambda r: r.get("nc_switchin_on_status_per_game")),
     ]),
 ]
