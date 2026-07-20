@@ -1546,5 +1546,220 @@ class PlayerActualStatsTest(unittest.TestCase):
         self.assertEqual(observation.numeric_features[opp_active][NUMERIC_ACTUAL_HP], 0.0)
 
 
+_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+_HAS_SHOWDOWN_CHECKOUT = Path(
+    _SHOWDOWN_ROOT + "/data/random-battles/gen3/sets.json"
+).exists()
+
+
+class StaticDataTrainingFixTest(unittest.TestCase):
+    """Regression tests for two checkpoint-compatible (value-only) static-data encoder fixes.
+
+    F1 — Showdown OMITS the level token from a mon's details string when — and only when —
+    the level is 100 (``sim/pokemon.ts::getUpdatedDetails``: ``level === 100 ? '' :
+    `, L${level}```), so a token-less details string means L100, not "unknown". The encoder
+    must then set NUMERIC_LEVEL=1.0 (self, opponent, and switch tokens) and compute the
+    opponent expected-stats block instead of leaving it zeroed.
+
+    F2 — gen3 randbats emit Unown as lettered cosmetic formes (Unown-C, ...) absent from the
+    Pokedex; the encoder must fall back to the base species for types + base stats, WITHOUT
+    collapsing real distinct dex formes (Deoxys-Attack/Defense/Speed, Castform).
+    """
+
+    def test_level_from_details_defaults_missing_token_to_l100(self) -> None:
+        from pokezero.showdown import _level_from_details
+
+        # No ", L<n>" token in a non-empty details string => level 100 (Showdown omits it).
+        self.assertEqual(_level_from_details("Nosepass, F"), 100)
+        self.assertEqual(_level_from_details("Unown-C"), 100)
+        self.assertEqual(_level_from_details("Ditto"), 100)
+        # A present level token is still parsed exactly (sub-100 unchanged).
+        self.assertEqual(_level_from_details("Charizard, L83, M"), 83)
+        self.assertEqual(_level_from_details("Zapdos, L78"), 78)
+        # Genuinely-absent details carry no level information => None (no default applied).
+        self.assertIsNone(_level_from_details(""))
+        self.assertIsNone(_level_from_details(None))
+
+    @unittest.skipUnless(_HAS_SHOWDOWN_CHECKOUT, "requires a real Gen 3 Showdown checkout for the dex")
+    def test_l100_level_and_expected_stats_with_sub100_unchanged(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.showdown import (
+            NUMERIC_BASE_HP,
+            NUMERIC_EXPECTED_ATK,
+            NUMERIC_EXPECTED_DEF,
+            NUMERIC_EXPECTED_HP,
+            NUMERIC_EXPECTED_SPA,
+            NUMERIC_EXPECTED_SPD,
+            NUMERIC_EXPECTED_SPE,
+            _ACTUAL_STAT_DIVISOR,
+            _encode_expected_stats,
+            _encode_pokemon_stats,
+            _gen3_stat,
+        )
+
+        dex = load_showdown_dex_cached(_SHOWDOWN_ROOT)
+        width = 160
+
+        # F1: an L100 mon (details carries no level token) encodes NUMERIC_LEVEL=1.0 + base stats.
+        # _encode_pokemon_stats is the SINGLE path for self, opponent AND switch tokens, so this
+        # covers the level column on every seat.
+        row = [0.0] * width
+        _encode_pokemon_stats(row, dex, "Nosepass", "Nosepass, F")
+        self.assertEqual(row[NUMERIC_LEVEL], 1.0)
+        self.assertAlmostEqual(row[NUMERIC_BASE_HP], dex.species_info("Nosepass").base_stats["hp"] / 200)
+
+        # Sub-100 mon UNCHANGED: the present level token is parsed, no default applied.
+        row = [0.0] * width
+        _encode_pokemon_stats(row, dex, "Zapdos", "Zapdos, L78")
+        self.assertAlmostEqual(row[NUMERIC_LEVEL], 0.78)
+
+        # F1: the L100 opponent expected-stats block is now computed (was zeroed by an early
+        # `level is None` bail). Without a set source the bounds collapse to the baseline spread.
+        exp_slots = (
+            NUMERIC_EXPECTED_HP,
+            NUMERIC_EXPECTED_ATK,
+            NUMERIC_EXPECTED_DEF,
+            NUMERIC_EXPECTED_SPA,
+            NUMERIC_EXPECTED_SPD,
+            NUMERIC_EXPECTED_SPE,
+        )
+        row = [0.0] * width
+        _encode_expected_stats(
+            row, dex, base_species="Luvdisc", battle_species="Luvdisc", details="Luvdisc, M", belief=None
+        )
+        for slot in exp_slots:
+            self.assertGreater(row[slot], 0.0)
+        luv = dex.species_info("Luvdisc").base_stats
+        self.assertAlmostEqual(
+            row[NUMERIC_EXPECTED_SPE],
+            min(1.0, _gen3_stat(luv["spe"], 100, ev=85, iv=31, hp=False) / _ACTUAL_STAT_DIVISOR),
+        )
+
+        # Sub-100 opponent expected-stats UNCHANGED: still the deterministic level-78 spread.
+        row = [0.0] * width
+        _encode_expected_stats(
+            row, dex, base_species="Zapdos", battle_species="Zapdos", details="Zapdos, L78", belief=None
+        )
+        zap = dex.species_info("Zapdos").base_stats
+        self.assertAlmostEqual(
+            row[NUMERIC_EXPECTED_SPE],
+            min(1.0, _gen3_stat(zap["spe"], 78, ev=85, iv=31, hp=False) / _ACTUAL_STAT_DIVISOR),
+        )
+
+    @unittest.skipUnless(_HAS_SHOWDOWN_CHECKOUT, "requires a real Gen 3 Showdown checkout for the dex + vocab")
+    def test_l100_level_on_both_self_and_opponent_tokens_end_to_end(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        dex = load_showdown_dex_cached(_SHOWDOWN_ROOT)
+        vocab = gen3_category_vocabulary(_SHOWDOWN_ROOT)
+        # Self (p1) active is an L100 Nosepass; opponent (p2) reveals an L100 Luvdisc. Both details
+        # strings omit the level token (L100), so both tokens must encode NUMERIC_LEVEL=1.0.
+        request = json.dumps(
+            {
+                "active": [{"moves": [{"move": "Rock Slide", "id": "rockslide"}], "trapped": False}],
+                "side": {
+                    "id": "p1",
+                    "name": "Us",
+                    "pokemon": [
+                        {
+                            "ident": "p1a: Nosepass",
+                            "details": "Nosepass, F",
+                            "condition": "100/100",
+                            "active": True,
+                            "moves": ["rockslide"],
+                        },
+                        {
+                            "ident": "p1b: Snorlax",
+                            "details": "Snorlax, L78",
+                            "condition": "100/100",
+                            "active": False,
+                        },
+                    ],
+                },
+            }
+        )
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Nosepass|Nosepass, F|100/100",
+            "|switch|p2a: Luvdisc|Luvdisc|100/100",
+            "|turn|1",
+            "|request|" + request,
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+        obs = observation_from_player_state(
+            state, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC, dex=dex
+        )
+        self_active = FIELD_TOKEN_COUNT  # token 1
+        opp_active = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT  # token 7
+        self.assertEqual(obs.numeric_features[self_active][NUMERIC_LEVEL], 1.0)  # L100 self
+        self.assertEqual(obs.numeric_features[opp_active][NUMERIC_LEVEL], 1.0)  # L100 opponent
+
+    @unittest.skipUnless(_HAS_SHOWDOWN_CHECKOUT, "requires a real Gen 3 Showdown checkout for the dex")
+    def test_unown_cosmetic_forme_resolves_to_base_types_and_stats(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.showdown import (
+            NUMERIC_BASE_ATK,
+            NUMERIC_BASE_DEF,
+            NUMERIC_BASE_HP,
+            NUMERIC_BASE_SPA,
+            NUMERIC_BASE_SPD,
+            NUMERIC_BASE_SPE,
+            CATEGORY_TYPE_2,
+            _encode_pokemon_stats,
+            _encode_species_type_categories,
+            _species_info_base_fallback,
+        )
+
+        dex = load_showdown_dex_cached(_SHOWDOWN_ROOT)
+        base = dex.species_info("unown")
+        # The bug: the cosmetic forme is absent from the dex.
+        self.assertIsNone(dex.species_info("Unown-C"))
+        # The fix: base-species fallback resolves it to base Unown (Psychic, 48/72/48/72/48/48).
+        resolved = _species_info_base_fallback(dex, "Unown-C")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.types, base.types)
+        self.assertEqual(resolved.base_stats, base.base_stats)
+
+        # Type categories: TYPE_1 = base Unown's (only) type; TYPE_2 stays pad (mono-type).
+        cat = [""] * 8
+        _encode_species_type_categories(cat, dex, "Unown-C")
+        self.assertEqual(cat[CATEGORY_TYPE_1], f"type:{base.types[0]}")
+        self.assertEqual(cat[CATEGORY_TYPE_2], "")
+
+        # Base stats + level populated (Unown is always L100).
+        num = [0.0] * 80
+        _encode_pokemon_stats(num, dex, "Unown-C", "Unown-C")
+        self.assertEqual(num[NUMERIC_LEVEL], 1.0)
+        for slot, key in (
+            (NUMERIC_BASE_HP, "hp"),
+            (NUMERIC_BASE_ATK, "atk"),
+            (NUMERIC_BASE_DEF, "def"),
+            (NUMERIC_BASE_SPA, "spa"),
+            (NUMERIC_BASE_SPD, "spd"),
+            (NUMERIC_BASE_SPE, "spe"),
+        ):
+            self.assertAlmostEqual(num[slot], base.base_stats[key] / 200)
+
+    @unittest.skipUnless(_HAS_SHOWDOWN_CHECKOUT, "requires a real Gen 3 Showdown checkout for the dex")
+    def test_real_distinct_formes_are_not_collapsed_to_base(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.showdown import _species_info_base_fallback
+
+        dex = load_showdown_dex_cached(_SHOWDOWN_ROOT)
+        # Real distinct Pokedex formes resolve on the DIRECT lookup, so the fallback returns them
+        # unchanged and never collapses them to a base spread.
+        for forme in ("Deoxys-Attack", "Deoxys-Defense", "Deoxys-Speed", "Castform"):
+            direct = dex.species_info(forme)
+            self.assertIsNotNone(direct, forme)
+            self.assertEqual(_species_info_base_fallback(dex, forme).base_stats, direct.base_stats, forme)
+        # Sanity: Deoxys-Attack's spread genuinely differs from base Deoxys (proves no collapse).
+        self.assertNotEqual(
+            dex.species_info("Deoxys-Attack").base_stats, dex.species_info("Deoxys").base_stats
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
