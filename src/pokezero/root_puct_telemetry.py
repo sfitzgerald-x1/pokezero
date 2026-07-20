@@ -159,6 +159,9 @@ _TIMING_KEYS = (
     # batch, so telemetry can distinguish enabled batching from execution.
     "adaptive_value_evaluation_count",
     "adaptive_cross_world_batched_leaf_count",
+    # Credits deterministic direct branches served from the adaptive root
+    # cache. This proves the W5 optimization executed in aggregated telemetry.
+    "adaptive_reused_root_branch_count",
     "rollout_tail_seconds",
     "rollout_tail_count",
     "policy_value_evaluation_seconds",
