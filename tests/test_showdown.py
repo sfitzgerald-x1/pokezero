@@ -1368,6 +1368,37 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertEqual(restored.boosts["p1"], {"atk": 2})
         self.assertEqual(restored.pending_baton_pass, ())
 
+    def test_snapshot_between_leech_seed_move_and_start_converges_with_live(self) -> None:
+        # Snapshot-vs-live convergence for the *inter-message* window: a snapshot taken after the
+        # |move| Leech Seed (which records the pending source) but before its matching |-start|
+        # (which consumes it) must restore the pending source, so the -start attributes the seed
+        # to p1 rather than falling to leechseed-source-unknown. Regression for the pending-map
+        # serialization gap (the map is transient and empty at decision boundaries, so this window
+        # is not hit in the live encode path, but snapshot-vs-live must still converge).
+        move_line = "|move|p1a: Bulbasaur|Leech Seed|p2a: Charizard"
+        start_line = "|-start|p2a: Charizard|move: Leech Seed"
+
+        parser = _ReplayParser()
+        parser.feed([move_line])
+        mid = parser.snapshot()
+        self.assertEqual(mid.pending_leech_seed_source_sides, {"p2": "p1"})
+
+        restored = _ReplayParser.from_snapshot(mid)
+        restored.feed([start_line])
+        restored_state = restored.snapshot()
+
+        live = parse_showdown_replay([move_line, start_line])
+
+        self.assertEqual(restored_state.leech_seed_source_sides, {"p2": "p1"})
+        self.assertEqual(restored_state.direct_materialization_blockers["p2"], ())
+        self.assertEqual(
+            restored_state.leech_seed_source_sides, live.leech_seed_source_sides
+        )
+        self.assertEqual(
+            restored_state.direct_materialization_blockers["p2"],
+            live.direct_materialization_blockers["p2"],
+        )
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.
