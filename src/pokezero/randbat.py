@@ -608,6 +608,26 @@ def _valid_gen3_move_combo(
         ):
             continue
         return False
+    # Zero-STAB fallback (teams.ts 264-279): if the set ends up with NO STAB-eligible move of any
+    # species type, the generator force-adds one whenever the movepool can still supply it. So a
+    # zero-STAB combo is only reachable when the movepool cannot supply a species-type STAB at that
+    # point — i.e. there is no non-Hidden-Power species STAB, and any Hidden-Power species STAB was
+    # culled by a different-typed Hidden Power already in this combo. This is what makes e.g.
+    # ``hypno: firepunch/protect/toxic/wish`` impossible (no checker forces Psychic at base SpA
+    # < 100, but the fallback still forces the movepool's Psychic STAB).
+    species_types = _species_types(species, species_metadata)
+    if species_types and not any(
+        _moves_have_stab_eligible(normalized_moves, species_type, move_metadata)
+        for species_type in species_types
+    ):
+        if _movepool_species_stab_eligible(
+            full_movepool, species_types, move_metadata, hidden_power=False
+        ):
+            return False
+        if not combo_has_hidden_power and _movepool_species_stab_eligible(
+            full_movepool, species_types, move_metadata, hidden_power=True
+        ):
+            return False
     return True
 
 
@@ -868,6 +888,24 @@ def _movepool_has_stab_eligible(
     return any(
         _is_stab_eligible(_normalize_move(move), species_type, move_metadata) for move in movepool
     )
+
+
+def _movepool_species_stab_eligible(
+    movepool: Sequence[str],
+    species_types: Sequence[str],
+    move_metadata: Mapping[str, Mapping[str, Any]],
+    *,
+    hidden_power: bool,
+) -> bool:
+    """Whether the movepool has a STAB-eligible move for ANY species type, restricted to Hidden
+    Power moves (``hidden_power=True``) or non-Hidden-Power moves (``hidden_power=False``)."""
+    for move in movepool:
+        move_id = _normalize_move(move)
+        if move_id.startswith("hiddenpower") != hidden_power:
+            continue
+        if any(_is_stab_eligible(move_id, species_type, move_metadata) for species_type in species_types):
+            return True
+    return False
 
 
 def _stab_only_via_hidden_power(

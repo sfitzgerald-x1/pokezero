@@ -381,6 +381,19 @@ STAB_RELAX_FIXTURE = {
             }
         ],
     },
+    # Psychic (base SpA 73 < 100 => Psychic checker does NOT fire), but the movepool has a
+    # non-Hidden-Power Psychic STAB (Psychic). Showdown's zero-STAB fallback forces that STAB, so a
+    # combo without any Psychic STAB (e.g. firepunch/protect/toxic/wish) is NOT generatable.
+    "hypno": {
+        "level": 84,
+        "sets": [
+            {
+                "role": "Bulky Support",
+                "movepool": ["firepunch", "protect", "psychic", "toxic", "wish"],
+                "abilities": ["Insomnia"],
+            }
+        ],
+    },
 }
 
 STAB_RELAX_MOVE_METADATA = {
@@ -400,12 +413,15 @@ STAB_RELAX_MOVE_METADATA = {
     "calmmind": {"type": "Psychic", "category": "Status", "basePower": 0},
     "healbell": {"type": "Normal", "category": "Status", "basePower": 0},
     "psychic": {"type": "Psychic", "category": "Special", "basePower": 90},
+    "protect": {"type": "Normal", "category": "Status", "basePower": 0},
+    "wish": {"type": "Normal", "category": "Status", "basePower": 0},
 }
 
 STAB_RELAX_SPECIES_METADATA = {
     "gengar": {"types": ["Ghost", "Poison"], "baseStats": {"spe": 110, "spa": 130}},
     "cradily": {"types": ["Rock", "Grass"], "baseStats": {"spe": 43, "spa": 81}},
     "chimecho": {"types": ["Psychic"], "baseStats": {"spe": 65, "spa": 95}},
+    "hypno": {"types": ["Psychic"], "baseStats": {"spe": 67, "spa": 73}},
 }
 
 
@@ -453,6 +469,16 @@ class Gen3RandbatStabRelaxationTest(unittest.TestCase):
     def test_setup_and_toxic_may_coexist(self) -> None:
         combos = self._combos(self._source(), "Chimecho")
         self.assertIn(frozenset({"calmmind", "psychic", "toxic", "hiddenpowerfire"}), combos)
+
+    def test_zero_stab_fallback_forces_a_species_stab_when_movepool_supplies_one(self) -> None:
+        # Hypno's Psychic checker is gated off (base SpA < 100), but the movepool has a non-HP
+        # Psychic STAB, so Showdown's zero-STAB fallback forces it. A zero-STAB combo must NOT
+        # survive, and every candidate must carry the Psychic STAB.
+        combos = self._combos(self._source(), "Hypno")
+        self.assertNotIn(frozenset({"firepunch", "protect", "toxic", "wish"}), combos)
+        self.assertTrue(combos)
+        for combo in combos:
+            self.assertIn("psychic", combo)
 
 
 @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "POKEZERO_SHOWDOWN_ROOT is not set")
