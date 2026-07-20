@@ -110,8 +110,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         parser.error(f"unknown scenario(s): {', '.join(unknown)}")
 
     # Curated fixtures deliberately exercise Gen 3 mechanics that are absent
-    # from the current randbat source. Keep their extra rows audit-local so the
-    # production checkpoint vocabulary and embedding shape stay unchanged.
+    # from the current randbat source. This audit-local vocabulary is never
+    # paired with a checkpoint, so its independently assigned row indices do
+    # not affect the production vocabulary or embedding shape.
     fixture_moves = tuple(
         move
         for name in sorted(names)

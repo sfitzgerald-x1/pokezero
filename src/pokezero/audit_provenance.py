@@ -20,6 +20,9 @@ _FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
 def public_repo_commit(repo_root: Path) -> str | None:
     """Return the injected source revision or the local checkout revision.
 
+    The injected value is a trusted image-build contract. Cluster launchers
+    must not override it with an arbitrary runtime environment value.
+
     An invalid injected value is never recorded as provenance. Complete-artifact
     validation can therefore fail closed instead of publishing an apparently
     source-pinned report.
