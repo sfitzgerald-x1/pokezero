@@ -1,6 +1,6 @@
 # Deep-Line Encoder Audit Report
 
-**Status:** Deep-line phase complete; deterministic coverage-enumeration implementation and full local source sweep complete. Final artifact capture, review, and report close-out remain.
+**Status:** Complete. The deep-line phase and deterministic coverage-enumeration phase have both been executed, independently reviewed, and recorded below.
 **Scope:** Read-only audit of the production Python observation encoder. This
 branch contains audit tooling and regression coverage only; it does not modify
 encoder, belief, transition, or engine-search behavior.
@@ -281,8 +281,9 @@ gap-fill remains mandatory behavior if a future source update leaves an atom
 uncovered by the two main passes.
 
 No new encoder or belief bug was confirmed by the exhaustive static source
-sweep. Final close-out requires committing the generated JSON evidence,
-independent review, and the permanent-gate/report completion audit.
+sweep. The generated JSON evidence is committed, the coverage implementation
+received an independent adversarial review, and the permanent-gate/report
+completion audit is complete.
 
 ## Runner Provenance
 
@@ -294,3 +295,26 @@ noise; it does not hide the defects or alter the encoder. The immutable shard
 already in flight retains its original configuration, while later shards will
 continue to record newly discovered signatures without repeated copies of the
 known set.
+
+## Completion Audit
+
+- Deep-line execution: 100 persistent random games, seven protocol cuts, and
+  17,963 decision boundaries. Confirmed findings and their actionable fixes are
+  recorded in the finding tables above; each newly confirmed bug was also
+  reported through Slack during execution.
+- Fresh-build enumeration: a clean Showdown build and source hash
+  `754b71cfed643fa0` produced 220/220 completed fixtures, zero findings, and
+  empty coverage-ledger sets for 220 species, 235 reachable species-ability
+  pairs, 125 source moves, and 13 source items. The committed JSON artifacts
+  preserve the machine-readable evidence and per-atom first coverage.
+- Verification: the merged-main focused audit suite passed 17 tests. Full
+  `unittest` discovery with the fresh Showdown root runs 90 tests but retains
+  one pre-existing, environment-sensitive bootstrap expectation: it assumes
+  `dex unavailable`, while the deliberately built checkout makes the Dex
+  available. This is unrelated to the audit changes and is not counted as a
+  green full-suite result.
+- Independent review: Claude Code adversarially reviewed PR #773, found no
+  blockers, and its Trace public-versus-native ability regression-test request
+  was added before merge.
+
+REPORT FINISHED
