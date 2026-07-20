@@ -63,7 +63,15 @@ _WEATHER_IDS = {
 # so the volatile alone is boost-only — never wrong, at worst incomplete if a
 # sampled world lacked the ability, which cannot happen for the mono-ability
 # Gen 3 randbats carriers nor for the request-known self side).
-_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire"})
+# ``attract`` needs no duration either (Gen 3 infatuation runs until the holder
+# switches or the source leaves — no countdown): the parser sets it on the
+# public ``-start``/``-activate move: Attract`` line and clears it on
+# ``-end``/switch, and the gen3 engine (patched:
+# ``third_party/poke-engine-gen3-attract.patch``) prices the 50%-per-turn move
+# immobilization as a chance branch. Source-leave is NOT tracked in-search, so
+# attract persists across the horizon even if the source switches out — a
+# bounded over-model in the immobilizing direction (docs/engine_fidelity_findings.md).
+_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire", "attract"})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {

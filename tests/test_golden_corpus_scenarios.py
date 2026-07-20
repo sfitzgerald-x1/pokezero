@@ -58,7 +58,10 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         from pokezero.golden_corpus_scenarios import run_scenario_fallback_sweep
 
         specs = {s.name: s for s in scenario_specs()}
-        chosen = [specs["truant_slaking"], specs["ditto_transform"], specs["baton_pass_boundary"]]
+        chosen = [
+            specs["truant_slaking"], specs["ditto_transform"],
+            specs["baton_pass_boundary"], specs["attract_snorlax"],
+        ]
         report = run_scenario_fallback_sweep(
             showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
             or "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
@@ -79,6 +82,17 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         )
         # The Baton Pass boundary must search straight through.
         self.assertEqual(report["baton_pass_boundary"]["fallback_decisions"], 0)
+        # Attract (free branch + paralysis composition) must SEARCH, not wall:
+        # the ``attract`` allow-list entry + the immobilization patch let every
+        # attracted decision construct worlds. Pre-fix these walled with
+        # ``volatile_unsupported: attract`` (a NON-known reason -> checked above).
+        attract = report["attract_snorlax"]
+        self.assertEqual(attract["fallback_decisions"], 0)
+        self.assertGreater(attract["searched_decisions"], 0)
+        self.assertFalse(
+            any("volatile_unsupported" in reason for reason in attract["world_failure_reasons"]),
+            attract["world_failure_reasons"],
+        )
 
     def test_item_state_scenarios_search_instead_of_failing_closed(self) -> None:
         # The Trick-swap current-item override + berry-consumption clearing:

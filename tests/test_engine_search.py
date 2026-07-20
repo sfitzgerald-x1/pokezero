@@ -138,6 +138,45 @@ class OwnSideSelectionTests(unittest.TestCase):
         self.assertEqual(self._run_seat("p2"), 1)  # surf, NOT p1's earthquake
 
 
+class AttractPatchFallbackTests(unittest.TestCase):
+    """A missing local patch must degrade safely, never search a no-op state."""
+
+    def test_missing_attract_patch_is_an_attributed_fallback(self) -> None:
+        import unittest.mock as mock
+
+        from pokezero.engine_world import EngineWorld
+        from pokezero.poke_engine_adapter import PokeEngineAttractUnsupportedError
+
+        module = mock.Mock()
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=module,
+            config=EngineMctsConfig(worlds=1, sample_retry_factor=1),
+        )
+        mask = (True, False, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, _candidates()))
+        world = EngineWorld(
+            spec=None,
+            slot_sides={"p1": "side_one", "p2": "side_two"},
+            party_species={"p1": (), "p2": ()},
+        )
+        with mock.patch(
+            "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+            return_value=(object(), None),
+        ), mock.patch("pokezero.engine_search.world_battle_spec", return_value=world), mock.patch(
+            "pokezero.engine_search.build_poke_engine_state",
+            side_effect=PokeEngineAttractUnsupportedError("missing patch"),
+        ):
+            decision = policy.select_action_with_context(context, rng=random.Random(0))
+
+        self.assertEqual(decision.metadata["engine_mcts"]["fallback"], "no_worlds_constructed")
+        self.assertEqual(
+            policy.stats.world_failure_reasons,
+            Counter({"attract_patch_unavailable": 1}),
+        )
+
+
 class FallbackTests(unittest.TestCase):
     def test_missing_public_state_falls_back_uniform_legal(self) -> None:
         policy = _policy()

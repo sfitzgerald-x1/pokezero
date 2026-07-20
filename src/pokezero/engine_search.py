@@ -48,7 +48,7 @@ from .determinization import (
 from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .randbat import canonical_gen3_randbat_species_id
-from .poke_engine_adapter import build_poke_engine_state
+from .poke_engine_adapter import PokeEngineAttractUnsupportedError, build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 
 _fallback_logger = logging.getLogger("pokezero.engine_search.fallback")
@@ -408,6 +408,13 @@ class EngineMctsPolicy:
                     rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
+            except PokeEngineAttractUnsupportedError:
+                # Upstream accepts ATTRACT but ignores its 50% Gen 3
+                # immobilization. The adapter proves the local patch before it
+                # permits a world; classify a missing patch as an attributed
+                # fallback instead of silently searching an optimistic state.
+                self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
+                continue
             except EngineWorldUnsupported as error:
                 key = error.reason
                 if key in (
