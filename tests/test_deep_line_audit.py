@@ -15,6 +15,7 @@ from pokezero.deep_line_audit import (
     protocol_cut_fixtures,
     census_protocol_cooccurrences,
 )
+from pokezero.golden_corpus_scenarios import interaction_registry_specs
 from pokezero.showdown import parse_showdown_replay
 
 
@@ -213,6 +214,14 @@ class DeepLineAuditDriverTests(unittest.TestCase):
 
         self.assertEqual(missing, 2)
         self.assertEqual(wrong, 2)
+
+    def test_interaction_registry_is_explicit_opt_in(self) -> None:
+        default = deep_line_audit_cli._available_scenarios(include_interaction_registry=False)
+        expanded = deep_line_audit_cli._available_scenarios(include_interaction_registry=True)
+        interaction_names = {spec.name for spec in interaction_registry_specs()}
+
+        self.assertFalse(interaction_names & default.keys())
+        self.assertTrue(interaction_names <= expanded.keys())
 
 
 if __name__ == "__main__":
