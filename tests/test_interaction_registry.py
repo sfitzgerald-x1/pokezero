@@ -138,7 +138,16 @@ class RegistryEncodingTests(unittest.TestCase):
         self.assertAlmostEqual(obs.numeric_features[tok][self.S.NUMERIC_BOOST_ATK], -1.0 / 6.0, places=4)
 
     def test_natural_cure_switch_clears_status_on_both_views_and_reentry(self) -> None:
-        self._drive("natural_cure_switch")
+        rounds = self._drive("natural_cure_switch")
+        toxic = self.vocab.encode("status:tox")
+        active_self = self.S.SELF_POKEMON_TOKEN_OFFSET
+        self.assertTrue(
+            any(
+                observation.categorical_ids[active_self][self.S.CATEGORY_SECONDARY] == toxic
+                for observation in rounds["p1"]
+            ),
+            "Toxic must land before the Natural Cure switch lifecycle is asserted",
+        )
         p1_state = self.env._state_for_player("p1")
         p2_state = self.env._state_for_player("p2")
         p1_starmie = next(mon for mon in p1_state.self_team if mon.species == "Starmie")
