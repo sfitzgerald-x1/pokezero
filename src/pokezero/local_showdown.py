@@ -185,14 +185,14 @@ class LocalShowdownConfig:
 
 
 @dataclass(frozen=True)
-class SearchSnapshotAnnotationCache:
-    """Branch-point annotation state for a determinized search snapshot.
+class SnapshotAnnotationCache:
+    """Incremental annotation state paired with a restorable local snapshot.
 
-    Root-PUCT visits restore the same sampled world many times. These trackers have
-    already folded its public prefix while building the search-choice cache, so each
-    visit starts from an independent clone and only consumes its branch suffix. The
-    cached tracker instances are never mutated after capture. Generic simulator
-    snapshots deliberately do not carry this search-only cache.
+    Restoring a snapshot must reproduce its public observation exactly. The Tier-2
+    and investment trackers record when each action was first assessed, so rebuilding
+    them from the final replay boundary can legitimately use more evidence and change
+    their output. Every snapshot therefore retains immutable tracker clones; search
+    restores receive independent clones before adding a branch suffix.
     """
 
     tier2_trackers: Mapping[PlayerId, Tier2LiveTracker] = field(default_factory=dict)
@@ -220,10 +220,9 @@ class LocalShowdownSnapshot:
     # world used for the branch. They avoid rebuilding public player state for
     # every repeated Root-PUCT visit without exposing data outside that world.
     search_choice_cache: Mapping[PlayerId, Mapping[int, str]] = field(default_factory=dict)
-    # Incremental public-evidence trackers paired with ``search_choice_cache``.
-    # Kept search-only so ordinary ``snapshot``/``restore`` behavior remains a
-    # from-scratch tracker rebuild.
-    search_annotation_cache: SearchSnapshotAnnotationCache | None = None
+    # Incremental public-evidence trackers needed to reproduce the observation at
+    # the snapshot boundary. These are independent of the optional search choices.
+    annotation_cache: SnapshotAnnotationCache | None = None
 
 
 @dataclass(frozen=True)
@@ -681,6 +680,7 @@ class LocalShowdownEnv:
             belief_engine=self._belief_engine.clone(),
             latest_turn=self._latest_turn,
             terminal=self._terminal,
+            annotation_cache=self._annotation_cache(),
         )
         if not include_search_choice_cache:
             return snapshot
@@ -689,12 +689,12 @@ class LocalShowdownEnv:
         # the shell to the exact paired snapshot so creating a search handle is
         # observationally side-effect-free for any caller that keeps using it.
         search_choice_cache = self._search_choice_cache()
-        search_annotation_cache = self._search_annotation_cache()
+        annotation_cache = self._annotation_cache()
         self._restore_local_snapshot_state(snapshot)
         return replace(
             snapshot,
             search_choice_cache=search_choice_cache,
-            search_annotation_cache=search_annotation_cache,
+            annotation_cache=annotation_cache,
         )
 
     def restore(self, snapshot: LocalShowdownSnapshot) -> None:
@@ -877,7 +877,7 @@ class LocalShowdownEnv:
         self._belief_engine = snapshot.belief_engine.clone()
         self._parsed_line_count = len(self._lines)
         self._belief_fed_count = len(snapshot.replay.public_events)
-        annotation_cache = snapshot.search_annotation_cache
+        annotation_cache = snapshot.annotation_cache
         if annotation_cache is None:
             self._tier2_trackers = {}
             self._investment_trackers = {}
@@ -946,10 +946,10 @@ class LocalShowdownEnv:
             }
         return cache
 
-    def _search_annotation_cache(self) -> SearchSnapshotAnnotationCache:
-        """Freeze the current public-prefix trackers for repeated search restores."""
+    def _annotation_cache(self) -> SnapshotAnnotationCache:
+        """Freeze tracker state so restoring a snapshot preserves its observation."""
 
-        return SearchSnapshotAnnotationCache(
+        return SnapshotAnnotationCache(
             tier2_trackers={
                 player: tracker.clone() for player, tracker in self._tier2_trackers.items()
             },

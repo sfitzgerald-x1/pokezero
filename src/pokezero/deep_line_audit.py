@@ -32,6 +32,8 @@ from .belief import PublicBattleBeliefEngine
 from .showdown import (
     CATEGORY_PRIMARY,
     CATEGORY_SECONDARY,
+    CATEGORY_TYPE_1,
+    CATEGORY_TYPE_2,
     CATEGORY_BELIEF_ABILITY_OFFSET,
     CATEGORY_BELIEF_ITEM_OFFSET,
     ACTION_CANDIDATE_TOKEN_OFFSET,
@@ -48,6 +50,16 @@ from .showdown import (
     NUMERIC_LEVEL,
     NUMERIC_PRESENT,
     NUMERIC_MOVE_PP_FRACTION,
+    NUMERIC_TIER2_CB_PINNED,
+    NUMERIC_TIER2_INVESTMENT_PINNED,
+    NUMERIC_TT_CB_BIT,
+    NUMERIC_TT_INVESTMENT_BIT,
+    NUMERIC_TT_RESIDUAL,
+    NUMERIC_TT_RESIDUAL_VALID,
+    NUMERIC_TM2_CB_BIT,
+    NUMERIC_TM2_INVESTMENT,
+    NUMERIC_TM2_RESIDUAL,
+    NUMERIC_TM2_RESIDUAL_VALID,
     NUMERIC_OPP_HAZARDS,
     NUMERIC_OPP_LIGHT_SCREEN_TURNS,
     NUMERIC_OPP_MIST_TURNS,
@@ -92,6 +104,30 @@ _PUBLIC_UNIT_INTERVAL_SLOTS = frozenset(
     }
 )
 _RANDBAT_COMPONENT_KINDS = ("species", "variant", "move", "ability", "item")
+_FORECAST_FORM_TYPE_FALLBACK = {
+    "castformsunny": ("Fire",),
+    "castformrainy": ("Water",),
+    "castformsnowy": ("Ice",),
+    "castform": ("Normal",),
+}
+# These fields are intentionally assessed at the first live observation after a
+# strike. A fresh batch fold sees the final boundary's strictly larger evidence
+# set, so equality is not a valid invariant for the corresponding history and
+# current-state projection columns.
+_LIVE_INCREMENTAL_ANNOTATION_COLUMNS = frozenset(
+    {
+        NUMERIC_TIER2_CB_PINNED,
+        NUMERIC_TIER2_INVESTMENT_PINNED,
+        NUMERIC_TT_RESIDUAL,
+        NUMERIC_TT_RESIDUAL_VALID,
+        NUMERIC_TT_CB_BIT,
+        NUMERIC_TT_INVESTMENT_BIT,
+        NUMERIC_TM2_RESIDUAL,
+        NUMERIC_TM2_RESIDUAL_VALID,
+        NUMERIC_TM2_CB_BIT,
+        NUMERIC_TM2_INVESTMENT,
+    }
+)
 
 
 def _normalize_randbat_component_move(value: str) -> str:
@@ -673,18 +709,27 @@ def audit_protocol_cut_fixture(fixture: ProtocolCutFixture, *, report: DeepLineA
         line = next(line for line in fixture.lines if line.startswith("|-formechange|"))
         parts = line.split("|")
         target = parts[2]
-        expected_species = _normalize_identifier(parts[3])
         slot = target[:2]
         active = replay.public_active.get(slot)
         _compare(
             report,
-            kind="protocol_formechange_identity",
+            kind="protocol_formechange_base_identity",
             player_id=slot,
             turn=turn,
             column=f"{slot}.active_species",
-            expected=expected_species,
+            expected=_normalize_identifier(target.split(": ", 1)[-1]),
             actual=_normalize_identifier(active.species) if active is not None else None,
-            detail="a public -formechange must update the replay active identity",
+            detail="Forecast retains Castform's base species while its live type changes",
+        )
+        _compare(
+            report,
+            kind="protocol_formechange_live_type",
+            player_id=slot,
+            turn=turn,
+            column=f"{slot}.live_type_override",
+            expected=f"forme:{parts[3].strip()}",
+            actual=replay.live_type_override.get(slot),
+            detail="a public -formechange must retain the form as a live type source",
         )
 
 
@@ -1091,6 +1136,7 @@ def _audit_snapshot_public_surface(
         return
     turn = int(snapshot.replay.turn_number)
     vocab = _category_vocab_for_env(env)
+    dex = load_showdown_dex_cached(env.config.resolved_showdown_root())
     _compare(
         report,
         kind="bridge_oracle",
@@ -1124,6 +1170,8 @@ def _audit_snapshot_public_surface(
             turn,
             vocab,
             report,
+            live_type_source=snapshot.replay.live_type_override.get(player_id),
+            dex=dex,
         )
     if opponent_side is not None:
         _audit_side_tokens(
@@ -1135,6 +1183,10 @@ def _audit_snapshot_public_surface(
             turn,
             vocab,
             report,
+            live_type_source=snapshot.replay.live_type_override.get(
+                "p2" if player_id == "p1" else "p1"
+            ),
+            dex=dex,
         )
 
 
@@ -1281,6 +1333,9 @@ def _audit_side_tokens(
     turn: int,
     vocab: CategoryVocabulary,
     report: DeepLineAuditReport,
+    *,
+    live_type_source: str | None,
+    dex: Any,
 ) -> None:
     raw_pokemon = tuple(item for item in side.get("pokemon", ()) if isinstance(item, Mapping))
     source_rows = source_team if isinstance(source_team, Sequence) and not isinstance(source_team, (str, bytes)) else ()
@@ -1353,6 +1408,9 @@ def _audit_side_tokens(
                 actual=_categorical(observation, token_index, CATEGORY_SECONDARY),
                 detail="public status category must match the simulator state",
             )
+        is_forecast_form = bool(
+            active and live_type_source and live_type_source.startswith("forme:")
+        )
         if not raw.get("transformed"):
             _compare(
                 report,
@@ -1360,10 +1418,51 @@ def _audit_side_tokens(
                 player_id=player_id,
                 turn=turn,
                 column=f"token[{token_index}].species",
-                expected=_encode_species_category(vocab, _raw_species(raw)),
+                expected=_encode_species_category(
+                    vocab, _raw_base_species(raw) if is_forecast_form else _raw_species(raw)
+                ),
                 actual=_categorical(observation, token_index, CATEGORY_PRIMARY),
                 detail="non-transformed species category must match the simulator state",
             )
+        if is_forecast_form and active:
+            expected_types = _forecast_form_types(dex, live_type_source)
+            if expected_types is None:
+                report.add(
+                    AuditFinding(
+                        kind="oracle_gap",
+                        player_id=player_id,
+                        turn=turn,
+                        column=f"token[{token_index}].forecast_type",
+                        expected="resolvable Forecast form type",
+                        actual=live_type_source,
+                        detail="the audit must resolve every public Forecast form before validating it",
+                    )
+                )
+            else:
+                _compare(
+                    report,
+                    kind="bridge_oracle",
+                    player_id=player_id,
+                    turn=turn,
+                    column=f"token[{token_index}].type1",
+                    expected=vocab.encode(f"type:{expected_types[0]}"),
+                    actual=_categorical(observation, token_index, CATEGORY_TYPE_1),
+                    detail="Forecast form must update the active type slot",
+                )
+                _compare(
+                    report,
+                    kind="bridge_oracle",
+                    player_id=player_id,
+                    turn=turn,
+                    column=f"token[{token_index}].type2",
+                    expected=(
+                        vocab.encode(f"type:{expected_types[1]}")
+                        if len(expected_types) > 1
+                        else vocab.encode("")
+                    ),
+                    actual=_categorical(observation, token_index, CATEGORY_TYPE_2),
+                    detail="Forecast form must update the active type slot",
+                )
         level = _raw_level(raw)
         if level is not None:
             _compare(
@@ -1455,7 +1554,8 @@ def _audit_incremental_vs_batch(
         turn=turn,
         expected=batch,
         actual=live,
-        detail="fresh replay/belief fold must match the incremental encoder state",
+        detail="fresh replay/belief fold must match the incremental encoder outside live-only annotations",
+        ignored_numeric_columns=_LIVE_INCREMENTAL_ANNOTATION_COLUMNS,
     )
 
 
@@ -1489,6 +1589,7 @@ def _compare_observation_arrays(
     expected: PokeZeroObservationV0,
     actual: PokeZeroObservationV0,
     detail: str,
+    ignored_numeric_columns: frozenset[int] = frozenset(),
 ) -> None:
     surfaces = (
         ("categorical_ids", expected.categorical_ids, actual.categorical_ids),
@@ -1498,7 +1599,12 @@ def _compare_observation_arrays(
         ("legal_action_mask", expected.legal_action_mask, actual.legal_action_mask),
     )
     for name, expected_value, actual_value in surfaces:
-        if expected_value == actual_value:
+        equal = expected_value == actual_value
+        if name == "numeric_features" and ignored_numeric_columns:
+            equal = _numeric_features_equal_except(
+                expected_value, actual_value, ignored_numeric_columns
+            )
+        if equal:
             continue
         report.add(
             AuditFinding(
@@ -1511,6 +1617,49 @@ def _compare_observation_arrays(
                 detail=detail,
             )
         )
+
+
+def _numeric_features_equal_except(
+    expected: Sequence[Sequence[float]],
+    actual: Sequence[Sequence[float]],
+    ignored_columns: frozenset[int],
+) -> bool:
+    """Compare numeric arrays while excluding documented live-only annotations."""
+
+    if len(expected) != len(actual):
+        return False
+    for expected_row, actual_row in zip(expected, actual):
+        if len(expected_row) != len(actual_row):
+            return False
+        if any(
+            expected_value != actual_value
+            for column, (expected_value, actual_value) in enumerate(zip(expected_row, actual_row))
+            if column not in ignored_columns
+        ):
+            return False
+    return True
+
+
+def _forecast_form_types(dex: Any, live_type_source: str) -> tuple[str, ...] | None:
+    """Resolve a public Forecast form independently from the production encoder.
+
+    The Gen 3 surface is deliberately small, but an audit must fail closed when a
+    public form cannot be interpreted. The dex is the primary authority; the
+    explicit fallback keeps the oracle live if a dex serialization omits Castform's
+    weather formes.
+    """
+
+    form = live_type_source.removeprefix("forme:").strip()
+    if not form:
+        return None
+    info = dex.species_info(form) if dex is not None else None
+    if info is None and dex is not None:
+        canonical = canonical_gen3_randbat_species_id(_normalize_identifier(form))
+        if canonical and canonical != _normalize_identifier(form):
+            info = dex.species_info(canonical)
+    if info is not None and info.types:
+        return tuple(info.types)
+    return _FORECAST_FORM_TYPE_FALLBACK.get(_normalize_identifier(form))
 
 
 def _serialized_battle(snapshot: LocalShowdownSnapshot) -> Mapping[str, Any] | None:

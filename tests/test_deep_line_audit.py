@@ -9,14 +9,31 @@ from pokezero.category_vocab import CategoryVocabulary
 from pokezero.deep_line_audit import (
     AuditFinding,
     DeepLineAuditReport,
+    _audit_side_tokens,
     _encode_species_category,
+    _forecast_form_types,
+    _numeric_features_equal_except,
     _raw_request_action_mask,
     _raw_side_condition_counts,
+    audit_protocol_cut_fixture,
     protocol_cut_fixtures,
     census_protocol_cooccurrences,
 )
+from pokezero.observation import PokeZeroObservationV0
 from pokezero.golden_corpus_scenarios import interaction_registry_specs
-from pokezero.showdown import parse_showdown_replay
+from pokezero.showdown import (
+    CATEGORY_PRIMARY,
+    CATEGORY_SECONDARY,
+    CATEGORY_TYPE_1,
+    CATEGORY_TYPE_2,
+    NUMERIC_ACTIVE,
+    NUMERIC_HP_FRACTION,
+    NUMERIC_LEGAL,
+    NUMERIC_PRESENT,
+    SELF_POKEMON_TOKEN_OFFSET,
+    V3_REPLAY_OBSERVATION_SPEC,
+    parse_showdown_replay,
+)
 
 
 _CLI_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "deep_line_audit.py"
@@ -84,6 +101,14 @@ class DeepLineAuditReportTest(unittest.TestCase):
             vocab.encode("species:deoxys-speed"),
         )
 
+    def test_numeric_comparison_can_exclude_live_only_annotations(self) -> None:
+        expected = ((0.0, 0.0, 1.0),)
+        annotation_only = ((0.0, 0.5, 1.0),)
+        public_difference = ((0.0, 0.5, 0.0),)
+
+        self.assertTrue(_numeric_features_equal_except(expected, annotation_only, frozenset({1})))
+        self.assertFalse(_numeric_features_equal_except(expected, public_difference, frozenset({1})))
+
     def test_known_finding_suppression_preserves_audit_incidence(self) -> None:
         report = DeepLineAuditReport(suppressed_kinds=frozenset({"known"}))
         report.add(
@@ -119,6 +144,69 @@ class DeepLineAuditReportTest(unittest.TestCase):
                 battle_id=f"battle-gen3randombattle-test-{fixture.name}",
             )
             self.assertGreater(len(replay.public_events), 1, fixture.name)
+
+    def test_forecast_fixture_keeps_base_species_and_records_live_type_source(self) -> None:
+        fixture = next(item for item in protocol_cut_fixtures() if item.name == "forecast_formechange")
+        report = DeepLineAuditReport()
+
+        audit_protocol_cut_fixture(fixture, report=report)
+
+        self.assertTrue(report.ok, report.findings)
+
+    def test_forecast_bridge_oracle_checks_base_species_and_live_type_slots(self) -> None:
+        vocab = CategoryVocabulary(tokens=("species:castform", "status:none", "type:water"))
+        spec = V3_REPLAY_OBSERVATION_SPEC
+        categorical = [[0] * spec.categorical_feature_count for _ in range(spec.token_count)]
+        numeric = [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+        token = SELF_POKEMON_TOKEN_OFFSET
+        categorical[token][CATEGORY_PRIMARY] = vocab.encode("species:castform")
+        categorical[token][CATEGORY_SECONDARY] = vocab.encode("status:none")
+        categorical[token][CATEGORY_TYPE_1] = vocab.encode("type:water")
+        categorical[token][CATEGORY_TYPE_2] = vocab.encode("")
+        numeric[token][NUMERIC_PRESENT] = 1.0
+        numeric[token][NUMERIC_ACTIVE] = 1.0
+        numeric[token][NUMERIC_LEGAL] = 1.0
+        numeric[token][NUMERIC_HP_FRACTION] = 1.0
+        observation = PokeZeroObservationV0(
+            categorical_ids=tuple(tuple(row) for row in categorical),
+            numeric_features=tuple(tuple(row) for row in numeric),
+            token_type_ids=tuple(0 for _ in range(spec.token_count)),
+            attention_mask=tuple(False for _ in range(spec.token_count)),
+            legal_action_mask=(False,) * 9,
+        )
+        dex = SimpleNamespace(species_info=lambda species: SimpleNamespace(types=("Water",)))
+        report = DeepLineAuditReport()
+
+        _audit_side_tokens(
+            observation,
+            {"pokemon": ({
+                "species": "Castform-Rainy",
+                "baseSpecies": "Castform",
+                "hp": 100,
+                "maxhp": 100,
+                "isActive": True,
+                "boosts": {},
+            },)},
+            SELF_POKEMON_TOKEN_OFFSET,
+            ({"species": "Castform"},),
+            "p1",
+            1,
+            vocab,
+            report,
+            live_type_source="forme:Castform-Rainy",
+            dex=dex,
+        )
+
+        self.assertTrue(report.ok, report.findings)
+        self.assertEqual(
+            _forecast_form_types(
+                SimpleNamespace(species_info=lambda _species: None), "forme: Castform-Rainy"
+            ),
+            ("Water",),
+        )
+        self.assertIsNone(
+            _forecast_form_types(SimpleNamespace(species_info=lambda _species: None), "forme: Missing")
+        )
 
     def test_raw_request_action_mask_handles_moves_trap_and_forced_switches(self) -> None:
         request = {

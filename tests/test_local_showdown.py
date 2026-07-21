@@ -2085,7 +2085,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             # for each perspective plus one assessed investment strike per tracker.
             env.step({"p1": 0, "p2": 0})
             snapshot = env.snapshot_for_search()
-            annotation_cache = snapshot.search_annotation_cache
+            annotation_cache = snapshot.annotation_cache
             self.assertIsNotNone(annotation_cache)
             assert annotation_cache is not None
             self.assertEqual(set(annotation_cache.tier2_trackers), {"p1", "p2"})
@@ -2359,7 +2359,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
         self.assertEqual(restored_suffix, expected_suffix)
 
-    def test_snapshot_restore_rebuilds_investment_trackers(self) -> None:
+    def test_snapshot_restore_preserves_investment_trackers(self) -> None:
         config = integration_config()
         assert config is not None
         config = replace(
@@ -2370,26 +2370,44 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         start_override = BattleStartOverride(
             player_teams={
                 "p1": pack_team(
-                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                    (
+                        FixturePokemon(
+                            species="Tauros",
+                            ability="Intimidate",
+                            moves=("Double-Edge", "Earthquake"),
+                            level=76,
+                        ),
+                    )
                 ),
                 "p2": pack_team(
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                    (
+                        FixturePokemon(
+                            species="Snorlax",
+                            ability="Immunity",
+                            moves=("Body Slam", "Earthquake"),
+                            level=71,
+                        ),
+                    )
                 ),
             },
+            observation_format_id="gen3randombattle",
         )
 
         with LocalShowdownEnv(config) as env:
             env.reset_with_start_override(seed=19, start_override=start_override)
+            env.step({"p1": 0, "p2": 0})
             env.observe("p1")
             self.assertIn("p1", env._investment_trackers)
+            self.assertTrue(env._tier2_trackers["p1"]._residuals)
+            self.assertTrue(env._investment_trackers["p1"]._state.strikes)
             snapshot = env.snapshot()
+            before_restore = env.observe("p1")
             env.step({"p1": 0, "p2": 0})
             self.assertIn("p1", env._investment_trackers)
 
             env.restore(snapshot)
-            self.assertEqual(env._investment_trackers, {})
-            env.observe("p1")
             self.assertIn("p1", env._investment_trackers)
+            self.assertEqual(env.observe("p1"), before_restore)
 
     def test_snapshot_restore_after_terminal_branch_keeps_stream_usable(self) -> None:
         config = integration_config()
