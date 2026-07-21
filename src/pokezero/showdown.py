@@ -433,7 +433,17 @@ NUMERIC_TM2_FAIL = V3_NUMERIC_BASE + 1
 # there is deliberately no freeze twin (it would be a dead column).
 NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF = V3_NUMERIC_BASE + 2
 NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_NUMERIC_BASE + 3
-V3_NUMERIC_EXTRA = 4
+# Change 3 — the consecutive-stall counter on each side's ACTIVE pokemon token (predictive
+# current-state, written like NUMERIC_TOXIC_STAGE — a per-slot public scalar on the active mon,
+# NOT the field token). One per-side counter = consecutive SUCCESSFUL stall-move uses
+# (Protect/Detect/Endure, which gen3 shares through a single ``stall`` volatile; engine ground
+# truth data/conditions.ts:439-462, where a failed stall deletes the volatile). Incremented on
+# the success-only ``-singleturn`` tag and reset on a failed stall / non-stall move / cant /
+# switch-out / faint (the five public mirrors of the engine's volatile deletion). Value is
+# ``min(1.0, count / 8.0)``; derived ONLY from public protocol lines, so both players compute
+# both sides' counters. Schema >= v3 only; sits above the v2.2 census so legacy modes stay frozen.
+NUMERIC_STALL_COUNTER = V3_NUMERIC_BASE + 4
+V3_NUMERIC_EXTRA = 5
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -637,6 +647,17 @@ class ShowdownReplayState:
     # ``-curestatus … slp`` and faint; switch-out does NOT clear (sleep persists and is public
     # on revealed mons). Derived ONLY from public protocol lines — no engine-side hidden state.
     induced_sleep_victims: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Public consecutive-stall counter (spec v3, docs/observation_v3_spec.md change 3): per side,
+    # the number of consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3 shares
+    # one ``stall`` volatile; engine ground truth data/conditions.ts:439-462) by that side's
+    # currently-active mon. Incremented on the success-only ``-singleturn`` tag; reset to 0 on a
+    # failed stall, any non-stall move, ``cant``, switch-out/drag, or faint. ``stall_move_pending``
+    # is the transient per-side "a stall move is in flight this action window" flag (set on a
+    # stall ``|move|``, consumed by its ``-singleturn``/``-fail``) that distinguishes reset cause
+    # (1) — a failed stall — from an unrelated ``-fail``; serialized so a mid-window resume
+    # converges. Both derived ONLY from public protocol lines — no engine-side hidden state.
+    stall_counter: Mapping[str, int] = field(default_factory=dict)
+    stall_move_pending: Mapping[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -722,6 +743,12 @@ class PlayerRelativeBattleState:
     # induced (our sleep-inducing moves will fail); opponent_* is the symmetric bit.
     self_sleep_clause_blocks: bool = False
     opponent_sleep_clause_blocks: bool = False
+    # ---- spec v3 change 3: consecutive-stall counter (docs/observation_v3_spec.md). Public
+    # count of consecutive SUCCESSFUL stall-move uses by each side's ACTIVE mon (Protect/Detect/
+    # Endure), from the _ReplayParser tracker. Encoded on the active pokemon token (like
+    # NUMERIC_TOXIC_STAGE) as min(1.0, count / 8.0) under schema >= v3 only.
+    self_stall_counter: int = 0
+    opponent_stall_counter: int = 0
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -773,6 +800,10 @@ class _ReplayParser:
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
+        # Public consecutive-stall counter (spec v3 change 3) + its transient in-flight flag.
+        # See ShowdownReplayState.stall_counter / stall_move_pending.
+        self.stall_counter: dict[str, int] = {"p1": 0, "p2": 0}
+        self.stall_move_pending: dict[str, bool] = {"p1": False, "p2": False}
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
@@ -818,6 +849,12 @@ class _ReplayParser:
         }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
+        }
+        parser.stall_counter = {
+            slot: int(snapshot.stall_counter.get(slot, 0)) for slot in ("p1", "p2")
+        }
+        parser.stall_move_pending = {
+            slot: bool(snapshot.stall_move_pending.get(slot, False)) for slot in ("p1", "p2")
         }
         return parser
 
@@ -897,6 +934,11 @@ class _ReplayParser:
                     self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
+                # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
+                # clears on switch/faint); switch-out/drag is reset cause (4). Clear the in-flight
+                # flag too so no stale stall move carries onto the replacement.
+                self.stall_counter[pokemon.showdown_slot] = 0
+                self.stall_move_pending[pokemon.showdown_slot] = False
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
                 # the mon that just left the slot: both revert to base type on switch-out, and a
                 # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
@@ -944,6 +986,7 @@ class _ReplayParser:
         _update_toxic_stage(parts, self.toxic_stage)
         _flag_baton_pass(parts, self.pending_baton_pass)
         self._update_induced_sleep(parts, line)
+        self._update_stall_counter(parts)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
 
@@ -1201,6 +1244,61 @@ class _ReplayParser:
                 for victims in self.induced_sleep_victims.values():
                     victims.discard(key)
 
+    def _update_stall_counter(self, parts: Sequence[str]) -> None:
+        """Public consecutive-stall counter (spec v3 change 3, docs/observation_v3_spec.md).
+
+        One per-side counter = consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure —
+        gen3 shares a single ``stall`` volatile across all three; engine ground truth
+        ``data/conditions.ts:439-462``, where ``onStallMove`` deletes the volatile on a
+        ``randomChance`` failure, so the counter is a consecutive-success streak) by that side's
+        currently-active mon. Reproduces that semantics from PUBLIC lines only:
+
+        - INCREMENT on the success-only ``-singleturn`` tag. Protect/Detect share
+          ``volatileStatus: 'protect'`` -> ``|-singleturn|SLOT|Protect``; Endure ->
+          ``|-singleturn|SLOT|move: Endure``. These fire ONLY on success (a failed stall emits
+          ``-fail`` and no ``-singleturn``). Focus Punch / Magic Coat / Snatch also use
+          ``-singleturn`` but normalize to other names and are excluded.
+        - RESET to 0 on the five public mirrors of the engine's volatile deletion: (1) a
+          ``-fail`` closing a stall move's action window (``stall_move_pending`` set by that
+          move's ``|move|`` line); (2) any non-stall ``|move|`` by the mon; (3) ``cant``;
+          (4) switch-out/drag (handled in the switch block, mirroring the toxic-stage reset);
+          (5) faint.
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type == "-singleturn" and len(parts) >= 4:
+            slot = _slot_from_ident(parts[2])
+            if slot in self.stall_counter and _is_stall_singleturn(parts[3]):
+                self.stall_counter[slot] = min(_STALL_COUNTER_CAP, self.stall_counter[slot] + 1)
+                self.stall_move_pending[slot] = False
+            return
+        if event_type == "move" and len(parts) >= 4:
+            slot = _slot_from_ident(parts[2])
+            if slot in self.stall_counter:
+                if _normalize_identifier(parts[3]) in _STALL_MOVE_IDS:
+                    # A stall move is in flight; its ``-singleturn`` (success) or ``-fail``
+                    # (failure) resolves the counter. Do NOT reset here — that would zero a
+                    # climbing streak on every successful consecutive Protect.
+                    self.stall_move_pending[slot] = True
+                else:
+                    # Any non-stall move breaks the consecutive-stall streak (reset cause 2).
+                    self.stall_counter[slot] = 0
+                    self.stall_move_pending[slot] = False
+            return
+        if event_type == "-fail" and len(parts) >= 3:
+            slot = _slot_from_ident(parts[2])
+            if slot in self.stall_counter and self.stall_move_pending.get(slot):
+                # The in-flight stall move failed (the ``randomChance`` miss that deletes the
+                # ``stall`` volatile) — reset cause (1).
+                self.stall_counter[slot] = 0
+                self.stall_move_pending[slot] = False
+            return
+        if event_type in {"cant", "faint"} and len(parts) >= 3:
+            slot = _slot_from_ident(parts[2])
+            if slot in self.stall_counter:
+                # cant / faint (reset causes 3 and 5).
+                self.stall_counter[slot] = 0
+                self.stall_move_pending[slot] = False
+
     def snapshot(self) -> ShowdownReplayState:
         return ShowdownReplayState(
             battle_id=self.battle_id,
@@ -1241,6 +1339,8 @@ class _ReplayParser:
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
             },
+            stall_counter=dict(self.stall_counter),
+            stall_move_pending=dict(self.stall_move_pending),
         )
 
 
@@ -1407,6 +1507,8 @@ def normalize_for_player(
         opponent_sleep_clause_used=sleep_clause_holders.get(opponent_slot) is not None,
         self_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(showdown_slot)),
         opponent_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(opponent_slot)),
+        self_stall_counter=int(replay.stall_counter.get(showdown_slot, 0)),
+        opponent_stall_counter=int(replay.stall_counter.get(opponent_slot, 0)),
     )
 
 
@@ -1584,10 +1686,12 @@ def observation_from_player_state(
         active_boosts=state.self_active_boosts,
         active_volatiles=state.self_active_volatiles,
         active_toxic_stage=state.self_toxic_stage,
+        active_stall_counter=state.self_stall_counter,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
+        schema_v3=schema_v3,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
     tendency_by_species = (
@@ -1609,6 +1713,7 @@ def observation_from_player_state(
         active_boosts=state.opponent_active_boosts,
         active_volatiles=state.opponent_active_volatiles,
         active_toxic_stage=state.opponent_toxic_stage,
+        active_stall_counter=state.opponent_stall_counter,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -1619,6 +1724,7 @@ def observation_from_player_state(
         },
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
+        schema_v3=schema_v3,
         tier2_cb_pinned_species=tier2_cb_pinned_species,
         tier2_investment_pinned=tier2_investment_pinned,
     )
@@ -1925,6 +2031,28 @@ _PARTIAL_TRAP_MOVES = frozenset({"wrap", "bind", "clamp", "firespin", "whirlpool
 # only reachable member (Grudge/Rage are -singlemove emitters but their moves are not in
 # the gen3 randbats pool); Focus Punch's focus is ``-singleturn`` and is NOT tracked here.
 _SINGLEMOVE_VOLATILES = frozenset({"destinybond", "grudge"})
+# Gen 3 stall moves (spec v3 change 3): all three set ``stallingMove: true`` and share the ONE
+# ``stall`` volatile (``data/moves.ts`` protect 13960 / detect 3523 / endure 4802). Pool
+# reachability in ``data/random-battles/gen3/sets.json``: protect (43 species) and endure (4)
+# are reachable; detect is NOT (0 species) but shares the ``protect`` volatile, so it is handled
+# for correctness. Used to decide, on a ``|move|`` line, whether the streak continues (stall) or
+# breaks (non-stall reset).
+_STALL_MOVE_IDS = frozenset({"protect", "detect", "endure"})
+# Streak saturates the ``min(1.0, count / 8.0)`` encoding at 8; cap the stored value there so a
+# pathological log cannot grow it without bound (mirrors the toxic-stage clamp).
+_STALL_COUNTER_CAP = 8
+
+
+def _is_stall_singleturn(tag: str) -> bool:
+    """True for a stall move's success-only ``-singleturn`` tag.
+
+    Protect/Detect emit ``|-singleturn|SLOT|Protect``; Endure emits
+    ``|-singleturn|SLOT|move: Endure`` (verified in the vendored data/moves.ts onStart lines).
+    Strip any ``move:`` prefix and normalize: ``Protect`` -> ``protect``, ``move: Endure`` ->
+    ``endure``. Other ``-singleturn`` users (Focus Punch, Magic Coat, Snatch) normalize to other
+    names and are correctly excluded.
+    """
+    return _normalize_identifier(tag.split(":", 1)[-1]) in {"protect", "endure"}
 
 
 def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> None:
@@ -2706,12 +2834,14 @@ def _encode_pokemon_tokens(
     active_boosts: Mapping[str, int] | None = None,
     active_volatiles: Sequence[str] = (),
     active_toxic_stage: int = 0,
+    active_stall_counter: int = 0,
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
     transform_targets_by_species: Mapping[str, ShowdownPokemon] | None = None,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
     schema_v2_1: bool = False,
+    schema_v3: bool = False,
     tier2_cb_pinned_species: frozenset[str] = frozenset(),
     tier2_investment_pinned: Mapping[str, float] | None = None,
 ) -> None:
@@ -2811,6 +2941,11 @@ def _encode_pokemon_tokens(
             _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
             if active_toxic_stage:
                 _set_numeric(numeric_features[token_index], NUMERIC_TOXIC_STAGE, min(1.0, active_toxic_stage / 15.0))
+            # Spec v3 change 3: the public consecutive-stall counter, written on the ACTIVE mon
+            # like the toxic stage above. Schema-gated so the column does not even exist below the
+            # v3 census, keeping v2.2 output byte-identical.
+            if schema_v3 and active_stall_counter:
+                _set_numeric(numeric_features[token_index], NUMERIC_STALL_COUNTER, min(1.0, active_stall_counter / 8.0))
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
