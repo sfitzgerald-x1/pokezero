@@ -277,15 +277,29 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         write_json(
             inventory / "inventory.json",
             {
-                "schema_version": "pokezero.protocol-emission-inventory.v2",
-                "engine_emittable": {"tag_count": 8},
-                "consumer_dispatch": {"tag_count": 7},
+                "schema_version": "pokezero.protocol-emission-inventory.v3",
+                "engine_emittable": {
+                    "tag_count": 8,
+                    "unresolved_emission_count": 0,
+                    "canonical_complete": True,
+                },
+                "consumer_dispatch": {
+                    "tag_count": 7,
+                    "unresolved_dispatch_count": 0,
+                    "canonical_complete": True,
+                },
                 "differential": {
                     "observed_but_unconsumed": [],
                     "observed_but_unconsumed_unclassified": [],
                     "observed_signatures_without_semantic_coverage": [],
                     "emittable_but_unobserved": [],
                     "consumer_not_emittable": [],
+                    "emittable_signatures_without_consumer": [],
+                    "emittable_signatures_but_unobserved": [],
+                    "observed_signatures_not_statically_emittable": [],
+                    "observed_signatures_with_unresolved_engine_source": [],
+                    "consumer_exact_signatures_not_statically_emittable": [],
+                    "consumer_exact_signatures_with_unresolved_engine_source": [],
                 },
                 "observed": {
                     "tag_count": 7,
@@ -297,6 +311,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                             ),
                         }
                     ],
+                    "learned_policy_census": {"status": "present"},
                 },
                 "audit_provenance": provenance(
                     command=["scripts/protocol_emission_inventory.py", "--out", "/shared/private/inventory.json"]
@@ -312,6 +327,8 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                 "observed_tag_count": 7,
                 "observed_but_unconsumed_count": 0,
                 "observed_but_unconsumed_unclassified_count": 0,
+                "unresolved_engine_emission_count": 0,
+                "unresolved_consumer_dispatch_count": 0,
                 "inventory_sha256": hashlib.sha256(
                     (inventory / "inventory.json").read_bytes()
                 ).hexdigest(),
@@ -553,6 +570,33 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     output=root / "public" / "summary.json",
                 )
 
+    def test_sanitizes_observed_census_kind_without_retaining_paths(self):
+        command = PUBLISHER._public_command(
+            [
+                "scripts/protocol_emission_inventory.py",
+                "--observed-audit",
+                "/shared/private/census.json",
+                "--observed-kind",
+                "learned-selfplay",
+                "--out",
+                "/shared/private/inventory.json",
+            ],
+            label="inventory command",
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "scripts/protocol_emission_inventory.py",
+                "--observed-audit",
+                "<artifact-path>",
+                "--observed-kind",
+                "learned-selfplay",
+                "--out",
+                "<artifact-path>",
+            ],
+        )
+
     def test_rejects_unsafe_uncovered_atom_before_publication(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -665,7 +709,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     output=root / "public" / "summary.json",
                 )
 
-    def test_publishes_clean_inventory_with_informational_census_deltas(self):
+    def test_rejects_clean_inventory_with_unresolved_emission_or_consumer_deltas(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             inventory = self._inventory_root(root)
@@ -681,17 +725,41 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             complete["inventory_sha256"] = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
             write_json(complete_path, complete)
 
-            result = PUBLISHER.publish(
-                coverage_root=self._coverage_root(root),
-                silent_root=self._silent_root(root),
-                collision_root=self._collision_root(root),
-                inventory_root=inventory,
-                output=root / "public" / "summary.json",
-            )
+            with self.assertRaisesRegex(ValueError, "disagrees with its validated counters"):
+                PUBLISHER.publish(
+                    coverage_root=self._coverage_root(root),
+                    silent_root=self._silent_root(root),
+                    collision_root=self._collision_root(root),
+                    inventory_root=inventory,
+                    output=root / "public" / "summary.json",
+                )
 
-        protocol_inventory = result["layers"]["protocol_inventory"]
-        self.assertEqual(protocol_inventory["status"], "clean")
-        self.assertEqual(protocol_inventory["emittable_but_unobserved_count"], 1)
+    def test_rejects_clean_inventory_with_canonical_or_learned_census_gaps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = self._inventory_root(root)
+            inventory_path = inventory / "inventory.json"
+            payload = json.loads(inventory_path.read_text(encoding="utf-8"))
+            payload["engine_emittable"]["canonical_complete"] = False
+            payload["engine_emittable"]["unresolved_emission_count"] = 1
+            payload["observed"]["learned_policy_census"] = {
+                "status": "unavailable-no-trained-v3-checkpoint"
+            }
+            write_json(inventory_path, payload)
+            complete_path = inventory / "complete.json"
+            complete = json.loads(complete_path.read_text(encoding="utf-8"))
+            complete["unresolved_engine_emission_count"] = 1
+            complete["inventory_sha256"] = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+            write_json(complete_path, complete)
+
+            with self.assertRaisesRegex(ValueError, "disagrees with its validated counters"):
+                PUBLISHER.publish(
+                    coverage_root=self._coverage_root(root),
+                    silent_root=self._silent_root(root),
+                    collision_root=self._collision_root(root),
+                    inventory_root=inventory,
+                    output=root / "public" / "summary.json",
+                )
 
     def test_rejects_mixed_observed_census_provenance_before_publication(self):
         with tempfile.TemporaryDirectory() as temp:

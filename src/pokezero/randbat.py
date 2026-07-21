@@ -16,10 +16,23 @@ from .belief import CandidateSetSummary
 
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
-# v5: source identity includes the resolved Gen 3 Dex metadata used to enumerate legal move
-# combinations. The variant universe depends on that metadata, not only sets.json and teams.js;
-# omitting it let different built Showdown trees share a cache/provenance hash.
-_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v5"
+# v6: source identity includes the resolved Gen 3 Dex metadata and the bounded
+# simulator surface that determines protocol emissions and state mutations. An
+# audit cannot claim to pin engine behavior from the random-battle generator
+# alone.
+_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v6"
+_AUDIT_ENGINE_RELATIVE_PATHS = (
+    "sim",
+    "data/mods/gen3",
+    "data/abilities.ts",
+    "data/items.ts",
+    "data/moves.ts",
+    "dist/sim",
+    "dist/data/mods/gen3",
+    "dist/data/abilities.js",
+    "dist/data/items.js",
+    "dist/data/moves.js",
+)
 _UNOWN_COSMETIC_FORM_SUFFIXES = frozenset("abcdefghijklmnopqrstuvwxyz") | {"exclamation", "question"}
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
 SPECIAL_TYPES = {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}
@@ -237,7 +250,10 @@ class Gen3RandbatSource:
             )
         move_metadata, species_metadata = _load_showdown_metadata(root)
         source_hash = _source_hash(
-            (path for path in (sets_path, source_generator_path, dist_generator_path) if path.exists()),
+            _audit_source_paths(
+                root,
+                (sets_path, source_generator_path, dist_generator_path),
+            ),
             resolved_metadata={"moves": move_metadata, "species": species_metadata},
         )
         metadata = RandbatSourceMetadata(
@@ -1003,6 +1019,24 @@ console.log(JSON.stringify(out));
         moves if isinstance(moves, dict) else {},
         species if isinstance(species, dict) else {},
     )
+
+
+def _audit_source_paths(root: Path, primary_paths: Iterable[Path]) -> tuple[Path, ...]:
+    """Return the random-battle and simulator files that define audit behavior."""
+
+    paths = {path for path in primary_paths if path.exists()}
+    for relative in _AUDIT_ENGINE_RELATIVE_PATHS:
+        candidate = root / relative
+        if candidate.is_file():
+            paths.add(candidate)
+        elif candidate.is_dir():
+            paths.update(
+                path
+                for suffix in ("*.ts", "*.js")
+                for path in candidate.rglob(suffix)
+                if path.is_file()
+            )
+    return tuple(sorted(paths, key=lambda path: str(path)))
 
 
 def _source_hash(

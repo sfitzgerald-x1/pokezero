@@ -83,7 +83,9 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             encoding="utf-8",
         )
         (showdown / "data" / "moves.ts").write_text(
-            "// this.add('-commented-out', pokemon);\nthis.add('-miss', pokemon);\n",
+            "// this.add('-commented-out', pokemon);\n"
+            "const sample = \"this.add('-inside-string', pokemon)\";\n"
+            "this.add('-miss', pokemon);\n",
             encoding="utf-8",
         )
         for relative, text in {
@@ -107,6 +109,126 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertEqual(emissions["-fail"][0].evidence, "gen3-module")
         self.assertEqual(emissions["move"][0].evidence, "shared-simulator")
         self.assertNotIn("-commented-out", emissions)
+        self.assertNotIn("-inside-string", emissions)
+
+    def test_canonical_differential_detects_subtype_mismatch_and_dynamic_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            showdown, public = self._fixture_roots(Path(temporary))
+            report = build_protocol_inventory(showdown_root=showdown, public_root=public)
+
+        engine_signatures = {
+            row["signature"] for row in report["engine_emittable"]["canonical_signatures"]
+        }
+        self.assertIn("-activate:bide", engine_signatures)
+        self.assertIn("cant:slp", engine_signatures)
+        self.assertNotIn("move", engine_signatures)
+        self.assertFalse(report["engine_emittable"]["canonical_complete"])
+        self.assertEqual(
+            [
+                (row["tag"], row["reason"])
+                for row in report["engine_emittable"]["unresolved_emissions"]
+            ],
+            [("move", "dynamic-payload")],
+        )
+
+        consumer_signatures = {
+            row["signature"]: row["kind"]
+            for row in report["consumer_dispatch"]["canonical_signatures"]
+        }
+        self.assertEqual(consumer_signatures["cant:*"], "pattern")
+        self.assertEqual(consumer_signatures["-activate:protect"], "exact")
+        mismatch = report["differential"]["emittable_signatures_without_consumer"]
+        self.assertIn("-activate:bide", mismatch)
+        self.assertNotIn("cant:slp", mismatch)
+
+    def test_observed_census_kinds_require_a_one_to_one_public_provenance_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            showdown, public = self._fixture_roots(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "one entry per observed audit"):
+                build_protocol_inventory(
+                    showdown_root=showdown,
+                    public_root=public,
+                    observed_audits=(Path("fixture.json"),),
+                    observed_census_kinds=("fixture", "learned-selfplay"),
+                )
+
+    def test_empty_learned_census_cannot_claim_presence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            showdown, public = self._fixture_roots(root)
+            observed = root / "empty-learned-census.json"
+            observed.write_text(
+                json.dumps(
+                    {
+                        "protocol_signature_schema_version": "pokezero.protocol-signature-census.v2",
+                        "protocol_signatures": {},
+                        "audit_provenance": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = build_protocol_inventory(
+                showdown_root=showdown,
+                public_root=public,
+                observed_audits=(observed,),
+                observed_census_kinds=("learned-selfplay",),
+            )
+
+        self.assertEqual(
+            report["observed"]["learned_policy_census"]["status"],
+            "empty-learned-v3-census",
+        )
+        self.assertEqual(
+            report["observed"]["census_input_kinds"],
+            [{"kind": "learned-selfplay", "artifact_count": 1, "observed_signature_count": 0}],
+        )
+
+    def test_dynamic_tag_is_reported_without_source_expression(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            showdown, public = self._fixture_roots(root)
+            (showdown / "sim" / "dynamic.ts").write_text(
+                "this.add(eventType, pokemon, privatePayload);\n",
+                encoding="utf-8",
+            )
+            report = build_protocol_inventory(showdown_root=showdown, public_root=public)
+
+        dynamic = [
+            row
+            for row in report["engine_emittable"]["unresolved_emissions"]
+            if row["reason"] == "dynamic-tag"
+        ]
+        self.assertEqual(len(dynamic), 1)
+        self.assertIsNone(dynamic[0]["tag"])
+        self.assertNotIn("expression", dynamic[0])
+        self.assertEqual(dynamic[0]["source_location"]["path"], "sim/dynamic.ts")
+
+    def test_static_scanner_reports_multiline_and_unparseable_calls_without_source_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            showdown, public = self._fixture_roots(root)
+            (showdown / "sim" / "edge-calls.ts").write_text(
+                "this.add(\n"
+                "  '-activate',\n"
+                "  pokemon,\n"
+                "  'move: Bide',\n"
+                ");\n"
+                "this.add(`dynamic-tag`, pokemon);\n"
+                "this.add('-fail', (pokemon);\n",
+                encoding="utf-8",
+            )
+            report = build_protocol_inventory(showdown_root=showdown, public_root=public)
+
+        signatures = {
+            row["signature"] for row in report["engine_emittable"]["canonical_signatures"]
+        }
+        self.assertIn("-activate:bide", signatures)
+        unresolved = report["engine_emittable"]["unresolved_emissions"]
+        self.assertEqual(
+            {row["reason"] for row in unresolved},
+            {"dynamic-payload", "dynamic-tag", "unparseable-call"},
+        )
+        self.assertTrue(all("expression" not in row for row in unresolved))
 
     def test_differential_keeps_observed_frequency_and_consumer_scope_separate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

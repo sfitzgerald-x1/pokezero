@@ -9,7 +9,12 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.belief import PublicBattleBeliefEngine
-from pokezero.randbat import Gen3RandbatSource, _source_hash, load_gen3_randbat_source_cached
+from pokezero.randbat import (
+    Gen3RandbatSource,
+    _audit_source_paths,
+    _source_hash,
+    load_gen3_randbat_source_cached,
+)
 from pokezero.showdown import parse_showdown_replay
 
 
@@ -138,6 +143,28 @@ class Gen3RandbatSourceTest(unittest.TestCase):
         )
 
         self.assertNotEqual(base, changed)
+
+    def test_audit_source_hash_covers_simulator_emission_surface(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        sets = root / "data" / "random-battles" / "gen3" / "sets.json"
+        generator = root / "data" / "random-battles" / "gen3" / "teams.ts"
+        simulator = root / "sim" / "battle.ts"
+        for path in (sets, generator, simulator):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        sets.write_text('{"fixture": true}', encoding="utf-8")
+        generator.write_text("export const fixture = true;\n", encoding="utf-8")
+        simulator.write_text("this.add('-damage');\n", encoding="utf-8")
+
+        def source_hash() -> str:
+            return _source_hash(
+                _audit_source_paths(root, (sets, generator)),
+                resolved_metadata={"moves": {}, "species": {}},
+            )
+
+        before = source_hash()
+        simulator.write_text("this.add('-heal');\n", encoding="utf-8")
+        self.assertNotEqual(before, source_hash())
 
     def test_process_cache_invalidates_when_same_showdown_root_is_rebuilt(self) -> None:
         # Workers can outlive a Showdown rebuild. The object cache must follow the runtime input
