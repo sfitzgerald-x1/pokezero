@@ -288,6 +288,47 @@ the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
   byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
   so every legacy mode stays byte-frozen.
 
+## Change 8 — Mean Look / Spider Web move-trap
+
+The switch-lock from Mean Look (Misdreavus) and Spider Web (Ariados) is public
+and decision-critical (it is what makes a perish-trap or a slow sweep work), yet
+it had no encoding. It is a DISTINCT mechanic from the Wrap partial-trap (Change
+6): Wrap pins *and* chips 1/16 a turn via the `partiallytrapped` volatile, while
+Mean Look pins with no residual via the `trapped` volatile — and distinct again
+from the trap-ability signal (`NUMERIC_TRAPPER_ALIVE`, Shadow Tag / Arena Trap /
+Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
+
+- One 0/1 numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
+  `meanlook_trap` at `V3_NUMERIC_BASE + 10` = "this mon is switch-locked by an
+  opposing Mean Look / Spider Web."
+- **Gen3 mechanic (verified against the vendored data + poke-engine):** both
+  moves run `target.addVolatile('trapped', source, move, 'trapper')`
+  (`data/moves.ts`; the gen3 mod does not override them). The base
+  `data/conditions.ts` `trapped` volatile is `noCopy` (never Baton-Pass-copied),
+  has an `onStart` that emits `|-activate|SLOT|trapped` (the volatile id, no
+  `[of]`, no move prefix), and has **NO `onEnd`** — so no protocol line marks the
+  trap's end. It is linked to the source's `trapper` volatile: when the trapper
+  leaves the field, `removeLinkedVolatiles` drops the target's `trapped`
+  **silently**. `poke-engine` does not model move-traps at all — its gen3
+  `trapped()` (`src/gen3/state.rs`) covers only LockedMove, `partiallytrapped`,
+  and the trap ABILITIES — so, like the partial-trap counter, this signal is
+  available ONLY from the protocol.
+- **End conditions (gen3, handled in the parser):** the trap ends when (a) the
+  TRAPPED mon leaves its slot (switch / `|drag|` / faint), or (b) the TRAPPER
+  leaves its slot (switch / `|drag|` / faint of the opposing active mon — the
+  linked source-side volatile is what actually drops the trap). The
+  `_ReplayParser` SETS `meanlook_trap[SLOT]` on `|-activate|SLOT|trapped` and
+  clears BOTH seats on any switch/drag (parse loop) or `|faint|` — in singles the
+  trapper is always the opposing active mon, so the two-seat clear is exact.
+  `|-activate|SLOT|trapped` is emitted ONLY by move-traps (ability traps trap at
+  request time via `onFoeTrapPokemon` with no protocol line), keeping this bit
+  cleanly separated from `NUMERIC_TRAPPER_ALIVE`.
+- **Reachability:** Mean Look (Misdreavus, "Staller" set) and Spider Web (Ariados,
+  "Bulky Support" / "Bulky Setup" sets) in `data/random-battles/gen3/sets.json`.
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical**; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -320,6 +361,10 @@ the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
   (`NUMERIC_GENDER_MALE`) and `V3_NUMERIC_BASE + 9` (`NUMERIC_GENDER_FEMALE`),
   bumping `V3_NUMERIC_EXTRA` 8 → 10 so `_V3_NUMERIC_FEATURE_COUNT` and the v3
   numeric census floor become 165. The categorical census is unchanged.
+- Change 8 adds one more appended numeric column at `V3_NUMERIC_BASE + 10`
+  (`NUMERIC_MEANLOOK_TRAP`), bumping `V3_NUMERIC_EXTRA` 10 → 11 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 166. The
+  categorical census is unchanged.
 
 ## Acceptance (tests required)
 
@@ -355,7 +400,14 @@ the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
    opponent mon is `(0, 0)` before it is revealed and flips on the switch-in
    reveal; the same log's v2.2 encoding is byte-identical to before the change
    (the columns do not exist under v2.2).
-8. Existing v2.2 test suites pass untouched.
+8. Mean Look / Spider Web move-trap (change 8): a scripted Mean Look (or Spider
+   Web) game sets the trapped mon's `meanlook_trap` bit under v3 on `-activate
+   trapped`, and clears it when the trapper switches out, the trapped mon leaves,
+   or either faints; the bit is DISTINCT from the Wrap partial-trap column and the
+   trap-ability signal; the same log's v2.2 encoding is byte-identical to before
+   the change (the column does not exist under v2.2); snapshot round-trip
+   preserves the flag.
+9. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
@@ -364,9 +416,10 @@ The v3 numeric block appends columns above the v2.2 census (155):
 the consecutive-stall counter at `+4` (change 3, #810), confusion
 turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
 (change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
-this PR), and the two gender bits at `+8` / `+9` (change 7, this PR).
-With change 7 landed, the v3 numeric feature count is
-**165** (`V3_NUMERIC_BASE + 10`), and every appended column `+0..+9` (155-164)
+this PR), the two gender bits at `+8` / `+9` (change 7, this PR), and the
+Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR).
+With change 8 landed, the v3 numeric feature count is
+**166** (`V3_NUMERIC_BASE + 11`), and every appended column `+0..+10` (155-165)
 is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)

@@ -41,12 +41,14 @@ OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # min(1, elapsed/5)), (5) encore turns-so-far on the encored mon's token (public
 # elapsed-duration counter, gen3 CAP 6, min(1, elapsed/6)), (6) Wrap (partial-trap)
 # turns-so-far on the trapped mon's token (public elapsed-duration counter, gen3 CAP 5,
-# min(1, elapsed/5)), and (7) per-mon gender as two 0/1 bits on every mon token (static public
-# attribute from the details string: male 10 / female 01 / genderless 00). All derived ONLY from
-# public protocol lines — no engine-side hidden state. Every v2.2 block carries forward unchanged
-# and v2.2 output stays byte-identical; same checkpoint-driven resolution mechanism. NOT the fresh
-# default until the Rust fold encoder mirrors it and the golden corpus regenerates at v3 (spec's
-# coordination section).
+# min(1, elapsed/5)), (7) per-mon gender as two 0/1 bits on every mon token (static public
+# attribute from the details string: male 10 / female 01 / genderless 00), and (8) a Mean Look /
+# Spider Web move-trap 0/1 bit on the trapped mon's token (public "switch-locked by Mean Look /
+# Spider Web" flag, distinct from the Wrap partial-trap and ability-trap signals). All derived ONLY
+# from public protocol lines — no engine-side hidden state. Every v2.2 block carries forward
+# unchanged and v2.2 output stays byte-identical; same checkpoint-driven resolution mechanism. NOT
+# the fresh default until the Rust fold encoder mirrors it and the golden corpus regenerates at v3
+# (spec's coordination section).
 OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
