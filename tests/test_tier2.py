@@ -929,6 +929,19 @@ class ContextFoldTest(unittest.TestCase):
         self.assertEqual(fold.contexts[idx_brick].defender_screens, ())
         self.assertEqual(fold.contexts[idx_after].defender_screens, ())
 
+    def test_transform_copies_target_boosts_in_incremental_fold(self) -> None:
+        # Keep Tier 2's incremental public ledger aligned with the replay observation state.
+        fold = _IncrementalContextFold()
+        fold.process(
+            [
+                "|-boost|p1a: Slowbro|spa|2",
+                "|-boost|p1a: Slowbro|spd|1",
+                "|-transform|p2a: Ditto|p1a: Slowbro",
+            ]
+        )
+        self.assertTrue(fold.transformed["p2"])
+        self.assertEqual(fold.boosts["p2"], {"spa": 2, "spd": 1})
+
 
 class WhitelistTest(unittest.TestCase):
     def _universe(self, species, variants):

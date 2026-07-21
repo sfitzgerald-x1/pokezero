@@ -853,6 +853,11 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             "|switch|p2a: Gengar|Gengar, L78|100/100",  # Ditto leaves -> reverts on the bench
             "|turn|3",
         ]
+        after_faint = base + [
+            "|-damage|p2a: Ditto|0 fnt",
+            "|faint|p2a: Ditto",  # Fainting also ends Transform before the next observation.
+            "|turn|3",
+        ]
         opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
 
         def opponent_tokens(lines):
@@ -876,6 +881,12 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         ditto_idx = next(i for i, row in enumerate(cat) if row[CATEGORY_PRIMARY] == ditto_species)
         self.assertEqual(num[ditto_idx][NUMERIC_ACTIVE], 0.0)
         self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)  # Ditto again, not Snorlax
+
+        # A fainted Ditto also reverts. The protocol retains its slot until replacement, but the
+        # token must already show Ditto rather than the stale copied Snorlax identity.
+        num, cat, _ = opponent_tokens(after_faint)
+        ditto_idx = next(i for i, row in enumerate(cat) if row[CATEGORY_PRIMARY] == ditto_species)
+        self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)
 
     @unittest.skipUnless(
         Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
@@ -1509,6 +1520,18 @@ class Phase2DynamicStateTest(unittest.TestCase):
                 "|-boost|p1a: Xatu|spa|2",
                 "|-boost|p1a: Xatu|spd|1",
                 "|-copyboost|p2a: Charizard|p1a: Xatu|[from] move: Psych Up",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"spa": 2, "spd": 1})
+        self.assertEqual(state.opponent_active_boosts, {"spa": 2, "spd": 1})
+
+    def test_transform_copies_opponent_boosts(self) -> None:
+        # Transform uses its own protocol tag, but inherits the target's public stages too.
+        state = self._replay_with(
+            [
+                "|-boost|p1a: Xatu|spa|2",
+                "|-boost|p1a: Xatu|spd|1",
+                "|-transform|p2a: Ditto|p1a: Xatu",
             ]
         )
         self.assertEqual(state.self_active_boosts, {"spa": 2, "spd": 1})

@@ -673,7 +673,15 @@ class PublicBattleBeliefEngine:
                     self._pending_mudshot = None
                 self._clear_sleep_clause_for(belief)
                 self._replace_belief(
-                    belief, condition="0 fnt", active=False, status_on_exit=None, cure_all_count_on_exit=-1
+                    belief,
+                    condition="0 fnt",
+                    active=False,
+                    status_on_exit=None,
+                    cure_all_count_on_exit=-1,
+                    # Transform ends on faint just as it does on a regular switch. Keeping the
+                    # copied identity after a faint leaks stale target attributes into the token.
+                    transformed=False,
+                    transform_species=None,
                 )
             return
 
@@ -932,8 +940,7 @@ class PublicBattleBeliefEngine:
 
     def _mark_side_inactive(self, showdown_slot: str) -> None:
         # Leaving the field ends Transform: the mon reverts to itself, so clear the copied identity
-        # (and the known-stats it implied). A fainted mon keeps its last state — we stop caring once
-        # it is KO'd.
+        # (and the known stats it implied). The faint handler applies the same reset.
         self._sides[showdown_slot] = [
             replace(pokemon, active=False, transformed=False, transform_species=None)
             if pokemon.transformed

@@ -2073,8 +2073,9 @@ def _update_boosts(parts: Sequence[str], boosts: dict[str, dict[str, int]]) -> N
         for slot in boosts:
             boosts[slot].clear()
         return
-    if event_type == "-copyboost" and len(parts) >= 4:
-        # Psych Up: SOURCE (parts[2]) copies the boost stages of TARGET (parts[3]).
+    if event_type in {"-copyboost", "-transform"} and len(parts) >= 4:
+        # Psych Up and Transform both copy the target's public boost stages. The latter
+        # is emitted as ``|-transform|SOURCE|TARGET`` rather than ``|-copyboost|``.
         source = _slot_from_ident(parts[2])
         target = _slot_from_ident(parts[3])
         if source in boosts and target in boosts:
