@@ -144,6 +144,10 @@ class TurnSubBlock:
     # Fraction of the ACTOR'S max HP lost to its own action (v2.2 SELF_HP_COST; see
     # transitions._SELF_COST_FROM_TAGS for the source classification).
     self_hp_cost: float = 0.0
+    # Confusion self-hit folded into this move's damage_fraction + presence flag (spec v3
+    # change 10); emitted only under v3. damage_fraction stays the frozen v2.2 value.
+    confusion_selfhit_fraction: float = 0.0
+    confusion_selfhit: bool = False
     damage_outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
@@ -365,6 +369,8 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
             transformed=sub.transformed,
             damage_fraction=sub.damage_fraction,
             self_hp_cost=sub.self_hp_cost,
+            confusion_selfhit_fraction=sub.confusion_selfhit_fraction,
+            confusion_selfhit=sub.confusion_selfhit,
             damage_outcome=sub.damage_outcome,
             crit=sub.crit,
             miss=sub.miss,
@@ -657,6 +663,8 @@ def _action_sub_block(window: _Window, **collapse) -> TurnSubBlock:
         transformed=window.transformed,
         damage_fraction=window.damage_fraction,
         self_hp_cost=window.self_hp_cost,
+        confusion_selfhit_fraction=window.confusion_selfhit_fraction,
+        confusion_selfhit=window.confusion_selfhit,
         damage_outcome=window.outcome,
         crit=window.crit,
         miss=window.miss,

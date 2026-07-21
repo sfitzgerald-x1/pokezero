@@ -226,6 +226,19 @@ class TransitionToken:
     # Pain Split down-side, self-faint moves = entire remaining fraction). Encoded only
     # under spec v2.2; see _SELF_COST_FROM_TAGS for the classification rationale.
     self_hp_cost: float = 0.0
+    # Confusion self-hit damage-attribution correction (spec v3 change 10;
+    # docs/observation_v3_spec.md). When a SLOWER confused mon self-hits, the sim emits
+    # ``|-activate|SLOT|confusion`` then an UNTAGGED ``|-damage|SLOT|…`` (no |move|/|cant|),
+    # which the fold — correctly, for the ``damage_fraction`` field the v2.2 encode reads —
+    # folds into the OPEN opponent-move window's ``damage_fraction``. This field records the
+    # self-hit's own fraction so a v3 encode can subtract it back out (``damage_fraction -
+    # confusion_selfhit_fraction``) WITHOUT mutating ``damage_fraction`` (kept frozen for
+    # v2.2 byte-identity). ``confusion_selfhit`` is the companion presence flag the v3 encode
+    # keys on (a 0-delta self-hit is possible in principle). Extracted for every replay (pure
+    # extraction, schema-independent); only a v3 encode reads either — v2/v2.1/v2.2 stay
+    # byte-identical.
+    confusion_selfhit_fraction: float = 0.0
+    confusion_selfhit: bool = False
     # Context trio (gen3 inventory: the principled derivability exception), captured at
     # action-declaration time (before the action's own effects land). "own" is the
     # perspective side.
@@ -326,6 +339,10 @@ class _Window:
     weather: Optional[str] = None
     damage_fraction: float = 0.0
     self_hp_cost: float = 0.0
+    # Confusion self-hit fraction folded into this move window's damage_fraction (spec v3
+    # change 10) + its presence flag; recorded additively, damage_fraction stays frozen.
+    confusion_selfhit_fraction: float = 0.0
+    confusion_selfhit: bool = False
     outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
@@ -523,6 +540,10 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
 
     windows: list[_Window] = []
     current: Optional[_Window] = None
+    # Spec v3 change 10: slot latched by |-activate|X|confusion, consumed by the NEXT
+    # -damage (the confused mon's untagged self-hit). Cleared on any action (open_window) or
+    # chunk boundary (close_window) so a stale latch can never bind a later, unrelated hit.
+    pending_confusion_selfhit_slot: Optional[str] = None
     weather_reveals: list[tuple[str, str, bool]] = []
     mon_counters: dict[tuple[str, str], _MonCounters] = {}
     turn_start_occupants: dict[int, dict[str, str]] = {}
@@ -533,13 +554,15 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         return mon_counters.setdefault((side, species), _MonCounters())
 
     def open_window(window: _Window) -> None:
-        nonlocal current
+        nonlocal current, pending_confusion_selfhit_slot
+        pending_confusion_selfhit_slot = None
         if current is not None:
             windows.append(current)
         current = window
 
     def close_window() -> None:
-        nonlocal current
+        nonlocal current, pending_confusion_selfhit_slot
+        pending_confusion_selfhit_slot = None
         if current is not None:
             windows.append(current)
             current = None
@@ -724,6 +747,15 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         if event_type == "-damage" and target in {"p1", "p2"} and len(parts) >= 4:
             condition = _condition_features(parts[3])
             new_fraction = condition.hp_fraction
+            # Spec v3 change 10: this -damage consumes the confusion latch. Any -damage
+            # disarms it (a non-self hit clears without recording); only the untagged self-hit
+            # on the latched slot is a real confusion self-hit.
+            is_confusion_selfhit = (
+                pending_confusion_selfhit_slot is not None
+                and target == pending_confusion_selfhit_slot
+                and from_payload is None
+            )
+            pending_confusion_selfhit_slot = None
             if current is not None and target == current.defender_side:
                 if from_payload is None:
                     if current.kind == TOKEN_KIND_MOVE and new_fraction is not None:
@@ -731,6 +763,12 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                         delta = previous_fraction - new_fraction
                         if delta > 0:
                             current.damage_fraction += delta
+                            # Record the self-hit fraction ADDITIVELY (damage_fraction above
+                            # stays frozen — the v2.2 field is unchanged). A v3 encode reads
+                            # this to subtract the self-hit back out of the move's damage.
+                            if is_confusion_selfhit:
+                                current.confusion_selfhit_fraction += delta
+                                current.confusion_selfhit = True
                         current.defender_hit_by_move = True
                 else:
                     # Chip landed on the defender after the move's own damage: a
@@ -881,6 +919,13 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
 
         elif event_type == "-activate" and len(parts) >= 4:
             identifier = _side_condition_identifier(parts[3])
+            # Spec v3 change 10: arm the confusion self-hit latch. gen3 emits
+            # |-activate|SLOT|confusion immediately before the confused mon's untagged
+            # self-hit -damage (no |move|/|cant| line); when it is the SLOWER mon, that damage
+            # folds into the opponent's still-open move window. Schema-agnostic latch — setting
+            # it never touches any v2.2-read field.
+            if identifier == "confusion" and target in {"p1", "p2"}:
+                pending_confusion_selfhit_slot = target
             if current is not None and target == current.defender_side:
                 if identifier in {"protect", "detect"}:
                     current.upgrade_outcome(DAMAGE_OUTCOME_BLOCKED)
@@ -923,6 +968,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             transformed=window.transformed,
             damage_fraction=window.damage_fraction,
             self_hp_cost=window.self_hp_cost,
+            confusion_selfhit_fraction=window.confusion_selfhit_fraction,
+            confusion_selfhit=window.confusion_selfhit,
             damage_outcome=window.outcome,
             crit=window.crit,
             miss=window.miss,

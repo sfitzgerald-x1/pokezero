@@ -511,11 +511,25 @@ NUMERIC_MEANLOOK_TRAP = V3_NUMERIC_BASE + 10
 # above the v2.2 census — legacy modes stay byte-frozen; the v2.2 pending bits 56/57 are unchanged.
 NUMERIC_SELF_WISH_TURNS = V3_NUMERIC_BASE + 11
 NUMERIC_OPP_WISH_TURNS = V3_NUMERIC_BASE + 12
+# Change 10 — confusion self-hit damage-attribution correction, one 0/1 bit on the OPPONENT's
+# turn-merged move sub-block (the token whose damage was polluted), schema >= v3 only. When a
+# SLOWER confused mon self-hits, the sim emits ``|-activate|SLOT|confusion`` then an UNTAGGED
+# ``|-damage|SLOT|…`` with no |move|/|cant| line; the fold folds that self-damage into the
+# opponent's still-open move window's ``damage_fraction`` (correct for the v2.2 field, which is
+# left FROZEN). Under v3 the encode writes the move's damage-fraction column as
+# ``damage_fraction - confusion_selfhit_fraction`` (the move's own damage, self-hit removed) and
+# sets this bit = "the defender self-hit from confusion after this move." A single column (not a
+# first/second pair like the fail bit) because the correction always rides the FIRST sub-block in
+# practice — the confused mon must be SLOWER, so the opponent moved first; the write is mirrored
+# onto the second sub-block defensively. Additive/schema-agnostic at extraction (the token fields
+# are always populated); only a v3 encode reads them, so v2/v2.1/v2.2 output stays byte-identical.
+NUMERIC_TT_CONFUSION_SELFHIT = V3_NUMERIC_BASE + 13
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
 # encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
-# (+8 / +9, change 7), the Mean Look move-trap bit (+10, change 8), and the two Wish turns-to-land
-# bits (+11 / +12, change 9), so the v3 numeric width is 168.
-V3_NUMERIC_EXTRA = 13
+# (+8 / +9, change 7), the Mean Look move-trap bit (+10, change 8), the two Wish turns-to-land
+# bits (+11 / +12, change 9), and the confusion self-hit flag (+13, change 10), so the v3 numeric
+# width is 169.
+V3_NUMERIC_EXTRA = 14
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -3984,8 +3998,14 @@ def _encode_turn_merged_transition_tokens(
         if first.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_FIRST_BP, f"species:{first.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
-        if first.damage_fraction:
-            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first.damage_fraction))
+        # Spec v3 change 10: under v3 subtract a folded-in confusion self-hit back out of the
+        # move's damage; under v2.2 first_damage IS first.damage_fraction (the frozen field),
+        # so the write is byte-identical.
+        first_damage = first.damage_fraction
+        if schema_v3 and first.confusion_selfhit:
+            first_damage = max(0.0, first_damage - first.confusion_selfhit_fraction)
+        if first_damage:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first_damage))
         if first.kind == _TT_KIND_MOVE:
             _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, first.n_hits / 5.0))
         for slot, flag in (
@@ -4022,6 +4042,10 @@ def _encode_turn_merged_transition_tokens(
         # byte-identical (the column does not even exist below the v3 census).
         if schema_v3 and first.fail:
             _set_numeric(num_row, NUMERIC_TT_FAIL, 1.0)
+        # Spec v3 change 10: the confusion self-hit flag on the (opponent's) move sub-block
+        # whose damage was just corrected above.
+        if schema_v3 and first.confusion_selfhit:
+            _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 
         second = token.second
         if second.status != _TM_SUB_BLOCK_ACTION:
@@ -4048,8 +4072,13 @@ def _encode_turn_merged_transition_tokens(
         if second.baton_pass_species:
             _set_category(cat_row, CATEGORY_TM_SECOND_BP, f"tt2_species:{second.baton_pass_species}")
         _set_numeric(num_row, NUMERIC_TM2_PRESENT, 1.0)
-        if second.damage_fraction:
-            _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second.damage_fraction))
+        # Spec v3 change 10 (second-mover mirror; the confused mon is normally SLOWER so this
+        # rarely fires, but the correction is symmetric). v2.2 uses the frozen field.
+        second_damage = second.damage_fraction
+        if schema_v3 and second.confusion_selfhit:
+            second_damage = max(0.0, second_damage - second.confusion_selfhit_fraction)
+        if second_damage:
+            _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second_damage))
         if second.kind == _TT_KIND_MOVE:
             _set_numeric(num_row, NUMERIC_TM2_N_HITS, min(1.0, second.n_hits / 5.0))
         for slot, flag in (
@@ -4074,6 +4103,10 @@ def _encode_turn_merged_transition_tokens(
         # Spec v3 change 1: the second-mover fail twin (mirrors NUMERIC_TM2_MISS's write).
         if schema_v3 and second.fail:
             _set_numeric(num_row, NUMERIC_TM2_FAIL, 1.0)
+        # Spec v3 change 10: the confusion self-hit flag rides the same single column as the
+        # first sub-block (one per-turn bit; the corrected damage is TM2's above).
+        if schema_v3 and second.confusion_selfhit:
+            _set_numeric(num_row, NUMERIC_TT_CONFUSION_SELFHIT, 1.0)
 
 
 def _tm_first_action_label(kind: str, action: str) -> str:
