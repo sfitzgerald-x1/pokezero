@@ -26,9 +26,10 @@ class _Policy:
 
 
 class _Env:
-    def __init__(self) -> None:
+    def __init__(self, *, capped: bool = False) -> None:
         self._terminal: TerminalState | None = None
         self._lines: tuple[str, ...] = ()
+        self._capped = capped
 
     @property
     def protocol_lines(self) -> tuple[str, ...]:
@@ -46,7 +47,7 @@ class _Env:
 
     def step(self, actions: dict[str, int]) -> StepResult:
         self._lines += ("|-activate|p1a: Alpha|move: Protect", "|win|PokeZero p1")
-        self._terminal = TerminalState(winner="p1", turn_count=1)
+        self._terminal = TerminalState(winner="p1", turn_count=1, capped=self._capped)
         return StepResult(observations={}, rewards={"p1": 1.0, "p2": -1.0}, terminal=self._terminal)
 
     def terminal(self) -> TerminalState | None:
@@ -83,15 +84,15 @@ class SelfplayProtocolCaptureTests(unittest.TestCase):
             games=1,
             capture_label="production-line",
             max_decision_rounds=250,
-            p1_policy_spec="neural:/private/a.pt",
-            p2_policy_spec="neural:/private/b.pt",
+            p1_policy_identity={"policy_id": "learned-a", "policy_spec_sha256": "p1", "weights_sha256": "weights-a"},
+            p2_policy_identity={"policy_id": "learned-b", "policy_spec_sha256": "p2", "weights_sha256": "weights-b"},
         )
         payload = {
             "schema_version": SELFPLAY_PROTOCOL_CAPTURE_SCHEMA_VERSION,
             "protocol_signature_schema_version": "pokezero.protocol-signature-census.v2",
             "protocol_signatures": {"move:tackle": 1},
             "protocol_signature_game_ids": ["locator"],
-            "selfplay_protocol_capture": {"completed_games": 1},
+            "selfplay_protocol_capture": {"completed_games": 1, "capped_games": 0},
             "audit_provenance": provenance,
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -104,6 +105,37 @@ class SelfplayProtocolCaptureTests(unittest.TestCase):
             changed = {**provenance, "execution_scope": {**provenance["execution_scope"], "seed_range": {"start": 11, "end": 11, "count": 1}}}
             with self.assertRaisesRegex(ValueError, "policy or seed scope"):
                 _validate_existing_capture(path, expected_provenance=changed, expected_games=1)
+
+    def test_rejects_capped_rollouts_without_writing_partial_census_evidence(self) -> None:
+        with self.assertRaisesRegex(ValueError, "refuses capped rollouts"):
+            capture_selfplay_protocol_signatures(
+                games=1,
+                env_factory=lambda: _Env(capped=True),
+                policies={"p1": _Policy("learned-a"), "p2": _Policy("learned-b")},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=50,
+            )
+
+    def test_provenance_redacts_policy_specifications_in_the_stored_command(self) -> None:
+        provenance = _capture_provenance(
+            source_hash="source-hash",
+            command_arguments=(
+                "--p1-policy", "neural:/private/checkpoint-a.pt?token=secret",
+                "--p2-policy=neural:/private/checkpoint-b.pt?token=secret",
+            ),
+            seed_start=10,
+            games=1,
+            capture_label="production-line",
+            max_decision_rounds=250,
+            p1_policy_identity={"policy_id": "learned-a", "policy_spec_sha256": "p1", "weights_sha256": "weights-a"},
+            p2_policy_identity={"policy_id": "learned-b", "policy_spec_sha256": "p2", "weights_sha256": "weights-b"},
+        )
+
+        command = provenance["command"]
+        self.assertIsInstance(command, list)
+        self.assertNotIn("checkpoint-a.pt", " ".join(command))
+        self.assertNotIn("checkpoint-b.pt", " ".join(command))
+        self.assertIn("sha256:", " ".join(command))
 
 
 if __name__ == "__main__":

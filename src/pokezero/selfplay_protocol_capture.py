@@ -32,7 +32,7 @@ from .showdown import observation_schema_version_from_choice, observation_spec_f
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SELFPLAY_PROTOCOL_CAPTURE_SCHEMA_VERSION = "pokezero.selfplay-protocol-capture.v1"
+SELFPLAY_PROTOCOL_CAPTURE_SCHEMA_VERSION = "pokezero.selfplay-protocol-capture.v2"
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,11 @@ def capture_selfplay_protocol_signatures(
         for offset in range(games):
             seed = seed_start + offset
             result = driver.run(seed=seed, battle_id=f"{battle_id_prefix}-{seed}")
+            if result.terminal.capped:
+                raise ValueError(
+                    "self-play protocol capture refuses capped rollouts; "
+                    f"seed {seed} reached max_decision_rounds={rollout_config.max_decision_rounds}"
+                )
             lines = getattr(env, "protocol_lines", None)
             if not isinstance(lines, Sequence) or isinstance(lines, (str, bytes)):
                 raise ValueError("self-play protocol capture environment does not expose protocol_lines")
@@ -120,6 +125,42 @@ def _policy_spec_sha256(spec: str) -> str:
     return hashlib.sha256(spec.encode("utf-8")).hexdigest()
 
 
+def _policy_identity(policy: Policy, *, spec: str) -> dict[str, str | None]:
+    """Bind a census seat to its loaded policy, not just a mutable path string."""
+
+    weights_sha256 = getattr(policy, "weights_sha256", None)
+    if weights_sha256 is not None and not isinstance(weights_sha256, str):
+        raise ValueError("loaded self-play policy has an invalid weights_sha256 provenance field")
+    return {
+        "policy_id": str(policy.policy_id),
+        "policy_spec_sha256": _policy_spec_sha256(spec),
+        "weights_sha256": weights_sha256,
+    }
+
+
+def _redacted_command_arguments(command_arguments: Sequence[str]) -> list[str]:
+    """Keep a reproducible command shape without persisting private policy specs."""
+
+    policy_flags = frozenset({"--p1-policy", "--p2-policy"})
+    redacted: list[str] = []
+    index = 0
+    while index < len(command_arguments):
+        argument = command_arguments[index]
+        if argument in policy_flags:
+            if index + 1 >= len(command_arguments):
+                raise ValueError(f"{argument} is missing its policy specification")
+            redacted.extend((argument, f"sha256:{_policy_spec_sha256(command_arguments[index + 1])}"))
+            index += 2
+            continue
+        flag, separator, value = argument.partition("=")
+        if separator and flag in policy_flags:
+            redacted.append(f"{flag}=sha256:{_policy_spec_sha256(value)}")
+        else:
+            redacted.append(argument)
+        index += 1
+    return redacted
+
+
 def _write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -139,8 +180,8 @@ def _capture_provenance(
     games: int,
     capture_label: str,
     max_decision_rounds: int,
-    p1_policy_spec: str,
-    p2_policy_spec: str,
+    p1_policy_identity: Mapping[str, str | None],
+    p2_policy_identity: Mapping[str, str | None],
 ) -> dict[str, object]:
     return {
         "schema_version": "pokezero.protocol-capture-provenance.v1",
@@ -149,17 +190,14 @@ def _capture_provenance(
         "showdown_source_hash": source_hash,
         "observation_schema": "pokezero.observation.v3",
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
-        "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+        "command": [str(Path(__file__).relative_to(ROOT)), *_redacted_command_arguments(command_arguments)],
         "execution_scope": {
             "capture_mode": "selfplay",
             "capture_label": capture_label,
             "seed_range": {"start": seed_start, "end": seed_start + games - 1, "count": games},
             "max_decision_rounds": max_decision_rounds,
-            # Policy paths can be private deployment detail. The immutable
-            # command remains in the private artifact while the summary carries
-            # only stable digests for cross-shard validation and public export.
-            "p1_policy_spec_sha256": _policy_spec_sha256(p1_policy_spec),
-            "p2_policy_spec_sha256": _policy_spec_sha256(p2_policy_spec),
+            "p1_policy": dict(p1_policy_identity),
+            "p2_policy": dict(p2_policy_identity),
         },
     }
 
@@ -199,6 +237,7 @@ def _validate_existing_capture(
         or len(set(game_ids)) != expected_games
         or not isinstance(capture, Mapping)
         or capture.get("completed_games") != expected_games
+        or capture.get("capped_games") != 0
     ):
         raise ValueError("existing self-play protocol capture has incomplete count-only evidence")
     return dict(payload)
@@ -230,6 +269,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     args = build_arg_parser().parse_args(command_arguments)
+    try:
+        return _run(args, command_arguments)
+    except ValueError as exc:
+        print(f"selfplay_protocol_capture: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(args: argparse.Namespace, command_arguments: Sequence[str]) -> int:
     if args.games <= 0:
         raise ValueError("--games must be positive")
     if args.max_decision_rounds <= 0:
@@ -240,24 +287,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if observation_schema is None:
         raise AssertionError("self-play protocol capture requires an explicit v3 schema")
     source = load_gen3_randbat_source_cached(args.showdown_root)
-    provenance = _capture_provenance(
-        source_hash=source.metadata.source_hash,
-        command_arguments=command_arguments,
-        seed_start=args.seed_start,
-        games=args.games,
-        capture_label=args.capture_label,
-        max_decision_rounds=args.max_decision_rounds,
-        p1_policy_spec=args.p1_policy,
-        p2_policy_spec=args.p2_policy,
-    )
-    if args.out.exists():
-        payload = _validate_existing_capture(args.out, expected_provenance=provenance, expected_games=args.games)
-        print(
-            "selfplay_protocol_capture: reused "
-            f"{payload['selfplay_protocol_capture']['completed_games']} games from {args.out}"
-        )
-        return 0
-
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -273,6 +302,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
         "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
     }
+    provenance = _capture_provenance(
+        source_hash=source.metadata.source_hash,
+        command_arguments=command_arguments,
+        seed_start=args.seed_start,
+        games=args.games,
+        capture_label=args.capture_label,
+        max_decision_rounds=args.max_decision_rounds,
+        p1_policy_identity=_policy_identity(policies["p1"], spec=args.p1_policy),
+        p2_policy_identity=_policy_identity(policies["p2"], spec=args.p2_policy),
+    )
+    if args.out.exists():
+        payload = _validate_existing_capture(args.out, expected_provenance=provenance, expected_games=args.games)
+        print(
+            "selfplay_protocol_capture: reused "
+            f"{payload['selfplay_protocol_capture']['completed_games']} games from {args.out}"
+        )
+        return 0
     result = capture_selfplay_protocol_signatures(
         games=args.games,
         env_factory=lambda: LocalShowdownEnv(env_config),
