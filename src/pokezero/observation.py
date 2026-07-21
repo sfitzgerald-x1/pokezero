@@ -9,7 +9,7 @@ from .actions import ACTION_COUNT
 
 # v2 (the WS-1 C one-way break, docs/observation_compression_design.md + corrections layer):
 # window_size=1 snapshots, the 24 recent-event tokens are dropped, and the token sequence gains
-# a stats token plus a 128-slot transition-token block (K in tokens, corrections item 11).
+# an opponent-tendency-stats token plus a 128-slot transition-token block (K in tokens, corrections item 11).
 # Checkpoints trained under v1 must load-and-refuse; replay them from their pinned tag
 # (docs/model_versioning.md).
 OBSERVATION_SCHEMA_VERSION_V2 = "pokezero.observation.v2"
@@ -80,8 +80,8 @@ FIELD_TOKEN_COUNT = 1
 SELF_POKEMON_TOKEN_COUNT = 6
 OPPONENT_POKEMON_TOKEN_COUNT = 6
 ACTION_CANDIDATE_TOKEN_COUNT = ACTION_COUNT
-# One stats token carries the global tendency (count, opportunity) pairs (design doc "Encoding").
-STATS_TOKEN_COUNT = 1
+# One opponent-tendency-stats token carries the global tendency (count, opportunity) pairs (design doc "Encoding").
+OPPONENT_TENDENCY_STATS_TOKEN_COUNT = 1
 # Transition-token slot budget: 128 tokens ≈ 64 turns of ordered history, truncated oldest-first
 # (the truncated prefix is what the unbounded aggregates have already absorbed). The K ∈ {16-turn}
 # ablation arm masks the budget down via config (ObservationFeatureMasks) — not a spec change.
@@ -103,7 +103,7 @@ class ObservationSpec:
 
     categorical_feature_count: int
     numeric_feature_count: int
-    stats_token_count: int = STATS_TOKEN_COUNT
+    opponent_tendency_stats_token_count: int = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
     transition_token_count: int = TRANSITION_TOKEN_COUNT
     schema_version: str = OBSERVATION_SCHEMA_VERSION
 
@@ -114,7 +114,7 @@ class ObservationSpec:
             + SELF_POKEMON_TOKEN_COUNT
             + OPPONENT_POKEMON_TOKEN_COUNT
             + ACTION_CANDIDATE_TOKEN_COUNT
-            + self.stats_token_count
+            + self.opponent_tendency_stats_token_count
             + self.transition_token_count
         )
 
@@ -126,7 +126,7 @@ class ObservationFeatureMasks:
     Masked-off content is zeroed and attention-masked at encode time, so an arm trains and
     evaluates on the same spec version with the block simply dark:
 
-    - ``stats_block``: the stats token + the per-opponent-mon tendency triple.
+    - ``opponent_tendency_stats_block``: the opponent-tendency-stats token + the per-opponent-mon tendency triple.
     - ``exact_state``: the exact-state layer (PP-ledger fractions, sleep/duration counters,
       sleep-clause / trapper / pending-Wish bits, computed expected stats).
     - ``transition_token_budget``: how many of the most recent transition tokens are filled
@@ -147,7 +147,7 @@ class ObservationFeatureMasks:
       v2.1 training adopts the column; pre-v2.1 pipelines encode byte-identically.
     """
 
-    stats_block: bool = True
+    opponent_tendency_stats_block: bool = True
     exact_state: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
     tier2_residuals: bool = True

@@ -43,7 +43,7 @@ from .observation import (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OPPONENT_POKEMON_TOKEN_COUNT,
-    STATS_TOKEN_COUNT,
+    OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
     ObservationPerspective,
@@ -162,7 +162,7 @@ NUMERIC_ACTUAL_DEF = 40
 NUMERIC_ACTUAL_SPA = 41
 NUMERIC_ACTUAL_SPD = 42
 NUMERIC_ACTUAL_SPE = 43
-# ---- observation spec v2 additions (exact-state layer + stats token + transition tokens). ----
+# ---- observation spec v2 additions (exact-state layer + opponent-tendency-stats token + transition tokens). ----
 # Field token — side-level exact state. Sleep-clause bits carry LIVE semantics (corrections
 # item 8): 1 while the side currently has an opposing mon asleep from its own sleep move.
 NUMERIC_SELF_SLEEP_CLAUSE = 44
@@ -625,8 +625,8 @@ FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
 OPPONENT_POKEMON_TOKEN_OFFSET = SELF_POKEMON_TOKEN_OFFSET + SELF_POKEMON_TOKEN_COUNT
 ACTION_CANDIDATE_TOKEN_OFFSET = OPPONENT_POKEMON_TOKEN_OFFSET + OPPONENT_POKEMON_TOKEN_COUNT
-STATS_TOKEN_OFFSET = ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_CANDIDATE_TOKEN_COUNT
-TRANSITION_TOKEN_OFFSET = STATS_TOKEN_OFFSET + STATS_TOKEN_COUNT
+OPPONENT_TENDENCY_STATS_TOKEN_OFFSET = ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_CANDIDATE_TOKEN_COUNT
+TRANSITION_TOKEN_OFFSET = OPPONENT_TENDENCY_STATS_TOKEN_OFFSET + OPPONENT_TENDENCY_STATS_TOKEN_COUNT
 
 # Transition-token kind ids. Literal copies of transitions.TOKEN_KIND_* — showdown cannot import
 # transitions at module level (transitions imports showdown's parse helpers); a unit test asserts
@@ -641,7 +641,7 @@ _TM_SUB_BLOCK_ACTION = "action"
 # Evidence-mass normalization scale for tendency counts (turn-scale, matches the 64-turn
 # transition budget); counts saturate at 64 rather than being encoded as rates.
 _STAT_COUNT_DIVISOR = 64.0
-# Fixed field order for the stats token's opponent weather-reveal pairs.
+# Fixed field order for the opponent-tendency-stats token's opponent weather-reveal pairs.
 _WEATHER_REVEAL_ORDER = ("raindance", "sunnyday", "sandstorm", "hail")
 # Deterministic gen 3 timed effects: 5 turns for move weather and for these side conditions.
 _TIMED_CONDITION_DURATION = 5
@@ -3473,7 +3473,7 @@ def _encode_pokemon_tokens(
                         else None
                     ),
                 )
-        if masks.stats_block and role == "opponent" and tendency_by_species:
+        if masks.opponent_tendency_stats_block and role == "opponent" and tendency_by_species:
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
             if tendency is not None:
                 _encode_mon_tendency(numeric_features[token_index], tendency)
@@ -3826,12 +3826,12 @@ def _encode_stats_token(
     *,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
 ) -> None:
-    """The global tendency-stats token: (count, opportunity) pairs + opponent weather reveals."""
+    """The opponent-tendency-stats token: (count, opportunity) pairs + opponent weather reveals."""
     stats = state.tendency_stats
-    if stats is None or not masks.stats_block:
+    if stats is None or not masks.opponent_tendency_stats_block:
         return
-    cat_row = categorical_ids[STATS_TOKEN_OFFSET]
-    num_row = numeric_features[STATS_TOKEN_OFFSET]
+    cat_row = categorical_ids[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET]
+    num_row = numeric_features[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET]
     _set_category(cat_row, CATEGORY_ROLE, "stats")
     _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
     for slot, count in (
@@ -4679,7 +4679,7 @@ def _token_type_ids(spec: ObservationSpec) -> tuple[int, ...]:
     token_types.extend([1] * 6)
     token_types.extend([2] * 6)
     token_types.extend([3] * ACTION_COUNT)
-    token_types.extend([5] * spec.stats_token_count)
+    token_types.extend([5] * spec.opponent_tendency_stats_token_count)
     token_types.extend([6] * spec.transition_token_count)
     return tuple(token_types)
 
@@ -4695,8 +4695,8 @@ def _attention_mask(
     mask.extend(index < len(state.self_team) for index in range(6))
     mask.extend(index < len(state.opponent_team) for index in range(6))
     mask.extend([True] * ACTION_COUNT)
-    stats_visible = masks.stats_block and state.tendency_stats is not None
-    mask.extend([stats_visible] * spec.stats_token_count)
+    opponent_tendency_stats_visible = masks.opponent_tendency_stats_block and state.tendency_stats is not None
+    mask.extend([opponent_tendency_stats_visible] * spec.opponent_tendency_stats_token_count)
     transition_stream = (
         state.turn_merged_tokens
         if spec.schema_version in (OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3)

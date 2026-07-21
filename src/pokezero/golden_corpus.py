@@ -1123,7 +1123,7 @@ def generate_golden_corpus(
             "numeric_feature_count": spec.numeric_feature_count,
             "action_count": ACTION_COUNT,
             "feature_masks": {
-                "stats_block": masks.stats_block,
+                "stats_block": masks.opponent_tendency_stats_block,
                 "exact_state": masks.exact_state,
                 "transition_token_budget": masks.transition_token_budget,
                 "tier2_residuals": masks.tier2_residuals,

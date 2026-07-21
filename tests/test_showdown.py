@@ -9,7 +9,7 @@ from pokezero.observation import (
     FIELD_TOKEN_COUNT,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
-    STATS_TOKEN_COUNT,
+    OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     ObservationFeatureMasks,
 )
 from pokezero.category_vocab import build_category_vocabulary
@@ -1173,7 +1173,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         # Spec v2 tail: one stats token, then the transition-token block (chronological,
         # zero-padded, attention-masked beyond the filled slots).
         stats_offset = event_offset
-        transition_offset = stats_offset + STATS_TOKEN_COUNT
+        transition_offset = stats_offset + OPPONENT_TENDENCY_STATS_TOKEN_COUNT
         self.assertEqual(observation.categorical_ids[stats_offset][2], stable_category_id("stats"))
         self.assertTrue(observation.attention_mask[stats_offset])
         # Fixture history: p1 lead switch, p1 voluntary switch, p2 lead switch, then two moves.
