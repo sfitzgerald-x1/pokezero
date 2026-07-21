@@ -79,6 +79,7 @@ _NUMERIC_FLAGS = frozenset(
 _LITERAL_FLAG_VALUES = {
     "--capture-driver": frozenset({"foul-play", "random-legal"}),
     "--observation-schema": frozenset({"v3"}),
+    "--observed-kind": frozenset({"fixture", "fixed-opponent", "learned-selfplay"}),
 }
 _BOOLEAN_FLAGS = frozenset(
     {

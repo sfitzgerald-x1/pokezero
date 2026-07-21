@@ -570,6 +570,33 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     output=root / "public" / "summary.json",
                 )
 
+    def test_sanitizes_observed_census_kind_without_retaining_paths(self):
+        command = PUBLISHER._public_command(
+            [
+                "scripts/protocol_emission_inventory.py",
+                "--observed-audit",
+                "/shared/private/census.json",
+                "--observed-kind",
+                "learned-selfplay",
+                "--out",
+                "/shared/private/inventory.json",
+            ],
+            label="inventory command",
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "scripts/protocol_emission_inventory.py",
+                "--observed-audit",
+                "<artifact-path>",
+                "--observed-kind",
+                "learned-selfplay",
+                "--out",
+                "<artifact-path>",
+            ],
+        )
+
     def test_rejects_unsafe_uncovered_atom_before_publication(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
