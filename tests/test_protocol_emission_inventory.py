@@ -55,6 +55,11 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
                     0,
                 )
             self.assertTrue(output.is_file())
+            written = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                written["audit_provenance"]["execution_scope"],
+                {"input_audit_count": 0, "seed_range": None, "shard": None},
+            )
 
     def _fixture_roots(self, root: Path) -> tuple[Path, Path]:
         showdown = root / "showdown"

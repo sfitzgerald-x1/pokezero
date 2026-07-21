@@ -80,6 +80,7 @@ def _run_scenario(env: LocalShowdownEnv, spec, report: SilentMutationAuditReport
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", type=Path, default=None)
     parser.add_argument("--observation-schema", choices=("v3",), required=True)
@@ -90,7 +91,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--interaction-registry", action="store_true")
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--json", type=Path, required=True)
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args = parser.parse_args(command_arguments)
     if args.random_games < 0 or args.seed_start < 0 or args.max_rounds < 1:
         parser.error("--random-games and --seed-start must be non-negative; --max-rounds must be positive")
 
@@ -151,7 +152,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         "showdown_source_hash": source.metadata.source_hash,
         "observation_schema": schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
-        "command": ["silent_mutation_audit.py", *sys.argv[1:]],
+        "command": ["silent_mutation_audit.py", *command_arguments],
+        # Keep the random and curated portions independently reproducible. An
+        # empty random lane is explicit instead of overloading a fake range.
+        "execution_scope": {
+            "seed_range": (
+                {"start": args.seed_start, "end": args.seed_start + args.random_games - 1, "count": args.random_games}
+                if args.random_games
+                else None
+            ),
+            "max_rounds": args.max_rounds,
+            "scenario_names": sorted(names),
+        },
     }
     _write_json_atomic(args.json, payload)
     return 0

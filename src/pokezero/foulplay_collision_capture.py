@@ -104,6 +104,7 @@ def _resume_protocol_signature_census(
         "showdown_source_hash",
         "observation_schema",
         "image_digest",
+        "execution_scope",
     )
     if not isinstance(provenance, Mapping) or any(
         provenance.get(field) != expected_provenance.get(field) for field in immutable_provenance_fields
@@ -131,7 +132,15 @@ def _resume_protocol_signature_census(
     return dict(counts), tuple(game_ids)
 
 
-def _protocol_census_provenance(*, source_hash: str, command_arguments: Sequence[str]) -> dict[str, object]:
+def _protocol_census_provenance(
+    *,
+    source_hash: str,
+    command_arguments: Sequence[str],
+    seed_start: int,
+    games: int,
+    capture_driver: str,
+    max_decision_rounds: int,
+) -> dict[str, object]:
     """Return the immutable provenance carried by progress and complete summaries."""
 
     return {
@@ -142,6 +151,11 @@ def _protocol_census_provenance(*, source_hash: str, command_arguments: Sequence
         "observation_schema": "pokezero.observation.v3",
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+        "execution_scope": {
+            "seed_range": {"start": seed_start, "end": seed_start + games - 1, "count": games},
+            "capture_driver": capture_driver,
+            "max_decision_rounds": max_decision_rounds,
+        },
     }
 
 
@@ -172,6 +186,10 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     provenance = _protocol_census_provenance(
         source_hash=source.metadata.source_hash,
         command_arguments=command_arguments,
+        seed_start=args.seed_start,
+        games=args.games,
+        capture_driver=args.capture_driver,
+        max_decision_rounds=args.max_decision_rounds,
     )
     try:
         initial_protocol_signatures, initial_protocol_signature_game_ids = _resume_protocol_signature_census(

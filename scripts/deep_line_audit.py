@@ -210,6 +210,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         "observation_schema": observation_schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+        # Record the bounded random lane separately from the deterministic
+        # scenario/fixture lanes so a later report can reproduce either one.
+        "execution_scope": {
+            "seed_range": (
+                {"start": args.seed_start, "end": args.seed_start + args.random_games - 1, "count": args.random_games}
+                if args.random_games
+                else None
+            ),
+            "max_rounds": args.max_rounds,
+            "scenario_names": sorted(names),
+            "protocol_fixtures": args.protocol_fixtures,
+        },
     }
     _write_json_atomic(args.json, payload)
     print(
