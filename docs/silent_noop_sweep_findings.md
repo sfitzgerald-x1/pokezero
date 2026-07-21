@@ -27,30 +27,33 @@ fails its terminal validation is **not** audit evidence. It may be retained as
 historical debugging context, but it must not be reported as a clean result or
 used to close a layer.
 
-## Active Audit Cycle
+## Active Audit Cycle (v5 Source Identity)
 
-The rows below are the only live evidence for the current canonical-signature
-audit cycle. They remain `Running` until their persistent Jobs write validated
-terminal aggregate artifacts; earlier artifacts are retained solely to explain
-why this recheck is required. The current cycle uses protocol-signature census
-schema `pokezero.protocol-signature-census.v2`; reports without that stamp are
-not valid input to the current E/O/C differential.
+The final audit cycle uses source identity schema v5, which hashes the resolved
+Gen 3 Dex metadata used to materialize variants and invalidates a long-lived
+worker's local universe after its Showdown checkout is rebuilt. No v4 artifact
+below is current clean evidence: its source identity omitted those resolved
+metadata inputs, so a matching v4 hash could still describe a different
+universe. The v5 Jobs will write the only evidence eligible to close this
+schema-freeze gate.
 
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | v2 | Exact universe fixtures | Complete: clean. All 1,682 current exact variants covered, zero findings, and no uncovered source atoms. | [public evidence mirror](audit_artifacts/v3signature-coverage-r2-summary.json) |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | v2 | Bounded-depth exact fixtures | Complete: clean. Eight-round lane checked 9,594 decisions with zero findings and full coverage. | [public evidence mirror](audit_artifacts/v3signature-coverage-r2-summary.json) |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | v2 | Curated party interactions | Complete: clean. The defined multi-mon interaction suite checked 489 decisions with zero findings. | [public evidence mirror](audit_artifacts/v3signature-coverage-r2-summary.json) |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | N/A | Silent engine-mutation lane | Complete: clean. 675 bounded transitions, zero unaccounted candidates. | [public evidence mirror](audit_artifacts/v3signature-silent-r2-summary.json) |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | v2 | E/O/C protocol inventory and census differential | In progress. Fixture observations are available; retry-safe production-style count-only capture support landed in #802 before final aggregation. | `v3signature-inventory-r2` terminal artifact pending |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | N/A | Encoding-collision capture and audit | In progress. Persistent compact capture is collecting the 100k-decision corpus. | `v3signature-collision-r3` terminal artifact pending |
-| 2026-07-20 | `996ea5489c48e8a8415057ce0258d8f144f65079` | v3 | N/A | Counterfactual harm probes | Runs only for the validated shortlist. | Not started |
+| v5 pending | Source-identity-v5 revision | v3 | v2 | Exact universe fixtures | Not started. Re-run the full materialized universe and record its v5 hash. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | v2 | Bounded-depth exact fixtures | Not started after the v5 static gate. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | v2 | Curated party interactions | Not started after the v5 static gate. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | N/A | Silent engine-mutation lane | Not started. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | v2 | E/O/C protocol inventory and census differential | Not started; any v4 capture remains historical. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | N/A | Encoding-collision capture and audit | Not started; any v4 capture remains historical. | Terminal aggregate pending |
+| v5 pending | Source-identity-v5 revision | v3 | N/A | Counterfactual harm probes | Runs only for the validated v5 shortlist. | Not started |
 
 ## Historical Triage Evidence
 
-The pre-repair cycle remains useful for identifying what the refreshed audit
-must confirm or minimize. It is not current clean evidence because the audit
-oracle and snapshot behavior changed in the parity repair.
+The pre-repair and v4-source-identity cycles remain useful for identifying what
+the refreshed audit must confirm or minimize. They are not current clean
+evidence because either the audit oracle/snapshot behavior changed or source
+identity did not include every input that could change the materialized
+universe.
 
 | Cycle | Public revision | Schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- |
@@ -64,19 +67,14 @@ oracle and snapshot behavior changed in the parity repair.
 The prior provenance-rejected coverage and silent-mutation attempts are not
 listed as results. They did not prove a v3 audit outcome.
 
-### Current Clean Coverage Result
+### Historical v4 Coverage and Fixture-Boundary Result
 
-The fresh exact-universe audit contains **1,682** variants. This supersedes the
-historical 1,748 count for this audit cycle; it is not a partial run or a
-coverage regression. The shared Showdown source hash is unchanged, so the
-count difference must not be read as evidence of an upstream source update.
-The static lane covered all 1,682 current tuples and reported zero findings,
-zero failure-only artifacts, and no uncovered species, moves, items,
-abilities, or exact variants. Its immutable source hash is
-`754b71cfed643fa0`; the runtime image is pinned by digest
-`sha256:0a5de863336b035902bd1552b2247d9b4d350796b95a204ef71d488163993949`.
+The v4 exact-universe audit reported **1,682** variants, zero findings, zero
+failure-only artifacts, and no uncovered species, moves, items, abilities, or
+exact variants. It is useful historical evidence, but must be re-run under v5
+before it can support a schema-freeze recommendation.
 
-The fresh bounded-depth lane completed all eight-round exact fixtures with
+The v4 bounded-depth lane completed all eight-round exact fixtures with
 9,594 checked decisions and zero findings. The curated party lane completed
 489 checked decisions and zero findings. These lanes together cover every
 current source tuple at the static surface, bounded multi-turn behavior for
@@ -85,17 +83,20 @@ do **not** claim exhaustive arbitrary six-mon game-state coverage, every
 chance outcome, or that every move is used in every possible tactical context.
 
 The broader party fixtures intentionally exercise some legal Gen 3 mechanics
-outside the current random-battle source universe. Vocabulary warnings for
-those fixture-only atoms are recorded as an explicit fixture-boundary
-limitation, not as a reachable Gen 3 random-battle observation finding.
+outside the current random-battle source universe. The warned Attract,
+Safeguard, Taunt, Future Sight, Reflect, Light Screen, Confuse Ray, Chesto
+Berry, and Quick Claw atoms are absent from both current `sets.json` and the
+v5 materialized universe. They are explicit fixture-boundary limitations, not
+reachable Gen 3 random-battle observation findings.
 
-### Current Silent-Mutation Result
+### Historical v4 Silent-Mutation Result
 
-The fresh bounded instrumentation pass checked 675 transitions across random
-and curated interactions. It found zero unaccounted silent mutations after
-the audit surface was repaired to ignore inactive type resets and normalize
-fainted state. The earlier 30-candidate result is therefore historical oracle
-debugging context, not an unresolved observation or belief omission.
+The v4 bounded instrumentation pass checked 675 transitions across random and
+curated interactions. It found zero unaccounted silent mutations after the
+audit surface was repaired to ignore inactive type resets and normalize fainted
+state. The earlier 30-candidate result is historical oracle debugging context,
+not an unresolved observation or belief omission; v5 must independently
+confirm this clean result.
 
 ### Pre-Repair Coverage Result
 
