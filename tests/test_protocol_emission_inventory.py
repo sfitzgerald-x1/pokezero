@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.protocol_emission_inventory import (
     _signature_coverage,
@@ -12,10 +15,47 @@ from pokezero.protocol_emission_inventory import (
     discover_engine_emissions,
     load_observed_audit_provenance,
     load_observed_signatures,
+    require_expected_observed_audit_provenance,
 )
 
 
 class ProtocolEmissionInventoryTests(unittest.TestCase):
+    def test_cli_allows_static_inventory_without_observed_audits(self) -> None:
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "protocol_emission_inventory.py"
+        spec = importlib.util.spec_from_file_location("protocol_emission_inventory_cli", script_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        payload = {
+            "observed": {"audit_provenance": [], "tag_count": 0},
+            "differential": {
+                "observed_but_unconsumed": [],
+                "observed_signatures_without_direct_consumer": [],
+                "observed_signatures_without_semantic_coverage": [],
+            },
+            "engine_emittable": {"tag_count": 1},
+            "consumer_dispatch": {"tag_count": 1},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "inventory.json"
+            with (
+                patch.object(module, "load_gen3_randbat_source_cached", return_value=SimpleNamespace(
+                    metadata=SimpleNamespace(source_hash="source-hash")
+                )),
+                patch.object(module, "build_protocol_inventory", return_value=payload),
+                patch.object(module, "public_repo_commit", return_value="a" * 40),
+            ):
+                self.assertEqual(
+                    module.main((
+                        "--showdown-root", str(temporary),
+                        "--observation-schema", "v3",
+                        "--out", str(output),
+                    )),
+                    0,
+                )
+            self.assertTrue(output.is_file())
+
     def _fixture_roots(self, root: Path) -> tuple[Path, Path]:
         showdown = root / "showdown"
         public = root / "public"
@@ -204,6 +244,24 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "protocol signature schema"):
                 load_observed_audit_provenance((path,))
+
+    def test_observed_provenance_requires_current_full_identity(self) -> None:
+        provenance = {
+            "public_repo_commit": "a" * 40,
+            "showdown_source_hash": "source-hash",
+            "observation_schema": "pokezero.observation.v3",
+            "image_digest": "example.invalid/pokezero@sha256:" + ("b" * 64),
+        }
+        entries = ({"audit_provenance": provenance},)
+
+        self.assertEqual(
+            require_expected_observed_audit_provenance(entries, expected=provenance), provenance
+        )
+        with self.assertRaisesRegex(ValueError, "differs from this inventory run"):
+            require_expected_observed_audit_provenance(
+                entries,
+                expected={**provenance, "image_digest": "example.invalid/pokezero@sha256:" + ("c" * 64)},
+            )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from .coverage_enumeration_audit import AUDIT_PROVENANCE_MATCH_KEYS, require_matching_audit_provenance
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION
 
 
@@ -373,6 +374,31 @@ def load_observed_audit_provenance(paths: Iterable[Path | str]) -> list[dict[str
             )
         entries.append({"path": str(path), "audit_provenance": dict(provenance)})
     return entries
+
+
+def require_expected_observed_audit_provenance(
+    entries: Iterable[Mapping[str, Any]], *, expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Require dynamic census inputs to match each other and this inventory run.
+
+    A protocol differential is evidence for one encoded world. Accepting a
+    source-compatible artifact made by another image would make a clean result
+    look stronger than it is, so compare the immutable coverage identity only.
+    """
+
+    actual = require_matching_audit_provenance(entries)
+    missing = [key for key in AUDIT_PROVENANCE_MATCH_KEYS if not expected.get(key)]
+    if missing:
+        raise ValueError(
+            "inventory run provenance is missing required fields: " + ", ".join(missing)
+        )
+    expected_identity = {key: expected[key] for key in AUDIT_PROVENANCE_MATCH_KEYS}
+    if actual != expected_identity:
+        raise ValueError(
+            "observed audit provenance differs from this inventory run: "
+            f"expected {expected_identity!r}, got {actual!r}"
+        )
+    return actual
 
 
 def _signature_tag(signature: str) -> str:

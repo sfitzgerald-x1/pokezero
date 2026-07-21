@@ -14,7 +14,10 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pokezero.protocol_emission_inventory import build_protocol_inventory  # noqa: E402
+from pokezero.protocol_emission_inventory import (  # noqa: E402
+    build_protocol_inventory,
+    require_expected_observed_audit_provenance,
+)
 from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
 from pokezero.showdown import observation_schema_version_from_choice  # noqa: E402
@@ -54,19 +57,31 @@ def main(argv: Iterable[str] | None = None) -> int:
         public_root=ROOT,
         observed_audits=args.observed_audit,
     )
-    for entry in payload["observed"]["audit_provenance"]:
+    run_provenance = {
+        "public_repo_commit": public_repo_commit(ROOT),
+        "showdown_source_hash": source.metadata.source_hash,
+        "observation_schema": observation_schema,
+        "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
+    }
+    observed_provenance = payload["observed"]["audit_provenance"]
+    for entry in observed_provenance:
         provenance = entry["audit_provenance"]
         if provenance.get("observation_schema") != observation_schema:
             parser.error(f"observed audit has a non-v3 schema: {entry['path']}")
         if provenance.get("showdown_source_hash") != source.metadata.source_hash:
             parser.error(f"observed audit source hash differs from --showdown-root: {entry['path']}")
+    if observed_provenance:
+        try:
+            require_expected_observed_audit_provenance(observed_provenance, expected=run_provenance)
+        except ValueError as exc:
+            parser.error(str(exc))
     payload["audit_provenance"] = {
         "schema_version": "pokezero.protocol-emission-inventory-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
-        "public_repo_commit": public_repo_commit(ROOT),
+        "public_repo_commit": run_provenance["public_repo_commit"],
         "showdown_source_hash": source.metadata.source_hash,
         "observation_schema": observation_schema,
-        "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
+        "image_digest": run_provenance["image_digest"],
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
     }
     _write_json_atomic(args.out, payload)
