@@ -15,7 +15,15 @@ def _snapshot(*, battle: dict, revealed: dict, protocol_lines: tuple[str, ...], 
     )
 
 
-def _battle(*, status: str, hp: int = 100, active: bool = True) -> dict:
+def _battle(
+    *,
+    status: str,
+    hp: int = 100,
+    active: bool = True,
+    fainted: bool = False,
+    types: list[str] | None = None,
+    species: str = "Starmie",
+) -> dict:
     return {
         "field": {"weather": ""},
         "sides": [
@@ -23,15 +31,15 @@ def _battle(*, status: str, hp: int = 100, active: bool = True) -> dict:
                 "id": "p1",
                 "pokemon": [
                     {
-                        "species": "[Species:starmie]",
+                        "species": f"[Species:{species}]",
                         "isActive": active,
-                        "fainted": False,
+                        "fainted": fainted,
                         "hp": hp,
                         "maxhp": 100,
                         "status": status,
                         "boosts": {},
                         "volatiles": {},
-                        "types": ["Water", "Psychic"],
+                        "types": types if types is not None else ["Water", "Psychic"],
                         "ability": "Natural Cure",
                         "item": "Leftovers",
                     }
@@ -104,6 +112,7 @@ class SilentMutationAuditTests(unittest.TestCase):
     def test_switch_is_backing_for_outgoing_boost_and_volatile_resets(self) -> None:
         self.assertTrue(_has_protocol_backing("boosts", ("switch",)))
         self.assertTrue(_has_protocol_backing("volatiles", ("switch",)))
+        self.assertTrue(_has_protocol_backing("types", ("switch",)))
 
     def test_request_private_choice_lock_is_excluded_from_the_public_volatile_surface(self) -> None:
         surface = _pokemon_surface(
@@ -121,6 +130,78 @@ class SilentMutationAuditTests(unittest.TestCase):
         )
 
         self.assertEqual(surface["volatiles"], ("substitute",))
+
+    def test_fainted_status_bookkeeping_does_not_create_a_silent_candidate(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="fnt", active=False, fainted=True),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=("|faint|p1a: Starmie",),
+        )
+        after = _snapshot(
+            battle=_battle(status="", active=False, fainted=True),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=before.protocol_lines + ("|switch|p1a: Blissey|Blissey, L80|100/100",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="fainted-status-normalization")
+
+        self.assertEqual(report.to_json_dict()["silent_candidate_count"], 0)
+
+    def test_inactive_type_resets_are_outside_the_model_visible_surface(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="", active=False, types=["Ground"], species="Kecleon"),
+            revealed={"p1": (SimpleNamespace(species="Kecleon"),)},
+            protocol_lines=(),
+        )
+        after = _snapshot(
+            battle=_battle(status="", active=False, types=["Normal"], species="Kecleon"),
+            revealed={"p1": (SimpleNamespace(species="Kecleon"),)},
+            protocol_lines=("|turn|2",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="benched-color-change-reset")
+
+        self.assertEqual(report.to_json_dict()["silent_candidate_count"], 0)
+
+    def test_unexplained_active_retype_remains_a_silent_candidate(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="", active=True, types=["Normal"], species="Kecleon"),
+            revealed={"p1": (SimpleNamespace(species="Kecleon"),)},
+            protocol_lines=(),
+        )
+        after = _snapshot(
+            battle=_battle(status="", active=True, types=["Fire"], species="Kecleon"),
+            revealed={"p1": (SimpleNamespace(species="Kecleon"),)},
+            protocol_lines=("|turn|2",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="active-unexplained-retype")
+
+        self.assertEqual(report.to_json_dict()["silent_candidate_count"], 1)
+
+    def test_switch_reveals_an_incoming_mons_dex_types(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="", active=False, types=["Water", "Psychic"]),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=(),
+        )
+        after = _snapshot(
+            battle=_battle(status="", active=True, types=["Water", "Psychic"]),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=("|switch|p1a: Starmie|Starmie, L80|100/100",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="switch-type-reveal")
+
+        self.assertEqual(report.to_json_dict()["silent_candidate_count"], 0)
 
 
 if __name__ == "__main__":

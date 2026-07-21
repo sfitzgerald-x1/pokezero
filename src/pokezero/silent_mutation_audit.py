@@ -35,7 +35,11 @@ _FIELD_PROTOCOL_TAGS: Mapping[str, frozenset[str]] = {
     "volatiles": frozenset(
         {"-start", "-end", "-activate", "-singleturn", "-singlemove", "switch", "drag", "replace", "faint"}
     ),
-    "types": frozenset({"-start", "-end", "-formechange", "-detailschange", "-transform"}),
+    # A switch directly reveals the incoming species, whose base types are
+    # dex-derived in v3. The dynamic cases below cover active retypes.
+    "types": frozenset(
+        {"-start", "-end", "-formechange", "-detailschange", "-transform", "switch", "drag", "replace"}
+    ),
     "weather": frozenset({"-weather"}),
     "side_conditions": frozenset({"-sidestart", "-sideend", "-swapsideconditions"}),
 }
@@ -102,6 +106,11 @@ class SilentMutationAuditReport:
             before_fields = before_surface[entity]
             after_fields = after_surface[entity]
             for field in _POKEMON_FIELDS:
+                # Dynamic types only reach the v3 input for the current active
+                # token. Do not compare a just-benched mon's retired override
+                # against its base dex type.
+                if field == "types" and not bool(after_fields["active"]):
+                    continue
                 if before_fields[field] == after_fields[field]:
                     continue
                 classification, detail = _classify_pokemon_mutation(
@@ -252,11 +261,16 @@ def _pokemon_surface(
     boosts = pokemon.get("boosts")
     volatiles = pokemon.get("volatiles")
     types = pokemon.get("types")
+    active = bool(pokemon.get("isActive"))
+    fainted = bool(pokemon.get("fainted"))
     return {
-        "active": bool(pokemon.get("isActive")),
-        "fainted": bool(pokemon.get("fainted")),
+        "active": active,
+        "fainted": fainted,
         "hp": _numeric_pair(pokemon.get("hp"), pokemon.get("maxhp")),
-        "status": _normalized_value(pokemon.get("status")),
+        # The bridge may normalize a fainted Pokemon's transient ``fnt``
+        # status string after the public faint event. Fainted is separately
+        # model-visible, so that bookkeeping change is not a status mutation.
+        "status": "fnt" if fainted else _normalized_value(pokemon.get("status")),
         "boosts": tuple(sorted((str(key), int(value)) for key, value in boosts.items())) if isinstance(boosts, Mapping) else (),
         # Choice locking and related action constraints live in the raw simulator but are
         # request-private. Keep only volatile ids already exposed by the public replay fold.
@@ -269,7 +283,14 @@ def _pokemon_surface(
         )
         if isinstance(volatiles, Mapping)
         else (),
-        "types": tuple(sorted(_normalized_value(value) for value in types)) if isinstance(types, list) else (),
+        # v3 applies dynamic Color Change / Forecast type overrides only to
+        # the active token. A benched mon's simulator type reset cannot reach
+        # the model input and must not create an audit candidate.
+        "types": (
+            tuple(sorted(_normalized_value(value) for value in types))
+            if active and isinstance(types, list)
+            else ()
+        ),
     }
 
 
