@@ -19,6 +19,19 @@
 #   defines Struggle as Normal-type, which wrongly made gen3 Struggle immune vs
 #   Ghost and resisted by Rock/Steel. Compile-time gated so gen1 stays Normal;
 #   authored against the attract-patched tree, applied AFTER attract.
+#   poke-engine-gen3-rapidspin-fidelity.patch — gen3 Rapid Spin / Protect fidelity.
+#   (1) Protect leak: the move-id-keyed post-hit handlers (choice_hazard_clear,
+#   choice_special_effect) survived remove_effects_for_protect() (which leaves
+#   move_id intact), so a Protect-blocked Rapid Spin still stripped the spinner's
+#   own Spikes, and Seismic Toss/Super Fang/Endeavor etc. still dealt fixed damage
+#   THROUGH Protect. before_move now returns a blocked_by_protect bool threaded to
+#   those handlers, which early-return when blocked (never gated on damage/hit_sub,
+#   so a spin that connects on a Substitute STILL clears). (2) A connecting Rapid
+#   Spin now also frees the user from Leech Seed and partial-trapping (Wrap/Bind/
+#   Fire Spin/Clamp/Whirlpool) — previously unmodelled. Verified vs real gen3
+#   Showdown (scripts/rapidspin_differential.py). Touches generate_instructions.rs
+#   + choice_effects.rs only (no overlap with the other patches); authored against
+#   the struggle-patched tree, applied AFTER struggle-typeless.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -37,7 +50,7 @@ tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch; do
+for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch poke-engine-gen3-rapidspin-fidelity.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 
