@@ -107,6 +107,16 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             [row["signature"] for row in report["differential"]["observed_signatures_without_semantic_coverage"]],
             ["-mystery"],
         )
+        self.assertEqual(
+            report["differential"]["observed_but_unconsumed_unclassified"],
+            [{
+                "signature": "-mystery",
+                "tag": "-mystery",
+                "count": 5,
+                "sources": [str(observed)],
+                "coverage": "unclassified",
+            }],
+        )
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
         self.assertEqual(report["observed"]["audit_provenance"][0]["audit_provenance"]["image_digest"], "fixture-image")
@@ -115,6 +125,45 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertEqual(_signature_coverage("-mustrecharge").coverage, "semantic-alias")
         self.assertEqual(_signature_coverage("move:protect").coverage, "direct")
         self.assertEqual(_signature_coverage("-start:perish3").coverage, "direct")
+
+    def test_inventory_keeps_focus_punch_charge_as_an_unclassified_o_minus_c_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            showdown, public = self._fixture_roots(root)
+            observed = root / "observed.json"
+            observed.write_text(
+                json.dumps(
+                    {
+                        "protocol_signatures": {"debug": 4, "-singleturn:focuspunch": 2},
+                        "protocol_signature_schema_version": "pokezero.protocol-signature-census.v2",
+                        "audit_provenance": {
+                            "observation_schema": "pokezero.observation.v3",
+                            "showdown_source_hash": "fixture-source",
+                            "image_digest": "fixture-image",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = build_protocol_inventory(
+                showdown_root=showdown,
+                public_root=public,
+                observed_audits=(observed,),
+            )
+
+        coverage = {row["signature"]: row for row in report["observed"]["signature_coverage"]}
+        self.assertEqual(coverage["debug"]["coverage"], "non-model")
+        self.assertEqual(coverage["-singleturn:focuspunch"]["coverage"], "unclassified")
+        self.assertEqual(
+            report["differential"]["observed_but_unconsumed_unclassified"],
+            [{
+                "signature": "-singleturn:focuspunch",
+                "tag": "-singleturn",
+                "count": 2,
+                "sources": [str(observed)],
+                "coverage": "unclassified",
+            }],
+        )
 
     def test_consumer_discovery_only_counts_event_type_comparisons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

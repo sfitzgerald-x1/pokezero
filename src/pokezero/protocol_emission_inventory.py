@@ -64,8 +64,11 @@ class ProtocolSignatureCoverage:
     ``direct`` means the listed protocol signature itself is consumed by a
     public observation, replay, or belief path. ``semantic-alias`` means the
     line is intentionally redundant because another public line in the same
-    mechanic carries the model-visible fact. Aliases stay outside C so the
-    inventory distinguishes a true handler from a justified omission.
+    mechanic carries the model-visible fact. ``non-model`` is a public
+    transport, setup, diagnostic, or terminal announcement that cannot alter
+    a later model decision in this fixed-format audit. Both non-direct classes
+    stay outside C so the inventory distinguishes a true handler from a
+    documented non-omission.
     """
 
     signature: str
@@ -191,6 +194,25 @@ _SIGNATURE_COVERAGE = (
         coverage="semantic-alias",
         handler="cant:recharge -> src/pokezero/transitions.py and src/pokezero/turn_merged.py",
         detail="The following public cant:recharge action is the model-visible forced-turn fact; this line announces it one turn early.",
+    ),
+    *(
+        ProtocolSignatureCoverage(
+            signature=signature,
+            coverage="non-model",
+            handler="fixed-format protocol boundary",
+            detail=detail,
+        )
+        for signature, detail in (
+            ("debug", "Diagnostic transport output is not battle state."),
+            ("-hint", "Human-facing protocol guidance does not change battle state."),
+            ("start", "Battle-start framing has no later decision-state payload."),
+            ("gametype", "The fixed singles format is already selected by the audit runner."),
+            ("gen", "The fixed Gen 3 format is already selected by the audit runner."),
+            ("rule", "Format rules are fixed before the first model decision."),
+            ("teamsize", "Gen 3 random battles use the fixed team-size contract."),
+            ("tier", "The fixed Gen 3 random-battle format is already selected by the runner."),
+            ("tie", "A terminal tie has no subsequent model decision."),
+        )
     ),
 )
 
@@ -386,6 +408,7 @@ def build_protocol_inventory(
     observed_signature_rows: list[dict[str, Any]] = []
     observed_without_direct_consumer: list[dict[str, Any]] = []
     observed_without_semantic_coverage: list[dict[str, Any]] = []
+    observed_unconsumed_unclassified: list[dict[str, Any]] = []
     for signature, count in sorted(observed_signatures.items(), key=lambda item: (-item[1], item[0])):
         coverage = _signature_coverage(signature)
         row: dict[str, Any] = {
@@ -403,6 +426,8 @@ def build_protocol_inventory(
             observed_without_direct_consumer.append(row)
         if coverage is None:
             observed_without_semantic_coverage.append(row)
+            if row["tag"] not in consumer_tags:
+                observed_unconsumed_unclassified.append(row)
     return {
         "schema_version": "pokezero.protocol-emission-inventory.v2",
         "engine_emittable": {
@@ -431,6 +456,9 @@ def build_protocol_inventory(
             "semantic_alias_count": sum(
                 coverage.coverage == "semantic-alias" for coverage in _SIGNATURE_COVERAGE
             ),
+            "non_model_signature_count": sum(
+                coverage.coverage == "non-model" for coverage in _SIGNATURE_COVERAGE
+            ),
         },
         "observed": {
             "signature_counts": [
@@ -451,6 +479,9 @@ def build_protocol_inventory(
             "observed_but_unconsumed": [
                 {"tag": tag, "count": observed_by_tag[tag]}
                 for tag in sorted(observed_tags - consumer_tags, key=lambda tag: (-observed_by_tag[tag], tag))
+            ],
+            "observed_but_unconsumed_unclassified": [
+                row for row in observed_unconsumed_unclassified
             ],
             "observed_signatures_without_direct_consumer": observed_without_direct_consumer,
             "observed_signatures_without_semantic_coverage": observed_without_semantic_coverage,
