@@ -1503,6 +1503,14 @@ _RESIDUAL_HP_TAGS = (
     "[from] Nightmare",
     "[from] move: Wrap",
     "[from] partiallytrapped",
+    # Wish's landing heal is an end-of-turn RESIDUAL heal (gen3 slotCondition, residual order 7),
+    # exactly like the Leftovers / Rain Dish residual heals above: it must NOT overwrite the
+    # action-phase HP snapshot the non-proc item pruning reads (same #769 mechanism as the psn/brn
+    # residual-DAMAGE tags). Without this, a Wish landing on a mon that fell to <=25% during the
+    # action phase (no berry eaten) would overwrite the low pre-residual snapshot with the healed
+    # value and MASK the action-phase non-proc, wrongly leaving the pinch variants un-pruned.
+    # (Ingrain is deliberately NOT listed — 0 gen3-randbats pool carriers, unreachable.)
+    "[from] move: Wish",
 )
 
 
