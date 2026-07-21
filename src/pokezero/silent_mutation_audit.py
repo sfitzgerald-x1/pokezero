@@ -127,6 +127,14 @@ class SilentMutationAuditReport:
                 # against its base dex type.
                 if field == "types" and not bool(after_fields["active"]):
                     continue
+                # Boosts and public volatile ids exist in the observation only
+                # for active tokens. A switch-out intentionally removes that
+                # token surface, so its old active-only values cannot be a
+                # silent mutation in the next model input. Status remains
+                # comparable here: a benched Natural Cure transition is the
+                # required silent-mutation regression case.
+                if field in {"boosts", "volatiles"} and not bool(after_fields["active"]):
+                    continue
                 if before_fields[field] == after_fields[field]:
                     continue
                 classification, detail = _classify_pokemon_mutation(
@@ -386,7 +394,7 @@ def _has_protocol_backing(
             return True
         if event.target_side != side:
             continue
-        if event.target_species == normalized_species:
+        if _species_target_matches(event.target_species, normalized_species):
             return True
         if (
             field == "active"
@@ -395,6 +403,33 @@ def _has_protocol_backing(
             and after_fields is not None
             and bool(before_fields.get("active"))
             and not bool(after_fields.get("active"))
+        ):
+            return True
+    return False
+
+
+def _species_target_matches(event_species: str | None, entity_species: str) -> bool:
+    """Match protocol's base-form target spelling to a public form identity.
+
+    Gen 3 protocol targets use base names for a few forms, such as
+    ``p2a: Unown`` for publicly revealed ``Unown-P``. The public parser and
+    belief engine already resolve that spelling; the audit must use the same
+    public equivalence or it will mislabel ordinary damage/switch transitions
+    as silent. Limit the relaxation to Gen 3 form families rather than using a
+    general prefix rule that could hide an unrelated species mismatch.
+    """
+
+    if event_species == entity_species:
+        return True
+    if event_species is None:
+        return False
+    for base_species in ("unown", "deoxys", "castform"):
+        if (
+            event_species == base_species
+            and entity_species.startswith(base_species)
+        ) or (
+            entity_species == base_species
+            and event_species.startswith(base_species)
         ):
             return True
     return False

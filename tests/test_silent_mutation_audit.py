@@ -163,6 +163,37 @@ class SilentMutationAuditTests(unittest.TestCase):
         self.assertEqual(surface["boosts"], ())
         self.assertEqual(surface["volatiles"], ())
 
+    def test_switching_out_does_not_report_retired_active_only_fields(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="", active=True),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=(),
+        )
+        before.bridge_snapshot["battle"]["sides"][0]["pokemon"][0]["boosts"] = {"spa": 2}
+        before.bridge_snapshot["battle"]["sides"][0]["pokemon"][0]["volatiles"] = {"substitute": {}}
+        before.replay.volatiles = {"p1": ("substitute",)}
+        after = _snapshot(
+            battle=_battle(status="", active=False),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=("|switch|p1a: Blissey|Blissey, L80|100/100",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="switch-out-active-only-fields")
+
+        self.assertEqual(report.to_json_dict()["silent_candidate_count"], 0)
+
+    def test_base_form_protocol_target_backs_revealed_unown_form(self) -> None:
+        events = _protocol_events(("|-damage|p2a: Unown|200/258",))
+
+        self.assertTrue(_has_protocol_backing("hp", events, entity="p2:unownp"))
+
+    def test_base_form_protocol_target_backs_revealed_deoxys_form(self) -> None:
+        events = _protocol_events(("|switch|p1a: Deoxys|Deoxys-Speed, L76|201/201",))
+
+        self.assertTrue(_has_protocol_backing("active", events, entity="p1:deoxysspeed"))
+
     def test_request_private_choice_lock_is_excluded_from_the_public_volatile_surface(self) -> None:
         surface = _pokemon_surface(
             {
