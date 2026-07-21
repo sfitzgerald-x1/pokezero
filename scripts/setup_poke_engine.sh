@@ -16,6 +16,16 @@
 #   mirroring the confusion self-hit, so search prices the immobilization
 #   (docs/engine_fidelity_findings.md). Authored against the residual-patched
 #   tree, so it is applied AFTER residual-order.
+#   poke-engine-gen3-struggle-typeless.patch — gen3 Struggle is TYPELESS (neutral
+#   vs all types incl. Ghost, no STAB); compile-time gated so gen1 stays Normal.
+#   Applied AFTER attract. (Kept in lock-step with vendor_poke_engine_src.sh so the
+#   Python wheel and the native pokezero-search crate build the SAME gen3 engine.)
+#   poke-engine-gen3-rapidspin-fidelity.patch — gen3 Rapid Spin / Protect fidelity:
+#   Protect-blocked move-id-keyed handlers (hazard clear, Seismic Toss/Super Fang/
+#   Endeavor special effects) no longer fire through Protect, and a connecting
+#   Rapid Spin now also clears the user's Leech Seed + partial-trap. Regression
+#   gate: scripts/rapidspin_differential.py + tests/test_engine_rapidspin_fidelity.py.
+#   Applied AFTER struggle-typeless.
 #   --fuzz=0 so a future version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -33,7 +43,7 @@ tar xzf "$BUILD_DIR"/poke_engine-"$VERSION".tar.gz -C "$BUILD_DIR"
 SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch; do
+for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch poke-engine-gen3-rapidspin-fidelity.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 

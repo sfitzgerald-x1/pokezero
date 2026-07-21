@@ -1,0 +1,199 @@
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -335,9 +335,22 @@
+ pub fn choice_hazard_clear(
+     state: &mut State,
+     choice: &Choice,
++    blocked_by_protect: bool,
+     attacking_side_ref: &SideReference,
+     instructions: &mut StateInstructions,
+ ) {
++    // pokezero gen3 Protect-fidelity fix: Protect blocks the ENTIRE move, but
++    // move_id survives remove_effects_for_protect(), so this move-id-keyed clear
++    // would otherwise still fire through Protect and wrongly strip the spinner's
++    // own hazards/Leech Seed/partial-trap. Verified vs real gen3 Showdown: Rapid
++    // Spin into Protect keeps Spikes (`-activate ... Protect`, no `-sideend`).
++    // The guard is on Protect specifically, NOT on damage/hit_sub: a Rapid Spin
++    // that connects on a Substitute STILL clears the hazards (Showdown emits
++    // `-activate ... Substitute [damage]` then `-sideend ... Spikes`), and that
++    // path is not blocked_by_protect.
++    if blocked_by_protect {
++        return;
++    }
+     let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
+     match choice.move_id {
+         Choices::RAPIDSPIN => {
+@@ -388,7 +401,50 @@
+                         },
+                     ));
+                 attacking_side.side_conditions.sticky_web = 0;
++            }
++            // pokezero gen3 fidelity fix: a CONNECTING Rapid Spin also frees the
++            // user from Leech Seed and from partial-trapping (Wrap/Bind/Fire Spin/
++            // Clamp/Whirlpool). Upstream cleared only the four entry-hazard side
++            // conditions, leaving these two entirely unmodelled. Verified against
++            // real gen3 Showdown: a seeded/trapped mon that Rapid Spins emits
++            // `-end <user> Leech Seed [from] move: Rapid Spin` and ends the
++            // partial-trap (`-end <user> <trap move> [partiallytrapped]`); a
++            // no-spin control shows both persisting. These are the ATTACKER's own
++            // volatiles. They ride the same blocked_by_protect guard above (never
++            // fire through Protect) but DO fire when the spin connects on a
++            // Substitute, exactly like the hazard clear.
++            if attacking_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::LEECHSEED)
++            {
++                instructions
++                    .instruction_list
++                    .push(Instruction::RemoveVolatileStatus(
++                        RemoveVolatileStatusInstruction {
++                            side_ref: *attacking_side_ref,
++                            volatile_status: PokemonVolatileStatus::LEECHSEED,
++                        },
++                    ));
++                attacking_side
++                    .volatile_statuses
++                    .remove(&PokemonVolatileStatus::LEECHSEED);
+             }
++            if attacking_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
++            {
++                instructions
++                    .instruction_list
++                    .push(Instruction::RemoveVolatileStatus(
++                        RemoveVolatileStatusInstruction {
++                            side_ref: *attacking_side_ref,
++                            volatile_status: PokemonVolatileStatus::PARTIALLYTRAPPED,
++                        },
++                    ));
++                attacking_side
++                    .volatile_statuses
++                    .remove(&PokemonVolatileStatus::PARTIALLYTRAPPED);
++            }
+         }
+         _ => {}
+     }
+@@ -397,9 +453,25 @@
+ pub fn choice_special_effect(
+     state: &mut State,
+     choice: &mut Choice,
++    blocked_by_protect: bool,
+     attacking_side_ref: &SideReference,
+     instructions: &mut StateInstructions,
+ ) {
++    // pokezero gen3 Protect-fidelity fix (sibling sweep): this dispatcher is keyed
++    // on choice.move_id, which survives remove_effects_for_protect(), and it runs
++    // BEFORE the damage none-check, so a Protect-blocked move whose arm computes
++    // its own damage/effect directly (independent of base_power/category) would
++    // leak through Protect. The reachable, gen3-randbats offenders are the
++    // fixed/level/fraction-damage moves SEISMICTOSS, SUPERFANG, ENDEAVOR (and the
++    // counter moves COUNTER/MIRRORCOAT, plus PAINSPLIT) — all verified fully
++    // blocked by Protect in real gen3 Showdown (`-activate ... Protect`, no
++    // damage). Protect blocks the whole move, so no arm here should run when
++    // blocked; a single guard covers every arm. Self-targeting arms (Belly Drum,
++    // Wish, Rest, weather, etc.) lack the protect flag and never set this bool, so
++    // they are unaffected.
++    if blocked_by_protect {
++        return;
++    }
+     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+     match choice.move_id {
+         Choices::BELLYDRUM => {
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1176,7 +1176,17 @@
+     defender_choice: &Choice,
+     attacking_side: &SideReference,
+     incoming_instructions: &mut StateInstructions,
+-) {
++) -> bool {
++    // pokezero gen3 Protect-fidelity fix: report whether this move was fully
++    // blocked by the defender's Protect. remove_effects_for_protect() (called
++    // below) zeroes base_power/category and clears the declarative effect fields
++    // but leaves move_id intact, so the move-id-keyed post-hit handlers
++    // (choice_special_effect, choice_hazard_clear) would otherwise still fire
++    // THROUGH Protect (e.g. Rapid Spin stripping the user's own Spikes, or
++    // Seismic Toss / Super Fang / Endeavor dealing their fixed damage). Threading
++    // this bool lets those handlers early-return. The block is gated on
++    // `choice.flags.protect`, so protect-bypassing moves never set it.
++    let mut blocked_by_protect = false;
+     item_before_move(state, choice, attacking_side, incoming_instructions);
+     choice_before_move(state, choice, attacking_side, incoming_instructions);
+ 
+@@ -1223,10 +1233,12 @@
+         && choice.flags.protect
+     {
+         choice.remove_effects_for_protect();
++        blocked_by_protect = true;
+         if choice.crash.is_some() {
+             choice.accuracy = 0.0;
+         }
+     }
++    blocked_by_protect
+ }
+ 
+ fn generate_instructions_from_existing_status_conditions(
+@@ -1646,7 +1658,7 @@
+         return;
+     }
+ 
+-    before_move(
++    let blocked_by_protect = before_move(
+         state,
+         choice,
+         defender_choice,
+@@ -1734,7 +1746,13 @@
+         final_instructions.push(incoming_instructions);
+         return;
+     }
+-    choice_special_effect(state, choice, &attacking_side, &mut incoming_instructions);
++    choice_special_effect(
++        state,
++        choice,
++        blocked_by_protect,
++        &attacking_side,
++        &mut incoming_instructions,
++    );
+     let damage = calculate_damage(state, &attacking_side, &choice, DamageRolls::Max);
+     check_move_hit_or_miss(
+         state,
+@@ -1849,6 +1867,7 @@
+             incoming_instructions,
+             hit_count,
+             does_damage,
++            blocked_by_protect,
+             regular_damage,
+             choice,
+             defender_choice,
+@@ -1868,6 +1887,7 @@
+                 branch_ins,
+                 hit_count,
+                 does_damage,
++                blocked_by_protect,
+                 branch_damage,
+                 choice,
+                 defender_choice,
+@@ -2659,6 +2679,7 @@
+     mut instructions: StateInstructions,
+     hit_count: i8,
+     does_damage: bool,
++    blocked_by_protect: bool,
+     damage_amount: i16,
+     choice: &mut Choice,
+     defender_choice: &Choice,
+@@ -2683,7 +2704,13 @@
+                 &mut instructions,
+             );
+         }
+-        choice_hazard_clear(state, &choice, &attacking_side, &mut instructions);
++        choice_hazard_clear(
++            state,
++            &choice,
++            blocked_by_protect,
++            &attacking_side,
++            &mut instructions,
++        );
+         if let Some(volatile_status) = &choice.volatile_status {
+             get_instructions_from_volatile_statuses(
+                 state,
