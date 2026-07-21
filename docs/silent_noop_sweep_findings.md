@@ -44,12 +44,14 @@ metadata inputs, so a matching v4 hash could still describe a different
 universe. The v5 Jobs will write the only evidence eligible to close this
 schema-freeze gate.
 
-The current v5 execution boundary also includes the public v3 parser and
-encoder additions for consecutive stall state and confusion turns-so-far. The
-active v3 numeric width is therefore **161**. Artifacts captured before those
-observation inputs landed are historical even if their source-universe hash
-matches: the next eligible v5 aggregate must be built from a public revision
-containing both additions and must record that revision in its provenance.
+The active v5 execution boundary includes the public v3 parser and encoder
+additions for consecutive stall state, confusion turns-so-far, and Encore
+turns-so-far. The active v3 numeric width is therefore **162**. The in-flight
+161-feature v5 wave remains useful regression evidence, but it is historical
+and cannot close this gate: it predates the Encore addition. A final aggregate
+must be built from a public revision containing all three additions and record
+that revision in its provenance. Pending v3 additions are folded into that
+replacement cycle before final submission rather than mixed with this wave.
 
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
