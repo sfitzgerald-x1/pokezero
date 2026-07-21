@@ -44,25 +44,29 @@ metadata inputs, so a matching v4 hash could still describe a different
 universe. The v5 Jobs will write the only evidence eligible to close this
 schema-freeze gate.
 
-No immutable final v5 execution boundary has been frozen yet. The current
-public baseline includes the v3 parser and encoder additions for consecutive
-stall state, confusion turns-so-far, Encore turns-so-far, Wrap elapsed turns,
-per-mon gender, and Mean Look / Spider Web trapping. Its numeric width is
-therefore **166**. The in-flight 161-feature v5 wave remains useful
-regression evidence, but it is historical and cannot close this gate: it
-predates the later v3 additions. The final replacement wave is intentionally
-held for the pending Wish-state repair, then will record that settled public
-revision and its rebuilt source identity in every artifact.
+The immutable final v5 execution boundary is public commit
+`a61ee3e710965fa114cf4889cbe33be09026ff34` (#820). It includes the v3 parser
+and encoder additions for consecutive stall state, confusion turns-so-far,
+Encore turns-so-far, Wrap elapsed turns, per-mon gender, Mean Look / Spider
+Web trapping, and the per-side Wish turns-to-land clock. Its numeric width is
+therefore **168**. The Wish repair also keeps a landing Wish heal out of the
+belief layer's action-phase HP snapshot, so it cannot mask a pinch-item
+non-proc. The final replacement wave has been submitted from this source
+boundary; only its terminal provenance-backed artifacts can close this gate.
+
+The in-flight 161-feature v5 wave remains useful regression evidence, but it
+is historical and cannot close this gate because it predates the later v3
+additions and the Wish repair.
 
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
-| v5 pending | Source-identity-v5 revision | v3 | v2 | Exact universe fixtures | Not started. Re-run the full materialized universe and record its v5 hash. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | v2 | Bounded-depth exact fixtures | Not started after the v5 static gate. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | v2 | Curated party interactions | Not started after the v5 static gate. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | N/A | Silent engine-mutation lane | Not started. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | v2 | E/O/C protocol inventory and census differential | Not started; any v4 capture remains historical. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | N/A | Encoding-collision capture and audit | Not started; any v4 capture remains historical. | Terminal aggregate pending |
-| v5 pending | Source-identity-v5 revision | v3 | N/A | Counterfactual harm probes | Runs only for the validated v5 shortlist. | Not started |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Exact universe fixtures | Submitted; terminal aggregate pending. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Curated party interactions | Submitted behind the static gate. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Silent engine-mutation lane | Submitted; terminal aggregate pending. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Encoding-collision capture and audit | Submitted; terminal aggregate pending. | Terminal aggregate pending |
+| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Counterfactual harm probes | Runs only for the validated v5 shortlist. | Not started |
 
 ## Historical Triage Evidence
 
