@@ -747,9 +747,17 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     )
     emittable_but_unobserved_count = _differential_count(differential, "emittable_but_unobserved")
     consumer_not_emittable_count = _differential_count(differential, "consumer_not_emittable")
+    # Every E/O/C delta needs either a fixture/reachability verdict or a stale
+    # handler disposition before the inventory can call itself clean. A
+    # signature with a semantic handler is not enough to waive an unobserved
+    # engine emission or a consumer that no current emitter can produce.
     status = _require_derived_status(
         status=complete.get("status"),
-        clean=semantic_coverage_gap_count == 0,
+        clean=(
+            semantic_coverage_gap_count == 0
+            and emittable_but_unobserved_count == 0
+            and consumer_not_emittable_count == 0
+        ),
         label="protocol inventory terminal aggregate",
     )
     return {

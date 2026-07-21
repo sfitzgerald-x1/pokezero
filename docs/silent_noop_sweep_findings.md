@@ -34,17 +34,33 @@ their common provenance tuple, then publishes a whitelist-only summary under
 does not copy private paths, fully qualified image names, or deployment data
 into the public repository.
 
-## Active Audit Cycle (v5 Source Identity)
+## Active Audit Cycle (Wish-Inclusive V6 Source Identity)
 
-The final audit cycle uses source identity schema v5, which hashes the resolved
-Gen 3 Dex metadata used to materialize variants and invalidates a long-lived
-worker's local universe after its Showdown checkout is rebuilt. No v4 artifact
-below is current clean evidence: its source identity omitted those resolved
-metadata inputs, so a matching v4 hash could still describe a different
-universe. The v5 Jobs will write the only evidence eligible to close this
-schema-freeze gate.
+The final audit cycle uses source identity schema v6, which hashes the resolved
+Gen 3 Dex metadata used to materialize variants plus the bounded Showdown
+simulator surface that determines protocol emissions and state mutations. No v5
+artifact below is current clean evidence: its source identity did not cover
+that simulator surface, so a matching v5 hash could still describe a different
+engine.
 
-The immutable source-and-observation boundary is public commit
+The current-source v5 diagnostic wave was rebuilt from public commit
+`cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` after the Wish residual-order repair
+and the count-only protocol-census contract landed. It reruns exact-universe,
+bounded-depth, party-interaction, silent-mutation, collision, and E/O/C
+inventory lanes with an immutable image and fresh source provenance. Its
+terminal aggregate is retained as diagnostic evidence while the canonical
+inventory, collision-hydration, and v6 engine-source contracts are hardened. A
+rebuilt v6 wave after those contracts land is required before the schema-freeze
+gate can close.
+
+No trained v3 checkpoint exists yet. The learned-policy production-self-play
+O-census is therefore deliberately **not** included in this wave: using a
+legacy checkpoint would violate the strict v3 boundary. The inventory still
+collects O from the fresh fixture and capture lanes, but this limitation must
+remain explicit until the first v3-trained checkpoint can supply a separately
+provenanced learned-policy capture. It is not a clean learned-policy result.
+
+The prior v5 source-and-observation boundary was public commit
 `a61ee3e710965fa114cf4889cbe33be09026ff34` (#820). It includes the v3 parser
 and encoder additions for consecutive stall state, confusion turns-so-far,
 Encore turns-so-far, Wrap elapsed turns, per-mon gender, Mean Look / Spider
@@ -55,10 +71,9 @@ non-proc. The first v5 wave from this source boundary is retained as diagnostic
 evidence only. Follow-up audit-contract hardening in public commit
 `250bdf5c533f44087c55aadfde28d50695092bf4` (#822) makes protocol backing
 entity-specific in the silent-mutation lane and hashes collision numerics at
-the model's float32 boundary. The replacement wave from that post-hardening
-revision is the only submitted v5 wave eligible to close this gate. The
-diagnostic wave may still contribute reproducible candidate evidence, but it
-cannot be cited as a final clean result.
+the model's float32 boundary. The diagnostic and replacement waves may still
+contribute reproducible candidate evidence, but they cannot be cited as a
+final clean result after the Wish-inclusive rebuild.
 
 The in-flight 161-feature v5 wave remains useful regression evidence, but it
 is historical and cannot close this gate because it predates the later v3
@@ -66,6 +81,13 @@ additions and the Wish repair.
 
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | v2 | Exact universe fixtures | Submitted from the rebuilt image; diagnostic only while evidence contracts are hardened. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | v2 | Curated party interactions | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | N/A | Silent engine-mutation lane | Submitted with the repaired classifier; diagnostic only. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers; no learned-policy v3 capture exists yet; diagnostic only until canonical E/C is enforced. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | N/A | Encoding-collision capture and audit | Submitted with model-float32 numeric hashing; diagnostic only until compact candidates are hydrated. | Terminal aggregate pending |
+| v5 Wish-inclusive diagnostic | `cb159b7d9fcf7bc4d18b14723a6498a5d87b07dc` | v3 | N/A | Counterfactual harm probes | Runs only for the validated current-wave shortlist. | Not started |
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Exact universe fixtures | Submitted; may produce diagnostic candidates only. | Terminal aggregate pending |
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Curated party interactions | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
@@ -195,7 +217,9 @@ this table.
 The schema-freeze recommendation is published only after every current-cycle
 layer above has a validated artifact or an evidence-based limitation, every
 candidate has a verdict, and all `ADD` candidates are grouped into one reviewed
-implementation proposal. The remaining open gates are the E/O/C differential,
-the 100k collision audit, and any resulting focused harm probes. A clean layer
-is recorded as a completed row with its full provenance; an empty table alone
-is never evidence of a clean audit.
+implementation proposal. The remaining open gates are canonical E/O/C
+enumeration with verdicts for all E-O/C-E rows, hydrated 100k collision
+evidence, the learned-policy O-census after a v3 checkpoint exists, and any
+resulting focused harm probes. A clean layer is recorded as a completed row
+with its full provenance; an empty table alone is never evidence of a clean
+audit.

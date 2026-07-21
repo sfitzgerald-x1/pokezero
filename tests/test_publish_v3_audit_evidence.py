@@ -665,7 +665,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     output=root / "public" / "summary.json",
                 )
 
-    def test_publishes_clean_inventory_with_informational_census_deltas(self):
+    def test_rejects_clean_inventory_with_unresolved_emission_or_consumer_deltas(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             inventory = self._inventory_root(root)
@@ -681,17 +681,14 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             complete["inventory_sha256"] = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
             write_json(complete_path, complete)
 
-            result = PUBLISHER.publish(
-                coverage_root=self._coverage_root(root),
-                silent_root=self._silent_root(root),
-                collision_root=self._collision_root(root),
-                inventory_root=inventory,
-                output=root / "public" / "summary.json",
-            )
-
-        protocol_inventory = result["layers"]["protocol_inventory"]
-        self.assertEqual(protocol_inventory["status"], "clean")
-        self.assertEqual(protocol_inventory["emittable_but_unobserved_count"], 1)
+            with self.assertRaisesRegex(ValueError, "disagrees with its validated counters"):
+                PUBLISHER.publish(
+                    coverage_root=self._coverage_root(root),
+                    silent_root=self._silent_root(root),
+                    collision_root=self._collision_root(root),
+                    inventory_root=inventory,
+                    output=root / "public" / "summary.json",
+                )
 
     def test_rejects_mixed_observed_census_provenance_before_publication(self):
         with tempfile.TemporaryDirectory() as temp:
