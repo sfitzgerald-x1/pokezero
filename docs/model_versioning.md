@@ -7,10 +7,11 @@ Showdown commit, or torch/deps. Checkpoints are self-describing — they carry `
 `training_schema_version`, and `model_config` — so the loader can detect an incompatible stack.
 
 Observation schema `pokezero.observation.v3` (CLI `v3`, checkpoint-driven like v2.1/v2.2, not yet
-the fresh default): v2.2's turn-merged surface plus five appended numeric columns — the `-fail`
-transition-event bit per sub-block, the public sleep-clause block bits on the field token, and the
-public consecutive-stall counter on each side's active mon (`docs/observation_v3_spec.md`); v3 is
-still pre-freeze, so the numeric feature count is 160; v2/v2.1/v2.2 encodes stay byte-identical.
+the fresh default): v2.2's turn-merged surface plus six appended numeric columns — the `-fail`
+transition-event bit per sub-block, the public sleep-clause block bits on the field token, the
+public consecutive-stall counter on each side's active mon, and confusion turns-so-far on a
+confused active mon (`docs/observation_v3_spec.md`); v3 is still pre-freeze, so the numeric feature
+count is 161; v2/v2.1/v2.2 encodes stay byte-identical.
 
 ## Policy: do NOT pin active checkpoints — pin only at a breaking change
 During normal development we **do not** freeze, tag, or pin checkpoints. Active checkpoints churn

@@ -44,6 +44,13 @@ metadata inputs, so a matching v4 hash could still describe a different
 universe. The v5 Jobs will write the only evidence eligible to close this
 schema-freeze gate.
 
+The current v5 execution boundary also includes the public v3 parser and
+encoder additions for consecutive stall state and confusion turns-so-far. The
+active v3 numeric width is therefore **161**. Artifacts captured before those
+observation inputs landed are historical even if their source-universe hash
+matches: the next eligible v5 aggregate must be built from a public revision
+containing both additions and must record that revision in its provenance.
+
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
 | v5 pending | Source-identity-v5 revision | v3 | v2 | Exact universe fixtures | Not started. Re-run the full materialized universe and record its v5 hash. | Terminal aggregate pending |
