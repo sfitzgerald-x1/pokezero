@@ -20,7 +20,7 @@ from pokezero.observation import (
 )
 
 K32_MASKS = ObservationFeatureMasks(transition_token_budget=32)
-STATS_OFF_MASKS = ObservationFeatureMasks(stats_block=False)
+STATS_OFF_MASKS = ObservationFeatureMasks(opponent_tendency_stats_block=False)
 
 
 class EnvConfigMaskResolutionTest(unittest.TestCase):
@@ -209,7 +209,7 @@ class MaskDerivationTest(unittest.TestCase):
         self.assertEqual(
             masks,
             ObservationFeatureMasks(
-                stats_block=False, exact_state=True, transition_token_budget=32
+                opponent_tendency_stats_block=False, exact_state=True, transition_token_budget=32
             ),
         )
         default_config = TransformerPolicyConfig.compact_category(

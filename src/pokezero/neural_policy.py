@@ -2302,7 +2302,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
     how the #492 train/eval observation mismatch happened.
     """
     return ObservationFeatureMasks(
-        stats_block=config.stats_block_enabled,
+        opponent_tendency_stats_block=config.stats_block_enabled,
         exact_state=config.exact_state_enabled,
         transition_token_budget=config.transition_token_budget,
         tier2_residuals=config.tier2_residuals,

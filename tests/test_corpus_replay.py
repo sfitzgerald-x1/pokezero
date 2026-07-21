@@ -52,7 +52,7 @@ class CorpusReplayGateTest(unittest.TestCase):
             NUMERIC_TIER2_INVESTMENT_PINNED,
             OPPONENT_POKEMON_TOKEN_OFFSET,
             OPPONENT_POKEMON_TOKEN_COUNT,
-            STATS_TOKEN_OFFSET,
+            OPPONENT_TENDENCY_STATS_TOKEN_OFFSET,
             TRANSITION_TOKEN_OFFSET,
             V2_1_REPLAY_OBSERVATION_SPEC,
             V2_REPLAY_OBSERVATION_SPEC,
@@ -130,7 +130,7 @@ class CorpusReplayGateTest(unittest.TestCase):
                                 )
                                 self.assertEqual(set(observation.categorical_ids[row_index]), {0})
                             self.assertEqual(
-                                observation.attention_mask[STATS_TOKEN_OFFSET],
+                                observation.attention_mask[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET],
                                 state.tendency_stats is not None,
                             )
                             for row_index in range(

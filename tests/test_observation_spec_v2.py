@@ -12,7 +12,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
-    STATS_TOKEN_COUNT,
+    OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
 )
@@ -50,7 +50,7 @@ from pokezero.showdown import (
     NUMERIC_WEATHER_PERMANENT,
     NUMERIC_WEATHER_TURNS,
     OPPONENT_POKEMON_TOKEN_OFFSET,
-    STATS_TOKEN_OFFSET,
+    OPPONENT_TENDENCY_STATS_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
     V2_1_REPLAY_OBSERVATION_SPEC,
     V2_REPLAY_OBSERVATION_SPEC,
@@ -357,11 +357,11 @@ class TransitionKindLockstepTest(unittest.TestCase):
 
     def test_token_section_offsets(self) -> None:
         self.assertEqual(
-            STATS_TOKEN_OFFSET,
+            OPPONENT_TENDENCY_STATS_TOKEN_OFFSET,
             FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT
             + ACTION_CANDIDATE_TOKEN_COUNT,
         )
-        self.assertEqual(TRANSITION_TOKEN_OFFSET, STATS_TOKEN_OFFSET + STATS_TOKEN_COUNT)
+        self.assertEqual(TRANSITION_TOKEN_OFFSET, OPPONENT_TENDENCY_STATS_TOKEN_OFFSET + OPPONENT_TENDENCY_STATS_TOKEN_COUNT)
         self.assertEqual(
             DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
             TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT,
@@ -682,7 +682,7 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
         observation = observation_from_player_state(
             state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
         )
-        stats_row = observation.numeric_features[STATS_TOKEN_OFFSET]
+        stats_row = observation.numeric_features[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET]
         self.assertAlmostEqual(stats_row[NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES], 1 / 64)
         # Rain reveal pair: (set-this-game=1, from-ability=0); order rain/sun/sand/hail.
         self.assertEqual(stats_row[NUMERIC_STAT_WEATHER_REVEAL_OFFSET], 1.0)
@@ -720,13 +720,13 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
 
     def test_stats_block_mask_zeroes_and_hides_the_stats_token(self) -> None:
         state = self._history_state()
-        masks = ObservationFeatureMasks(stats_block=False)
+        masks = ObservationFeatureMasks(opponent_tendency_stats_block=False)
         observation = observation_from_player_state(
             state, category_vocab=_VOCAB, feature_masks=masks, spec=V2_1_REPLAY_OBSERVATION_SPEC
         )
-        self.assertFalse(observation.attention_mask[STATS_TOKEN_OFFSET])
-        self.assertEqual(set(observation.numeric_features[STATS_TOKEN_OFFSET]), {0.0})
-        self.assertEqual(set(observation.categorical_ids[STATS_TOKEN_OFFSET]), {0})
+        self.assertFalse(observation.attention_mask[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET])
+        self.assertEqual(set(observation.numeric_features[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET]), {0.0})
+        self.assertEqual(set(observation.categorical_ids[OPPONENT_TENDENCY_STATS_TOKEN_OFFSET]), {0})
 
     def test_exact_state_mask_zeroes_exact_state_columns(self) -> None:
         state = _state([
@@ -756,7 +756,7 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
             state,
             category_vocab=_VOCAB,
             feature_masks=ObservationFeatureMasks(
-                stats_block=False, exact_state=False, transition_token_budget=32
+                opponent_tendency_stats_block=False, exact_state=False, transition_token_budget=32
             ),
             spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )

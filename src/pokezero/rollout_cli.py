@@ -391,7 +391,7 @@ def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationF
     from .observation import TRANSITION_TOKEN_COUNT, ObservationFeatureMasks
 
     return ObservationFeatureMasks(
-        stats_block=not no_stats,
+        opponent_tendency_stats_block=not no_stats,
         exact_state=not no_exact,
         transition_token_budget=TRANSITION_TOKEN_COUNT if budget is None else budget,
         tier2_residuals=True if tier2 is None else bool(tier2),

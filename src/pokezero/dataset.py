@@ -355,7 +355,17 @@ def _feature_masks_payload(feature_masks) -> dict | None:
     if feature_masks is None:
         return None
     if is_dataclass(feature_masks):
-        return asdict(feature_masks)
+        payload = asdict(feature_masks)
+        # Wire-format compat: the serialized key stays "stats_block" (frozen in existing
+        # checkpoint cache metadata + the golden corpus) even though the attribute was
+        # renamed to opponent_tendency_stats_block. Remap on the way out until the corpus
+        # regen lands and the wire key can move with it.
+        if "opponent_tendency_stats_block" in payload:
+            payload = {
+                ("stats_block" if key == "opponent_tendency_stats_block" else key): value
+                for key, value in payload.items()
+            }
+        return payload
     return dict(feature_masks)
 
 

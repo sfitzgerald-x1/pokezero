@@ -5,7 +5,7 @@ from pokezero.observation import (
     LEGACY_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
-    STATS_TOKEN_COUNT,
+    OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
     ObservationPerspective,
@@ -29,11 +29,11 @@ class ObservationSpecTest(unittest.TestCase):
 
         # v2 layout: field + self mons + opponent mons + action candidates + stats token(s)
         # + transition-token slots (the 24 recent-event tokens are gone).
-        self.assertEqual(STATS_TOKEN_COUNT, 1)
+        self.assertEqual(OPPONENT_TENDENCY_STATS_TOKEN_COUNT, 1)
         self.assertEqual(TRANSITION_TOKEN_COUNT, 128)
         self.assertEqual(
             spec.token_count,
-            1 + 6 + 6 + ACTION_COUNT + STATS_TOKEN_COUNT + TRANSITION_TOKEN_COUNT,
+            1 + 6 + 6 + ACTION_COUNT + OPPONENT_TENDENCY_STATS_TOKEN_COUNT + TRANSITION_TOKEN_COUNT,
         )
 
     def test_schema_version_is_v2_2_with_v2_v2_1_v3_supported_and_v1_legacy(self) -> None:
