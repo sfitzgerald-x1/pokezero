@@ -636,6 +636,17 @@ class ShowdownReplayState:
     # ``noCopy: true`` (not Baton-Pass-copied), so it always drops on switch. Derived ONLY from
     # public protocol lines.
     encore_elapsed: Mapping[str, int]
+    # Wrap (partial-trap) turns-so-far per slot (spec v3 change 6, docs/observation_v3_spec.md):
+    # the public elapsed-duration counter of the active mon's ``partiallytrapped`` volatile.
+    # Advances by 1 on each ``|turn|`` while the volatile is present (like the toxic ramp /
+    # confusion / encore counters), resets to 0 on ``-end <partial-trap move> [partiallytrapped]``
+    # / switch-out / drag / faint. Gen3 partial-trap (Wrap) lasts 2..5 turns (the base condition's
+    # modern ``random(5,7)`` is NOT overridden by the gen3 mod but is the wrong value; poke-engine
+    # tracks no duration at all — see the spec), encoded ``min(1, elapsed/5)`` with CAP 5; the raw
+    # counter is uncapped. Unlike encore, ``partiallytrapped`` IS Baton-Pass-copied, so the switch
+    # reset is gated on the volatile being absent (parallel to confusion). Derived ONLY from public
+    # protocol lines.
+    wrap_trap_elapsed: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -794,6 +805,12 @@ class PlayerRelativeBattleState:
     # (gen3 CAP = 6). 0 when the active mon is not encored.
     self_encore_elapsed: int = 0
     opponent_encore_elapsed: int = 0
+    # ---- spec v3 change 6: Wrap (partial-trap) turns-so-far (docs/observation_v3_spec.md).
+    # Per-side public elapsed-duration counter for the ACTIVE mon's partiallytrapped volatile,
+    # from the _ReplayParser tracker; encoded on the trapped mon's token under schema >= v3 only
+    # as min(1, elapsed/5) (gen3 CAP = 5). 0 when the active mon is not partially trapped.
+    self_wrap_trap_elapsed: int = 0
+    opponent_wrap_trap_elapsed: int = 0
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -830,6 +847,9 @@ class _ReplayParser:
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
         self.encore_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
+        # Wrap (partial-trap) turns-so-far per slot (spec v3 change 6). See
+        # ShowdownReplayState.wrap_trap_elapsed.
+        self.wrap_trap_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         self.pending_baton_pass: set[str] = set()
         self.public_events: list[ShowdownPublicEvent] = []
         self.public_lines: list[str] = []
@@ -883,6 +903,9 @@ class _ReplayParser:
         }
         parser.encore_elapsed = {
             slot: int(snapshot.encore_elapsed.get(slot, 0)) for slot in ("p1", "p2")
+        }
+        parser.wrap_trap_elapsed = {
+            slot: int(snapshot.wrap_trap_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
         parser.public_events = list(snapshot.public_events)
         parser.public_lines = list(snapshot.public_lines)
@@ -1006,6 +1029,13 @@ class _ReplayParser:
                 # volatile-absence gate is kept parallel to the confusion reset for consistency.
                 if "encore" not in self.volatiles[pokemon.showdown_slot]:
                     self.encore_elapsed[pokemon.showdown_slot] = 0
+                # Wrap (partial-trap) turns-so-far (spec v3 change 6) belong to the mon that just
+                # left. Unlike encore, ``partiallytrapped`` IS a Baton-Pass-copied volatile, so — as
+                # with confusion — a plain switch/drag drops it (reset) while a Baton Pass that
+                # carried the trap keeps the counter running on the inheritor; gate the reset on the
+                # volatile being absent from the finalized slot set.
+                if "partiallytrapped" not in self.volatiles[pokemon.showdown_slot]:
+                    self.wrap_trap_elapsed[pokemon.showdown_slot] = 0
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
                 # the mon that just left the slot: both revert to base type on switch-out, and a
                 # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
@@ -1046,6 +1076,14 @@ class _ReplayParser:
             for slot in self.encore_elapsed:
                 if "encore" in self.volatiles.get(slot, ()):
                     self.encore_elapsed[slot] += 1
+            # Wrap (partial-trap) turns-so-far (spec v3 change 6): each turn the partiallytrapped
+            # volatile is publicly present on a slot's active mon, its elapsed-duration counter
+            # advances (same per-|turn| point as the toxic ramp / confusion / encore counters).
+            # Left uncapped in the raw counter; the encode's min(1, elapsed/5) caps the emitted
+            # value at the gen3 5-turn max.
+            for slot in self.wrap_trap_elapsed:
+                if "partiallytrapped" in self.volatiles.get(slot, ()):
+                    self.wrap_trap_elapsed[slot] += 1
         if event_type == "-fail" and len(parts) >= 3:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
@@ -1068,6 +1106,7 @@ class _ReplayParser:
         _update_toxic_stage(parts, self.toxic_stage)
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
+        _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
         _flag_baton_pass(parts, self.pending_baton_pass)
         self._update_induced_sleep(parts, line)
         self._update_stall_counter(parts)
@@ -1405,6 +1444,7 @@ class _ReplayParser:
             toxic_stage=dict(self.toxic_stage),
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
+            wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
             public_events=tuple(self.public_events),
             public_lines=tuple(self.public_lines),
             weather=self.weather,
@@ -1575,6 +1615,8 @@ def normalize_for_player(
         opponent_confusion_elapsed=int(replay.confusion_elapsed.get(opponent_slot, 0)),
         self_encore_elapsed=int(replay.encore_elapsed.get(showdown_slot, 0)),
         opponent_encore_elapsed=int(replay.encore_elapsed.get(opponent_slot, 0)),
+        self_wrap_trap_elapsed=int(replay.wrap_trap_elapsed.get(showdown_slot, 0)),
+        opponent_wrap_trap_elapsed=int(replay.wrap_trap_elapsed.get(opponent_slot, 0)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -2294,6 +2336,36 @@ def _update_encore_elapsed(parts: Sequence[str], encore_elapsed: dict[str, int])
         and _side_condition_identifier(parts[3]) == "encore"
     ):
         encore_elapsed[slot] = 0
+
+
+def _update_wrap_trap_elapsed(parts: Sequence[str], wrap_trap_elapsed: dict[str, int]) -> None:
+    """Reset the Wrap (partial-trap) turns-so-far counter on expiry / faint (spec v3 change 6).
+
+    The per-``|turn|`` advance happens in the parse loop (gated on the public ``partiallytrapped``
+    volatile, mirroring the toxic ramp and the confusion / encore counters). This handles the two
+    RESET lines that are not a switch (which the parse loop resets directly): the partial-trap
+    ``|-end|SLOT|Wrap|[partiallytrapped]`` (the pin wore off, or the vendored sim's silent
+    ``[silent]`` end when the trapper left the field — base ``conditions.ts partiallytrapped.onEnd``
+    emits ``this.add('-end', pokemon, sourceEffect, '[partiallytrapped]')``, where ``sourceEffect``
+    is the MOVE, so ``parts[3]`` is the move NAME like ``Wrap``, NOT the volatile id — the same
+    keying the ``_update_volatiles`` partial-trap arm uses) and ``|faint|SLOT`` (the mon fainted
+    while trapped). The counter is also reset on switch-out/drag in the parse loop, so a stale value
+    can never ride onto a replacement or survive past the volatile.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in wrap_trap_elapsed:
+        return
+    if event_type == "faint":
+        wrap_trap_elapsed[slot] = 0
+    elif (
+        event_type == "-end"
+        and len(parts) >= 4
+        and _side_condition_identifier(parts[3]) in _PARTIAL_TRAP_MOVES
+    ):
+        wrap_trap_elapsed[slot] = 0
 
 
 def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
