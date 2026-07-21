@@ -188,6 +188,76 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
   shape change; it sits above the v2.2 census, so every legacy mode stays
   byte-frozen.
 
+## Change 6 — Wrap (partial-trap) turns-so-far (elapsed-duration signal)
+
+Sibling of Changes 4/5: the same per-slot elapsed-duration counter, applied to
+the `partiallytrapped` volatile that Gen 3 binding moves inflict. Wrap is the
+gen3-randbats pool's ONLY partial-trap move and is central to Shuckle's
+pin-and-stall line — it pins the target (no switching) while chipping it 1/16 a
+turn, so a policy that cannot see how many turns the pin has already run cannot
+price how many chip turns remain before the target breaks free. (Offsets `+4` /
+`+5` / `+6` in the v3 numeric block are the consecutive-stall counter
+(`NUMERIC_STALL_COUNTER`, #810), confusion turns-so-far
+(`NUMERIC_CONFUSION_TURNS`, #811), and encore turns-so-far
+(`NUMERIC_ENCORE_TURNS`, #814); this change takes offset `+7`.)
+
+- One numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
+  `wrap_trap_turns` = `min(1, elapsed / 5)`, where `elapsed` is the number of
+  turns the mon has been partially trapped so far. The trap PRESENCE is already
+  the `volatile:partiallytrapped` categorical (`TRACKED_VOLATILES`); this is the
+  turns-so-far counter ONLY (the elapsed clock the presence bit cannot express).
+- **Gen3 mechanic (verified before coding — the base condition's `duration` is
+  the MODERN value and is WRONG for gen3):** the vendored base
+  `data/conditions.ts` `partiallytrapped` declares `duration: 5` with
+  `durationCallback → this.random(5, 7)` = `{5,6}`, which is the Gen 5+ binding
+  duration; **the gen3 mod does NOT override it** (no `partiallytrapped` entry in
+  `data/mods/gen3/conditions.ts`, and no partial-trap move overrides its
+  `condition` in `data/mods/gen3/moves.ts`), so the sim would inherit the modern
+  value — but the authoritative Gen II–IV binding-move mechanic is **2–5 turns**,
+  max **5**. `poke-engine` corroborates that the duration is not an engine fact:
+  it models the trap as a boolean `PokemonVolatileStatus::PARTIALLYTRAPPED` with a
+  flat `maxhp / 16` end-of-turn residual (`src/gen3/generate_instructions.rs`) and
+  **NO duration counter** — the volatile is a set membership, cleared on
+  switch-out, never counted down. So the turn count is unavailable from either
+  engine and MUST come from the PROTOCOL/parser (the public residual/`-end`
+  cadence). We therefore take `CAP = 5` (the gen3 max), so the ramp saturates at
+  `1.0` at the longest possible pin. The raw counter is left uncapped in the
+  parser — mirroring the confusion/encore/toxic ramps — and the encode's
+  `min(1, …)` caps the value. (Unlike confusion/encore, whose hidden
+  move-attempt clock only ticks when the mon actually acts, the partial-trap
+  residual fires every end-of-turn regardless of the trapped mon's action, so the
+  raw counter tracks true elapsed and the cap is purely a saturation/safety
+  bound.)
+- **Reachability:** Wrap is the pool's SOLE partial-trap move, carried by exactly
+  **one** species — Shuckle (from `data/random-battles/gen3/sets.json`, 1 of 220
+  pool species). The column is reachable (it is the Shuckle pin automaton's
+  signal) and is encoded per the owner directive (do NOT gate on incidence).
+- **Public trace / attribution (no hidden state):** the sim never emits a
+  `-start` for partial traps; application is
+  `|-activate|SLOT|move: Wrap|[of] SOURCE` (base `partiallytrapped.onStart`), the
+  per-turn residual is `|-damage|SLOT|…|[from] Wrap`, and expiry is
+  `|-end|SLOT|Wrap|[partiallytrapped]` (`onEnd`) — note the `-end` carries the
+  move NAME (`Wrap`), not the volatile id, exactly as the existing
+  `_update_volatiles` partial-trap arm already handles it. Wrap traps the TARGET
+  (the target cannot switch and takes chip); elapsed (turns-so-far) is public —
+  count decisions since the `-activate` — while the remaining duration is hidden.
+  The `_ReplayParser` per-slot counter advances by 1 on each `|turn|` while the
+  `partiallytrapped` volatile is publicly present on that slot (the same
+  per-`|turn|` advance the `toxic_stage` ramp and Changes 4/5 use), and RESETS to
+  0 on `-end <partial-trap move> [partiallytrapped]`, switch-out, `|drag|`
+  (phazing), or faint. Unlike Encore, `partiallytrapped` IS a Baton-Pass-copied
+  volatile (`_BATON_PASS_TRANSFERRED_VOLATILES`), so — as with confusion — the
+  switch reset is gated on the volatile being absent from the finalized slot set:
+  a plain switch/drag drops the volatile (reset), while a Baton Pass that carried
+  the trap keeps the counter running on the inheritor. (In gen3 the vendored sim
+  also emits a silent `-end` when the TRAPPER leaves the field; the counter
+  follows the public `-end` either way, so it never needs to model the trapper's
+  seat.)
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
+  shape change; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -211,6 +281,10 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
 - Change 5 adds one more appended numeric column at `V3_NUMERIC_BASE + 6`
   (`NUMERIC_ENCORE_TURNS`), bumping `V3_NUMERIC_EXTRA` 6 → 7 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 162. The
+  categorical census is unchanged.
+- Change 6 adds one more appended numeric column at `V3_NUMERIC_BASE + 7`
+  (`NUMERIC_WRAP_TRAP_TURNS`), bumping `V3_NUMERIC_EXTRA` 7 → 8 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 163. The
   categorical census is unchanged.
 
 ## Acceptance (tests required)
@@ -237,16 +311,22 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
    `-end Encore`, switch-out, `|drag|`, and faint; the same log's v2.2 encoding
    is byte-identical to before the change (the column does not exist under v2.2);
    snapshot round-trip preserves the elapsed counter.
-6. Existing v2.2 test suites pass untouched.
+6. Wrap partial-trap turns-so-far (change 6): a scripted Shuckle-Wrap game raises
+   the trapped mon's `wrap_trap_turns` column 1/5, 2/5, … under v3, and it resets
+   to 0 on `-end Wrap [partiallytrapped]`, switch-out, `|drag|`, and faint; the
+   same log's v2.2 encoding is byte-identical to before the change (the column
+   does not exist under v2.2); snapshot round-trip preserves the elapsed counter.
+7. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
 The v3 numeric block appends columns above the v2.2 census (155):
 `-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
 the consecutive-stall counter at `+4` (change 3, #810), confusion
-turns-so-far at `+5` (change 4, #811), and encore turns-so-far at `+6`
-(change 5, this PR). With change 5 landed, the v3 numeric feature count is
-**162** (`V3_NUMERIC_BASE + 7`), and every appended column `+0..+6` (155-161)
+turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
+(change 5, #814), and Wrap partial-trap turns-so-far at `+7` (change 6,
+this PR). With change 6 landed, the v3 numeric feature count is
+**163** (`V3_NUMERIC_BASE + 8`), and every appended column `+0..+7` (155-162)
 is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)
