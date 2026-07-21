@@ -189,10 +189,90 @@ def _public_provenance(value: object, *, label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):  # Kept for static type narrowing after validation.
         raise AssertionError("validated provenance must be a mapping")
     result["command"] = _public_command(value.get("command"), label=label)
+    result["execution_scope"] = _public_execution_scope(value.get("execution_scope"), label=label)
+    _require_execution_scope_for_script(
+        command=result["command"], scope=result["execution_scope"], label=label
+    )
     if "seed_range" in value:
         result["seed_range"] = _public_seed_range(value["seed_range"], label=label)
     if "shard" in value:
         result["shard"] = _public_shard(value["shard"], label=label)
+    return result
+
+
+def _require_execution_scope_for_script(
+    *, command: Sequence[str], scope: Mapping[str, Any], label: str
+) -> None:
+    """Require the range/configuration dimensions that define each audit lane."""
+
+    required_fields = {
+        "scripts/coverage_enumeration_audit.py": {"seed_range", "shard"},
+        "scripts/deep_line_audit.py": {"seed_range", "max_rounds", "scenario_names", "protocol_fixtures"},
+        "scripts/silent_mutation_audit.py": {"seed_range", "max_rounds", "scenario_names"},
+        "scripts/encoding_collision_audit.py": {"decision_range", "input_kind", "input_artifact_count"},
+        "scripts/protocol_emission_inventory.py": {"input_audit_count", "seed_range", "shard"},
+    }
+    missing = sorted(required_fields[command[0]] - set(scope))
+    if missing:
+        raise ValueError(f"{label} execution scope is missing required fields: {', '.join(missing)}")
+
+
+def _public_execution_scope(value: object, *, label: str) -> dict[str, Any]:
+    """Copy only reproducibility metadata that is safe for the public ledger."""
+
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError(f"{label} is missing execution scope")
+    allowed = {
+        "seed_range",
+        "shard",
+        "max_rounds",
+        "max_decision_rounds",
+        "capture_driver",
+        "scenario_names",
+        "protocol_fixtures",
+        "decision_range",
+        "input_kind",
+        "input_artifact_count",
+        "input_audit_count",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"{label} execution scope has unsupported fields: {', '.join(unknown)}")
+    result: dict[str, Any] = {}
+    if "seed_range" in value:
+        result["seed_range"] = _public_execution_seed_range(value["seed_range"], label=label)
+    if "shard" in value:
+        result["shard"] = _public_shard(value["shard"], label=label) if value["shard"] is not None else None
+    for key in ("max_rounds", "max_decision_rounds", "input_artifact_count", "input_audit_count"):
+        if key in value:
+            result[key] = _require_nonnegative_int(value[key], label=f"{label} execution scope {key}")
+    if "capture_driver" in value:
+        if value["capture_driver"] not in {"checkpoint", "random-legal"}:
+            raise ValueError(f"{label} execution scope has invalid capture driver")
+        result["capture_driver"] = value["capture_driver"]
+    if "scenario_names" in value:
+        names = value["scenario_names"]
+        if not isinstance(names, list) or not all(isinstance(name, str) and _PUBLIC_ATOM_RE.fullmatch(name) for name in names):
+            raise ValueError(f"{label} execution scope has invalid scenario names")
+        result["scenario_names"] = list(names)
+    if "protocol_fixtures" in value:
+        if not isinstance(value["protocol_fixtures"], bool):
+            raise ValueError(f"{label} execution scope protocol_fixtures must be boolean")
+        result["protocol_fixtures"] = value["protocol_fixtures"]
+    if "decision_range" in value:
+        decision_range = value["decision_range"]
+        if not isinstance(decision_range, Mapping) or set(decision_range) != {"start", "limit", "end_exclusive"}:
+            raise ValueError(f"{label} execution scope has invalid decision range")
+        start = _require_nonnegative_int(decision_range.get("start"), label=f"{label} decision start")
+        limit = _require_nonnegative_int(decision_range.get("limit"), label=f"{label} decision limit")
+        end = _require_nonnegative_int(decision_range.get("end_exclusive"), label=f"{label} decision end")
+        if end != start + limit:
+            raise ValueError(f"{label} execution scope has inconsistent decision range")
+        result["decision_range"] = {"start": start, "limit": limit, "end_exclusive": end}
+    if "input_kind" in value:
+        if value["input_kind"] not in {"corpus", "collision-sketch"}:
+            raise ValueError(f"{label} execution scope has invalid input kind")
+        result["input_kind"] = value["input_kind"]
     return result
 
 
@@ -279,6 +359,24 @@ def _public_seed_range(value: object, *, label: str) -> dict[str, int] | None:
     if end < start:
         raise ValueError(f"{label} seed range ends before it starts")
     return {"start": start, "end": end}
+
+
+def _public_execution_seed_range(value: object, *, label: str) -> dict[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) not in ({"start", "end"}, {"start", "end", "count"}):
+        raise ValueError(f"{label} execution scope has an invalid seed range")
+    start = _require_nonnegative_int(value.get("start"), label=f"{label} seed start")
+    end = _require_nonnegative_int(value.get("end"), label=f"{label} seed end")
+    if end < start:
+        raise ValueError(f"{label} seed range ends before it starts")
+    result: dict[str, int] = {"start": start, "end": end}
+    if "count" in value:
+        count = _require_nonnegative_int(value.get("count"), label=f"{label} seed count")
+        if count != result["end"] - result["start"] + 1:
+            raise ValueError(f"{label} execution scope has inconsistent seed range")
+        result["count"] = count
+    return result
 
 
 def _public_shard(value: object, *, label: str) -> dict[str, int]:

@@ -93,6 +93,8 @@ def _run_provenance(
     """Stamp the inputs needed to reject stale or mixed audit artifacts."""
 
     seeds = sorted({game.seed for game in selected_games})
+    seed_range = {"start": seeds[0], "end": seeds[-1]} if seeds else None
+    shard = {"index": shard_index, "count": shard_count}
     return {
         "schema_version": "pokezero.coverage-enumeration-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -104,8 +106,12 @@ def _run_provenance(
         # container run in committed evidence.
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
         "command": list(command),
-        "shard": {"index": shard_index, "count": shard_count},
-        "seed_range": {"start": seeds[0], "end": seeds[-1]} if seeds else None,
+        "shard": shard,
+        "seed_range": seed_range,
+        "execution_scope": {
+            "seed_range": seed_range,
+            "shard": shard,
+        },
     }
 
 

@@ -21,7 +21,7 @@ COMMIT = "b" * 40
 SOURCE_HASH = "c" * 16
 
 
-def provenance(*, command: list[str], seed_range=None, shard=None):
+def provenance(*, command: list[str], seed_range=None, shard=None, execution_scope=None):
     payload = {
         "recorded_at": "2026-07-21T00:00:00+00:00",
         "public_repo_commit": COMMIT,
@@ -34,6 +34,33 @@ def provenance(*, command: list[str], seed_range=None, shard=None):
         payload["seed_range"] = seed_range
     if shard is not None:
         payload["shard"] = shard
+    if execution_scope is None:
+        script = Path(command[0]).name
+        execution_scope = {
+            "coverage_enumeration_audit.py": {"seed_range": seed_range, "shard": shard},
+            "deep_line_audit.py": {
+                "seed_range": seed_range,
+                "max_rounds": 250,
+                "scenario_names": [],
+                "protocol_fixtures": False,
+            },
+            "silent_mutation_audit.py": {
+                "seed_range": seed_range,
+                "max_rounds": 120,
+                "scenario_names": [],
+            },
+            "encoding_collision_audit.py": {
+                "decision_range": {"start": 0, "limit": 100000, "end_exclusive": 100000},
+                "input_kind": "collision-sketch",
+                "input_artifact_count": 1,
+            },
+            "protocol_emission_inventory.py": {
+                "input_audit_count": 0,
+                "seed_range": None,
+                "shard": None,
+            },
+        }[script]
+    payload["execution_scope"] = execution_scope
     return payload
 
 
@@ -329,6 +356,26 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     coverage_root=self._coverage_root(root),
                     silent_root=self._silent_root(root),
                     collision_root=collision,
+                    inventory_root=self._inventory_root(root),
+                    output=output,
+                )
+            self.assertFalse(output.exists())
+
+    def test_rejects_artifact_missing_execution_scope_before_writing_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            silent = self._silent_root(root)
+            audit_path = silent / "audit.json"
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            del audit["audit_provenance"]["execution_scope"]
+            write_json(audit_path, audit)
+            output = root / "public" / "summary.json"
+
+            with self.assertRaisesRegex(ValueError, "missing execution scope"):
+                PUBLISHER.publish(
+                    coverage_root=self._coverage_root(root),
+                    silent_root=silent,
+                    collision_root=self._collision_root(root),
                     inventory_root=self._inventory_root(root),
                     output=output,
                 )
