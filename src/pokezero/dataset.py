@@ -1144,11 +1144,17 @@ def write_training_cache_from_examples(
     output_path: PathInput,
     *,
     config: TrajectoryDatasetConfig | None = None,
+    feature_masks=None,
+    observation_schema: str | None = None,
     overwrite: bool = False,
     max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     cache_root: PathInput | None = None,
 ) -> TrainingCacheSummary:
-    builder = TrainingCacheBuilder(config=config)
+    builder = TrainingCacheBuilder(
+        config=config,
+        feature_masks=feature_masks,
+        observation_schema=observation_schema,
+    )
     for example in examples:
         builder.add_example(example)
     return builder.write(

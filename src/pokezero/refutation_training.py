@@ -239,6 +239,8 @@ def write_refutation_training_cache(
     dataset_config: TrajectoryDatasetConfig | None = None,
     config: RefutationTrainingConfig | None = None,
     curriculum_records: Sequence[RolloutRecord] = (),
+    feature_masks: Any = None,
+    observation_schema: str | None = None,
     overwrite: bool = False,
 ) -> RefutationTrainingSummary:
     fragile_rows = tuple(fragile_states)
@@ -258,6 +260,8 @@ def write_refutation_training_cache(
         examples,
         output_path,
         config=dataset_config,
+        feature_masks=feature_masks,
+        observation_schema=observation_schema,
         overwrite=overwrite,
     )
     _stamp_refutation_cache_metadata(

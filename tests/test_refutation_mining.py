@@ -3295,6 +3295,46 @@ class RefutationSmokeProtocolTest(unittest.TestCase):
         # seat won this continuation, so its rows carry positive return targets.
         self.assertIn(1.0, tuple(batch.returns))
 
+    def test_training_cache_stamps_observation_provenance_when_supplied(self) -> None:
+        from pokezero.observation import ObservationFeatureMasks
+
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=5,
+            min_flip_rate=0.75,
+            max_decision_points_per_game=1,
+        )
+        masks = ObservationFeatureMasks(
+            stats_block=True,
+            exact_state=True,
+            transition_token_budget=32,
+            tier2_residuals=True,
+            tier2_investment=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cache_path = root / "refutation-cache"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=5),
+                archive_path=root / "fragile.jsonl",
+            )
+            write_refutation_training_cache(
+                records=(_record(),),
+                fragile_states=tuple(row.to_dict() for row in report.certified_refutations),
+                output_path=cache_path,
+                config=RefutationTrainingConfig(target_mode="policy-value"),
+                feature_masks=masks,
+                observation_schema="v2.2",
+            )
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(metadata["observation_schema"], "v2.2")
+        self.assertEqual(metadata["feature_masks"]["transition_token_budget"], 32)
+        self.assertTrue(metadata["feature_masks"]["tier2_investment"])
+
     def test_training_cache_rejects_curriculum_records_without_metadata(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",

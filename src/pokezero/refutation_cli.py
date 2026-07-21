@@ -254,6 +254,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "to saturate a configured trainer mixing fraction. May repeat."
         ),
     )
+    training_cache.add_argument(
+        "--masks-from-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Stamp the cache's observation_schema and feature_masks metadata from this "
+            "transformer checkpoint's provenance (normally the champion checkpoint that "
+            "collected the source records). Required for the trainer's schema/mask "
+            "cross-checks under v2.2+ models; without it the cache is stamped legacy/None."
+        ),
+    )
     training_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
     training_cache.set_defaults(func=_training_cache)
 
@@ -706,12 +717,31 @@ def _reproduce(args: argparse.Namespace) -> int:
     return 0 if payload["passed"] else 2
 
 
+def _observation_provenance_from_checkpoint(checkpoint: Path | None) -> tuple[Any, str | None]:
+    """Resolve (feature_masks, observation_schema) from a checkpoint's stamped provenance."""
+
+    if checkpoint is None:
+        return None, None
+    from .neural_policy import (
+        feature_masks_from_model_config,
+        load_transformer_model_config,
+        observation_spec_from_model_config,
+    )
+
+    model_config = load_transformer_model_config(checkpoint)
+    return (
+        feature_masks_from_model_config(model_config),
+        observation_spec_from_model_config(model_config).schema_version,
+    )
+
+
 def _training_cache(args: argparse.Namespace) -> int:
     fragile_states = tuple(iter_fragile_states(args.archive))
     records = _load_records_at_indices(args.records, _source_record_indices_from_fragile_rows(fragile_states))
     curriculum_records: tuple[Any, ...] = ()
     if args.curriculum_records:
         curriculum_records = tuple(_iter_records(args.curriculum_records))
+    feature_masks, observation_schema = _observation_provenance_from_checkpoint(args.masks_from_checkpoint)
     summary = write_refutation_training_cache(
         records=records,
         fragile_states=fragile_states,
@@ -730,6 +760,8 @@ def _training_cache(args: argparse.Namespace) -> int:
             surprise_weight_max=args.surprise_weight_max,
         ),
         curriculum_records=curriculum_records,
+        feature_masks=feature_masks,
+        observation_schema=observation_schema,
         overwrite=args.overwrite,
     )
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
