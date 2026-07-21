@@ -101,18 +101,18 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertEqual(coverage["-activate:protect"]["coverage"], "direct")
         self.assertEqual(coverage["-singleturn:protect"]["coverage"], "semantic-alias")
         self.assertEqual(coverage["-fieldactivate:perishsong"]["coverage"], "semantic-alias")
-        self.assertEqual(coverage["-mustrecharge"]["coverage"], "unclassified")
+        self.assertEqual(coverage["-mustrecharge"]["coverage"], "semantic-alias")
         self.assertEqual(coverage["-mystery"]["coverage"], "unclassified")
         self.assertEqual(
             [row["signature"] for row in report["differential"]["observed_signatures_without_semantic_coverage"]],
-            ["-mystery", "-mustrecharge"],
+            ["-mystery"],
         )
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
         self.assertEqual(report["observed"]["audit_provenance"][0]["audit_provenance"]["image_digest"], "fixture-image")
 
-    def test_signature_coverage_keeps_recharge_unclassified_and_registers_perish_counter(self) -> None:
-        self.assertIsNone(_signature_coverage("-mustrecharge"))
+    def test_signature_coverage_records_recharge_as_a_semantic_alias(self) -> None:
+        self.assertEqual(_signature_coverage("-mustrecharge").coverage, "semantic-alias")
         self.assertEqual(_signature_coverage("move:protect").coverage, "direct")
         self.assertEqual(_signature_coverage("-start:perish3").coverage, "direct")
 
