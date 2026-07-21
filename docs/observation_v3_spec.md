@@ -408,6 +408,59 @@ heal follows in the residual phase) and cannot let a residual Wish heal corrupt
 the pinch-berry (or Leftovers) reasoning. **Ingrain is deliberately NOT added**
 — it has 0 gen3-randbats pool carriers (unreachable).
 
+## Change 10 — confusion self-hit damage-attribution correction (corrective signal)
+
+When a **confused** mon self-hits (gen3: a 50% roll each turn it acts; confusion
+is reachable in the pool via Signal Beam's 10% secondary), the sim emits
+`|-activate|SLOT|confusion` then an **UNTAGGED** `|-damage|SLOT|…` with **no
+intervening `|move|`/`|cant|` line** — the confused mon's turn is spent hurting
+itself. When the confused mon is the **SLOWER** of the two, that untagged
+self-damage lands while the FASTER opponent's move window is still open, and the
+fold — correctly, for the `damage_fraction` field the v2.2 encode reads — folds
+it into the opponent's move `damage_fraction`. The opponent's move token then
+overstates its own damage by the self-hit amount (e.g. a 0.17 Surf reads 0.27
+after a 0.10 self-hit folds in), polluting damage calibration.
+
+This change corrects the attribution **at encode time under v3 only**, without
+touching the folded `damage_fraction` field:
+
+- **Extraction (schema-agnostic, both fold paths).** The fold latches the slot on
+  `|-activate|X|confusion` (`pending_confusion_selfhit_slot`), and when the NEXT
+  `-damage` is the untagged self-hit on that slot, records its own fraction into a
+  new additive `confusion_selfhit_fraction` field on the move window it was folded
+  into — **in addition to** the existing (unchanged) `damage_fraction += delta` —
+  plus a companion `confusion_selfhit` presence flag. The latch is armed only by
+  `|-activate|X|confusion` and disarmed by the next action (a real move clears it,
+  so a confused mon that shakes off confusion and attacks is unaffected) or the
+  next `-damage` (a non-self hit clears without recording; a `[from] confusion`
+  TAGGED self-hit never folds into `damage_fraction` in the first place, so it is
+  neither corrected nor flagged). These fields ride the per-action `TransitionToken`
+  and the turn-merged `TurnSubBlock` and survive the merge/flatten bijection.
+- **v3 encode (schema >= v3 only).** For the move sub-block whose damage absorbed
+  the self-hit, the encode writes the damage-fraction column as
+  `damage_fraction - confusion_selfhit_fraction` (the move's OWN damage, self-hit
+  removed) and sets `NUMERIC_TT_CONFUSION_SELFHIT` (`V3_NUMERIC_BASE + 13`) = 1.0.
+  Semantics: "the defender self-hit from confusion after this move." It is a SINGLE
+  appended column (not a first/second pair like the `-fail` bit) because the
+  correction always rides the FIRST sub-block in practice — the confused mon must be
+  SLOWER, so the opponent moved first; the write is mirrored onto the second
+  sub-block defensively. **No new token is synthesized** (that would change the
+  turn-merged stream length/order and break v2.2 byte-identity).
+- **v2.2 stays FROZEN (explicit).** Unlike Changes 1–9, which only APPEND columns
+  above the v2.2 census (so v2.2 is a byte-prefix of v3), Change 10 is a v3-only
+  REWRITE of a v2.2-positioned column (`NUMERIC_TT_DAMAGE_FRACTION`, 105). **The
+  v2.2 encode deliberately RETAINS the folded value (0.27 in the example) — the
+  live m50/l200 runs keep exactly the value they were trained on.** The v2.2 path
+  never reads `confusion_selfhit_fraction`/`confusion_selfhit` and computes the
+  damage column from the unchanged `damage_fraction`, so v2.2 output is byte-
+  identical to the pre-change encoder by construction (verified: a v2.2-vs-pristine
+  SHA over a confusion-self-hit-both-seats + normal-game battery is identical). The
+  v2.2-vs-v3 encodes therefore agree on the entire shared 0..154 surface EXCEPT
+  exactly the corrected damage column on the flagged row.
+- **Reachability:** confusion is a reachable volatile (Signal Beam 10% in the pool;
+  the confusion self-hit is a 50% roll). Encoded per the owner directive (encode
+  reachable, do NOT gate on incidence).
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -451,6 +504,19 @@ the pinch-berry (or Leftovers) reasoning. **Ingrain is deliberately NOT added**
   categorical census is unchanged. It also lands a belief-layer fix (append
   `[from] move: Wish` to `belief._RESIDUAL_HP_TAGS`) that does NOT touch the
   observation schema.
+- Change 10 adds ONE appended numeric column at `V3_NUMERIC_BASE + 13`
+  (`NUMERIC_TT_CONFUSION_SELFHIT`), bumping `V3_NUMERIC_EXTRA` 13 → 14 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 169. The
+  categorical census is unchanged. Unlike Changes 1–9 it ALSO rewrites the v3
+  value of the v2.2-positioned `NUMERIC_TT_DAMAGE_FRACTION` (105) on the flagged
+  move (subtracting the folded confusion self-hit) — the v2.2 encode is
+  unaffected. The `GEN3_CANT_REASONS` vocabulary is deliberately NOT extended:
+  `cant:confusion` is never emitted (a confusion self-hit produces no `|cant|`
+  line), and because the runtime category vocabulary is a globally-SORTED
+  positional row map, inserting `cant:confusion` / `tt2_cant:confusion` would
+  shift the rows of every later-sorting label and BREAK v2.2 categorical
+  byte-identity (empirically verified: 13+ v2.2-emitted labels shift). The
+  observation schema therefore adds no categorical rows.
 
 ## Acceptance (tests required)
 
@@ -504,7 +570,17 @@ the pinch-berry (or Leftovers) reasoning. **Ingrain is deliberately NOT added**
    fell to ≤25% during the action phase (no berry eaten) still rules the pinch
    variants out — the residual Wish heal does not mask the action-phase non-proc
    (mirrors the #769 pinch-berry class).
-10. Existing v2.2 test suites pass untouched.
+10. Confusion self-hit (change 10): a scripted game where the SLOWER confused mon
+    self-hits with an untagged `-damage` (no `|move|`/`|cant|` line) has the
+    opponent's move token read the FOLDED damage (0.27) under v2.2 and the
+    CORRECTED damage (0.17) plus `NUMERIC_TT_CONFUSION_SELFHIT = 1` under v3; the
+    fold records `confusion_selfhit_fraction`/`confusion_selfhit` on both fold
+    paths and they survive the merge/flatten bijection; a `[from] confusion`
+    tagged self-hit and a confused-mon-that-still-moves engage neither field; the
+    v2.2 encoding is byte-identical to before the change (cmp-against-pristine SHA
+    over a both-seats + normal-game battery), and the change fails without the fix
+    (pristine v3 reads 0.27).
+11. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
@@ -513,12 +589,15 @@ The v3 numeric block appends columns above the v2.2 census (155):
 the consecutive-stall counter at `+4` (change 3, #810), confusion
 turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
 (change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
-this PR), the two gender bits at `+8` / `+9` (change 7, this PR), and the
-Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR), and the two
-Wish turns-to-land bits at `+11` / `+12` (change 9, this PR).
-With change 9 landed, the v3 numeric feature count is
-**168** (`V3_NUMERIC_BASE + 13`), and every appended column `+0..+12` (155-167)
-is written exactly once.
+this PR), the two gender bits at `+8` / `+9` (change 7, this PR), the
+Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR), the two
+Wish turns-to-land bits at `+11` / `+12` (change 9, this PR), and the confusion
+self-hit flag at `+13` (change 10, this PR).
+With change 10 landed, the v3 numeric feature count is
+**169** (`V3_NUMERIC_BASE + 14`), and every appended column `+0..+13` (155-168)
+is written exactly once. Change 10 additionally rewrites the v3 value of the
+v2.2-positioned damage column (105) on the flagged move; v2.2 keeps the folded
+value, so it stays byte-frozen.
 
 ## Coordination (v3-stream / Rust fold)
 
