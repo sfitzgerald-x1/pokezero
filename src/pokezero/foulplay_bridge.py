@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 import hashlib
 import json
 import math
@@ -30,6 +31,7 @@ from .belief import PublicBattleBeliefEngine
 from .category_vocab import CategoryVocabulary
 from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
+from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
 from .local_showdown import (
@@ -926,9 +928,17 @@ class ControlledFoulPlayCollisionSketchResult:
     resumed_decisions: int
     captured_new_decisions: int
     recovered_trailing_partial: bool
+    protocol_signature_schema_version: str
+    protocol_signatures: Mapping[str, int]
+    protocol_signature_game_ids: Sequence[str]
 
     def to_dict(self) -> dict[str, Any]:
         payload = self.benchmark.to_dict()
+        # A frequency-only public census lets the E/O/C inventory consume a
+        # production-style capture without retaining raw protocol or requests.
+        payload["protocol_signature_schema_version"] = self.protocol_signature_schema_version
+        payload["protocol_signatures"] = dict(sorted(self.protocol_signatures.items()))
+        payload["protocol_signature_game_ids"] = sorted(self.protocol_signature_game_ids)
         payload["collision_sketch_capture"] = {
             "out": str(self.output_path),
             "pool_id": self.pool_id,
@@ -947,6 +957,9 @@ class ControlledFoulPlayCollisionSketchResult:
             "captured_new_decisions": self.captured_new_decisions,
             "recovered_trailing_partial": self.recovered_trailing_partial,
             "foulplay_search_time_ms": self.benchmark.config.search_time_ms,
+            "protocol_signature_schema_version": self.protocol_signature_schema_version,
+            "protocol_signatures": dict(sorted(self.protocol_signatures.items())),
+            "protocol_signature_game_ids": sorted(self.protocol_signature_game_ids),
         }
         return payload
 
@@ -1850,6 +1863,8 @@ async def capture_controlled_foulplay_collision_sketch(
     out_path: Path,
     pool_id: str = "controlled-foulplay-collision",
     capture_progress_callback: ControlledFoulPlayCaptureProgressCallback | None = None,
+    initial_protocol_signatures: Mapping[str, int] | None = None,
+    initial_protocol_signature_game_ids: Iterable[str] = (),
 ) -> ControlledFoulPlayCollisionSketchResult:
     """Capture compact public collision evidence without retaining model tensors.
 
@@ -1888,10 +1903,15 @@ async def capture_controlled_foulplay_collision_sketch(
     skipped_tied_games = 0
     captured_new_decisions = 0
     observation_schema_version: str | None = None
+    protocol_signatures = _validated_protocol_signature_counts(initial_protocol_signatures or {})
+    protocol_signature_game_ids = _validated_protocol_signature_game_ids(initial_protocol_signature_game_ids)
 
     def progress_payload(*, status: str) -> dict[str, Any]:
         return {
             "status": status,
+            "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+            "protocol_signatures": dict(sorted(protocol_signatures.items())),
+            "protocol_signature_game_ids": sorted(protocol_signature_game_ids),
             "collision_sketch_capture": {
                 "out": str(out_path),
                 "pool_id": pool_id,
@@ -1910,6 +1930,9 @@ async def capture_controlled_foulplay_collision_sketch(
                 "captured_new_decisions": captured_new_decisions,
                 "recovered_trailing_partial": writer.recovered_trailing_partial,
                 "foulplay_search_time_ms": config.search_time_ms,
+                "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+                "protocol_signatures": dict(sorted(protocol_signatures.items())),
+                "protocol_signature_game_ids": sorted(protocol_signature_game_ids),
             },
         }
 
@@ -1918,6 +1941,23 @@ async def capture_controlled_foulplay_collision_sketch(
         nonlocal captured_new_decisions, observation_schema_version
         if trajectory.terminal is None:
             raise RuntimeError("collision sketch capture requires a terminal trajectory")
+        signature_schema = trajectory.metadata.get("protocol_signature_schema_version")
+        signature_counts = trajectory.metadata.get("protocol_signatures")
+        if signature_schema != PROTOCOL_SIGNATURE_SCHEMA_VERSION or not isinstance(signature_counts, Mapping):
+            raise RuntimeError("collision sketch capture is missing public protocol-signature census metadata")
+        validated_signature_counts = _validated_protocol_signature_counts(signature_counts)
+        signature_game_id = _protocol_signature_game_id(
+            pool_id=pool_id,
+            showdown_seed=trajectory.seed,
+            foulplay_seed=(
+                config.foulplay_random_seed + (trajectory.seed - config.seed_start)
+                if config.foulplay_random_seed is not None
+                else trajectory.seed
+            ),
+        )
+        if signature_game_id not in protocol_signature_game_ids:
+            protocol_signatures.update(validated_signature_counts)
+            protocol_signature_game_ids.add(signature_game_id)
         if trajectory.terminal.winner is None:
             if trajectory.terminal.capped:
                 skipped_capped_games += 1
@@ -1945,6 +1985,11 @@ async def capture_controlled_foulplay_collision_sketch(
             capture_progress_callback(progress_payload(status="running"))
 
     try:
+        # The writer has already fsynced its manifest. Persist matching empty
+        # census state before the first game so an early interruption remains
+        # safely resumable instead of leaving an orphaned manifest.
+        if capture_progress_callback is not None:
+            capture_progress_callback(progress_payload(status="running"))
         benchmark = await run_controlled_foulplay_benchmark(config, trajectory_callback=capture)
         writer.complete()
     finally:
@@ -1963,10 +2008,46 @@ async def capture_controlled_foulplay_collision_sketch(
         resumed_decisions=writer.resumed_record_count,
         captured_new_decisions=captured_new_decisions,
         recovered_trailing_partial=writer.recovered_trailing_partial,
+        protocol_signature_schema_version=PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+        protocol_signatures=dict(protocol_signatures),
+        protocol_signature_game_ids=sorted(protocol_signature_game_ids),
     )
     if capture_progress_callback is not None:
         capture_progress_callback({"status": "complete", **result.to_dict()})
     return result
+
+
+def _validated_protocol_signature_counts(value: Mapping[str, Any]) -> Counter[str]:
+    """Return validated count-only protocol census data for resumable capture."""
+
+    counts: Counter[str] = Counter()
+    for signature, count in value.items():
+        if not isinstance(signature, str) or not isinstance(count, int) or count < 0:
+            raise RuntimeError("collision sketch capture has invalid public protocol-signature counts")
+        counts[signature] += count
+    return counts
+
+
+def _validated_protocol_signature_game_ids(values: Iterable[str]) -> set[str]:
+    """Return opaque, fixed-width game identifiers used only to de-duplicate retries."""
+
+    game_ids: set[str] = set()
+    for game_id in values:
+        if (
+            not isinstance(game_id, str)
+            or len(game_id) != 64
+            or any(char not in "0123456789abcdef" for char in game_id)
+        ):
+            raise RuntimeError("collision sketch capture has invalid protocol-signature game identifiers")
+        game_ids.add(game_id)
+    return game_ids
+
+
+def _protocol_signature_game_id(*, pool_id: str, showdown_seed: int, foulplay_seed: int) -> str:
+    """Return an opaque id so retry-safe census state need not retain raw game identifiers."""
+
+    payload = f"{pool_id}\0{showdown_seed}\0{foulplay_seed}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _p1_capture_trajectory(trajectory: BattleTrajectory, *, pool_id: str) -> BattleTrajectory:
@@ -2786,6 +2867,8 @@ async def _run_single_game(
             "public_resolved_action_rounds": [
                 round_.to_dict() for round_ in state.public_resolved_action_rounds
             ],
+            "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+            "protocol_signatures": dict(sorted(protocol_signature_counts(state.public_lines).items())),
         }
         # Opt-in omniscient stash for trait capture (trait_foulplay.py). Gated on an env flag so it
         # never contaminates the default p1-only/opponent-hidden capture path, which spreads this

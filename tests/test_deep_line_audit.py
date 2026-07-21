@@ -16,10 +16,12 @@ from pokezero.deep_line_audit import (
     _raw_request_action_mask,
     _raw_side_condition_counts,
     _canonical_protocol_signature,
+    canonical_protocol_signature,
     PROTOCOL_SIGNATURE_SCHEMA_VERSION,
     audit_protocol_cut_fixture,
     protocol_cut_fixtures,
     census_protocol_cooccurrences,
+    protocol_signature_counts,
 )
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.golden_corpus_scenarios import interaction_registry_specs
@@ -66,6 +68,23 @@ class DeepLineAuditReportTest(unittest.TestCase):
             _canonical_protocol_signature(("", "-fieldactivate", "move: Perish Song")),
             "-fieldactivate:perishsong",
         )
+        self.assertEqual(
+            canonical_protocol_signature(("", "cant", "p1a: A", "slp")),
+            "cant:slp",
+        )
+
+    def test_public_protocol_signature_counts_exclude_transport_only_lines(self) -> None:
+        counts = protocol_signature_counts(
+            (
+                "|init|battle",
+                "|request|{private-payload}",
+                "|move|p1a: A|Protect|p2a: B",
+                "|-singleturn|p1a: A|move: Protect",
+                "|turn|2",
+            )
+        )
+
+        self.assertEqual(dict(counts), {"-singleturn:protect": 1, "init": 1, "move:protect": 1})
 
     def test_begin_game_resets_candidate_history_without_losing_aggregate_counts(self) -> None:
         report = DeepLineAuditReport()

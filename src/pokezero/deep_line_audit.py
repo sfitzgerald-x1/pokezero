@@ -753,7 +753,7 @@ def census_protocol_cooccurrences(
             continue
         if event not in {"request", "upkeep", "t:", "player"}:
             current.append(event)
-            report.protocol_signatures[_canonical_protocol_signature(parts)] += 1
+            report.protocol_signatures[canonical_protocol_signature(parts)] += 1
     _record_turn_cooccurrence(current, report)
 
 
@@ -807,7 +807,7 @@ def _canonical_effect_identifier(value: str) -> str:
     return _normalize_identifier(value)
 
 
-def _canonical_protocol_signature(parts: Sequence[str]) -> str:
+def canonical_protocol_signature(parts: Sequence[str]) -> str:
     """Return a stable tag-plus-meaningful-payload protocol census key.
 
     The static omission inventory distinguishes subtypes such as ``cant``
@@ -836,6 +836,31 @@ def _canonical_protocol_signature(parts: Sequence[str]) -> str:
         else _normalize_identifier(payload)
     )
     return f"{event}:{identifier}" if identifier else event
+
+
+def protocol_signature_counts(lines: Sequence[str]) -> Counter[str]:
+    """Return a compact census over public protocol lines.
+
+    This is intentionally count-only. Capture callers persist neither raw
+    protocol lines nor request payloads, so production-style audit artifacts
+    can contribute occurrence frequencies without expanding the observation
+    audit's data-retention surface.
+    """
+
+    counts: Counter[str] = Counter()
+    for line in lines:
+        parts = line.split("|")
+        event = parts[1] if len(parts) > 1 else ""
+        if not event or event in {"request", "upkeep", "t:", "player", "turn"}:
+            continue
+        counts[canonical_protocol_signature(parts)] += 1
+    return counts
+
+
+def _canonical_protocol_signature(parts: Sequence[str]) -> str:
+    """Backward-compatible private spelling for existing audit callers."""
+
+    return canonical_protocol_signature(parts)
 
 
 def _record_turn_cooccurrence(events: Sequence[str], report: DeepLineAuditReport) -> None:
