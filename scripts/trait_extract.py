@@ -78,6 +78,10 @@ PROTECT_MOVES = {mid("Protect"), mid("Detect")}  # the boom-blocking protection 
 AROMATHERAPY = {mid("Aromatherapy"), mid("Heal Bell")}  # party-wide status cure (identical twins)
 NATURAL_CURE = mid("Natural Cure")   # ability: cures the mon's status on switch-out
 STRUGGLE = mid("Struggle")
+# Counter (physical) / Mirror Coat (special) — reactive damage-return moves (both on Wobbuffet in
+# gen3 randbats). They fail SILENTLY (no -fail) when there's no matching damage to bounce; a success
+# is the direct -damage they deal to the target (no [from] tag, unlike upkeep residuals).
+COUNTER_MOVES = {mid("Counter"), mid("Mirror Coat")}
 
 
 def reversal_bp(cur, mx):
@@ -210,6 +214,7 @@ class GameParse:
         self.slept_by = {"p1": set(), "p2": set()}  # opp species this seat move-slept (Sleep Clause set)
         self._move_in_flight = None            # seat whose move is resolving, for -fail attribution
         self._nc_switchin = set()              # seats that switched a Natural Cure mon in this turn
+        self._cm_pending = None                # seat whose Counter/Mirror Coat awaits its damage/whiff
         # Protect chain: was this seat's immediately-preceding move a *successful* Protect/Detect?
         # (consecutive Protect has a diminishing success chance in gen3, so repeating after a success
         # is the risky play we break out.) Reset by any non-Protect move, a failed Protect, or a switch.
@@ -288,6 +293,7 @@ class GameParse:
                     self.last_move[seat] = move
                     # any newly-resolving move ends a prior priority-KO window (target survived to act)
                     self._pri_ko_seat = None
+                    self._cm_pending = None   # a new move ends a prior Counter/Mirror Coat window (whiffed)
                     if move in PRIORITY_MOVES:
                         self._pri_ko_seat = seat            # awaiting an immediate opponent faint
                     elif move not in NONZERO_PRIORITY:
@@ -378,6 +384,11 @@ class GameParse:
                     self.seed[seat] += 1
                 if tag == "-heal" and seat:
                     self._check_absorb(seat, a)   # Volt/Water Absorb heal rides a -heal line
+                # Counter/Mirror Coat success: a direct hit on the target (no [from]) after its use.
+                if (tag == "-damage" and self._cm_pending is not None
+                        and seat == OTHER_SEAT[self._cm_pending] and not any("[from]" in str(x) for x in a[2:])):
+                    self.ev[self._cm_pending]["cm_success"] += 1
+                    self._cm_pending = None
                 # residual damage (poison/burn/Leech Seed/sand — carries a [from]) is not the priority
                 # move's hit: don't let a later residual faint be miscredited as a priority KO.
                 if (self._pri_ko_seat is not None and seat == OTHER_SEAT[self._pri_ko_seat]
@@ -465,6 +476,7 @@ class GameParse:
                 self._nc_switchin = set()
                 self._move_in_flight = None
                 self._protect_pending = None
+                self._cm_pending = None
         # game over: flush any Belly-Drum windows still open (drummer survived to the end) and any
         # toxic episode a still-active mon was in (its peak stage is whatever it reached at game end).
         for s in ("p1", "p2"):
@@ -590,6 +602,9 @@ class GameParse:
             self._protect_pending = seat            # its -singleturn (ok) / -fail (failed) resolves it
         else:
             self.prev_protect_success[seat] = False  # any non-Protect move breaks the chain
+        if move in COUNTER_MOVES:
+            E["cat_counter_mirrorcoat"] += 1
+            self._cm_pending = seat                 # success = the direct -damage it deals this turn
         if move == YAWN:
             E["cat_yawn"] += 1
         if move == WILL_O_WISP:
@@ -704,7 +719,7 @@ def extract(files, lineage=None, milestone=None):
     CATS = {"cat_stat_boost","cat_heal","cat_wish","cat_rest","cat_weather_sun","cat_weather_rain",
             "cat_phaze","cat_spikes","cat_rapidspin_total","cat_toxic","cat_para","cat_sleep","cat_yawn",
             "cat_burn","cat_status_move","cat_knockoff","cat_reversal","cat_bellydrum",
-            "cat_priority","cat_destinybond","cat_aromatherapy","cat_protect",
+            "cat_priority","cat_destinybond","cat_aromatherapy","cat_protect","cat_counter_mirrorcoat",
             "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse"}
     CAT_MOVE = {"cat_stat_boost":STAT_BOOST,"cat_heal":HEAL_NON_REST,"cat_wish":{WISH},"cat_rest":{REST},
         "cat_weather_sun":{k for k,v in WEATHER_PRIMARY.items() if v=="sun"},
@@ -716,7 +731,7 @@ def extract(files, lineage=None, milestone=None):
         "cat_solarbeam":{SOLAR_BEAM},"cat_curse":{CURSE},"cat_knockoff":{KNOCK_OFF},
         "cat_reversal":REVERSAL_MOVES,"cat_bellydrum":{BELLY_DRUM},
         "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY,
-        "cat_protect":PROTECT_MOVES}
+        "cat_protect":PROTECT_MOVES,"cat_counter_mirrorcoat":COUNTER_MOVES}
 
     for g in games:
         gp = GameParse(g.get("movesets", {}))
@@ -764,7 +779,8 @@ def extract(files, lineage=None, milestone=None):
                           # v3-only: sleep-clause, move failures, Aromatherapy cures, Struggle
                           "cat_sleep","sleep_clause_active","move_failed",
                           "cat_aromatherapy","aroma_cured","cat_struggle",
-                          "cat_protect","cat_protect_consecutive"):
+                          "cat_protect","cat_protect_consecutive",
+                          "cat_counter_mirrorcoat","cm_success"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -945,6 +961,11 @@ def extract(files, lineage=None, milestone=None):
         "protect_after_success_uses": cat_extra["cat_protect_consecutive"],
         "protect_after_success_rate": (round(cat_extra["cat_protect_consecutive"] / cat_extra["cat_protect"], 4)
                                        if cat_extra["cat_protect"] else None),
+        # Counter + Mirror Coat (grouped): total uses and the fraction that actually landed damage
+        # (they whiff silently when there's no matching physical/special hit to bounce).
+        "counter_mirrorcoat_uses": cat_extra["cat_counter_mirrorcoat"],
+        "counter_mirrorcoat_success_rate": (round(cat_extra["cm_success"] / cat_extra["cat_counter_mirrorcoat"], 4)
+                                            if cat_extra["cat_counter_mirrorcoat"] else None),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],

@@ -608,6 +608,47 @@ class ProtectMetric(unittest.TestCase):
         self.assertEqual(e["cat_protect_consecutive"], 0)
 
 
+class CounterMirrorCoat(unittest.TestCase):
+    def test_counter_success_on_direct_damage(self):
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: Machamp|Cross Chop|p2a: Wobbuffet",
+            "|-damage|p2a: Wobbuffet|100/446",              # p1 lands a physical hit
+            "|move|p2a: Wobbuffet|Counter|p1a: Machamp",     # Counter returns 2x — a direct hit
+            "|-damage|p1a: Machamp|0 fnt",
+            "|faint|p1a: Machamp",
+        ])
+        e = gp.ev["p2"]
+        self.assertEqual(e["cat_counter_mirrorcoat"], 1)
+        self.assertEqual(e["cm_success"], 1)
+
+    def test_mirror_coat_whiff_is_not_success(self):
+        # opponent used a status move (no special damage to bounce) -> Mirror Coat whiffs silently
+        gp = parse([
+            "|turn|1",
+            "|move|p1a: Rapidash|Toxic|p2a: Wobbuffet",
+            "|-status|p2a: Wobbuffet|tox",
+            "|move|p2a: Wobbuffet|Mirror Coat|p1a: Rapidash",
+            "|",
+            "|-weather|SunnyDay|[upkeep]",
+            "|turn|2",
+        ])
+        e = gp.ev["p2"]
+        self.assertEqual(e["cat_counter_mirrorcoat"], 1)
+        self.assertEqual(e["cm_success"], 0)
+
+    def test_residual_damage_is_not_counted_as_counter_success(self):
+        gp = parse([
+            "|turn|1",
+            "|move|p2a: Wobbuffet|Counter|p1a: Gengar",      # whiffs
+            "|-damage|p1a: Gengar|100/260|[from] psn",       # opp's residual, has [from] -> excluded
+            "|turn|2",
+        ])
+        e = gp.ev["p2"]
+        self.assertEqual(e["cat_counter_mirrorcoat"], 1)
+        self.assertEqual(e["cm_success"], 0)
+
+
 class SwitchBehavior(unittest.TestCase):
     def test_immunity_switchin_same_turn_only(self):
         # p1 switches Gengar in; p2's Earthquake that turn is immune -> counts once.
