@@ -29,6 +29,10 @@ from pokezero.showdown import (
     NUMERIC_GENDER_FEMALE,
     NUMERIC_GENDER_MALE,
     NUMERIC_MEANLOOK_TRAP,
+    NUMERIC_OPP_WISH_PENDING,
+    NUMERIC_OPP_WISH_TURNS,
+    NUMERIC_SELF_WISH_PENDING,
+    NUMERIC_SELF_WISH_TURNS,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
     NUMERIC_STALL_COUNTER,
@@ -50,7 +54,7 @@ from pokezero.showdown import (
     observation_spec_for_schema,
     parse_showdown_replay,
 )
-from pokezero.showdown import _ReplayParser
+from pokezero.showdown import _ReplayParser, _wish_pending, _wish_turns_remaining
 from pokezero.transitions import TOKEN_KIND_MOVE, extract_transition_tokens
 from pokezero.turn_merged import extract_turn_merged_tokens
 
@@ -227,6 +231,63 @@ _WRAP_SELF = [
 ]
 
 
+# ---- change 9: Wish turns-to-land. p1's Vaporeon declares Wish on turn 1 (a per-SIDE slot
+# condition); the field-token clock reads 1/2 at the turn-2 decision (the heal lands end of turn 2)
+# and returns to 0 at turn 3 after the ``[from] move: Wish`` heal lands. Wish is a status move, so
+# in normal play the FIRST post-declaration decision is turn 2 (1/2); the 2/2 value is only observed
+# at an intra-turn decision on the declaration turn (exercised by the forced-switch wish-pass below).
+_WISH_LEADS = [
+    "|player|p1|Alice|",
+    "|player|p2|Bob|",
+    "|switch|p1a: Vaporeon|Vaporeon, L80|300/300",
+    "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+    "|turn|1",
+]
+_WISH_RIDE = _WISH_LEADS + [
+    "|move|p1a: Vaporeon|Wish|p1a: Vaporeon",
+    "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon",
+    "|-damage|p1a: Vaporeon|250/300",
+    "|upkeep",
+    "|turn|2",
+    "|move|p1a: Vaporeon|Protect|p1a: Vaporeon",
+    "|-singleturn|p1a: Vaporeon|Protect",
+    "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon",
+    "|-activate|p1a: Vaporeon|Protect",
+    "|-heal|p1a: Vaporeon|400/300|[from] move: Wish",
+    "|upkeep",
+    "|turn|3",
+]
+# Wish-pass via a FORCED SWITCH on the declaration turn: Vaporeon Wishes turn 1, is KO'd the same
+# turn, and p1 must switch. At the forced-switch |request| (turn_number still 1) the clock reads 2/2;
+# the incoming Umbreon inherits the per-side slot and reads 1/2 at turn 2, then the heal lands on IT.
+_WISH_PASS_FAINT = [
+    "|player|p1|Alice|",
+    "|player|p2|Bob|",
+    "|switch|p1a: Vaporeon|Vaporeon, L80|100/100",
+    "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+    "|turn|1",
+    "|move|p1a: Vaporeon|Wish|p1a: Vaporeon",
+    "|move|p2a: Snorlax|Body Slam|p1a: Vaporeon",
+    "|-damage|p1a: Vaporeon|0 fnt",
+    "|faint|p1a: Vaporeon",
+    '|request|{"forceSwitch":[true],"side":{"id":"p1","name":"Alice","pokemon":['
+    '{"ident":"p1a: Vaporeon","details":"Vaporeon, L80","condition":"0 fnt","active":true},'
+    '{"ident":"p1: Umbreon","details":"Umbreon, L80","condition":"400/400","active":false}]}}',
+]
+# The turn-2 continuation after the forced switch resolves onto Umbreon.
+_WISH_PASS_RIDE = _WISH_PASS_FAINT[:-1] + [
+    "|switch|p1a: Umbreon|Umbreon, L80|400/400",
+    "|upkeep",
+    "|turn|2",
+    "|move|p1a: Umbreon|Moonlight|p1a: Umbreon",
+    "|move|p2a: Snorlax|Body Slam|p1a: Umbreon",
+    "|-damage|p1a: Umbreon|300/400",
+    "|-heal|p1a: Umbreon|500/400|[from] move: Wish",
+    "|upkeep",
+    "|turn|3",
+]
+
+
 def _through_turn(lines, turn):
     """The log prefix up to and including the ``|turn|<turn>`` decision boundary."""
     return lines[: lines.index(f"|turn|{turn}") + 1]
@@ -248,16 +309,17 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends ELEVEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # v3 appends THIRTEEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
         # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
         # change 4 (confusion turns-so-far, +5, #811), change 5 (encore turns-so-far, +6, #814),
         # change 6 (Wrap partial-trap turns-so-far, +7), change 7 (the two gender bits, +8/+9),
-        # and change 8 (Mean Look / Spider Web move-trap, +10).
+        # change 8 (Mean Look / Spider Web move-trap, +10), and change 9 (the two Wish
+        # turns-to-land bits, +11/+12).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 11,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 13,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 166)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 168)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -267,11 +329,11 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The eleven appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # The thirteen appended columns start exactly at the v2.2 census end (155) and are pinned in
         # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
         # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162),
-        # gender-male(163), gender-female(164), meanlook-trap(165). Every offset +0..+10 (155-165)
-        # is written exactly once.
+        # gender-male(163), gender-female(164), meanlook-trap(165), self-wish-turns(166),
+        # opp-wish-turns(167). Every offset +0..+12 (155-167) is written exactly once.
         self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
         self.assertEqual(V3_NUMERIC_BASE, 155)
         self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
@@ -300,10 +362,18 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(NUMERIC_GENDER_FEMALE, 164)
         self.assertEqual(NUMERIC_MEANLOOK_TRAP, V3_NUMERIC_BASE + 10)
         self.assertEqual(NUMERIC_MEANLOOK_TRAP, 165)
-        # Width covers through +10; total 166.
+        # Change 9 (Wish turns-to-land) at +11/+12, on the field token beside the v2.2 pending bits.
+        self.assertEqual(NUMERIC_SELF_WISH_TURNS, V3_NUMERIC_BASE + 11)
+        self.assertEqual(NUMERIC_SELF_WISH_TURNS, 166)
+        self.assertEqual(NUMERIC_OPP_WISH_TURNS, V3_NUMERIC_BASE + 12)
+        self.assertEqual(NUMERIC_OPP_WISH_TURNS, 167)
+        # The v3 turns columns sit ABOVE the v2.2 pending bits (56/57), which keep their positions.
+        self.assertEqual(NUMERIC_SELF_WISH_PENDING, 56)
+        self.assertEqual(NUMERIC_OPP_WISH_PENDING, 57)
+        # Width covers through +12; total 168.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_MEANLOOK_TRAP + 1,
+            NUMERIC_OPP_WISH_TURNS + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -603,7 +673,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(len(v3_row), width + 13)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -773,7 +843,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(len(v3_row), width + 13)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -984,7 +1054,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(len(v3_row), width + 13)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1162,7 +1232,7 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(len(v3_row), width + 13)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1343,7 +1413,147 @@ class WrapTrapEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
+        self.assertEqual(
+            [tuple(row) for row in v2_2.categorical_ids],
+            [tuple(row) for row in v3.categorical_ids],
+        )
+        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+
+
+class WishTurnsTrackerTest(unittest.TestCase):
+    """Change 9 lifecycle at the public-parser layer (spec acceptance item 9): the per-side
+    turns-to-land clock re-derived from ``wish_set_turns`` reads 2 the declaration turn, 1 the
+    landing turn, 0 otherwise — and is nonzero on exactly the turns the v2.2 pending bit is set."""
+
+    def _remaining(self, lines, slot="p1"):
+        return _wish_turns_remaining(parse_showdown_replay(lines, battle_id="wish"), slot)
+
+    def test_two_then_one_then_zero(self) -> None:
+        # Mid declaration-turn (before |turn|2 is fed): 2. Turn 2 (the landing turn): 1. Turn 3
+        # (after the heal landed and popped wish_set_turns): 0.
+        mid = _WISH_LEADS + ["|move|p1a: Vaporeon|Wish|p1a: Vaporeon"]
+        self.assertEqual(self._remaining(mid), 2)
+        self.assertEqual(self._remaining(_through_turn(_WISH_RIDE, 2)), 1)
+        self.assertEqual(self._remaining(_through_turn(_WISH_RIDE, 3)), 0)
+
+    def test_zero_when_no_wish_pending(self) -> None:
+        self.assertEqual(self._remaining(_WISH_LEADS), 0)
+        # The un-wishing side never leaves 0.
+        self.assertEqual(self._remaining(_through_turn(_WISH_RIDE, 2), slot="p2"), 0)
+
+    def test_nonzero_exactly_when_pending_bit_is_set(self) -> None:
+        # The v3 turns clock and the v2.2 pending predicate agree about presence at every boundary.
+        for prefix in (_WISH_LEADS,
+                       _WISH_LEADS + ["|move|p1a: Vaporeon|Wish|p1a: Vaporeon"],
+                       _through_turn(_WISH_RIDE, 2),
+                       _through_turn(_WISH_RIDE, 3)):
+            replay = parse_showdown_replay(prefix, battle_id="wish")
+            self.assertEqual(bool(_wish_turns_remaining(replay, "p1")), _wish_pending(replay, "p1"))
+
+    def test_wish_pass_keeps_the_clock_on_the_side_across_a_switch(self) -> None:
+        # Per-slot (keyed on side, not mon): the forced switch after the wisher faints keeps the
+        # clock. Mid-turn-1 (forced-switch request) = 2; turn 2 on the inheritor = 1; turn 3 = 0.
+        self.assertEqual(self._remaining(_WISH_PASS_FAINT), 2)
+        self.assertEqual(self._remaining(_through_turn(_WISH_PASS_RIDE, 2)), 1)
+        self.assertEqual(self._remaining(_through_turn(_WISH_PASS_RIDE, 3)), 0)
+
+    def test_re_declared_wish_while_pending_does_not_re_arm(self) -> None:
+        # Gen3: a Wish declared while one is already pending FAILS and must not reset the clock.
+        lines = _through_turn(_WISH_RIDE, 2) + ["|move|p1a: Vaporeon|Wish|p1a: Vaporeon"]
+        # Still keyed to the original turn-1 declaration: remaining stays 1 (not re-armed to 2).
+        self.assertEqual(self._remaining(lines), 1)
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class WishTurnsEncodeTest(unittest.TestCase):
+    """Change 9 at the encode layer: the per-side clock lands on the FIELD token, reads 2/2 then
+    1/2 then 0 across a Wish's life, on both seats, persists across a wish-pass switch, leaves the
+    sibling v3 columns and the v2.2 pending bits alone, and keeps the v2.2 prefix byte-identical."""
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="wish-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
+        observation.validate(spec)
+        return observation
+
+    def _field(self, observation):
+        return observation.numeric_features[FIELD_TOKEN_OFFSET]
+
+    def test_self_clock_reads_one_half_then_zero_on_the_field_token(self) -> None:
+        # Turn 2 (the landing turn): the wishing side reads 1/2; the opponent column stays 0.
+        turn2 = self._encode(self._state(_through_turn(_WISH_RIDE, 2)), V3_REPLAY_OBSERVATION_SPEC)
+        self.assertAlmostEqual(self._field(turn2)[NUMERIC_SELF_WISH_TURNS], 0.5)
+        self.assertEqual(self._field(turn2)[NUMERIC_OPP_WISH_TURNS], 0.0)
+        # Only ONE token (the field token) carries the column.
+        self.assertEqual(
+            [i for i, row in enumerate(turn2.numeric_features) if row[NUMERIC_SELF_WISH_TURNS]],
+            [FIELD_TOKEN_OFFSET],
+        )
+        # The v2.2 pending bit agrees (56 set), and the sibling v3 columns are untouched.
+        self.assertEqual(self._field(turn2)[NUMERIC_SELF_WISH_PENDING], 1.0)
+        for col in (NUMERIC_STALL_COUNTER, NUMERIC_CONFUSION_TURNS, NUMERIC_ENCORE_TURNS,
+                    NUMERIC_WRAP_TRAP_TURNS, NUMERIC_MEANLOOK_TRAP):
+            self.assertTrue(all(row[col] == 0.0 for row in turn2.numeric_features))
+        # Turn 3: the Wish landed -> the column (and the pending bit) return to 0.
+        turn3 = self._encode(self._state(_through_turn(_WISH_RIDE, 3)), V3_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(self._field(turn3)[NUMERIC_SELF_WISH_TURNS], 0.0)
+        self.assertEqual(self._field(turn3)[NUMERIC_SELF_WISH_PENDING], 0.0)
+
+    def test_opponent_reads_the_column_from_the_other_seat(self) -> None:
+        # From p2's perspective p1's Wish is the OPPONENT's: opp column set, self column clear.
+        turn2 = self._encode(
+            self._state(_through_turn(_WISH_RIDE, 2), player="p2"), V3_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertAlmostEqual(self._field(turn2)[NUMERIC_OPP_WISH_TURNS], 0.5)
+        self.assertEqual(self._field(turn2)[NUMERIC_SELF_WISH_TURNS], 0.0)
+
+    def test_two_over_two_at_the_forced_switch_and_persists_to_the_wish_pass_recipient(self) -> None:
+        # Intra-turn-1 forced-switch decision: the clock reads 2/2 (2 turns remaining) even though
+        # the wisher just fainted — the per-side slot condition outlives the mon.
+        faint = self._encode(self._state(_WISH_PASS_FAINT), V3_REPLAY_OBSERVATION_SPEC)
+        self.assertAlmostEqual(self._field(faint)[NUMERIC_SELF_WISH_TURNS], 1.0)
+        # Turn 2: the incoming Umbreon inherits the slot and reads 1/2 ("the heal lands on me").
+        turn2 = self._encode(
+            self._state(_through_turn(_WISH_PASS_RIDE, 2)), V3_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertAlmostEqual(self._field(turn2)[NUMERIC_SELF_WISH_TURNS], 0.5)
+
+    def test_v2_2_encode_of_a_wish_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+        # NON-VACUOUS guard: at turn 2 the v3 encode DOES set the wish column (1/2), so the invariant
+        # (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful. The v2.2
+        # pending bit (56) is present in BOTH encodes and stays byte-identical.
+        state = self._state(_through_turn(_WISH_RIDE, 2))
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+        self.assertTrue(any(row[NUMERIC_SELF_WISH_TURNS] for row in v3.numeric_features))
+        self.assertEqual(v2_2.numeric_features[FIELD_TOKEN_OFFSET][NUMERIC_SELF_WISH_PENDING], 1.0)
+        for row_index, (v22_row, v3_row) in enumerate(
+            zip(v2_2.numeric_features, v3.numeric_features)
+        ):
+            self.assertEqual(len(v22_row), width)
+            self.assertEqual(len(v3_row), width + 13)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
