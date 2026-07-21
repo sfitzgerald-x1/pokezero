@@ -129,6 +129,53 @@ _CONFUSE_SELF = [
 ]
 
 
+# ---- change 5: encore turns-so-far. Wobbuffet is a gen3-randbats Encore carrier (16 total).
+# Snorlax uses Body Slam turn 1, Wobbuffet locks it in with Encore (|-start|…|Encore); it rides
+# turns 2-3 (elapsed 1, 2) repeating Body Slam, snaps out via ``-end`` on turn 3, turn 4 clean. ----
+_ENCORE_LEADS = [
+    "|player|p1|Alice|",
+    "|player|p2|Bob|",
+    "|switch|p1a: Wobbuffet|Wobbuffet, L80|100/100",
+    "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+    "|turn|1",
+]
+_ENCORE_RIDE = _ENCORE_LEADS + [
+    "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+    "|-damage|p1a: Wobbuffet|80/100",
+    "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
+    "|-start|p2a: Snorlax|Encore",
+    "|upkeep",
+    "|turn|2",
+    "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+    "|-damage|p1a: Wobbuffet|60/100",
+    "|upkeep",
+    "|turn|3",
+    "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+    "|-damage|p1a: Wobbuffet|40/100",
+    "|-end|p2a: Snorlax|Encore",
+    "|upkeep",
+    "|turn|4",
+]
+# p1's OWN mon encored, with a |request| so the encored mon lands on a SELF-side token — the
+# reveal-driven opponent token exercises the opponent write path, this the self write path.
+_ENCORE_SELF = [
+    "|player|p1|Us|",
+    "|player|p2|Them|",
+    "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+    "|switch|p2a: Wobbuffet|Wobbuffet, L80|100/100",
+    "|turn|1",
+    "|move|p1a: Snorlax|Body Slam|p2a: Wobbuffet",
+    "|-damage|p2a: Wobbuffet|80/100",
+    "|move|p2a: Wobbuffet|Encore|p1a: Snorlax",
+    "|-start|p1a: Snorlax|Encore",
+    "|upkeep",
+    "|turn|2",
+    '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
+    '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
+    '"details":"Snorlax, L80","condition":"80/100","active":true}]}}',
+]
+
+
 def _through_turn(lines, turn):
     """The log prefix up to and including the ``|turn|<turn>`` decision boundary."""
     return lines[: lines.index(f"|turn|{turn}") + 1]
@@ -868,6 +915,184 @@ class ConfusionEncodeTest(unittest.TestCase):
         width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
         # The v3 encode is non-vacuous: the confusion column is actually populated.
         self.assertTrue(any(row[NUMERIC_CONFUSION_TURNS] for row in v3.numeric_features))
+        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        for row_index, (v22_row, v3_row) in enumerate(
+            zip(v2_2.numeric_features, v3.numeric_features)
+        ):
+            self.assertEqual(len(v22_row), width)
+            self.assertEqual(len(v3_row), width + 7)
+            self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
+        self.assertEqual(
+            [tuple(row) for row in v2_2.categorical_ids],
+            [tuple(row) for row in v3.categorical_ids],
+        )
+        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+
+
+class EncoreElapsedTrackerTest(unittest.TestCase):
+    """Change 5 lifecycle at the public-parser layer (spec acceptance item 5)."""
+
+    def _replay(self, lines):
+        return parse_showdown_replay(lines, battle_id="encore")
+
+    def test_counter_rises_each_turn_the_volatile_is_present(self) -> None:
+        # 1 turn elapsed at turn 2, 2 at turn 3; the un-encored side never leaves 0.
+        self.assertEqual(self._replay(_through_turn(_ENCORE_RIDE, 2)).encore_elapsed["p2"], 1)
+        replay3 = self._replay(_through_turn(_ENCORE_RIDE, 3))
+        self.assertEqual(replay3.encore_elapsed["p2"], 2)
+        self.assertEqual(replay3.encore_elapsed["p1"], 0)
+
+    def test_end_encore_resets_the_counter(self) -> None:
+        # Turn 4 is past the turn-3 ``-end`` expiry.
+        self.assertEqual(self._replay(_through_turn(_ENCORE_RIDE, 4)).encore_elapsed["p2"], 0)
+
+    def test_switch_out_resets_the_counter(self) -> None:
+        lines = _ENCORE_LEADS + [
+            "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+            "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
+            "|-start|p2a: Snorlax|Encore",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|100/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
+
+    def test_drag_resets_the_counter(self) -> None:
+        # Encore is noCopy: true, so a phazing |drag| (Whirlwind/Roar) also drops the volatile.
+        lines = _ENCORE_LEADS + [
+            "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+            "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
+            "|-start|p2a: Snorlax|Encore",
+            "|upkeep",
+            "|turn|2",
+            "|drag|p2a: Skarmory|Skarmory, L76|100/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
+
+    def test_faint_resets_the_counter(self) -> None:
+        lines = _ENCORE_LEADS + [
+            "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+            "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
+            "|-start|p2a: Snorlax|Encore",
+            "|upkeep",
+            "|turn|2",
+            "|faint|p2a: Snorlax",
+            "|upkeep",
+        ]
+        self.assertEqual(self._replay(lines).encore_elapsed["p2"], 0)
+
+    def test_snapshot_round_trip_preserves_elapsed(self) -> None:
+        replay = self._replay(_through_turn(_ENCORE_RIDE, 3))  # mid-encore, elapsed 2
+        self.assertEqual(replay.encore_elapsed["p2"], 2)
+        resumed = _ReplayParser.from_snapshot(replay)
+        self.assertEqual(resumed.snapshot().encore_elapsed["p2"], 2)
+        # The reset still fires on the resumed tracker (state, not just the log prefix, carries it).
+        resumed.feed(["|-end|p2a: Snorlax|Encore", "|turn|4"])
+        self.assertEqual(resumed.snapshot().encore_elapsed["p2"], 0)
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class EncoreEncodeTest(unittest.TestCase):
+    """Change 5 at the encode layer: the column-pinned rise/reset on the encored mon's token,
+    the sibling stall/confusion columns staying zero, and the v2.2 byte-identity guard."""
+
+    _STALL_COL = V3_NUMERIC_BASE + 4
+    _CONFUSION_COL = V3_NUMERIC_BASE + 5
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="encore-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
+        observation.validate(spec)
+        return observation
+
+    def _encore_cells(self, observation):
+        return [
+            (index, row[NUMERIC_ENCORE_TURNS])
+            for index, row in enumerate(observation.numeric_features)
+            if row[NUMERIC_ENCORE_TURNS]
+        ]
+
+    def test_column_rises_then_resets_on_the_encored_opponent_token(self) -> None:
+        for turn, want in ((2, 1 / 6), (3, 2 / 6)):
+            observation = self._encode(
+                self._state(_through_turn(_ENCORE_RIDE, turn)), V3_REPLAY_OBSERVATION_SPEC
+            )
+            cells = self._encore_cells(observation)
+            # Column-position-pinned: exactly ONE token, at the opponent-active slot, in the
+            # encore column — and the sibling stall (+4) and confusion (+5) columns are untouched.
+            self.assertEqual(len(cells), 1)
+            self.assertEqual(cells[0][0], OPPONENT_POKEMON_TOKEN_OFFSET)
+            self.assertAlmostEqual(cells[0][1], want)
+            self.assertTrue(
+                all(row[self._STALL_COL] == 0.0 for row in observation.numeric_features)
+            )
+            self.assertTrue(
+                all(row[self._CONFUSION_COL] == 0.0 for row in observation.numeric_features)
+            )
+        # Expiry on turn 3 -> the column is empty at turn 4.
+        observation = self._encode(
+            self._state(_through_turn(_ENCORE_RIDE, 4)), V3_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertEqual(self._encore_cells(observation), [])
+
+    def test_column_fills_the_encored_self_active_token(self) -> None:
+        # The self write path: p1's own encored Snorlax (via a request) carries the column.
+        observation = self._encode(
+            self._state(_ENCORE_SELF, player="p1"), V3_REPLAY_OBSERVATION_SPEC
+        )
+        cells = self._encore_cells(observation)
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0][0], SELF_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(cells[0][1], 1 / 6)  # 1 turn elapsed
+
+    def test_switch_out_drag_and_faint_zero_the_column(self) -> None:
+        for tail in (
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+        ):
+            lines = _ENCORE_LEADS + [
+                "|move|p2a: Snorlax|Body Slam|p1a: Wobbuffet",
+                "|move|p1a: Wobbuffet|Encore|p2a: Snorlax",
+                "|-start|p2a: Snorlax|Encore",
+                "|upkeep",
+                "|turn|2",
+            ] + tail
+            observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
+            self.assertEqual(self._encore_cells(observation), [])
+
+    def test_v2_2_encode_of_an_encore_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+        # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the encore column (2/6), so the
+        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        state = self._state(_through_turn(_ENCORE_RIDE, 3))
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+        # The v3 encode is non-vacuous: the encore column is actually populated.
+        self.assertTrue(any(row[NUMERIC_ENCORE_TURNS] for row in v3.numeric_features))
         # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
         for row_index, (v22_row, v3_row) in enumerate(
             zip(v2_2.numeric_features, v3.numeric_features)
