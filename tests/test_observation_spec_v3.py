@@ -25,6 +25,7 @@ from pokezero.observation import (
 from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
     NUMERIC_CONFUSION_TURNS,
+    NUMERIC_ENCORE_TURNS,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
     NUMERIC_STALL_COUNTER,
@@ -149,14 +150,14 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends SIX numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
-        # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810), and
-        # change 4 (confusion turns-so-far, +5).
+        # v3 appends SEVEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
+        # change 4 (confusion turns-so-far, +5, #811), and change 5 (encore turns-so-far, +6).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 6,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 7,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 161)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 162)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -166,24 +167,32 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The six appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # The seven appended columns start exactly at the v2.2 census end (155) and are pinned in
         # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
-        # confusion-turns(160). Every offset +0..+5 (155-160) is written exactly once.
+        # confusion-turns(160, #811), encore-turns(161). Every offset +0..+6 (155-161) is
+        # written exactly once.
         self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
+        self.assertEqual(V3_NUMERIC_BASE, 155)
         self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
+        self.assertEqual(NUMERIC_TT_FAIL, 155)
         self.assertEqual(NUMERIC_TM2_FAIL, V3_NUMERIC_BASE + 1)
+        self.assertEqual(NUMERIC_TM2_FAIL, 156)
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, V3_NUMERIC_BASE + 2)
+        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, 157)
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, V3_NUMERIC_BASE + 3)
-        # Change 3 (consecutive-stall counter, #810) is pinned at +4; change 4
-        # (confusion turns-so-far) at +5.
+        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, 158)
+        # Change 3 (consecutive-stall counter, #810) at +4; change 4 (confusion turns-so-far,
+        # #811) at +5; change 5 (encore turns-so-far, this PR) at +6.
         self.assertEqual(NUMERIC_STALL_COUNTER, V3_NUMERIC_BASE + 4)
         self.assertEqual(NUMERIC_STALL_COUNTER, 159)
         self.assertEqual(NUMERIC_CONFUSION_TURNS, V3_NUMERIC_BASE + 5)
         self.assertEqual(NUMERIC_CONFUSION_TURNS, 160)
-        # Width covers through +5; total 161.
+        self.assertEqual(NUMERIC_ENCORE_TURNS, V3_NUMERIC_BASE + 6)
+        self.assertEqual(NUMERIC_ENCORE_TURNS, 161)
+        # Width covers through +6; total 162.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_CONFUSION_TURNS + 1,
+            NUMERIC_ENCORE_TURNS + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -483,7 +492,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 6)
+            self.assertEqual(len(v3_row), width + 7)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -653,7 +662,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 6)
+            self.assertEqual(len(v3_row), width + 7)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -864,7 +873,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 6)
+            self.assertEqual(len(v3_row), width + 7)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],

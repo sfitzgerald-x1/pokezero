@@ -450,9 +450,17 @@ NUMERIC_STALL_COUNTER = V3_NUMERIC_BASE + 4
 # Public trace: |-start (apply) / |-activate (each confused turn) / |-end (snap-out) confusion;
 # elapsed is public, remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
 NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
-# EXTRA counts BOTH the stall-counter column (+4, change 3) and this confusion column (+5,
-# change 4), so the v3 numeric width is 161.
-V3_NUMERIC_EXTRA = 6
+# Change 5 — Encore turns-so-far on the ENCORED (active) mon's token, schema >= v3 only, the
+# sibling of change 4. Gen3 Encore runs the gen3 mod override (data/mods/gen3/moves.ts
+# encore.condition.durationCallback → ``this.random(3, 7)`` = {3,4,5,6} turns), so the encoded
+# value is ``min(1, elapsed/6)`` with CAP = 6. The encore PRESENCE is already the
+# ``volatile:encore`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter only.
+# Public trace: |-start|SLOT|Encore (apply) / |-end|SLOT|Encore (expiry); elapsed is public,
+# remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
+NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
+# EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), and
+# this encore column (+6, change 5), so the v3 numeric width is 162.
+V3_NUMERIC_EXTRA = 7
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -1770,6 +1778,7 @@ def observation_from_player_state(
         active_toxic_stage=state.self_toxic_stage,
         active_stall_counter=state.self_stall_counter,
         active_confusion_elapsed=state.self_confusion_elapsed,
+        active_encore_elapsed=state.self_encore_elapsed,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
@@ -1798,6 +1807,7 @@ def observation_from_player_state(
         active_toxic_stage=state.opponent_toxic_stage,
         active_stall_counter=state.opponent_stall_counter,
         active_confusion_elapsed=state.opponent_confusion_elapsed,
+        active_encore_elapsed=state.opponent_encore_elapsed,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -2973,6 +2983,7 @@ def _encode_pokemon_tokens(
     active_toxic_stage: int = 0,
     active_stall_counter: int = 0,
     active_confusion_elapsed: int = 0,
+    active_encore_elapsed: int = 0,
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
@@ -3093,6 +3104,17 @@ def _encode_pokemon_tokens(
                     numeric_features[token_index],
                     NUMERIC_CONFUSION_TURNS,
                     min(1.0, active_confusion_elapsed / 5.0),
+                )
+            # Spec v3 change 5: encore turns-so-far on the encored (active) mon's token,
+            # schema >= v3 only. Gen3 Encore maxes at 6 turns (gen3 mod random(3,7)), so CAP = 6
+            # and the ramp saturates at 1.0. The column sits above the v2.2 census, so legacy
+            # modes stay byte-frozen; the counter is 0 (unwritten) whenever the active mon is not
+            # encored.
+            if schema_v3 and active_encore_elapsed:
+                _set_numeric(
+                    numeric_features[token_index],
+                    NUMERIC_ENCORE_TURNS,
+                    min(1.0, active_encore_elapsed / 6.0),
                 )
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
