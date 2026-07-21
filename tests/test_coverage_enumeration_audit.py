@@ -668,11 +668,15 @@ class CoverageEnumerationSourceIntegrationTests(unittest.TestCase):
             exact_variants=True,
         )
         ledger = plan.coverage_ledger()
+        source_variant_count = sum(len(universe.variants) for universe in source.universes.values())
 
         self.assertTrue(ledger["complete"])
-        self.assertEqual(len(ledger["expected"]["variants"]), 1748)
-        self.assertEqual(len(ledger["first_coverage"]["variants"]), 1748)
-        self.assertEqual(len(plan.games), 874)
+        # The upstream Showdown/Dex data is intentionally live. The source hash in the
+        # resulting artifact identifies its exact universe; this integration test verifies
+        # that every tuple from that universe is planned rather than pinning a stale count.
+        self.assertEqual(len(ledger["expected"]["variants"]), source_variant_count)
+        self.assertEqual(len(ledger["first_coverage"]["variants"]), source_variant_count)
+        self.assertEqual(len(plan.games), (source_variant_count + 1) // 2)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import json
 import os
@@ -5,9 +6,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.belief import PublicBattleBeliefEngine
-from pokezero.randbat import Gen3RandbatSource
+from pokezero.randbat import Gen3RandbatSource, _source_hash, load_gen3_randbat_source_cached
 from pokezero.showdown import parse_showdown_replay
 
 
@@ -120,6 +122,50 @@ def source() -> Gen3RandbatSource:
 
 
 class Gen3RandbatSourceTest(unittest.TestCase):
+    def test_source_hash_covers_resolved_dex_metadata(self) -> None:
+        temp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(temp_dir))
+        source_file = temp_dir / "sets.json"
+        source_file.write_text('{"fixture": true}', encoding="utf-8")
+
+        base = _source_hash(
+            (source_file,),
+            resolved_metadata={"moves": {"surf": {"type": "Water"}}, "species": {}},
+        )
+        changed = _source_hash(
+            (source_file,),
+            resolved_metadata={"moves": {"surf": {"type": "Normal"}}, "species": {}},
+        )
+
+        self.assertNotEqual(base, changed)
+
+    def test_process_cache_invalidates_when_same_showdown_root_is_rebuilt(self) -> None:
+        # Workers can outlive a Showdown rebuild. The object cache must follow the runtime input
+        # stamp rather than returning the universe that happened to load first for this path.
+        root = Path("/tmp/showdown-cache-fixture")
+        first = source()
+        second = replace(
+            first,
+            metadata=replace(first.metadata, source_hash="rebuilt-source-hash"),
+        )
+        with (
+            patch(
+                "pokezero.randbat._showdown_runtime_input_stamp",
+                side_effect=[
+                    (("dist/sim/index.js", 1, 1),),
+                    (("dist/sim/index.js", 1, 1),),
+                    (("dist/sim/index.js", 2, 1),),
+                ],
+            ),
+            patch.object(Gen3RandbatSource, "from_showdown_root", side_effect=[first, second]) as load,
+            patch("pokezero.randbat._SOURCE_CACHE", {}),
+        ):
+            self.assertIs(load_gen3_randbat_source_cached(root), first)
+            self.assertIs(load_gen3_randbat_source_cached(root), first)
+            self.assertIs(load_gen3_randbat_source_cached(root), second)
+
+        self.assertEqual(load.call_count, 2)
+
     def test_loads_source_and_builds_variant_universe(self) -> None:
         set_source = source()
         universe = set_source.universe_for("Xatu")
