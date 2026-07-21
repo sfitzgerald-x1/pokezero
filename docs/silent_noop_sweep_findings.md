@@ -177,15 +177,18 @@ observable or behaviorally harmful.
 ## Candidate Verdicts
 
 Each candidate discovered by Layers 1--3 is appended here before any schema
-change is proposed. A candidate is actionable only after its evidence row is
-complete; `COVERED`, `UNREACHABLE`, and `ACCEPTED-LOSS` are explicit verdicts,
-not omissions from this table.
+change is proposed. Known targeted regressions are retained here as well, but
+are explicitly labeled rather than credited to a broad audit layer. A candidate
+is actionable only after its evidence row is complete; `COVERED`,
+`UNREACHABLE`, and `ACCEPTED-LOSS` are explicit verdicts, not omissions from
+this table.
 
 | Canonical signature or public fact | Layer | Reachability evidence | Observed count and provenance | Consuming handler | Collision or mutation evidence | Harm probe | Verdict | Reproduction |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Status/type candidates from the pre-repair silent surface | Silent mutation | Fresh random plus curated recheck | Historical 30 candidates; current 675-transition aggregate has 0 | The repaired audit excludes inactive resets and normalizes fainted state before classification | No fresh candidate survived | Not needed | SUPERSEDED BY CLEAN RE-RUN | `python scripts/silent_mutation_audit.py --observation-schema v3 --random-games 8 --max-rounds 120 --interaction-registry --json audit.json` |
 | Live Tier-2/investment annotations differed from a bare batch fold | Bounded depth | Fresh exact eight-round recheck | Historical 6,111 annotation-only divergences; current 9,594-decision lane has 0 findings | Batch-equivalent annotation overlay now matches the live path | No fresh divergence survived | Not needed | SUPERSEDED BY CLEAN RE-RUN | Fresh bounded-depth aggregate in `v3signature-coverage-r2` |
 | Castform Forecast and Ditto Transform party-oracle differences | Party fixture | Fresh curated interaction recheck | Historical six divergences; current 489-decision lane has 0 findings | Oracle contract now validates base species with live type state | No fresh divergence survived | Not needed | SUPERSEDED BY CLEAN RE-RUN | Fresh party aggregate in `v3signature-coverage-r2` |
+| Wish landing heal after an action-phase pinch-item non-proc | Targeted belief regression, not audit-discovered | Minimal public trace: action-phase damage crosses the pinch threshold, then `-heal ... [from] move: Wish` lands at residual | One synthetic public trace in `ExactStateLedgerTest`; no v5 broad-lane finding is claimed | `belief._RESIDUAL_HP_TAGS` keeps the residual Wish heal from replacing the action-phase HP snapshot | Not a collision candidate; the old failure was an over-retained source-valid candidate set | Directly asserts all incompatible pinch items are ruled out; no separate harm probe required | COVERED BY TARGETED REGRESSION; broad Wish and berry scenarios did not independently detect this ordering case | `python -m unittest tests.test_belief.ExactStateLedgerTest.test_wish_landing_heal_does_not_mask_the_action_phase_pinch_non_proc` |
 
 ## Completion Record
 
