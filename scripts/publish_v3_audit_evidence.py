@@ -28,6 +28,7 @@ OBSERVATION_SCHEMA = "pokezero.observation.v3"
 PROTOCOL_SIGNATURE_SCHEMA = "pokezero.protocol-signature-census.v2"
 SILENT_MUTATION_AUDIT_SCHEMA = "pokezero.silent-mutation-audit.v1"
 COLLISION_AUDIT_SCHEMA = "pokezero.encoding-collision-audit.v1"
+COLLISION_MODEL_INPUT_NUMERIC_DTYPE = "float32"
 COVERAGE_AUDIT_SCHEMA = "pokezero.deep-line-audit.v1"
 REQUIRED_BOUNDED_DEPTH_ROUNDS = 8
 MINIMUM_SILENT_RANDOM_GAMES = 8
@@ -647,6 +648,8 @@ def _collision(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     _require_schema(audit, COLLISION_AUDIT_SCHEMA, label="collision audit")
     if audit.get("expected_observation_schema") != OBSERVATION_SCHEMA:
         raise ValueError("collision audit did not encode the v3 observation schema")
+    if audit.get("model_input_numeric_dtype") != COLLISION_MODEL_INPUT_NUMERIC_DTYPE:
+        raise ValueError("collision audit did not hash the model float32 input boundary")
     expected_sha = complete.get("audit_sha256")
     actual_sha = hashlib.sha256(audit_path.read_bytes()).hexdigest()
     if not isinstance(expected_sha, str) or expected_sha != actual_sha:
@@ -655,12 +658,19 @@ def _collision(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if _immutable_digest(complete.get("image_digest"), label="collision terminal aggregate") != provenance["image_digest"]:
         raise ValueError("collision terminal image digest differs from audit provenance")
     records_scanned = _require_nonnegative_int(audit.get("records_scanned"), label="collision records_scanned")
+    input_group_count = _require_nonnegative_int(audit.get("input_group_count"), label="collision input_group_count")
     collision_group_count = _require_nonnegative_int(
         audit.get("collision_group_count"), label="collision collision_group_count"
     )
     actionable_collision_group_count = _require_nonnegative_int(
         audit.get("actionable_collision_group_count"), label="collision actionable_collision_group_count"
     )
+    if input_group_count > records_scanned:
+        raise ValueError("collision input_group_count exceeds records_scanned")
+    if collision_group_count > input_group_count:
+        raise ValueError("collision collision_group_count exceeds input_group_count")
+    if actionable_collision_group_count > collision_group_count:
+        raise ValueError("collision actionable_collision_group_count exceeds collision_group_count")
     status = _require_derived_status(
         status=complete.get("status"),
         clean=actionable_collision_group_count == 0,
@@ -669,6 +679,7 @@ def _collision(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return {
         "status": status,
         "records_scanned": records_scanned,
+        "input_group_count": input_group_count,
         "collision_group_count": collision_group_count,
         "actionable_collision_group_count": actionable_collision_group_count,
         "minimum_records_required": REQUIRED_COLLISION_RECORDS,

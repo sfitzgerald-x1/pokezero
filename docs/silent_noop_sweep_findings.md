@@ -51,8 +51,13 @@ Encore turns-so-far, Wrap elapsed turns, per-mon gender, Mean Look / Spider
 Web trapping, and the per-side Wish turns-to-land clock. Its numeric width is
 therefore **168**. The Wish repair also keeps a landing Wish heal out of the
 belief layer's action-phase HP snapshot, so it cannot mask a pinch-item
-non-proc. The final replacement wave has been submitted from this source
-boundary; only its terminal provenance-backed artifacts can close this gate.
+non-proc. The first v5 wave from this source boundary is retained as diagnostic
+evidence only. Follow-up audit-contract hardening makes protocol backing
+entity-specific in the silent-mutation lane and hashes collision numerics at
+the model's float32 boundary, so a replacement wave from the post-hardening
+public revision is required before any clean result can close this gate. The
+diagnostic wave may still contribute reproducible candidate evidence, but it
+cannot be cited as a final clean result.
 
 The in-flight 161-feature v5 wave remains useful regression evidence, but it
 is historical and cannot close this gate because it predates the later v3
@@ -60,13 +65,13 @@ additions and the Wish repair.
 
 | Cycle | Public revision | Observation schema | Protocol signature schema | Layer | Status | Aggregate artifact |
 | --- | --- | --- | --- | --- | --- | --- |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Exact universe fixtures | Submitted; terminal aggregate pending. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Curated party interactions | Submitted behind the static gate. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Silent engine-mutation lane | Submitted; terminal aggregate pending. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Encoding-collision capture and audit | Submitted; terminal aggregate pending. | Terminal aggregate pending |
-| v5 active | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Counterfactual harm probes | Runs only for the validated v5 shortlist. | Not started |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Exact universe fixtures | Submitted; may produce diagnostic candidates only. | Terminal aggregate pending |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | Curated party interactions | Submitted behind the static gate; diagnostic only. | Terminal aggregate pending |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Silent engine-mutation lane | Submitted; diagnostic only under the pre-hardening classifier. | Terminal aggregate pending |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers; diagnostic only. | Terminal aggregate pending |
+| v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Encoding-collision capture and audit | Submitted; diagnostic only under pre-float32 hashing. | Terminal aggregate pending |
+| replacement pending | Post-hardening public revision | v3 | N/A | Counterfactual harm probes | Runs only for the validated replacement-wave shortlist. | Not started |
 
 ## Historical Triage Evidence
 

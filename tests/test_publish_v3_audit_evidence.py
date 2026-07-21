@@ -242,7 +242,9 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             {
                 "schema_version": "pokezero.encoding-collision-audit.v1",
                 "expected_observation_schema": "pokezero.observation.v3",
+                "model_input_numeric_dtype": "float32",
                 "records_scanned": 100000,
+                "input_group_count": 3,
                 "collision_group_count": 3,
                 "actionable_collision_group_count": 0,
                 "audit_provenance": provenance(
@@ -333,6 +335,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "pokezero.v3-audit-public-evidence.v2")
         self.assertEqual(payload["provenance"]["image_digest"], "sha256:" + "a" * 64)
         self.assertEqual(payload["layers"]["encoding_collision"]["records_scanned"], 100000)
+        self.assertEqual(payload["layers"]["encoding_collision"]["input_group_count"], 3)
         self.assertNotIn("registry.example.invalid", serialized)
         self.assertNotIn("/shared/private", serialized)
         self.assertIn("<artifact-path>", serialized)
@@ -400,6 +403,28 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     output=output,
                 )
             self.assertFalse(output.exists())
+
+    def test_rejects_collision_report_without_model_input_group_count(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            collision = self._collision_root(root)
+            audit_path = collision / "audit" / "collision-audit.json"
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            audit.pop("input_group_count")
+            write_json(audit_path, audit)
+            complete_path = collision / "controller" / "complete.json"
+            complete = json.loads(complete_path.read_text(encoding="utf-8"))
+            complete["audit_sha256"] = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+            write_json(complete_path, complete)
+
+            with self.assertRaisesRegex(ValueError, "input_group_count"):
+                PUBLISHER.publish(
+                    coverage_root=self._coverage_root(root),
+                    silent_root=self._silent_root(root),
+                    collision_root=collision,
+                    inventory_root=self._inventory_root(root),
+                    output=root / "public" / "summary.json",
+                )
 
     def test_rejects_coverage_summary_that_disagrees_with_audit(self):
         with tempfile.TemporaryDirectory() as temp:

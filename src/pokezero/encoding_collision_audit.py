@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 from typing import Any, Iterable, Iterator, Mapping
 
 from .observation import OBSERVATION_SCHEMA_VERSION_V3
@@ -27,6 +28,7 @@ from .public_decision_corpus import (
 ENCODING_COLLISION_AUDIT_SCHEMA_VERSION = "pokezero.encoding-collision-audit.v1"
 COLLISION_SKETCH_SCHEMA_VERSION = "pokezero.encoding-collision-sketch.v2"
 WHITELIST_VERSION = "pokezero.encoding-collision-whitelist.v1"
+MODEL_INPUT_NUMERIC_DTYPE = "float32"
 DELIBERATE_ABSTRACTION_WHITELIST = frozenset(
     {
         "hp-quantization",
@@ -41,11 +43,20 @@ def _input_payload(record: PublicDecisionRecord) -> dict[str, Any]:
     return {
         "schema_version": observation.schema_version,
         "categorical_ids": observation.categorical_ids,
-        "numeric_features": observation.numeric_features,
+        # The policy adapter materializes these values as ``torch.float32``.
+        # Hashing Python's wider floats would split states that the model cannot
+        # distinguish after that cast, defeating this audit's collision check.
+        # Hex preserves the exact float32 bits without exposing a different
+        # tensor representation in public corpus artifacts.
+        "numeric_features_float32": _float32_rows(observation.numeric_features),
         "token_type_ids": observation.token_type_ids,
         "attention_mask": observation.attention_mask,
         "legal_action_mask": observation.legal_action_mask,
     }
+
+
+def _float32_rows(rows: Iterable[Iterable[float]]) -> tuple[tuple[str, ...], ...]:
+    return tuple(tuple(struct.pack("<f", float(value)).hex() for value in row) for row in rows)
 
 
 def encoded_input_hash(record: PublicDecisionRecord) -> str:
@@ -565,6 +576,7 @@ class EncodingCollisionAudit:
         return {
             "schema_version": ENCODING_COLLISION_AUDIT_SCHEMA_VERSION,
             "expected_observation_schema": self.expected_observation_schema,
+            "model_input_numeric_dtype": MODEL_INPUT_NUMERIC_DTYPE,
             "whitelist": {
                 "version": WHITELIST_VERSION,
                 "rules": sorted(DELIBERATE_ABSTRACTION_WHITELIST),
@@ -665,6 +677,7 @@ class EncodingCollisionSketchAudit:
         return {
             "schema_version": ENCODING_COLLISION_AUDIT_SCHEMA_VERSION,
             "expected_observation_schema": self.expected_observation_schema,
+            "model_input_numeric_dtype": MODEL_INPUT_NUMERIC_DTYPE,
             "whitelist": {
                 "version": WHITELIST_VERSION,
                 "rules": sorted(DELIBERATE_ABSTRACTION_WHITELIST),
