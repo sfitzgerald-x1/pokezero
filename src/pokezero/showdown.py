@@ -443,7 +443,16 @@ NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_NUMERIC_BASE + 3
 # ``min(1.0, count / 8.0)``; derived ONLY from public protocol lines, so both players compute
 # both sides' counters. Schema >= v3 only; sits above the v2.2 census so legacy modes stay frozen.
 NUMERIC_STALL_COUNTER = V3_NUMERIC_BASE + 4
-V3_NUMERIC_EXTRA = 5
+# Change 4 — Confusion turns-so-far on the CONFUSED (active) mon's token, schema >= v3 only.
+# Gen3 confusion runs ``this.random(2,6)`` = {2,3,4,5} turns (no gen3 override), so the encoded
+# value is ``min(1, elapsed/5)`` with CAP = 5. The confusion PRESENCE is already the
+# ``volatile:confusion`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter only.
+# Public trace: |-start (apply) / |-activate (each confused turn) / |-end (snap-out) confusion;
+# elapsed is public, remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
+NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
+# EXTRA counts BOTH the stall-counter column (+4, change 3) and this confusion column (+5,
+# change 4), so the v3 numeric width is 161.
+V3_NUMERIC_EXTRA = 6
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -756,6 +765,12 @@ class PlayerRelativeBattleState:
     # NUMERIC_TOXIC_STAGE) as min(1.0, count / 8.0) under schema >= v3 only.
     self_stall_counter: int = 0
     opponent_stall_counter: int = 0
+    # ---- spec v3 change 4: confusion turns-so-far (docs/observation_v3_spec.md). Per-side
+    # public elapsed-duration counter for the ACTIVE mon's confusion volatile, from the
+    # _ReplayParser tracker; encoded on the confused mon's token under schema >= v3 only as
+    # min(1, elapsed/5) (gen3 CAP = 5). 0 when the active mon is not confused.
+    self_confusion_elapsed: int = 0
+    opponent_confusion_elapsed: int = 0
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -1513,6 +1528,8 @@ def normalize_for_player(
         opponent_active_volatiles=tuple(replay.volatiles.get(opponent_slot, ())),
         self_toxic_stage=int(replay.toxic_stage.get(showdown_slot, 0)),
         opponent_toxic_stage=int(replay.toxic_stage.get(opponent_slot, 0)),
+        self_confusion_elapsed=int(replay.confusion_elapsed.get(showdown_slot, 0)),
+        opponent_confusion_elapsed=int(replay.confusion_elapsed.get(opponent_slot, 0)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -1715,6 +1732,7 @@ def observation_from_player_state(
         active_volatiles=state.self_active_volatiles,
         active_toxic_stage=state.self_toxic_stage,
         active_stall_counter=state.self_stall_counter,
+        active_confusion_elapsed=state.self_confusion_elapsed,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
@@ -1742,6 +1760,7 @@ def observation_from_player_state(
         active_volatiles=state.opponent_active_volatiles,
         active_toxic_stage=state.opponent_toxic_stage,
         active_stall_counter=state.opponent_stall_counter,
+        active_confusion_elapsed=state.opponent_confusion_elapsed,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -2889,6 +2908,7 @@ def _encode_pokemon_tokens(
     active_volatiles: Sequence[str] = (),
     active_toxic_stage: int = 0,
     active_stall_counter: int = 0,
+    active_confusion_elapsed: int = 0,
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
@@ -3000,6 +3020,16 @@ def _encode_pokemon_tokens(
             # v3 census, keeping v2.2 output byte-identical.
             if schema_v3 and active_stall_counter:
                 _set_numeric(numeric_features[token_index], NUMERIC_STALL_COUNTER, min(1.0, active_stall_counter / 8.0))
+            # Spec v3 change 4: confusion turns-so-far on the confused (active) mon's token,
+            # schema >= v3 only. Gen3 confusion maxes at 5 turns, so CAP = 5 and the ramp
+            # saturates at 1.0. The column sits above the v2.2 census, so legacy modes stay
+            # byte-frozen; the counter is 0 (unwritten) whenever the active mon is not confused.
+            if schema_v3 and active_confusion_elapsed:
+                _set_numeric(
+                    numeric_features[token_index],
+                    NUMERIC_CONFUSION_TURNS,
+                    min(1.0, active_confusion_elapsed / 5.0),
+                )
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
