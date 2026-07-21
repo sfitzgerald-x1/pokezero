@@ -63,18 +63,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         "observation_schema": observation_schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
     }
-    for entry in payload["observed"]["audit_provenance"]:
+    observed_provenance = payload["observed"]["audit_provenance"]
+    for entry in observed_provenance:
         provenance = entry["audit_provenance"]
         if provenance.get("observation_schema") != observation_schema:
             parser.error(f"observed audit has a non-v3 schema: {entry['path']}")
         if provenance.get("showdown_source_hash") != source.metadata.source_hash:
             parser.error(f"observed audit source hash differs from --showdown-root: {entry['path']}")
-    try:
-        require_expected_observed_audit_provenance(
-            payload["observed"]["audit_provenance"], expected=run_provenance
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
+    if observed_provenance:
+        try:
+            require_expected_observed_audit_provenance(observed_provenance, expected=run_provenance)
+        except ValueError as exc:
+            parser.error(str(exc))
     payload["audit_provenance"] = {
         "schema_version": "pokezero.protocol-emission-inventory-provenance.v1",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
