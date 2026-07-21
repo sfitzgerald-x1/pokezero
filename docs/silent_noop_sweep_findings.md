@@ -41,14 +41,15 @@ The active V6 core wave was built from public commit
 `cc1042b61222fcf0e8a608b3f1b762cbafc35891`, Showdown source
 `9d01efb72af41473`, and `pokezero.observation.v3`. Its immutable runtime image
 digest is `sha256:ba14c4bc80281f899ee6cfee71b9946660f9529c2f67b1fa1efb32384a2a3f2a`.
-The image was built from fresh `main` before the wave started.
+Its public-safe terminal summary is
+[`v6-core-terminal-cc1042b.json`](audit_artifacts/v6-core-terminal-cc1042b.json).
 
 | Layer | Result | Evidence boundary |
 | --- | --- | --- |
-| Exact source-universe | Clean: 1,682 decision boundaries, eight shards, no uncovered species, ability pairs, moves, items, or variants; zero failure artifacts. | The source universe has 1,748 final-set variants. The smaller decision count is the number of eligible decision boundaries exercised by the fixture, not a reduced variant universe. |
-| Bounded depth | Clean: 9,594 decision boundaries, depth eight, eight shards, zero findings and zero failure artifacts. | Covers the exact universe through the bounded multi-turn contract; it is not exhaustive arbitrary battle-state coverage. |
-| Curated party interactions | Clean in the original V6 registry: 489 decisions, zero findings. | This original registry predates the targeted Natural Cure fixture below. |
-| Silent engine mutations | Clean: 675 steps, zero unaccounted silent candidates. | Eight random games plus the documented interaction-registry scenarios; not a proof about every possible long-game state. |
+| Exact source-universe | Clean: 1,682 decision boundaries, eight shards, no uncovered species, ability pairs, moves, items, or variants; zero failure artifacts. | The source universe has 1,748 final-set variants. The smaller decision count is the number of eligible decision boundaries exercised by the fixture, not a reduced variant universe. See the [core terminal summary](audit_artifacts/v6-core-terminal-cc1042b.json). |
+| Bounded depth | Clean: 9,594 decision boundaries, depth eight, eight shards, zero findings and zero failure artifacts. | Covers the exact universe through the bounded multi-turn contract; it is not exhaustive arbitrary battle-state coverage. See the [core terminal summary](audit_artifacts/v6-core-terminal-cc1042b.json). |
+| Curated party interactions | Clean in the original V6 registry: 489 decisions, zero findings. | This original registry predates the targeted Natural Cure fixture below. See the [core terminal summary](audit_artifacts/v6-core-terminal-cc1042b.json). |
+| Silent engine mutations | Clean: 675 steps, zero unaccounted silent candidates. | Eight random games plus the documented interaction-registry scenarios; not a proof about every possible long-game state. See the [core terminal summary](audit_artifacts/v6-core-terminal-cc1042b.json). |
 | Encoding collisions | Running: 20 resumable capture shards targeting at least 100,000 public decision records. | The audit hashes only model-visible arrays and masks, scopes comparisons by perspective and decision kind, and keeps compact public locators for later hydration. |
 | Canonical E/O/C differential | Running. | The report will distinguish engine-emittable (`E`), observed (`O`), and consumed (`C`) canonical signatures. No learned schema-v3 policy capture exists, so that specific census will be an explicit limitation rather than a clean result. |
 | Layer 4 harm probes | Pending shortlist. | Probes run only for non-whitelisted collisions or prioritized E/O/C candidates. |
@@ -63,7 +64,8 @@ party-only rerun on that current commit, using Showdown source
 `9d01efb72af41473`, schema v3, and image digest
 `sha256:80c53db660591c6a6992efe030fed0af8b75d45b30e17cd6a1a6d5248a74fbdc`,
 checked 495 decisions with zero findings. Its scenario registry explicitly
-includes `natural_cure_switch`.
+includes `natural_cure_switch`; see the [targeted party
+summary](audit_artifacts/v6-natural-cure-party-6b292ae.json).
 
 The fixture first proves that Toxic landed, then checks the public Natural
 Cure status removal after switch-out and before re-entry. This prevents the

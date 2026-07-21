@@ -1,0 +1,33 @@
+{
+  "schema_version": "pokezero.v3-audit-targeted-party-evidence.v1",
+  "status": "clean",
+  "provenance": {
+    "public_repo_commit": "6b292aebdd66bca799fa419c8c58f5ba269abde5",
+    "showdown_source_hash": "9d01efb72af41473",
+    "observation_schema": "pokezero.observation.v3",
+    "image_digest": "sha256:80c53db660591c6a6992efe030fed0af8b75d45b30e17cd6a1a6d5248a74fbdc",
+    "recorded_at": "2026-07-21T23:00:35.398044+00:00"
+  },
+  "terminal_evidence": {
+    "schema_version": "pokezero.coverage-audit-job.v1",
+    "status": "clean",
+    "terminal_stage": "party"
+  },
+  "command": [
+    "scripts/deep_line_audit.py",
+    "--observation-schema",
+    "v3",
+    "--random-games",
+    "0",
+    "--scenarios",
+    "--interaction-registry",
+    "--protocol-fixtures",
+    "--json",
+    "<artifact-path>"
+  ],
+  "max_rounds": 250,
+  "protocol_fixtures": true,
+  "scenario": "natural_cure_switch",
+  "decisions_checked": 495,
+  "finding_count": 0
+}
