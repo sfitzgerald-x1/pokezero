@@ -209,3 +209,78 @@ Layers 4 and the silent-mutation lane are deliberately narrow adjudication
 passes. The output is the findings doc and, if any ADDs survive, one
 implementation PR structured exactly like #779 (spec-first, both fold paths,
 byte-identity tests, review).
+
+---
+
+# Part 2 — Cross-window automata sweep (the Protect-counter class)
+
+Sibling lane, same freeze gate. Class definition: **publicly-derivable
+running state (counters, countdowns, ramps) whose value requires more
+history than one observation window**, and which the tendency columns
+(long-run averages) cannot represent. Every event feeding the automaton IS
+encoded per-turn; what the model cannot do is integrate them across
+decisions — window-size 1 means transition tokens only cover events since
+the last decision.
+
+**Exemplar (found empirically, 2026-07-20 protocol probe):** consecutive
+Protect/Detect count. Gen3 halves Protect's success odds per consecutive
+use (100%→50%→25%); the count is public and central to Protect/Leftovers
+stall wars; the model can see "he Protected last turn" but never "this is
+his third in a row."
+
+## Enumeration method (three sources, in order of authority)
+
+1. **Engine state structs — the ground-truth list.** The engine must track
+   every cross-turn automaton to implement it. Enumerate: showdown's
+   `Battle#toJSON` volatile/side/field state (every field with a
+   `duration`, `counter`, `time`, or `stage` semantic, filtered to gen3),
+   and cross-check poke-engine's `VolatileStatusDurations` + side/state
+   counter fields. The diff (engine counter fields) − (encoded features) is
+   the candidate list. This source cannot miss an automaton the game
+   actually has.
+2. **Dex mechanics scan.** Grep vendored `data/moves.ts` + gen3 mods for
+   `stallingMove`, `durationCallback`, consecutive-use mechanics
+   (Rollout/Fury Cutter ramps), and counter-bearing volatiles; filter to
+   pool reachability via `data/random-battles/gen3/sets.json`.
+3. **Window-horizon test, per candidate:** is the state reconstructible
+   from (a) boundary tokens, (b) ONE window of transition tokens,
+   (c) tendencies? Only a "no" is a finding.
+
+## Seed candidates (adjudicate with the Part-1 verdict scheme)
+
+| Candidate | Public automaton | Prior |
+|---|---|---|
+| Consecutive Protect count | success halving | ADD-leaning (found) |
+| Confusion turns-so-far | 2–5 turn hazard rate | check volatile encoding |
+| Encore turns-so-far | 4–8 turn window | pool-reachable, check |
+| Perish count (3/2/1) | explicit `-start perish{N}` events | verify pool reachability |
+| Partial-trap turns-so-far (Wrap family) | 2–5 turns | pool check |
+| Move-weather countdown | 5-turn clock vs permanent Sand Stream | carried from Part 1 |
+| Rollout/Fury Cutter ramp | damage doubling per consecutive hit | pool check |
+| Stockpile count (1–3) | explicit stages | pool check |
+| Disable/Taunt turns-so-far | timed locks | gen3 semantics + pool check |
+| Opp per-move public use counts | PP depletion / Struggle proximity | check belief columns first |
+| `cant` reason subtype | full-para vs sleep vs flinch distinguishability | carried from Part 1 |
+
+Already covered (do not re-derive): sleep turns (`NUMERIC_SLEEP_TURNS`),
+toxic stage, substitute HP, Spikes layers, choice-lock inference (belief
+tier2 CB columns), `item_removed`.
+
+## Encoding conventions for ADDs
+
+Numeric scalars on the OWNING token — per-mon automata (confusion, encore,
+trap, ramp, stockpile) on that mon's token, side/field automata (weather
+countdown, Protect count of the active) on the field token — normalized
+like `NUMERIC_SLEEP_TURNS` (`min(1, x/cap)`). No categorical vocab growth.
+Every ADD rides schema v3 pre-freeze with the #779 byte-identity pattern,
+and each gets the same interpretability property as the sleep-clause bits:
+a counterfactual flag/count-flip probe is the acceptance demonstration.
+
+## Adjudication and sequencing
+
+Shared with Part 1: reachability evidence mandatory, frequency from the
+census/self-play, strategic-value argument per ADD (does the count change
+optimal play?), ONE batched owner decision covering both parts, then the
+v3 freeze. The engine-struct diff (source 1) is mechanical and should run
+first — it bounds the class completely; sources 2–3 only classify what it
+finds.
