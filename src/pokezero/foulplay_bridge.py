@@ -58,11 +58,12 @@ from .neural_policy import (
 )
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    OBSERVATION_SCHEMA_VERSION_V3,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     PokeZeroObservationV0,
 )
-from .policy import Policy, PolicyContext, PolicyDecision
+from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy
 from .public_action_capture import append_public_action_round, public_action_round_from_protocol_lines
 from .public_decision_corpus import (
     PublicDecisionCorpusWriter,
@@ -86,6 +87,8 @@ from .showdown import (
     PlayerRelativeBattleState,
     normalize_for_player,
     observation_from_player_state,
+    observation_schema_version_from_choice,
+    observation_spec_for_schema,
     parse_showdown_replay,
     showdown_choice_for_action,
 )
@@ -110,7 +113,7 @@ _ROOT_PUCT_TIMING_FIELD_NAMES = tuple(entry.name for entry in fields(RootPUCTSea
 
 @dataclass(frozen=True)
 class ControlledFoulPlayConfig:
-    checkpoint: Path
+    checkpoint: Path | None
     showdown_root: Path
     value_checkpoint: Path | None = None
     foulplay_root: Path = DEFAULT_FOULPLAY_ROOT
@@ -157,6 +160,11 @@ class ControlledFoulPlayConfig:
     foulplay_username: str = "FoulPlayBot"
     pokezero_player: PlayerId = "p1"
     websocket_host: str = "127.0.0.1"
+    # Collision auditing can intentionally explore with a non-trained policy so
+    # it never has to substitute a legacy-schema checkpoint just to emit v3
+    # observations. This is capture-only, not a strength-evaluation mode.
+    capture_driver: str = "checkpoint"
+    audit_observation_schema: str | None = None
 
     def __post_init__(self) -> None:
         if self.games <= 0:
@@ -171,6 +179,22 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct"}:
             raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
+        if self.capture_driver not in {"checkpoint", "random-legal"}:
+            raise ValueError("capture_driver must be 'checkpoint' or 'random-legal'.")
+        if self.capture_driver == "checkpoint":
+            if self.checkpoint is None:
+                raise ValueError("checkpoint capture requires a checkpoint.")
+            if self.audit_observation_schema is not None:
+                raise ValueError("audit_observation_schema is only valid for random-legal capture.")
+        else:
+            if self.checkpoint is not None:
+                raise ValueError("random-legal capture must not provide a checkpoint.")
+            if self.value_checkpoint is not None:
+                raise ValueError("random-legal capture cannot use a value checkpoint.")
+            if self.policy_mode != "raw":
+                raise ValueError("random-legal capture requires policy_mode='raw'.")
+            if self.audit_observation_schema != "v3":
+                raise ValueError("random-legal capture requires audit_observation_schema='v3'.")
         if self.selection_mode not in {"puct", "value", "visits"}:
             raise ValueError("selection_mode must be 'puct', 'value', or 'visits'.")
         if self.root_prior_temperature is not None and (
@@ -650,8 +674,10 @@ class ControlledFoulPlayBenchmarkResult:
         ]
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
-            "checkpoint": str(self.config.checkpoint),
+            "checkpoint": _checkpoint_path_label(self.config),
             "checkpoint_sha256": self.checkpoint_sha256,
+            "capture_driver": self.config.capture_driver,
+            "audit_observation_schema": _audit_observation_schema_version(self.config),
             "format_id": self.config.format_id,
             "policy_id": self.policy_id,
             "policy_mode": self.config.policy_mode,
@@ -811,7 +837,9 @@ class ControlledFoulPlayComparisonResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": COMPARISON_SCHEMA_VERSION,
-            "checkpoint": str(self.config.checkpoint),
+            "checkpoint": _checkpoint_path_label(self.config),
+            "capture_driver": self.config.capture_driver,
+            "audit_observation_schema": _audit_observation_schema_version(self.config),
             "format_id": self.config.format_id,
             "opponent_policy_id": "foul-play",
             "games": self.config.games,
@@ -888,7 +916,7 @@ class ControlledFoulPlayCollisionSketchResult:
     benchmark: ControlledFoulPlayBenchmarkResult
     output_path: Path
     pool_id: str
-    checkpoint_sha256: str
+    checkpoint_sha256: str | None
     belief_set_source_hash: str | None
     observation_schema_version: str | None
     captured_games: int
@@ -907,6 +935,8 @@ class ControlledFoulPlayCollisionSketchResult:
             "sides": "p1-only",
             "policy_mode": "raw",
             "checkpoint_sha256": self.checkpoint_sha256,
+            "capture_driver": self.benchmark.config.capture_driver,
+            "audit_observation_schema": _audit_observation_schema_version(self.benchmark.config),
             "belief_set_source_hash": self.belief_set_source_hash,
             "observation_schema_version": self.observation_schema_version,
             "captured_games": self.captured_games,
@@ -1472,8 +1502,30 @@ async def run_controlled_foulplay_benchmark(
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
     _validate_external_paths(config)
-    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
-    model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
+    if config.capture_driver == "random-legal":
+        observation_spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
+        vocab = gen3_category_vocabulary(
+            config.showdown_root,
+            include_turn_merged=True,
+        )
+        return await _run_controlled_foulplay_games(
+            config,
+            policy=RandomLegalPolicy(policy_id="audit-random-legal"),
+            policy_id="audit-random-legal",
+            vocab=vocab,
+            dex=load_showdown_dex_cached(config.showdown_root),
+            observation_spec=observation_spec,
+            feature_masks=DEFAULT_OBSERVATION_FEATURE_MASKS,
+            checkpoint_sha256=None,
+            progress_callback=progress_callback,
+            trajectory_callback=trajectory_callback,
+        )
+
+    checkpoint = config.checkpoint
+    if checkpoint is None:
+        raise AssertionError("checkpoint driver validation must reject a missing checkpoint")
+    checkpoint_sha256 = _checkpoint_sha256(config)
+    model, result = load_transformer_checkpoint(checkpoint, map_location=config.device)
     value_model, value_result = model, result
     value_leaf_provenance: Mapping[str, object] | None = None
     if config.value_checkpoint is not None:
@@ -1482,7 +1534,7 @@ async def run_controlled_foulplay_benchmark(
             map_location=config.device,
         )
         value_leaf_provenance = require_compatible_transformer_value_checkpoint(
-            policy_checkpoint=config.checkpoint,
+            policy_checkpoint=checkpoint,
             policy_result=result,
             value_checkpoint=config.value_checkpoint,
             value_result=value_result,
@@ -1527,6 +1579,37 @@ async def run_controlled_foulplay_benchmark(
         policy_id=policy_id,
     )
     benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
+    return await _run_controlled_foulplay_games(
+        config,
+        policy=policy,
+        policy_id=benchmark_policy_id,
+        vocab=vocab,
+        dex=dex,
+        observation_spec=observation_spec,
+        feature_masks=feature_masks,
+        checkpoint_sha256=checkpoint_sha256,
+        value_leaf_provenance=value_leaf_provenance,
+        progress_callback=progress_callback,
+        trajectory_callback=trajectory_callback,
+    )
+
+
+async def _run_controlled_foulplay_games(
+    config: ControlledFoulPlayConfig,
+    *,
+    policy: Policy,
+    policy_id: str,
+    vocab: CategoryVocabulary,
+    dex: ShowdownDex,
+    observation_spec: Any,
+    feature_masks: ObservationFeatureMasks,
+    checkpoint_sha256: str | None,
+    value_leaf_provenance: Mapping[str, object] | None = None,
+    progress_callback: ControlledFoulPlayProgressCallback | None = None,
+    trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+) -> ControlledFoulPlayBenchmarkResult:
+    """Run a preconstructed legal policy through the shared FoulPlay bridge."""
+
     foulplay_random_seed_schedule = _per_seed_foulplay_random_seed_schedule(config, count=config.games)
 
     server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
@@ -1579,7 +1662,7 @@ async def run_controlled_foulplay_benchmark(
                 progress_callback(
                     ControlledFoulPlayBenchmarkResult(
                         config=config,
-                        policy_id=benchmark_policy_id,
+                        policy_id=policy_id,
                         games=tuple(game_results),
                         checkpoint_sha256=checkpoint_sha256,
                         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
@@ -1592,7 +1675,7 @@ async def run_controlled_foulplay_benchmark(
 
     return ControlledFoulPlayBenchmarkResult(
         config=config,
-        policy_id=benchmark_policy_id,
+        policy_id=policy_id,
         games=tuple(game_results),
         checkpoint_sha256=checkpoint_sha256,
         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
@@ -1620,6 +1703,8 @@ async def capture_controlled_foulplay_rollouts(
 
     if config.policy_mode != "raw":
         raise ValueError("controlled foul-play rollout capture requires policy_mode='raw'.")
+    if config.capture_driver != "checkpoint":
+        raise ValueError("controlled foul-play rollout capture requires the checkpoint capture driver.")
     if config.pokezero_player != "p1":
         raise ValueError("controlled foul-play rollout capture requires pokezero_player='p1'.")
     if config.opponent_legal_mask_mode != "hidden":
@@ -1633,7 +1718,9 @@ async def capture_controlled_foulplay_rollouts(
 
     source = _resolved_belief_set_source(config)
     belief_set_source_hash = source.metadata.source_hash if source is not None else None
-    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+    checkpoint_sha256 = _checkpoint_sha256(config)
+    if checkpoint_sha256 is None:
+        raise AssertionError("checkpoint rollout capture requires checkpoint provenance")
     handle = None
     captured_games = 0
     skipped_capped_games = 0
@@ -1711,7 +1798,7 @@ async def capture_controlled_foulplay_rollouts(
             battle_id=p1_trajectory.battle_id,
             seed=p1_trajectory.seed,
             format_id=p1_trajectory.format_id,
-            policy_ids={"p1": f"neural:{config.checkpoint}", "p2": "foul-play"},
+            policy_ids={"p1": f"neural:{_checkpoint_path_label(config)}", "p2": "foul-play"},
             decision_round_count=len(p1_trajectory.steps),
             elapsed_seconds=now - previous_capture_time,
             terminal=p1_trajectory.terminal,
@@ -1782,9 +1869,9 @@ async def capture_controlled_foulplay_collision_sketch(
 
     source = _resolved_belief_set_source(config)
     belief_set_source_hash = source.metadata.source_hash if source is not None else None
-    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+    checkpoint_sha256 = _checkpoint_sha256(config)
     capture_manifest = public_corpus_manifest(
-        checkpoint_sha256=checkpoint_sha256 or "missing-checkpoint",
+        checkpoint_sha256=_capture_driver_identity(config, checkpoint_sha256=checkpoint_sha256),
         belief_set_source_hash=belief_set_source_hash,
         capture_config=_public_corpus_capture_config(config),
     )
@@ -1810,6 +1897,8 @@ async def capture_controlled_foulplay_collision_sketch(
                 "pool_id": pool_id,
                 "sides": "p1-only",
                 "policy_mode": "raw",
+                "capture_driver": config.capture_driver,
+                "audit_observation_schema": _audit_observation_schema_version(config),
                 "checkpoint_sha256": checkpoint_sha256,
                 "belief_set_source_hash": belief_set_source_hash,
                 "observation_schema_version": observation_schema_version,
@@ -1864,7 +1953,7 @@ async def capture_controlled_foulplay_collision_sketch(
         benchmark=benchmark,
         output_path=out_path,
         pool_id=pool_id,
-        checkpoint_sha256=checkpoint_sha256 or "missing-checkpoint",
+        checkpoint_sha256=checkpoint_sha256,
         belief_set_source_hash=belief_set_source_hash,
         observation_schema_version=observation_schema_version,
         captured_games=captured_games,
@@ -1986,7 +2075,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
     root_puct_offsets: list[int] = []
     raw_policy_id: str | None = None
     root_puct_policy_id: str | None = None
-    checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+    checkpoint_sha256 = _checkpoint_sha256(config)
     raw_value_leaf_provenance: Mapping[str, object] | None = None
     root_puct_value_leaf_provenance: Mapping[str, object] | None = None
     opponent_crashes: list[ControlledFoulPlayOpponentCrash] = []
@@ -2123,8 +2212,11 @@ def _single_seed_comparison_config(
 
 
 def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
-    if not config.checkpoint.exists():
-        raise FileNotFoundError(f"checkpoint not found: {config.checkpoint}")
+    if config.capture_driver == "checkpoint":
+        if config.checkpoint is None:
+            raise AssertionError("checkpoint driver validation must reject a missing checkpoint")
+        if not config.checkpoint.exists():
+            raise FileNotFoundError(f"checkpoint not found: {config.checkpoint}")
     if config.value_checkpoint is not None and not config.value_checkpoint.exists():
         raise FileNotFoundError(f"value checkpoint not found: {config.value_checkpoint}")
     if not (config.showdown_root / "dist" / "sim" / "index.js").exists():
@@ -2163,8 +2255,11 @@ def _build_policy(
     rollout_config: RolloutConfig,
     policy_id: str,
 ) -> Policy:
-    raw_checkpoint = str(config.checkpoint.resolve(strict=False))
-    raw_checkpoint_sha256 = _sha256_file(config.checkpoint) if config.checkpoint.is_file() else None
+    checkpoint = config.checkpoint
+    if checkpoint is None:
+        raise AssertionError("root-PUCT policy construction requires a checkpoint")
+    raw_checkpoint = str(checkpoint.resolve(strict=False))
+    raw_checkpoint_sha256 = _sha256_file(checkpoint) if checkpoint.is_file() else None
 
     def raw_policy(
         policy_id_override: str | None = None,
@@ -3281,7 +3376,7 @@ def _warn_on_belief_provenance_mismatch(config: ControlledFoulPlayConfig, result
     current_hash = current.metadata.source_hash if current is not None else None
     if recorded == current_hash:
         return
-    key = (str(config.checkpoint), recorded, current_hash)
+    key = (_checkpoint_path_label(config) or f"audit-driver:{config.capture_driver}", recorded, current_hash)
     if key in _PROVENANCE_WARNINGS_EMITTED:
         return
     _PROVENANCE_WARNINGS_EMITTED.add(key)
@@ -3432,6 +3527,29 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _checkpoint_path_label(config: ControlledFoulPlayConfig) -> str | None:
+    """Return a path only when a trained checkpoint actually drove the game."""
+
+    return str(config.checkpoint) if config.checkpoint is not None else None
+
+
+def _checkpoint_sha256(config: ControlledFoulPlayConfig) -> str | None:
+    checkpoint = config.checkpoint
+    return _sha256_file(checkpoint) if checkpoint is not None and checkpoint.is_file() else None
+
+
+def _audit_observation_schema_version(config: ControlledFoulPlayConfig) -> str | None:
+    if config.audit_observation_schema is None:
+        return None
+    return observation_schema_version_from_choice(config.audit_observation_schema)
+
+
+def _capture_driver_identity(config: ControlledFoulPlayConfig, *, checkpoint_sha256: str | None) -> str:
+    """Stable capture provenance when no checkpoint weights exist."""
+
+    return checkpoint_sha256 if checkpoint_sha256 is not None else f"audit-driver:{config.capture_driver}"
+
+
 def _public_corpus_capture_config(config: ControlledFoulPlayConfig) -> dict[str, Any]:
     """Return only the stable public-corpus capture conditions.
 
@@ -3440,7 +3558,9 @@ def _public_corpus_capture_config(config: ControlledFoulPlayConfig) -> dict[str,
     """
 
     return {
-        "capture_mode": "controlled-foulplay/raw",
+        "capture_mode": f"controlled-foulplay/{config.capture_driver}",
+        "capture_driver": config.capture_driver,
+        "audit_observation_schema": _audit_observation_schema_version(config),
         "format_id": config.format_id,
         "policy_mode": config.policy_mode,
         "max_decision_rounds": config.max_decision_rounds,
@@ -3807,6 +3927,8 @@ def _config_from_args(
         pokezero_username=args.pokezero_username,
         foulplay_username=args.foulplay_username,
         pokezero_player=args.pokezero_player,
+        capture_driver=getattr(args, "capture_driver", "checkpoint"),
+        audit_observation_schema=getattr(args, "observation_schema", None),
     )
 
 
