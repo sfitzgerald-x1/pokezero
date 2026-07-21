@@ -3,7 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from pokezero.silent_mutation_audit import SilentMutationAuditReport, _has_protocol_backing, _pokemon_surface, _public_mutation_surface
+from pokezero.silent_mutation_audit import (
+    SilentMutationAuditReport,
+    _has_protocol_backing,
+    _pokemon_surface,
+    _protocol_events,
+    _public_mutation_surface,
+)
 
 
 def _snapshot(*, battle: dict, revealed: dict, protocol_lines: tuple[str, ...], turn: int = 1):
@@ -109,10 +115,53 @@ class SilentMutationAuditTests(unittest.TestCase):
         self.assertEqual(report.to_json_dict()["silent_candidate_count"], 0)
         self.assertEqual(report.to_json_dict()["classification_counts"]["protocol-backed"], 1)
 
-    def test_switch_is_backing_for_outgoing_boost_and_volatile_resets(self) -> None:
-        self.assertTrue(_has_protocol_backing("boosts", ("switch",)))
-        self.assertTrue(_has_protocol_backing("volatiles", ("switch",)))
-        self.assertTrue(_has_protocol_backing("types", ("switch",)))
+    def test_switch_only_backs_the_named_incoming_pokemon(self) -> None:
+        events = _protocol_events(("|switch|p1a: Blissey|Blissey, L80|100/100",))
+        self.assertTrue(
+            _has_protocol_backing("boosts", events, entity="p1:blissey")
+        )
+        self.assertFalse(
+            _has_protocol_backing("boosts", events, entity="p1:starmie")
+        )
+
+    def test_unrelated_damage_does_not_mask_a_silent_hp_mutation(self) -> None:
+        before = _snapshot(
+            battle=_battle(status="", hp=100),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=(),
+        )
+        after = _snapshot(
+            battle=_battle(status="", hp=60),
+            revealed={"p1": (SimpleNamespace(species="Starmie"),)},
+            protocol_lines=("|-damage|p2a: Gengar|200/300",),
+            turn=2,
+        )
+
+        report = SilentMutationAuditReport()
+        report.record_transition(before, after, game_id="unrelated-damage")
+
+        payload = report.to_json_dict()
+        self.assertEqual(payload["silent_candidate_count"], 1)
+        candidate = next(item for item in payload["aggregates"] if item["classification"] == "silent-candidate")
+        self.assertEqual((candidate["entity"], candidate["field"]), ("p1:starmie", "hp"))
+
+    def test_benched_boosts_and_volatiles_are_outside_model_visible_surface(self) -> None:
+        surface = _pokemon_surface(
+            {
+                "isActive": False,
+                "fainted": False,
+                "hp": 100,
+                "maxhp": 100,
+                "status": "",
+                "boosts": {"atk": 2},
+                "volatiles": {"substitute": {}},
+                "types": ["Water"],
+            },
+            public_volatiles=("substitute",),
+        )
+
+        self.assertEqual(surface["boosts"], ())
+        self.assertEqual(surface["volatiles"], ())
 
     def test_request_private_choice_lock_is_excluded_from_the_public_volatile_surface(self) -> None:
         surface = _pokemon_surface(

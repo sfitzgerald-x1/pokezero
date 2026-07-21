@@ -430,6 +430,18 @@ def build_protocol_inventory(
 
     engine_tags = set(engine)
     consumer_tags = set(consumers)
+    stale_direct_coverage = sorted(
+        signature
+        for signature in observed_signatures
+        if (coverage := _signature_coverage(signature)) is not None
+        and coverage.coverage == "direct"
+        and _signature_tag(signature) not in consumer_tags
+    )
+    if stale_direct_coverage:
+        raise ValueError(
+            "direct protocol-signature coverage has no discovered consumer dispatch: "
+            + ", ".join(stale_direct_coverage)
+        )
     observed_tags = set(observed_by_tag)
     observed_signature_rows: list[dict[str, Any]] = []
     observed_without_direct_consumer: list[dict[str, Any]] = []

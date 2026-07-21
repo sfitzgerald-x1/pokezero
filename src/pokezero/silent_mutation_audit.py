@@ -46,6 +46,21 @@ _FIELD_PROTOCOL_TAGS: Mapping[str, frozenset[str]] = {
 
 
 @dataclass(frozen=True)
+class _ProtocolEvent:
+    """Public protocol family plus its directly named target, when one exists.
+
+    A mutation belongs to a particular revealed Pokemon, so a tag elsewhere in
+    the same resolved step cannot serve as its backing.  Keep this internal
+    structure deliberately small: audit artifacts still publish only tag names
+    and never raw protocol payloads or bridge values.
+    """
+
+    tag: str
+    target_side: str | None
+    target_species: str | None
+
+
+@dataclass(frozen=True)
 class SilentMutationAggregate:
     """A public-safe, aggregated mutation classification.
 
@@ -99,7 +114,8 @@ class SilentMutationAuditReport:
         self.steps_audited += 1
         self.public_entities_observed += len(set(before_surface) | set(after_surface))
         self.ambiguous_entities_skipped += before_ambiguous + after_ambiguous
-        protocol_tags = _protocol_tags(after.protocol_lines[len(before.protocol_lines) :])
+        protocol_events = _protocol_events(after.protocol_lines[len(before.protocol_lines) :])
+        protocol_tags = tuple(sorted({event.tag for event in protocol_events}))
         turn = int(after.replay.turn_number)
 
         for entity in sorted((set(before_surface) & set(after_surface)) - {"field"}):
@@ -117,7 +133,7 @@ class SilentMutationAuditReport:
                     field=field,
                     before_fields=before_fields,
                     after_fields=after_fields,
-                    protocol_tags=protocol_tags,
+                    protocol_events=protocol_events,
                     after=after,
                     entity=entity,
                 )
@@ -134,7 +150,9 @@ class SilentMutationAuditReport:
         for field in ("weather", "side_conditions"):
             if before_surface.get("field", {}).get(field) == after_surface.get("field", {}).get(field):
                 continue
-            classification = "protocol-backed" if _has_protocol_backing(field, protocol_tags) else "silent-candidate"
+            classification = (
+                "protocol-backed" if _has_protocol_backing(field, protocol_events) else "silent-candidate"
+            )
             detail = (
                 "A matching public protocol family was emitted."
                 if classification == "protocol-backed"
@@ -271,7 +289,15 @@ def _pokemon_surface(
         # status string after the public faint event. Fainted is separately
         # model-visible, so that bookkeeping change is not a status mutation.
         "status": "fnt" if fainted else _normalized_value(pokemon.get("status")),
-        "boosts": tuple(sorted((str(key), int(value)) for key, value in boosts.items())) if isinstance(boosts, Mapping) else (),
+        # The encoder exposes boosts and public volatiles only on active
+        # Pokemon tokens. Simulator resets after a mon leaves the field are
+        # therefore outside the model-visible surface and must not create (or
+        # mask) silent-mutation candidates.
+        "boosts": (
+            tuple(sorted((str(key), int(value)) for key, value in boosts.items()))
+            if active and isinstance(boosts, Mapping)
+            else ()
+        ),
         # Choice locking and related action constraints live in the raw simulator but are
         # request-private. Keep only volatile ids already exposed by the public replay fold.
         "volatiles": tuple(
@@ -281,7 +307,7 @@ def _pokemon_surface(
                 if _normalized_value(key) in {_normalized_value(value) for value in public_volatiles}
             )
         )
-        if isinstance(volatiles, Mapping)
+        if active and isinstance(volatiles, Mapping)
         else (),
         # v3 applies dynamic Color Change / Forecast type overrides only to
         # the active token. A benched mon's simulator type reset cannot reach
@@ -299,20 +325,18 @@ def _classify_pokemon_mutation(
     field: str,
     before_fields: Mapping[str, object],
     after_fields: Mapping[str, object],
-    protocol_tags: tuple[str, ...],
+    protocol_events: tuple[_ProtocolEvent, ...],
     after: LocalShowdownSnapshot,
     entity: str,
 ) -> tuple[str, str]:
-    if _has_protocol_backing(field, protocol_tags):
-        return "protocol-backed", "A matching public protocol family was emitted."
-    # A switch line itself exposes the incoming active Pokemon's condition. Treat that direct
-    # public request boundary as backing for its status/HP, but never for a switched-out mon.
-    if (
-        field in {"hp", "status"}
-        and bool(after_fields["active"])
-        and "switch" in protocol_tags
+    if _has_protocol_backing(
+        field,
+        protocol_events,
+        entity=entity,
+        before_fields=before_fields,
+        after_fields=after_fields,
     ):
-        return "protocol-backed", "The switch boundary directly reported the incoming Pokemon condition."
+        return "protocol-backed", "A matching public protocol family was emitted."
     if field == "status" and _belief_status_matches(after, entity, after_fields["status"]):
         return "belief-inferred", "The public belief state matches the post-mutation status without a direct status tag."
     return "silent-candidate", "No matching public protocol family or belief inference covered this mutation."
@@ -328,12 +352,78 @@ def _belief_status_matches(snapshot: LocalShowdownSnapshot, entity: str, status:
     return False
 
 
-def _has_protocol_backing(field: str, protocol_tags: tuple[str, ...]) -> bool:
-    return bool(_FIELD_PROTOCOL_TAGS[field] & set(protocol_tags))
+def _has_protocol_backing(
+    field: str,
+    protocol_events: tuple[_ProtocolEvent, ...],
+    *,
+    entity: str | None = None,
+    before_fields: Mapping[str, object] | None = None,
+    after_fields: Mapping[str, object] | None = None,
+) -> bool:
+    """Whether a public event directly accounts for one mutation.
+
+    Field families have no Pokemon target, but Pokemon mutations must match the
+    named side and species. A switch identifies the incoming Pokemon and only
+    explains that Pokemon's HP/status/boost/etc. A same-side switch also
+    explains the outgoing active flag changing to false, but not an unrelated
+    HP or status change such as a silent Natural Cure cure.
+    """
+
+    allowed_tags = _FIELD_PROTOCOL_TAGS[field]
+    if entity is None:
+        return any(event.tag in allowed_tags for event in protocol_events)
+
+    side, separator, species = entity.partition(":")
+    if separator != ":" or side not in {"p1", "p2"} or not species:
+        return False
+    normalized_species = _normalized_value(species)
+    for event in protocol_events:
+        if event.tag not in allowed_tags:
+            continue
+        if event.tag == "-clearallboost" and field == "boosts":
+            return True
+        if event.tag == "-cureteam" and field == "status" and event.target_side == side:
+            return True
+        if event.target_side != side:
+            continue
+        if event.target_species == normalized_species:
+            return True
+        if (
+            field == "active"
+            and event.tag in {"switch", "drag", "replace"}
+            and before_fields is not None
+            and after_fields is not None
+            and bool(before_fields.get("active"))
+            and not bool(after_fields.get("active"))
+        ):
+            return True
+    return False
 
 
-def _protocol_tags(lines: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(sorted({parts[1] for line in lines if (parts := line.split("|")) and len(parts) > 1 and parts[1]}))
+def _protocol_events(lines: tuple[str, ...]) -> tuple[_ProtocolEvent, ...]:
+    events: list[_ProtocolEvent] = []
+    for line in lines:
+        parts = line.split("|")
+        tag = parts[1] if len(parts) > 1 else ""
+        if not tag:
+            continue
+        target_side, target_species = _event_target(parts[2] if len(parts) > 2 else "")
+        events.append(_ProtocolEvent(tag=tag, target_side=target_side, target_species=target_species))
+    return tuple(events)
+
+
+def _event_target(value: str) -> tuple[str | None, str | None]:
+    """Extract a public target from a protocol field without retaining raw text."""
+
+    head, separator, tail = value.partition(":")
+    normalized_head = head.strip().lower()
+    side = normalized_head[:2] if normalized_head[:2] in {"p1", "p2"} else None
+    # ``p1a: Species`` is a Pokemon identifier. ``p1: condition`` is a side
+    # identifier and must never be mistaken for a species target.
+    if side is None or len(normalized_head) < 3 or not separator:
+        return side, None
+    species = _normalized_value(tail)
+    return side, species or None
 
 
 def _mapping_value(value: object, key: str) -> object:

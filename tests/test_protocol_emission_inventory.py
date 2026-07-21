@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.protocol_emission_inventory import (
+    _SIGNATURE_COVERAGE,
     _signature_coverage,
     build_protocol_inventory,
     discover_consumer_dispatches,
@@ -20,6 +21,12 @@ from pokezero.protocol_emission_inventory import (
 
 
 class ProtocolEmissionInventoryTests(unittest.TestCase):
+    def test_direct_signature_registry_matches_discovered_consumer_tags(self) -> None:
+        consumers = discover_consumer_dispatches(Path(__file__).resolve().parents[1])
+        for coverage in _SIGNATURE_COVERAGE:
+            if coverage.coverage == "direct":
+                self.assertIn(coverage.signature.split(":", 1)[0], consumers)
+
     def test_cli_allows_static_inventory_without_observed_audits(self) -> None:
         script_path = Path(__file__).resolve().parents[1] / "scripts" / "protocol_emission_inventory.py"
         spec = importlib.util.spec_from_file_location("protocol_emission_inventory_cli", script_path)

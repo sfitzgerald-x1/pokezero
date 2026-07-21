@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,11 +28,12 @@ def _record(
     player: str = "p1",
     turn: int = 2,
     rounds: tuple[PublicResolvedActionRound, ...] = (),
+    numeric_features: tuple[tuple[float, ...], ...] = ((0.25, 0.5),),
 ) -> PublicDecisionRecord:
     observation = PublicObservation(
         schema_version=OBSERVATION_SCHEMA_VERSION_V3,
         categorical_ids=((11, 12),),
-        numeric_features=((0.25, 0.5),),
+        numeric_features=numeric_features,
         token_type_ids=(1,),
         attention_mask=(True,),
         legal_action_mask=(True, False, False, False, False, False, False, False, False),
@@ -112,6 +114,29 @@ class EncodingCollisionAuditTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "requires schema"):
             audit.add(legacy)
+
+    def test_hashes_numeric_features_at_the_policy_float32_boundary(self) -> None:
+        baseline = 0.25
+        same_after_float32_cast = math.nextafter(baseline, 1.0)
+        self.assertNotEqual(baseline, same_after_float32_cast)
+
+        audit = EncodingCollisionAudit()
+        audit.add(
+            _record(
+                state={"turn_number": 2, "weather": "sunnyday"},
+                numeric_features=((baseline, 0.5),),
+            )
+        )
+        audit.add(
+            _record(
+                state={"turn_number": 2, "weather": "raindance"},
+                numeric_features=((same_after_float32_cast, 0.5),),
+            )
+        )
+
+        payload = audit.to_json_dict(corpus={})
+        self.assertEqual(payload["input_group_count"], 1)
+        self.assertEqual(payload["actionable_collision_group_count"], 1)
 
     def test_compact_sketch_reports_collision_without_model_tensors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
