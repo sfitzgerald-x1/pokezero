@@ -695,6 +695,33 @@ class ExplosionFixtureTest(unittest.TestCase):
         self.assertLess(len(merged), 0.62 * len(per_action))
 
 
+class ConfusionSelfHitMergeTest(unittest.TestCase):
+    """Spec v3 change 10: the confusion self-hit metadata rides the opponent's move
+    sub-block and survives the merge/flatten bijection."""
+
+    def test_selfhit_rides_the_first_sub_block_and_survives_bijection(self) -> None:
+        lines = _leads() + [
+            "|move|p2a: Alakazam|Surf|p1a: Tyranitar",
+            "|-damage|p1a: Tyranitar|83/100",
+            "|-activate|p1a: Tyranitar|confusion",
+            "|-damage|p1a: Tyranitar|73/100",  # slower confused mon self-hits
+            "|upkeep",
+            "|turn|2",
+        ]
+        merged = _assert_bijection(self, lines)
+        turn = merged[1]
+        self.assertEqual(turn.phase, PHASE_TURN)
+        # The faster Alakazam is the FIRST sub-block and carries the correction metadata.
+        self.assertEqual(turn.first.actor_slot, "p2")
+        self.assertEqual(turn.first.action, "surf")
+        self.assertAlmostEqual(turn.first.damage_fraction, 0.27)  # frozen v2.2 value
+        self.assertTrue(turn.first.confusion_selfhit)
+        self.assertAlmostEqual(turn.first.confusion_selfhit_fraction, 0.10)
+        # The confused mon's declared action was consumed with no move trace: NEGATED.
+        self.assertEqual(turn.second.actor_slot, "p1")
+        self.assertEqual(turn.second.status, SUB_BLOCK_NEGATED)
+
+
 class FixtureReplayTest(unittest.TestCase):
     def test_p2_seat_replay_merges_and_rebuilds(self) -> None:
         lines = (FIXTURE_ROOT / "p2_seat_replay.txt").read_text().splitlines()

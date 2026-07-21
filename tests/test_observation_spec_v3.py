@@ -38,6 +38,8 @@ from pokezero.showdown import (
     NUMERIC_STALL_COUNTER,
     NUMERIC_TM2_FAIL,
     NUMERIC_TM2_MISS,
+    NUMERIC_TT_CONFUSION_SELFHIT,
+    NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
     NUMERIC_TT_MISS,
     NUMERIC_WRAP_TRAP_TURNS,
@@ -309,17 +311,17 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends THIRTEEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # v3 appends FOURTEEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
         # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
         # change 4 (confusion turns-so-far, +5, #811), change 5 (encore turns-so-far, +6, #814),
         # change 6 (Wrap partial-trap turns-so-far, +7), change 7 (the two gender bits, +8/+9),
-        # change 8 (Mean Look / Spider Web move-trap, +10), and change 9 (the two Wish
-        # turns-to-land bits, +11/+12).
+        # change 8 (Mean Look / Spider Web move-trap, +10), change 9 (the two Wish
+        # turns-to-land bits, +11/+12), and change 10 (the confusion self-hit flag, +13).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 13,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 14,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 168)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 169)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -329,11 +331,12 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The thirteen appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # The fourteen appended columns start exactly at the v2.2 census end (155) and are pinned in
         # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
         # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162),
         # gender-male(163), gender-female(164), meanlook-trap(165), self-wish-turns(166),
-        # opp-wish-turns(167). Every offset +0..+12 (155-167) is written exactly once.
+        # opp-wish-turns(167), confusion-selfhit-flag(168, change 10). Every offset +0..+13
+        # (155-168) is written exactly once.
         self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
         self.assertEqual(V3_NUMERIC_BASE, 155)
         self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
@@ -367,13 +370,16 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(NUMERIC_SELF_WISH_TURNS, 166)
         self.assertEqual(NUMERIC_OPP_WISH_TURNS, V3_NUMERIC_BASE + 12)
         self.assertEqual(NUMERIC_OPP_WISH_TURNS, 167)
+        # Change 10 (confusion self-hit flag) at +13, on the corrected move sub-block.
+        self.assertEqual(NUMERIC_TT_CONFUSION_SELFHIT, V3_NUMERIC_BASE + 13)
+        self.assertEqual(NUMERIC_TT_CONFUSION_SELFHIT, 168)
         # The v3 turns columns sit ABOVE the v2.2 pending bits (56/57), which keep their positions.
         self.assertEqual(NUMERIC_SELF_WISH_PENDING, 56)
         self.assertEqual(NUMERIC_OPP_WISH_PENDING, 57)
-        # Width covers through +12; total 168.
+        # Width covers through +13; total 169.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_OPP_WISH_TURNS + 1,
+            NUMERIC_TT_CONFUSION_SELFHIT + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -673,7 +679,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -843,7 +849,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1054,7 +1060,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1232,7 +1238,7 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1413,7 +1419,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1553,7 +1559,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 13)
+            self.assertEqual(len(v3_row), width + 14)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1561,6 +1567,102 @@ class WishTurnsEncodeTest(unittest.TestCase):
         )
         self.assertEqual(v2_2.attention_mask, v3.attention_mask)
         self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+
+
+# Change 10 fixture: p2 Skarmory (faster) attacks p1 Snorlax for 0.17, then the SLOWER
+# confused Snorlax self-hits for 0.10 with an UNTAGGED -damage and no |move|/|cant| line —
+# so the fold folds 0.10 into Skarmory's move damage (0.27) exactly as the change brief
+# reproduces. Skarmory (base speed 70) outspeeds Snorlax (30), so it is the FIRST sub-block.
+_CONFUSE_SELFHIT_LINES = _LEADS + [
+    "|move|p2a: Skarmory|Drill Peck|p1a: Snorlax",
+    "|-damage|p1a: Snorlax|83/100",  # opponent move = 0.17
+    "|-activate|p1a: Snorlax|confusion",
+    "|-damage|p1a: Snorlax|73/100",  # confused self-hit = 0.10 (untagged)
+    "|upkeep",
+    "|turn|2",
+]
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class ConfusionSelfHitEncodeTest(unittest.TestCase):
+    """Change 10 at the encode layer: v2.2 keeps the folded damage (0.27) byte-identically;
+    v3 subtracts the confused defender's self-hit back out (0.17) and sets the flag. Both
+    seats, non-vacuous (the two encodes DISAGREE on the damage column), v2.2 prefix frozen."""
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="confuse-selfhit-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
+        observation.validate(spec)
+        return observation
+
+    def test_v3_corrects_the_damage_and_sets_the_flag_v2_2_keeps_the_folded_value(self) -> None:
+        state = self._state(_CONFUSE_SELFHIT_LINES)
+        turn1 = TRANSITION_TOKEN_OFFSET + 1  # lead pair at +0, turn 1 at +1
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        # v2.2 (frozen): the self-hit is still folded into the move's damage column (0.27).
+        self.assertAlmostEqual(v2_2.numeric_features[turn1][NUMERIC_TT_DAMAGE_FRACTION], 0.27)
+        # v3: the move's OWN damage (self-hit removed) is 0.17, and the flag is set. This is a
+        # NON-VACUOUS guard — without the fix v3 would read 0.27 too and this assertion fails.
+        self.assertAlmostEqual(v3.numeric_features[turn1][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
+        self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_CONFUSION_SELFHIT], 1.0)
+        # The flag is set on EXACTLY that one row.
+        self.assertEqual(
+            [i for i, row in enumerate(v3.numeric_features) if row[NUMERIC_TT_CONFUSION_SELFHIT]],
+            [turn1],
+        )
+
+    def test_v2_2_is_frozen_and_v3_diverges_only_at_the_corrected_damage_column(self) -> None:
+        # Change 10 is the FIRST v3 change that rewrites a v2.2-POSITIONED column (the damage
+        # fraction, 105) under v3 — so v2.2 is NOT a byte-prefix of v3 here (unlike changes
+        # 1-9). The right invariant: v2.2 keeps the FROZEN folded value everywhere, and the ONLY
+        # place v2.2 and v3 disagree on the shared 0..154 surface is exactly NUMERIC_TT_DAMAGE_
+        # FRACTION on the flagged row, where v3 = v2.2 - confusion_selfhit_fraction. That, plus
+        # the structural argument (the v2.2 encode never reads the new fields), is the v2.2
+        # byte-identity proof; the cmp-against-pristine SHA over a battery is the gate's job.
+        for player in ("p1", "p2"):
+            state = self._state(_CONFUSE_SELFHIT_LINES, player=player)
+            v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+            v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+            width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+            flagged = [i for i, row in enumerate(v3.numeric_features) if row[NUMERIC_TT_CONFUSION_SELFHIT]]
+            self.assertEqual(len(flagged), 1, f"seat {player}: expected exactly one flagged row")
+            flagged_row = flagged[0]
+            prefix_diffs = {
+                (ri, ci)
+                for ri, (a, b) in enumerate(zip(v2_2.numeric_features, v3.numeric_features))
+                for ci in range(width)
+                if a[ci] != b[ci]
+            }
+            # The sole divergence on the shared surface is the intended damage correction.
+            self.assertEqual(prefix_diffs, {(flagged_row, NUMERIC_TT_DAMAGE_FRACTION)})
+            self.assertAlmostEqual(v2_2.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.27)
+            self.assertAlmostEqual(v3.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
+            # Categoricals, masks, and token types are wholly untouched by change 10.
+            self.assertEqual(
+                [tuple(row) for row in v2_2.categorical_ids],
+                [tuple(row) for row in v3.categorical_ids],
+            )
+            self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+            self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
 
 
 if __name__ == "__main__":
