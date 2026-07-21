@@ -51,6 +51,7 @@ class RegistryWellFormedTests(unittest.TestCase):
         # The two retype bugs (Castform + Color Change) must stay in the registry.
         self.assertIn("castform_forecast_formechange", names)
         self.assertIn("colorchange_kecleon", names)
+        self.assertIn("natural_cure_switch", names)
 
 
 @unittest.skipIf(not _live_showdown_available(), "requires a built local Showdown checkout")
@@ -135,6 +136,18 @@ class RegistryEncodingTests(unittest.TestCase):
         obs = self._drive("intimidate_switchin")["p1"][0]
         tok = self.S.SELF_POKEMON_TOKEN_OFFSET
         self.assertAlmostEqual(obs.numeric_features[tok][self.S.NUMERIC_BOOST_ATK], -1.0 / 6.0, places=4)
+
+    def test_natural_cure_switch_clears_status_on_both_views_and_reentry(self) -> None:
+        self._drive("natural_cure_switch")
+        p1_state = self.env._state_for_player("p1")
+        p2_state = self.env._state_for_player("p2")
+        p1_starmie = next(mon for mon in p1_state.self_team if mon.species == "Starmie")
+        p2_starmie = next(mon for mon in p2_state.opponent_team if mon.species == "Starmie")
+        for starmie in (p1_starmie, p2_starmie):
+            self.assertTrue(starmie.active, "Starmie should have re-entered after the cure")
+            self.assertNotIn("tox", starmie.condition.split())
+        # The public ability line is visible from p2 and must identify the cure source.
+        self.assertEqual(p2_starmie.ability, "naturalcure")
 
     def test_bellydrum_maxes_attack(self) -> None:
         rounds = self._drive("bellydrum_snorlax")["p1"]
