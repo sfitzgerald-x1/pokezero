@@ -258,6 +258,36 @@ price how many chip turns remain before the target breaks free. (Offsets `+4` /
   shape change; it sits above the v2.2 census, so every legacy mode stays
   byte-frozen.
 
+## Change 7 — per-mon gender (static public attribute)
+
+Gender is a public fact that was never encoded, yet the search engine already
+conditions on it (Cute Charm infatuation; pool carriers Clefable / Wigglytuff /
+Delcatty). The Layer-3 collision audit flagged this as a policy/search asymmetry:
+the value function sees a coupling the policy is blind to. This change closes it.
+(This is a STATIC per-mon attribute — no `_ReplayParser` counter — so it takes
+the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
+
+- Two 0/1 numeric features on EVERY mon token (self and opponent), schema >= v3
+  only: `gender_male` at `V3_NUMERIC_BASE + 8` and `gender_female` at
+  `V3_NUMERIC_BASE + 9`. male → `(1, 0)`, female → `(0, 1)`, genderless → `(0, 0)`
+  (a two-bit one-hot with an all-zero "genderless/unknown" class — no third
+  column needed).
+- **Source (public only):** SELF gender comes from the request/known set
+  (`candidate.details`); OPPONENT gender from the `details` string Showdown emits
+  on switch-in (`|switch|SLOT|Species, Lxx, M|…`). Both are parsed by the
+  EXISTING `determinization._gender_from_details`, which reads the `, M` / `, F`
+  token (genderless mons carry no gender letter). Reused verbatim (single source
+  of truth for the details convention), imported lazily in the encoder to avoid a
+  module-load cycle.
+- **Opponent pre-reveal = `(0, 0)`:** an opponent mon that has not yet been seen
+  is not in the revealed team, so its token carries no gender bits; the bits
+  appear the moment the switch-in `details` reveal lands. Transform does NOT
+  change gender, so a transformed Ditto keeps its own sex (the bits read
+  `candidate.details`, not the copied identity).
+- Under v2.2 emission the columns do not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
+  so every legacy mode stays byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -286,6 +316,10 @@ price how many chip turns remain before the target breaks free. (Offsets `+4` /
   (`NUMERIC_WRAP_TRAP_TURNS`), bumping `V3_NUMERIC_EXTRA` 7 → 8 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 163. The
   categorical census is unchanged.
+- Change 7 adds TWO appended numeric columns at `V3_NUMERIC_BASE + 8`
+  (`NUMERIC_GENDER_MALE`) and `V3_NUMERIC_BASE + 9` (`NUMERIC_GENDER_FEMALE`),
+  bumping `V3_NUMERIC_EXTRA` 8 → 10 so `_V3_NUMERIC_FEATURE_COUNT` and the v3
+  numeric census floor become 165. The categorical census is unchanged.
 
 ## Acceptance (tests required)
 
@@ -316,7 +350,12 @@ price how many chip turns remain before the target breaks free. (Offsets `+4` /
    to 0 on `-end Wrap [partiallytrapped]`, switch-out, `|drag|`, and faint; the
    same log's v2.2 encoding is byte-identical to before the change (the column
    does not exist under v2.2); snapshot round-trip preserves the elapsed counter.
-7. Existing v2.2 test suites pass untouched.
+7. Gender (change 7): a male mon encodes `(1, 0)`, a female mon `(0, 1)`, and a
+   genderless mon `(0, 0)` on both the self and opponent tokens under v3; an
+   opponent mon is `(0, 0)` before it is revealed and flips on the switch-in
+   reveal; the same log's v2.2 encoding is byte-identical to before the change
+   (the columns do not exist under v2.2).
+8. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
@@ -324,9 +363,10 @@ The v3 numeric block appends columns above the v2.2 census (155):
 `-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
 the consecutive-stall counter at `+4` (change 3, #810), confusion
 turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
-(change 5, #814), and Wrap partial-trap turns-so-far at `+7` (change 6,
-this PR). With change 6 landed, the v3 numeric feature count is
-**163** (`V3_NUMERIC_BASE + 8`), and every appended column `+0..+7` (155-162)
+(change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
+this PR), and the two gender bits at `+8` / `+9` (change 7, this PR).
+With change 7 landed, the v3 numeric feature count is
+**165** (`V3_NUMERIC_BASE + 10`), and every appended column `+0..+9` (155-164)
 is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)

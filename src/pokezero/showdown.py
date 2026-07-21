@@ -471,10 +471,22 @@ NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
 # partial-trap move (Shuckle, sole carrier). Sits above the v2.2 census — legacy modes stay
 # byte-frozen.
 NUMERIC_WRAP_TRAP_TURNS = V3_NUMERIC_BASE + 7
+# Change 7 — per-mon GENDER, two 0/1 bits on EVERY mon token (self and opponent), schema >= v3
+# only. A STATIC public attribute (no parser counter): male -> (MALE=1, FEMALE=0), female ->
+# (0, 1), genderless -> (0, 0). SELF gender comes from the request/known set (candidate.details);
+# OPPONENT gender from the ``details`` string revealed on switch-in (both parsed by the existing
+# ``determinization._gender_from_details``, which reads the ``, M`` / ``, F`` token — genderless
+# has no letter). An OPPONENT mon is 00 before it is ever seen (it is not in the revealed team) and
+# the bits appear on the switch-in reveal. Motivation: gender is public but was unencoded, while
+# the search engine already conditions on it (Cute Charm infatuation; pool carriers
+# Clefable/Wigglytuff/Delcatty) — a policy/search asymmetry the Layer-3 collision audit found. Sits
+# above the v2.2 census — legacy modes stay byte-frozen.
+NUMERIC_GENDER_MALE = V3_NUMERIC_BASE + 8
+NUMERIC_GENDER_FEMALE = V3_NUMERIC_BASE + 9
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
-# encore column (+6, change 5), and this Wrap partial-trap column (+7, change 6), so the v3 numeric
-# width is 163.
-V3_NUMERIC_EXTRA = 8
+# encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), and the two gender
+# bits (+8 / +9, change 7), so the v3 numeric width is 165.
+V3_NUMERIC_EXTRA = 10
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -3082,7 +3094,15 @@ def _encode_pokemon_tokens(
     schema_v3: bool = False,
     tier2_cb_pinned_species: frozenset[str] = frozenset(),
     tier2_investment_pinned: Mapping[str, float] | None = None,
+    active_meanlook_trap: bool = False,
 ) -> None:
+    # Spec v3 change 7: reuse the determinization gender parser (single source of truth for the
+    # ``, M`` / ``, F`` details convention). Imported lazily to avoid a module-load cycle
+    # (determinization imports the observation stack that imports this module) and only when the v3
+    # gender columns actually exist.
+    gender_from_details = None
+    if schema_v3:
+        from .determinization import _gender_from_details as gender_from_details
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
         belief = _belief_for_species(beliefs_by_species, candidate.species)
@@ -3174,6 +3194,17 @@ def _encode_pokemon_tokens(
             if original_hp:
                 _set_numeric(numeric_features[token_index], NUMERIC_BASE_HP, min(1.0, float(original_hp) / 200.0))
         _encode_actual_stats(numeric_features[token_index], candidate.stats)
+        # Spec v3 change 7: per-mon gender on EVERY token, schema >= v3 only. Two 0/1 bits from the
+        # mon's TRUE details (``candidate.details`` — Transform copies species/stats but NOT gender,
+        # so this stays the real mon's sex): male -> (MALE, FEMALE) = (1, 0), female -> (0, 1),
+        # genderless / not-yet-revealed -> (0, 0). Above the v2.2 census, so legacy modes stay
+        # byte-frozen.
+        if schema_v3:
+            gender = gender_from_details(candidate.details)
+            if gender == "M":
+                _set_numeric(numeric_features[token_index], NUMERIC_GENDER_MALE, 1.0)
+            elif gender == "F":
+                _set_numeric(numeric_features[token_index], NUMERIC_GENDER_FEMALE, 1.0)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
             _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
