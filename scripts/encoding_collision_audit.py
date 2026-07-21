@@ -92,6 +92,15 @@ def main(argv: Iterable[str] | None = None) -> int:
         "observation_schema": observation_schema,
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+        "execution_scope": {
+            "decision_range": {
+                "start": args.start_decision,
+                "limit": args.max_decisions,
+                "end_exclusive": args.start_decision + args.max_decisions,
+            },
+            "input_kind": "corpus" if args.corpus is not None else "collision-sketch",
+            "input_artifact_count": 1 if args.corpus is not None else len(args.collision_sketches or ()),
+        },
     }
     _write_json_atomic(args.out, payload)
     print(

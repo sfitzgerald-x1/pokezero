@@ -83,6 +83,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         "observation_schema": observation_schema,
         "image_digest": run_provenance["image_digest"],
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+        # This lane derives its census from completed upstream artifacts rather
+        # than executing a seed band itself. Record that fact explicitly.
+        "execution_scope": {
+            "input_audit_count": len(args.observed_audit),
+            "seed_range": None,
+            "shard": None,
+        },
     }
     _write_json_atomic(args.out, payload)
     differential = payload["differential"]

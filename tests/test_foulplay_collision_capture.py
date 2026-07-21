@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from pokezero.deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION
 from pokezero.foulplay_collision_capture import (
+    _protocol_census_provenance,
     _resume_protocol_signature_census,
     async_main,
     build_collision_capture_arg_parser,
@@ -27,6 +28,18 @@ from pokezero.policy import RandomLegalPolicy
 
 
 class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
+    def test_zero_game_capture_scope_has_no_invalid_seed_range(self) -> None:
+        provenance = _protocol_census_provenance(
+            source_hash="source-hash",
+            command_arguments=(),
+            seed_start=17,
+            games=0,
+            capture_driver="random-legal",
+            max_decision_rounds=61,
+        )
+
+        self.assertIsNone(provenance["execution_scope"]["seed_range"])
+
     def test_collision_summary_exposes_count_only_protocol_census(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=None,
@@ -200,6 +213,12 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
                         "v3",
                         "--showdown-root",
                         "/showdown",
+                        "--games",
+                        "3",
+                        "--seed-start",
+                        "17",
+                        "--max-decision-rounds",
+                        "61",
                         "--out",
                         "collision-sketch.jsonl",
                         "--summary-out",
@@ -215,6 +234,14 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
         self.assertEqual(provenance["observation_schema"], OBSERVATION_SCHEMA_VERSION_V3)
         self.assertEqual(provenance["public_repo_commit"], "a" * 40)
         self.assertEqual(provenance["command"][1:3], ["--capture-driver", "random-legal"])
+        self.assertEqual(
+            provenance["execution_scope"],
+            {
+                "seed_range": {"start": 17, "end": 19, "count": 3},
+                "capture_driver": "random-legal",
+                "max_decision_rounds": 61,
+            },
+        )
 
     def test_protocol_only_capture_allows_no_observation_schema(self) -> None:
         """Tied/capped captures still publish their count-only census safely."""
@@ -290,6 +317,11 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
                 "showdown_source_hash": "source-hash",
                 "observation_schema": OBSERVATION_SCHEMA_VERSION_V3,
                 "image_digest": "fixture-image",
+                "execution_scope": {
+                    "seed_range": {"start": 17, "end": 19, "count": 3},
+                    "capture_driver": "random-legal",
+                    "max_decision_rounds": 61,
+                },
             }
             sketch_path.touch()
             summary_path.write_text(
@@ -344,6 +376,11 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
                 "showdown_source_hash": "source-hash",
                 "observation_schema": OBSERVATION_SCHEMA_VERSION_V3,
                 "image_digest": "fixture-image",
+                "execution_scope": {
+                    "seed_range": {"start": 17, "end": 19, "count": 3},
+                    "capture_driver": "random-legal",
+                    "max_decision_rounds": 61,
+                },
             }
             sketch_path.touch()
             summary_path.write_text(
@@ -403,6 +440,52 @@ class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
                     summary_path=summary_path,
                     expected_provenance=provenance,
                     expected_pool_id="new-pool",
+                )
+
+    def test_resume_protocol_signature_census_rejects_execution_scope_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sketch_path = root / "sketch.jsonl"
+            summary_path = root / "summary.json"
+            provenance = {
+                "schema_version": "pokezero.protocol-capture-provenance.v1",
+                "public_repo_commit": "a" * 40,
+                "showdown_source_hash": "source-hash",
+                "observation_schema": OBSERVATION_SCHEMA_VERSION_V3,
+                "image_digest": "fixture-image",
+                "execution_scope": {
+                    "seed_range": {"start": 17, "end": 19, "count": 3},
+                    "capture_driver": "random-legal",
+                    "max_decision_rounds": 61,
+                },
+            }
+            sketch_path.touch()
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+                        "protocol_signatures": {"move:protect": 3},
+                        "protocol_signature_game_ids": ["b" * 64],
+                        "collision_sketch_capture": {"out": str(sketch_path), "pool_id": "fixture"},
+                        "audit_provenance": {
+                            **provenance,
+                            "execution_scope": {
+                                **provenance["execution_scope"],
+                                "seed_range": {"start": 20, "end": 22, "count": 3},
+                            },
+                            "recorded_at": "2026-07-20T00:00:00+00:00",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "incompatible source, schema, or image provenance"):
+                _resume_protocol_signature_census(
+                    sketch_path=sketch_path,
+                    summary_path=summary_path,
+                    expected_provenance=provenance,
+                    expected_pool_id="fixture",
                 )
 
     def test_protocol_signature_census_deduplicates_a_replayed_game(self) -> None:
