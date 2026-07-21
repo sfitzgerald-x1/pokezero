@@ -35,6 +35,10 @@ TERMINAL_ROLLOUT_EVALUATION_SOURCE = "terminal_rollout"
 DEFAULT_R0_MIN_SAMPLED_WINS = 200
 DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS = 10
 DEFAULT_R0_MIN_FLIP_RATE = 0.60
+# R0 acceptance keeps the 20-reseed protocol; smoke/dev mining may relax down to
+# this floor, and validation marks any sub-20 protocol as non-R0-eligible.
+DEFAULT_R0_CERTIFICATION_SEED_COUNT = 20
+MIN_CERTIFICATION_SEED_COUNT = 5
 
 
 class InfeasibleRefutationLineError(ValueError):
@@ -70,8 +74,11 @@ class RefutationMiningConfig:
             raise ValueError("max_deviations_per_state must be positive when set.")
         if self.max_line_depth <= 0 or self.max_line_depth > 3:
             raise ValueError("max_line_depth must be between 1 and 3.")
-        if self.certification_seed_count < 20:
-            raise ValueError("certification_seed_count must be at least 20.")
+        if self.certification_seed_count < MIN_CERTIFICATION_SEED_COUNT:
+            raise ValueError(
+                f"certification_seed_count must be at least {MIN_CERTIFICATION_SEED_COUNT} "
+                "(R0 acceptance requires at least 20)."
+            )
         if not 0.0 < self.min_flip_rate < 1.0:
             raise ValueError("min_flip_rate must be between 0 and 1.")
         if self.mode not in {"oracle", "fair"}:
@@ -1087,8 +1094,11 @@ def validate_refutation_report_payload(
         raise ValueError("min_sampled_wins must be positive.")
     if min_certified_refutations <= 0:
         raise ValueError("min_certified_refutations must be positive.")
-    if min_certification_seed_count < 20:
-        raise ValueError("min_certification_seed_count must be at least 20.")
+    if min_certification_seed_count < MIN_CERTIFICATION_SEED_COUNT:
+        raise ValueError(
+            f"min_certification_seed_count must be at least {MIN_CERTIFICATION_SEED_COUNT} "
+            "(R0 acceptance requires at least 20)."
+        )
     if not 0.0 < min_flip_rate < 1.0:
         raise ValueError("min_flip_rate must be between 0 and 1.")
 
@@ -1323,6 +1333,8 @@ def validate_refutation_report_payload(
         relaxed_thresholds["min_certified_refutations"] = min_certified_refutations
     if min_flip_rate < DEFAULT_R0_MIN_FLIP_RATE:
         relaxed_thresholds["min_flip_rate"] = min_flip_rate
+    if min_certification_seed_count < DEFAULT_R0_CERTIFICATION_SEED_COUNT:
+        relaxed_thresholds["min_certification_seed_count"] = min_certification_seed_count
     if relaxed_thresholds:
         waivers.append(
             {

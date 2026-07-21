@@ -74,6 +74,9 @@ class RefutationTrainingSummary:
     training_weight_max: float | None
     training_weight_mean: float | None
     cache: TrainingCacheSummary
+    corrected_example_count: int = 0
+    curriculum_record_count: int = 0
+    curriculum_example_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +90,9 @@ class RefutationTrainingSummary:
             "training_weight_min": self.training_weight_min,
             "training_weight_max": self.training_weight_max,
             "training_weight_mean": self.training_weight_mean,
+            "corrected_example_count": self.corrected_example_count,
+            "curriculum_record_count": self.curriculum_record_count,
+            "curriculum_example_count": self.curriculum_example_count,
             "cache": self.cache.to_dict(),
         }
 
@@ -143,6 +149,88 @@ def refutation_behavior_seed_training_examples(
     return examples
 
 
+def curriculum_continuation_examples(
+    *,
+    curriculum_records: Sequence[RolloutRecord],
+    dataset_config: TrajectoryDatasetConfig | None = None,
+) -> tuple[TrajectoryExample, ...]:
+    """Build deviating-seat examples from curriculum continuation rollouts.
+
+    Curriculum records (``pokezero-refutation curriculum``) are ordinary rollout
+    records that start from certified fragile states, so their steps carry real
+    rewards and terminal outcomes.  Only the deviating (loser) seat's steps are
+    emitted: that seat's play from the certified position is the refutation
+    lesson; the opposing seat's steps are ordinary self-play and would dilute a
+    mixing budget.  No retargeting is applied — returns/GAE targets come from
+    the standard dataset pipeline over the observed continuation.
+    """
+
+    resolved_dataset_config = dataset_config or TrajectoryDatasetConfig()
+    examples: list[TrajectoryExample] = []
+    for record in curriculum_records:
+        curriculum_metadata = _curriculum_metadata_from_record(record)
+        loser_player_id = _required_str(
+            curriculum_metadata.get("loser_player_id"),
+            label="refutation_curriculum.loser_player_id",
+        )
+        for example in examples_from_record(record, config=resolved_dataset_config):
+            if example.player_id != loser_player_id:
+                continue
+            metadata = dict(example.step_metadata or {})
+            metadata["refutation_curriculum"] = {
+                "source_battle_id": curriculum_metadata.get("source_battle_id"),
+                "source_record_index": curriculum_metadata.get("source_record_index"),
+                "fragile_state_index": curriculum_metadata.get("fragile_state_index"),
+                "repeat_index": curriculum_metadata.get("repeat_index"),
+                "decision_round_index": curriculum_metadata.get("decision_round_index"),
+                "flip_rate": curriculum_metadata.get("flip_rate"),
+            }
+            examples.append(replace(example, step_metadata=metadata))
+    return tuple(examples)
+
+
+def _curriculum_metadata_from_record(record: RolloutRecord) -> Mapping[str, Any]:
+    metadata = record.trajectory.metadata or {}
+    curriculum_metadata = metadata.get("refutation_curriculum")
+    if not isinstance(curriculum_metadata, Mapping):
+        raise ValueError(
+            f"curriculum record {record.battle_id!r} is missing refutation_curriculum "
+            "trajectory metadata; pass records emitted by the curriculum subcommand."
+        )
+    return curriculum_metadata
+
+
+def _proportional_interleave(
+    primary: Sequence[TrajectoryExample],
+    secondary: Sequence[TrajectoryExample],
+) -> tuple[TrajectoryExample, ...]:
+    """Deterministically merge two example streams at their global ratio.
+
+    The trainer's capped-auxiliary iterator consumes refutation-cache rows in
+    file order and stops at the mixing fraction, so any consumed prefix should
+    carry both corrected rows and curriculum continuations at the emitted
+    ratio rather than one block first.
+    """
+
+    if not primary:
+        return tuple(secondary)
+    if not secondary:
+        return tuple(primary)
+    merged: list[TrajectoryExample] = []
+    primary_emitted = 0
+    secondary_emitted = 0
+    while primary_emitted < len(primary) or secondary_emitted < len(secondary):
+        primary_progress = (primary_emitted + 0.5) / len(primary) if primary_emitted < len(primary) else math.inf
+        secondary_progress = (secondary_emitted + 0.5) / len(secondary) if secondary_emitted < len(secondary) else math.inf
+        if primary_progress <= secondary_progress:
+            merged.append(primary[primary_emitted])
+            primary_emitted += 1
+        else:
+            merged.append(secondary[secondary_emitted])
+            secondary_emitted += 1
+    return tuple(merged)
+
+
 def write_refutation_training_cache(
     *,
     records: Sequence[RolloutRecord],
@@ -150,16 +238,22 @@ def write_refutation_training_cache(
     output_path: Path,
     dataset_config: TrajectoryDatasetConfig | None = None,
     config: RefutationTrainingConfig | None = None,
+    curriculum_records: Sequence[RolloutRecord] = (),
     overwrite: bool = False,
 ) -> RefutationTrainingSummary:
     fragile_rows = tuple(fragile_states)
     resolved_config = config or RefutationTrainingConfig()
-    examples, skipped_count = _refutation_training_examples_and_skipped(
+    corrected_examples, skipped_count = _refutation_training_examples_and_skipped(
         records=records,
         fragile_states=fragile_rows,
         dataset_config=dataset_config,
         config=resolved_config,
     )
+    curriculum_examples = curriculum_continuation_examples(
+        curriculum_records=curriculum_records,
+        dataset_config=dataset_config,
+    )
+    examples = _proportional_interleave(corrected_examples, curriculum_examples)
     cache = write_training_cache_from_examples(
         examples,
         output_path,
@@ -172,6 +266,12 @@ def write_refutation_training_cache(
         compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
         surprise_weighting=_surprise_weighting_payload(resolved_config),
         training_weight_stats=_training_weight_stats(examples),
+        sources={
+            "corrected_example_count": len(corrected_examples),
+            "curriculum_example_count": len(curriculum_examples),
+            "curriculum_record_count": len(curriculum_records),
+            "interleave": "proportional",
+        },
     )
     weight_stats = _training_weight_stats(examples)
     return RefutationTrainingSummary(
@@ -185,6 +285,9 @@ def write_refutation_training_cache(
         training_weight_min=weight_stats["min"],
         training_weight_max=weight_stats["max"],
         training_weight_mean=weight_stats["mean"],
+        corrected_example_count=len(corrected_examples),
+        curriculum_record_count=len(curriculum_records),
+        curriculum_example_count=len(curriculum_examples),
         cache=cache,
     )
 
@@ -347,6 +450,7 @@ def _stamp_refutation_cache_metadata(
     compatible_objectives: Sequence[str],
     surprise_weighting: Mapping[str, Any],
     training_weight_stats: Mapping[str, float | None],
+    sources: Mapping[str, Any] | None = None,
 ) -> None:
     metadata_path = cache_path / "metadata.json"
     payload = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -356,6 +460,7 @@ def _stamp_refutation_cache_metadata(
         "compatible_objectives": list(compatible_objectives),
         "surprise_weighting": dict(surprise_weighting),
         "training_weight_stats": dict(training_weight_stats),
+        **({"sources": dict(sources)} if sources is not None else {}),
     }
     metadata_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",

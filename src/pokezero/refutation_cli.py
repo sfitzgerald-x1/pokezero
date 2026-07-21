@@ -127,7 +127,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--min-certification-seeds",
         type=int,
         default=20,
-        help="Minimum terminal-rollout reseeds per certified example (default 20).",
+        help=(
+            "Minimum terminal-rollout reseeds per certified example (default 20). "
+            "Smoke protocols may relax down to 5; that marks the payload non-R0-eligible."
+        ),
     )
     validate.add_argument(
         "--min-flip-rate",
@@ -230,6 +233,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Dataset target mode used while materializing source windows before refutation targets are applied.",
     )
     training_cache.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda for source materialization when --ppo-target-mode=gae.")
+    training_cache.add_argument(
+        "--capped-terminal-value",
+        type=float,
+        default=0.0,
+        help=(
+            "Dataset capped-terminal value used while materializing examples. Must match "
+            "the consuming run's --capped-terminal-value or the trainer refuses the cache."
+        ),
+    )
+    training_cache.add_argument(
+        "--curriculum-records",
+        action="append",
+        type=Path,
+        default=None,
+        help=(
+            "Optional curriculum rollout-record JSONL (from the curriculum subcommand). "
+            "Deviating-seat continuation examples from these records are interleaved with "
+            "the corrected fragile-state rows so the emitted cache carries enough volume "
+            "to saturate a configured trainer mixing fraction. May repeat."
+        ),
+    )
     training_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
     training_cache.set_defaults(func=_training_cache)
 
@@ -415,7 +439,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--certification-seeds",
         type=int,
         default=20,
-        help="Terminal rollout reseeds per deviation. Must be at least 20.",
+        help=(
+            "Terminal rollout reseeds per deviation. Must be at least 5; R0 acceptance "
+            "requires at least 20 (sub-20 protocols validate as non-R0-eligible)."
+        ),
     )
     parser.add_argument(
         "--min-flip-rate",
@@ -682,6 +709,9 @@ def _reproduce(args: argparse.Namespace) -> int:
 def _training_cache(args: argparse.Namespace) -> int:
     fragile_states = tuple(iter_fragile_states(args.archive))
     records = _load_records_at_indices(args.records, _source_record_indices_from_fragile_rows(fragile_states))
+    curriculum_records: tuple[Any, ...] = ()
+    if args.curriculum_records:
+        curriculum_records = tuple(_iter_records(args.curriculum_records))
     summary = write_refutation_training_cache(
         records=records,
         fragile_states=fragile_states,
@@ -689,6 +719,7 @@ def _training_cache(args: argparse.Namespace) -> int:
         dataset_config=TrajectoryDatasetConfig(
             window_size=args.window_size,
             discount=args.discount,
+            capped_terminal_value=args.capped_terminal_value,
             ppo_target_mode=args.ppo_target_mode,
             gae_lambda=args.gae_lambda,
         ),
@@ -698,6 +729,7 @@ def _training_cache(args: argparse.Namespace) -> int:
             surprise_weight_scale=args.surprise_weight_scale,
             surprise_weight_max=args.surprise_weight_max,
         ),
+        curriculum_records=curriculum_records,
         overwrite=args.overwrite,
     )
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
