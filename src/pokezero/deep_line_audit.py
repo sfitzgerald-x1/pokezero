@@ -16,7 +16,7 @@ Gen 3 randbat source as public evidence accumulates.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from math import isfinite
 from typing import Any, Mapping, Sequence
@@ -453,6 +453,7 @@ class DeepLineAuditReport:
             "findings": [finding.to_json_dict() for finding in self.findings],
             "suppressed_finding_counts": dict(sorted(self.suppressed_findings.items())),
             "protocol_events": dict(sorted(self.protocol_events.items())),
+            "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
             "protocol_signatures": dict(sorted(self.protocol_signatures.items())),
             "protocol_cooccurrences": [
                 {"events": list(events), "count": count}
@@ -765,6 +766,7 @@ _SIGNATURE_PAYLOAD_EVENTS = frozenset(
         "-start",
         "-end",
         "-singleturn",
+        "-fieldactivate",
         "-mustrecharge",
         "-notarget",
         "-sethp",
@@ -773,6 +775,36 @@ _SIGNATURE_PAYLOAD_EVENTS = frozenset(
         "-curestatus",
     }
 )
+
+# This pins the spelling of ``protocol_signatures`` separately from the
+# surrounding deep-line report. Consumers reject older spellings rather than
+# treating legacy ``move:`` or ``ability:`` prefixes as new omissions.
+PROTOCOL_SIGNATURE_SCHEMA_VERSION = "pokezero.protocol-signature-census.v2"
+
+_EFFECT_IDENTIFIER_EVENTS = frozenset(
+    {
+        "-activate",
+        "-end",
+        "-fail",
+        "-fieldactivate",
+        "-singleturn",
+        "-start",
+    }
+)
+
+
+def _canonical_effect_identifier(value: str) -> str:
+    """Normalize a protocol effect name without preserving transport prefixes.
+
+    Showdown spells the same effect as either ``Protect`` or ``move: Protect``
+    depending on the event family. The census must treat those as one semantic
+    signature so a handler can be matched with its redundant announcement.
+    """
+
+    prefix, separator, remainder = value.partition(":")
+    if separator and prefix.strip().lower() in {"ability", "item", "move"}:
+        value = remainder
+    return _normalize_identifier(value)
 
 
 def _canonical_protocol_signature(parts: Sequence[str]) -> str:
@@ -788,15 +820,22 @@ def _canonical_protocol_signature(parts: Sequence[str]) -> str:
     event = parts[1] if len(parts) > 1 else ""
     if not event or event not in _SIGNATURE_PAYLOAD_EVENTS:
         return event
-    # Most protocol events place their semantic identifier after the target;
-    # weather is field-scoped and carries it directly as the first payload.
-    payload_index = 2 if event == "-weather" else 3
+    # Most protocol events place their semantic identifier after the target.
+    # Weather and field activation are field-scoped, carrying the effect as
+    # their first payload. Perish Song uses ``-fieldactivate`` before its
+    # per-Pokemon counter starts.
+    payload_index = 2 if event in {"-fieldactivate", "-weather"} else 3
     if len(parts) <= payload_index:
         return event
     payload = parts[payload_index].strip()
     if not payload or payload.startswith("["):
         return event
-    return f"{event}:{_normalize_identifier(payload)}"
+    identifier = (
+        _canonical_effect_identifier(payload)
+        if event in _EFFECT_IDENTIFIER_EVENTS
+        else _normalize_identifier(payload)
+    )
+    return f"{event}:{identifier}" if identifier else event
 
 
 def _record_turn_cooccurrence(events: Sequence[str], report: DeepLineAuditReport) -> None:

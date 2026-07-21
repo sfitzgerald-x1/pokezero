@@ -76,7 +76,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         f"E={payload['engine_emittable']['tag_count']} "
         f"O={payload['observed']['tag_count']} "
         f"C={payload['consumer_dispatch']['tag_count']} "
-        f"O-C={len(differential['observed_but_unconsumed'])}"
+        f"O-C(tags)={len(differential['observed_but_unconsumed'])} "
+        f"O-C(signatures)={len(differential['observed_signatures_without_direct_consumer'])} "
+        f"unclassified={len(differential['observed_signatures_without_semantic_coverage'])}"
     )
     return 0
 
