@@ -21,6 +21,8 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION
+
 
 _EMITTER_RELATIVE_PATHS = (
     "sim",
@@ -91,6 +93,12 @@ class ProtocolSignatureCoverage:
 # pretending that the announcement itself was parsed.
 _SIGNATURE_COVERAGE = (
     ProtocolSignatureCoverage(
+        signature="move:*",
+        coverage="direct",
+        handler="src/pokezero/transitions.py action-window fold",
+        detail="A declared move and its identifier are retained in transition history.",
+    ),
+    ProtocolSignatureCoverage(
         signature="cant:*",
         coverage="direct",
         handler="src/pokezero/showdown.py turn-merged cant reason + src/pokezero/belief.py sleep bookkeeping",
@@ -150,29 +158,33 @@ _SIGNATURE_COVERAGE = (
         handler="src/pokezero/showdown.py _update_future_sight",
         detail="Landing clears the delayed-attack field state.",
     ),
+    *(
+        ProtocolSignatureCoverage(
+            signature=f"{event}:{counter}",
+            coverage="direct",
+            handler="src/pokezero/showdown.py _update_volatiles",
+            detail="The active Perish Song counter is retained as a volatile token.",
+        )
+        for event in ("-start", "-end")
+        for counter in ("perish0", "perish1", "perish2", "perish3", "perishsong")
+    ),
     ProtocolSignatureCoverage(
         signature="-singleturn:protect",
         coverage="semantic-alias",
-        handler="-activate:protect -> src/pokezero/transitions.py",
-        detail="The same-turn Protect activation carries the model-visible blocked outcome.",
+        handler="move:protect -> src/pokezero/transitions.py",
+        detail="The declared Protect action remains in transition history even when it blocks no move.",
     ),
     ProtocolSignatureCoverage(
         signature="-singleturn:endure",
         coverage="semantic-alias",
-        handler="-activate:endure -> src/pokezero/transitions.py",
-        detail="The same-turn Endure activation carries the model-visible endured outcome.",
+        handler="move:endure -> src/pokezero/transitions.py",
+        detail="The declared Endure action remains in transition history even when it prevents no KO.",
     ),
     ProtocolSignatureCoverage(
         signature="-fieldactivate:perishsong",
         coverage="semantic-alias",
-        handler="-start:perish3 -> src/pokezero/showdown.py volatile tracker",
+        handler="-start/-end:perish0..perish3 -> src/pokezero/showdown.py volatile tracker",
         detail="Perish Song counters are the durable decision-state fact; field activation is an announcement.",
-    ),
-    ProtocolSignatureCoverage(
-        signature="-mustrecharge",
-        coverage="semantic-alias",
-        handler="src/pokezero/engine_search.py _recharging_slots",
-        detail="Search derives the forced recharge from the preceding public Hyper Beam action and hit anchor; no player decision occurs during the recharge turn.",
     ),
 )
 
@@ -316,7 +328,7 @@ def load_observed_signatures(paths: Iterable[Path | str]) -> tuple[Counter[str],
 
 
 def load_observed_audit_provenance(paths: Iterable[Path | str]) -> list[dict[str, Any]]:
-    """Require each dynamic census input to declare its v3 audit provenance."""
+    """Require each dynamic census input to declare v3 and signature provenance."""
 
     entries: list[dict[str, Any]] = []
     for raw_path in paths:
@@ -325,6 +337,12 @@ def load_observed_audit_provenance(paths: Iterable[Path | str]) -> list[dict[str
         provenance = payload.get("audit_provenance")
         if not isinstance(provenance, Mapping):
             raise ValueError(f"{path} is missing audit_provenance")
+        signature_schema = payload.get("protocol_signature_schema_version")
+        if signature_schema != PROTOCOL_SIGNATURE_SCHEMA_VERSION:
+            raise ValueError(
+                f"{path} has protocol signature schema {signature_schema!r}; "
+                f"expected {PROTOCOL_SIGNATURE_SCHEMA_VERSION!r}"
+            )
         entries.append({"path": str(path), "audit_provenance": dict(provenance)})
     return entries
 

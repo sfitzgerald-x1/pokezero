@@ -453,6 +453,7 @@ class DeepLineAuditReport:
             "findings": [finding.to_json_dict() for finding in self.findings],
             "suppressed_finding_counts": dict(sorted(self.suppressed_findings.items())),
             "protocol_events": dict(sorted(self.protocol_events.items())),
+            "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
             "protocol_signatures": dict(sorted(self.protocol_signatures.items())),
             "protocol_cooccurrences": [
                 {"events": list(events), "count": count}
@@ -774,6 +775,11 @@ _SIGNATURE_PAYLOAD_EVENTS = frozenset(
         "-curestatus",
     }
 )
+
+# This pins the spelling of ``protocol_signatures`` separately from the
+# surrounding deep-line report. Consumers reject older spellings rather than
+# treating legacy ``move:`` or ``ability:`` prefixes as new omissions.
+PROTOCOL_SIGNATURE_SCHEMA_VERSION = "pokezero.protocol-signature-census.v2"
 
 _EFFECT_IDENTIFIER_EVENTS = frozenset(
     {

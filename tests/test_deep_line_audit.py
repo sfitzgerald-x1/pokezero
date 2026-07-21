@@ -16,6 +16,7 @@ from pokezero.deep_line_audit import (
     _raw_request_action_mask,
     _raw_side_condition_counts,
     _canonical_protocol_signature,
+    PROTOCOL_SIGNATURE_SCHEMA_VERSION,
     audit_protocol_cut_fixture,
     protocol_cut_fixtures,
     census_protocol_cooccurrences,
@@ -46,6 +47,12 @@ _CLI_SPEC.loader.exec_module(deep_line_audit_cli)
 
 
 class DeepLineAuditReportTest(unittest.TestCase):
+    def test_report_stamps_protocol_signature_schema_version(self) -> None:
+        self.assertEqual(
+            DeepLineAuditReport().to_json_dict()["protocol_signature_schema_version"],
+            PROTOCOL_SIGNATURE_SCHEMA_VERSION,
+        )
+
     def test_protocol_signature_normalizes_effect_prefixes_and_fieldactivate(self) -> None:
         self.assertEqual(
             _canonical_protocol_signature(("", "-singleturn", "p1a: A", "move: Protect")),

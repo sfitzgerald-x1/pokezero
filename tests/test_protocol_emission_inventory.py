@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from pokezero.protocol_emission_inventory import (
+    _signature_coverage,
     build_protocol_inventory,
     discover_consumer_dispatches,
     discover_engine_emissions,
@@ -66,8 +67,10 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
                         "-activate:protect": 2,
                         "-fieldactivate:perishsong": 1,
                         "-mystery": 5,
+                        "-mustrecharge": 1,
                         "-singleturn:protect": 3,
                     },
+                    "protocol_signature_schema_version": "pokezero.protocol-signature-census.v2",
                     "audit_provenance": {
                         "observation_schema": "pokezero.observation.v3",
                         "showdown_source_hash": "fixture-source",
@@ -84,27 +87,34 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
 
         self.assertEqual(report["engine_emittable"]["tag_count"], 5)
         self.assertEqual(report["consumer_dispatch"]["tag_count"], 5)
-        self.assertEqual(report["observed"]["signature_count"], 4)
+        self.assertEqual(report["observed"]["signature_count"], 5)
         self.assertEqual(
             report["differential"]["observed_but_unconsumed"],
             [
                 {"tag": "-mystery", "count": 5},
                 {"tag": "-singleturn", "count": 3},
                 {"tag": "-fieldactivate", "count": 1},
+                {"tag": "-mustrecharge", "count": 1},
             ],
         )
         coverage = {row["signature"]: row for row in report["observed"]["signature_coverage"]}
         self.assertEqual(coverage["-activate:protect"]["coverage"], "direct")
         self.assertEqual(coverage["-singleturn:protect"]["coverage"], "semantic-alias")
         self.assertEqual(coverage["-fieldactivate:perishsong"]["coverage"], "semantic-alias")
+        self.assertEqual(coverage["-mustrecharge"]["coverage"], "unclassified")
         self.assertEqual(coverage["-mystery"]["coverage"], "unclassified")
         self.assertEqual(
             [row["signature"] for row in report["differential"]["observed_signatures_without_semantic_coverage"]],
-            ["-mystery"],
+            ["-mystery", "-mustrecharge"],
         )
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
         self.assertEqual(report["observed"]["audit_provenance"][0]["audit_provenance"]["image_digest"], "fixture-image")
+
+    def test_signature_coverage_keeps_recharge_unclassified_and_registers_perish_counter(self) -> None:
+        self.assertIsNone(_signature_coverage("-mustrecharge"))
+        self.assertEqual(_signature_coverage("move:protect").coverage, "direct")
+        self.assertEqual(_signature_coverage("-start:perish3").coverage, "direct")
 
     def test_consumer_discovery_only_counts_event_type_comparisons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -131,6 +141,19 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             path = Path(temporary) / "missing.json"
             path.write_text(json.dumps({"protocol_signatures": {}}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "missing audit_provenance"):
+                load_observed_audit_provenance((path,))
+
+    def test_observed_provenance_loader_rejects_legacy_signature_spelling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "legacy.json"
+            path.write_text(
+                json.dumps({
+                    "protocol_signatures": {"-activate:moveprotect": 1},
+                    "audit_provenance": {"observation_schema": "pokezero.observation.v3"},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "protocol signature schema"):
                 load_observed_audit_provenance((path,))
 
 
