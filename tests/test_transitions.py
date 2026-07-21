@@ -1046,5 +1046,85 @@ class FixtureReplayTest(unittest.TestCase):
         self.assertEqual(stats.my_switch_turn_count, 0)
 
 
+class ConfusionSelfHitTest(unittest.TestCase):
+    """Spec v3 change 10: the SLOWER confused mon's untagged self-hit folds into the
+    opponent's still-open move window's damage_fraction (kept frozen for v2.2), and the
+    fold records the self-hit's own fraction additively so a v3 encode can subtract it."""
+
+    # The exact reproduction from the change brief: p2 Surf (0.17) on p1, then p1 (slower,
+    # confused) self-hits for 0.10 with an UNTAGGED -damage and no |move|/|cant| line.
+    _CONFUSION_LINES = _leads() + [
+        "|move|p2a: Alakazam|Surf|p1a: Tyranitar",
+        "|-damage|p1a: Tyranitar|83/100",  # Surf = 0.17
+        "|-activate|p1a: Tyranitar|confusion",
+        "|-damage|p1a: Tyranitar|73/100",  # self-hit = 0.10 (untagged)
+        "|upkeep",
+        "|turn|2",
+    ]
+
+    def _surf(self, lines):
+        surfs = [t for t in _moves_only(_tokens(lines)) if t.action == "surf"]
+        self.assertEqual(len(surfs), 1)
+        return surfs[0]
+
+    def test_self_hit_folds_into_damage_fraction_but_is_recorded_separately(self) -> None:
+        surf = self._surf(self._CONFUSION_LINES)
+        # The v2.2 field is FROZEN: the self-hit is still folded into damage_fraction.
+        self.assertAlmostEqual(surf.damage_fraction, 0.27)
+        # The additive v3 metadata isolates the self-hit's own fraction + a presence flag.
+        self.assertTrue(surf.confusion_selfhit)
+        self.assertAlmostEqual(surf.confusion_selfhit_fraction, 0.10)
+        # The move's own damage (self-hit removed) is the corrected value a v3 encode writes.
+        self.assertAlmostEqual(
+            surf.damage_fraction - surf.confusion_selfhit_fraction, 0.17
+        )
+
+    def test_no_confusion_leaves_the_fields_default(self) -> None:
+        # Identical log minus the confusion self-hit: damage_fraction is just Surf's 0.17
+        # and neither v3 field is engaged.
+        clean = _leads() + [
+            "|move|p2a: Alakazam|Surf|p1a: Tyranitar",
+            "|-damage|p1a: Tyranitar|83/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        surf = self._surf(clean)
+        self.assertAlmostEqual(surf.damage_fraction, 0.17)
+        self.assertFalse(surf.confusion_selfhit)
+        self.assertAlmostEqual(surf.confusion_selfhit_fraction, 0.0)
+
+    def test_confused_mon_that_still_moves_does_not_arm_the_latch(self) -> None:
+        # |-activate|confusion followed by a real |move| (the mon shook off confusion and
+        # attacked): the latch is cleared by the move, so the opponent's window is untouched.
+        lines = _leads() + [
+            "|move|p2a: Alakazam|Surf|p1a: Tyranitar",
+            "|-damage|p1a: Tyranitar|83/100",
+            "|-activate|p1a: Tyranitar|confusion",
+            "|move|p1a: Tyranitar|Crunch|p2a: Alakazam",
+            "|-damage|p2a: Alakazam|60/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        surf = self._surf(lines)
+        self.assertAlmostEqual(surf.damage_fraction, 0.17)
+        self.assertFalse(surf.confusion_selfhit)
+
+    def test_tagged_confusion_self_hit_does_not_pollute_and_is_not_recorded(self) -> None:
+        # A [from] confusion-tagged self-hit never folds into damage_fraction (no bug to
+        # correct), so neither v3 field engages.
+        lines = _leads() + [
+            "|move|p2a: Alakazam|Surf|p1a: Tyranitar",
+            "|-damage|p1a: Tyranitar|83/100",
+            "|-activate|p1a: Tyranitar|confusion",
+            "|-damage|p1a: Tyranitar|73/100|[from] confusion",
+            "|upkeep",
+            "|turn|2",
+        ]
+        surf = self._surf(lines)
+        self.assertAlmostEqual(surf.damage_fraction, 0.17)
+        self.assertFalse(surf.confusion_selfhit)
+        self.assertAlmostEqual(surf.confusion_selfhit_fraction, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
