@@ -495,11 +495,27 @@ NUMERIC_GENDER_FEMALE = V3_NUMERIC_BASE + 9
 # when the trapper leaves the field, the trapped mon leaves, or either faints — see the parser.
 # Sits above the v2.2 census — legacy modes stay byte-frozen.
 NUMERIC_MEANLOOK_TRAP = V3_NUMERIC_BASE + 10
+# Change 9 — Wish turns-to-land, two per-SIDE numeric columns on the FIELD token (like the
+# sleep-clause pair, change 2), schema >= v3 only. A Wish is a per-side ``slotCondition`` (NOT a
+# per-mon volatile), so the clock lives on the field token beside the v2.2 pending bits (56/57).
+# ``self_wish_turns`` / ``opp_wish_turns`` = ``min(1, remaining / 2)`` where ``remaining =
+# 2 - (turn - set_turn)`` is the turns until the Wish resolves: 2 on the declaration turn, 1 on the
+# landing turn, 0 otherwise — so the column reads 2/2 then 1/2 across a Wish's life and returns to 0
+# the turn it lands. Re-derived from the SAME ``wish_set_turns`` tracker the v2.2 pending bit reads
+# (``_update_wish``); nonzero on EXACTLY the pending turns. Per-slot (keyed on side, not mon), so it
+# survives a wish-pass switch: the incoming mon reads 1/2. Gen3 Wish heals the RECIPIENT's
+# baseMaxhp/2 (the engine/materialization are already gen3-correct — no engine change, and NO
+# heal-amount column: the heal is ½ the recipient's max HP, already derivable from its max-HP
+# columns). Public-protocol-derived (declaration + landing heal lines), so gated on the schema alone
+# (NOT masks.exact_state, which darkens the belief-fed layer where the v2.2 pending BIT lives). Sits
+# above the v2.2 census — legacy modes stay byte-frozen; the v2.2 pending bits 56/57 are unchanged.
+NUMERIC_SELF_WISH_TURNS = V3_NUMERIC_BASE + 11
+NUMERIC_OPP_WISH_TURNS = V3_NUMERIC_BASE + 12
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
 # encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
-# (+8 / +9, change 7), and this Mean Look move-trap bit (+10, change 8), so the v3 numeric width is
-# 166.
-V3_NUMERIC_EXTRA = 11
+# (+8 / +9, change 7), the Mean Look move-trap bit (+10, change 8), and the two Wish turns-to-land
+# bits (+11 / +12, change 9), so the v3 numeric width is 168.
+V3_NUMERIC_EXTRA = 13
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -826,6 +842,13 @@ class PlayerRelativeBattleState:
     opponent_timed_condition_turns: Mapping[str, int] = field(default_factory=dict)
     self_wish_pending: bool = False
     opponent_wish_pending: bool = False
+    # ---- spec v3 change 9: Wish turns-to-land per side (docs/observation_v3_spec.md). Turns until
+    # a declared Wish resolves — 2 the declaration turn, 1 the landing turn, 0 otherwise — re-derived
+    # from the SAME public ``wish_set_turns`` tracker the v2.2 pending bit reads; encoded on the
+    # field token under schema >= v3 only as ``min(1, remaining / 2)``. Per-slot, so it survives a
+    # wish-pass switch. Nonzero on exactly the turns the pending bit is set.
+    self_wish_turns: int = 0
+    opponent_wish_turns: int = 0
     # Live sleep-clause consumption per side (from the belief engine's holders).
     self_sleep_clause_used: bool = False
     opponent_sleep_clause_used: bool = False
@@ -1708,6 +1731,8 @@ def normalize_for_player(
         opponent_timed_condition_turns=_timed_condition_turns(replay, opponent_slot),
         self_wish_pending=_wish_pending(replay, showdown_slot),
         opponent_wish_pending=_wish_pending(replay, opponent_slot),
+        self_wish_turns=_wish_turns_remaining(replay, showdown_slot),
+        opponent_wish_turns=_wish_turns_remaining(replay, opponent_slot),
         self_sleep_clause_used=sleep_clause_holders.get(showdown_slot) is not None,
         opponent_sleep_clause_used=sleep_clause_holders.get(opponent_slot) is not None,
         self_sleep_clause_blocks=bool(replay.induced_sleep_victims.get(showdown_slot)),
@@ -1753,6 +1778,19 @@ def _wish_pending(replay: ShowdownReplayState, slot: str) -> bool:
     """True while a declared Wish has not yet landed on ``slot``'s side (lands end of next turn)."""
     set_turn = replay.wish_set_turns.get(slot)
     return set_turn is not None and (replay.turn_number - set_turn) <= 1
+
+
+def _wish_turns_remaining(replay: ShowdownReplayState, slot: str) -> int:
+    """Turns until a declared Wish resolves on ``slot``'s side: 2 the declaration turn, 1 the
+    landing turn, 0 when none is pending (spec v3 change 9). Reads the same ``wish_set_turns``
+    tracker as ``_wish_pending`` and is nonzero on exactly the turns that predicate is true, so the
+    v3 turns column and the v2.2 pending bit never disagree about presence. Keyed on the SIDE, so a
+    wish-pass switch keeps the clock running for the mon that inherits the slot."""
+    set_turn = replay.wish_set_turns.get(slot)
+    if set_turn is None:
+        return 0
+    remaining = 2 - (replay.turn_number - set_turn)
+    return remaining if 1 <= remaining <= 2 else 0
 
 
 def observation_from_player_state(
@@ -2881,6 +2919,21 @@ def _encode_field_token(
             _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, 1.0)
         if state.opponent_sleep_clause_blocks:
             _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, 1.0)
+        # Spec v3 change 9: the per-side Wish turns-to-land clock, on the field token beside the
+        # v2.2 pending bits. Public-protocol-derived (like the sleep-clause bits above), so gated on
+        # the schema alone; value min(1, remaining/2) reads 2/2 then 1/2 across a Wish's life.
+        if state.self_wish_turns:
+            _set_numeric(
+                numeric_features[FIELD_TOKEN_OFFSET],
+                NUMERIC_SELF_WISH_TURNS,
+                min(1.0, state.self_wish_turns / 2.0),
+            )
+        if state.opponent_wish_turns:
+            _set_numeric(
+                numeric_features[FIELD_TOKEN_OFFSET],
+                NUMERIC_OPP_WISH_TURNS,
+                min(1.0, state.opponent_wish_turns / 2.0),
+            )
 
 
 # (condition id, self numeric slot, opponent numeric slot) for the timed side conditions.
