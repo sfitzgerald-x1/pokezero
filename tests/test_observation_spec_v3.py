@@ -26,11 +26,14 @@ from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
+    NUMERIC_STALL_COUNTER,
     NUMERIC_TM2_FAIL,
     NUMERIC_TM2_MISS,
     NUMERIC_TT_FAIL,
     NUMERIC_TT_MISS,
+    OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
+    SELF_POKEMON_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
     V3_REPLAY_OBSERVATION_SPEC,
@@ -96,11 +99,14 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
-    def test_v3_widths_append_four_numerics_to_the_v2_2_census(self) -> None:
+    def test_v3_widths_append_five_numerics_to_the_v2_2_census(self) -> None:
+        # Change 1/2 added four columns (fail x2, sleep-clause x2); change 3 appends the fifth
+        # (the consecutive-stall counter). v3 is still pre-freeze so the append is legal.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 4,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 5,
         )
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 160)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -110,14 +116,17 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The four appended columns start exactly at the v2.2 census end (155).
+        # The five appended columns start exactly at the v2.2 census end (155) and are pinned
+        # in order: fail(155,156), sleep-clause(157,158), stall-counter(159).
         self.assertEqual(NUMERIC_TT_FAIL, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
         self.assertEqual(NUMERIC_TM2_FAIL, NUMERIC_TT_FAIL + 1)
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, NUMERIC_TT_FAIL + 2)
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, NUMERIC_TT_FAIL + 3)
+        self.assertEqual(NUMERIC_STALL_COUNTER, NUMERIC_TT_FAIL + 4)
+        self.assertEqual(NUMERIC_STALL_COUNTER, 159)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP + 1,
+            NUMERIC_STALL_COUNTER + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -240,6 +249,120 @@ class SleepClauseTrackerTest(unittest.TestCase):
         self.assertEqual(resumed.snapshot().induced_sleep_victims.get("p1"), ())
 
 
+class StallCounterTrackerTest(unittest.TestCase):
+    """Change 3 lifecycle at the public-parser layer (spec acceptance item 3).
+
+    One per-side counter = consecutive successful stall-move uses by that side's active mon.
+    Mirrors the clause-lifecycle suite: increment across consecutive Protects; reset on each
+    of the five causes; Endure shares the counter; both seats symmetric; snapshot round-trip.
+    """
+
+    def _protect(self, slot: str) -> list[str]:
+        return [f"|move|{slot}a: X|Protect|{slot}a: X", f"|-singleturn|{slot}a: X|Protect", "|upkeep"]
+
+    def _counter(self, lines, *, slot="p1"):
+        return parse_showdown_replay(lines, battle_id="stall").stall_counter.get(slot, 0)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="stall")
+        return normalize_for_player(replay, player_id=player, configured_showdown_slot=player)
+
+    def test_counter_climbs_across_consecutive_protects(self) -> None:
+        lines = list(_LEADS)
+        for turn in range(1, 4):
+            lines += self._protect("p1") + [f"|turn|{turn + 1}"]
+            self.assertEqual(self._counter(lines), turn)
+
+    def test_reset_on_failed_stall_move(self) -> None:
+        # A failed Protect (the randomChance miss deletes the `stall` volatile) emits -fail and
+        # no -singleturn — reset cause (1).
+        lines = _LEADS + self._protect("p1") + [
+            "|turn|2",
+            "|move|p1a: X|Protect|p1a: X",
+            "|-fail|p1a: X",
+            "|turn|3",
+        ]
+        self.assertEqual(self._counter(lines), 0)
+
+    def test_reset_on_non_stall_move(self) -> None:
+        lines = _LEADS + self._protect("p1") + [
+            "|turn|2",
+            "|move|p1a: X|Spikes|p1a: X",
+            "|turn|3",
+        ]
+        self.assertEqual(self._counter(lines), 0)
+
+    def test_reset_on_cant(self) -> None:
+        lines = _LEADS + self._protect("p1") + ["|turn|2", "|cant|p1a: X|par", "|turn|3"]
+        self.assertEqual(self._counter(lines), 0)
+
+    def test_reset_on_switch_out_and_drag(self) -> None:
+        switched = _LEADS + self._protect("p1") + [
+            "|turn|2",
+            "|switch|p1a: Zapdos|Zapdos, L78|100/100",
+        ]
+        self.assertEqual(self._counter(switched), 0)
+        dragged = _LEADS + self._protect("p1") + [
+            "|turn|2",
+            "|drag|p1a: Zapdos|Zapdos, L78|100/100",
+        ]
+        self.assertEqual(self._counter(dragged), 0)
+
+    def test_reset_on_faint(self) -> None:
+        lines = _LEADS + self._protect("p1") + ["|turn|2", "|faint|p1a: X", "|turn|3"]
+        self.assertEqual(self._counter(lines), 0)
+
+    def test_endure_shares_the_counter_with_protect(self) -> None:
+        # Endure emits `-singleturn|SLOT|move: Endure`; it feeds the SAME streak as Protect.
+        lines = _LEADS + [
+            "|move|p1a: X|Endure|p1a: X",
+            "|-singleturn|p1a: X|move: Endure",
+            "|upkeep",
+            "|turn|2",
+        ] + self._protect("p1") + ["|turn|3"]
+        self.assertEqual(self._counter(lines), 2)
+
+    def test_both_seats_symmetric(self) -> None:
+        # p2 stalls; the per-side scalars are symmetric across the two perspectives.
+        lines = _LEADS + self._protect("p2") + [
+            "|turn|2",
+        ] + self._protect("p2") + ["|turn|3"]
+        self.assertEqual(self._counter(lines, slot="p2"), 2)
+        self.assertEqual(self._counter(lines, slot="p1"), 0)
+        stalled_by_opp = self._state(lines, player="p1")
+        self.assertEqual(stalled_by_opp.opponent_stall_counter, 2)
+        self.assertEqual(stalled_by_opp.self_stall_counter, 0)
+        stalled_view = self._state(lines, player="p2")
+        self.assertEqual(stalled_view.self_stall_counter, 2)
+        self.assertEqual(stalled_view.opponent_stall_counter, 0)
+
+    def test_snapshot_round_trip_preserves_both_counters(self) -> None:
+        lines = _LEADS + self._protect("p1") + ["|turn|2"] + self._protect("p1") + ["|turn|3"]
+        # p2 also has a one-turn streak, so both sides are non-zero.
+        lines = lines[: len(_LEADS)] + self._protect("p1") + ["|turn|2"] + self._protect("p1") \
+            + self._protect("p2") + ["|turn|3"]
+        replay = parse_showdown_replay(lines, battle_id="stall")
+        self.assertEqual(replay.stall_counter.get("p1"), 2)
+        self.assertEqual(replay.stall_counter.get("p2"), 1)
+        resumed = _ReplayParser.from_snapshot(replay)
+        # Resume and feed a p1 non-stall move: only p1 resets, p2's streak survives the round-trip.
+        resumed.feed(["|move|p1a: X|Spikes|p1a: X", "|turn|4"])
+        snap = resumed.snapshot()
+        self.assertEqual(snap.stall_counter.get("p1"), 0)
+        self.assertEqual(snap.stall_counter.get("p2"), 1)
+
+    def test_pending_flag_round_trips_mid_action_window(self) -> None:
+        # A snapshot taken between a stall |move| and its resolution restores the in-flight
+        # flag, so a resumed -fail still resets (snapshot-vs-live convergence).
+        mid = _LEADS + self._protect("p1") + ["|turn|2", "|move|p1a: X|Protect|p1a: X"]
+        replay = parse_showdown_replay(mid, battle_id="stall")
+        self.assertEqual(replay.stall_counter.get("p1"), 1)
+        self.assertTrue(replay.stall_move_pending.get("p1"))
+        resumed = _ReplayParser.from_snapshot(replay)
+        resumed.feed(["|-fail|p1a: X"])
+        self.assertEqual(resumed.snapshot().stall_counter.get("p1"), 0)
+
+
 @unittest.skipUnless(
     (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
     "requires a local Gen 3 Pokemon Showdown checkout",
@@ -303,7 +426,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 4)
+            self.assertEqual(len(v3_row), width + 5)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -340,6 +463,150 @@ class V3EncodeTest(unittest.TestCase):
                 : V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
             ],
         )
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class StallCounterEncodeTest(unittest.TestCase):
+    """Change 3 at the encode layer: the counter lands on the ACTIVE mon token, rises
+    1/8, 2/8, …, is written for both seats, exists under v3 only, and leaves the v2.2 prefix
+    byte-identical (the cmp-against-pristine invariant applied to a Protect-heavy log)."""
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="stall-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(
+            state, category_vocab=self._vocab(), spec=spec
+        )
+        observation.validate(spec)
+        return observation
+
+    @staticmethod
+    def _active_token(team, offset):
+        for idx, mon in enumerate(team):
+            if mon.active:
+                return offset + idx
+        raise AssertionError("no active mon in team")
+
+    # Two consecutive Protects by the OPPONENT (populated from public reveals — no request
+    # needed), viewed from the perspective whose opponent is the staller.
+    def _opp_protect_lines(self, staller: str):
+        other = "p2" if staller == "p1" else "p1"
+        return _LEADS[:2] + [
+            f"|switch|{staller}a: Skarmory|Skarmory, L76|100/100",
+            f"|switch|{other}a: Snorlax|Snorlax, L80|100/100",
+            "|turn|1",
+            f"|move|{staller}a: Skarmory|Protect|{staller}a: Skarmory",
+            f"|-singleturn|{staller}a: Skarmory|Protect",
+            "|upkeep",
+            "|turn|2",
+            f"|move|{staller}a: Skarmory|Protect|{staller}a: Skarmory",
+            f"|-singleturn|{staller}a: Skarmory|Protect",
+            "|upkeep",
+            "|turn|3",
+        ]
+
+    def test_counter_rises_on_the_opponent_active_token_both_seats(self) -> None:
+        for staller, viewer in (("p1", "p2"), ("p2", "p1")):
+            lines = self._opp_protect_lines(staller)
+            state = self._state(lines, player=viewer)
+            self.assertEqual(state.opponent_stall_counter, 2)
+            obs = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+            tok = self._active_token(state.opponent_team, OPPONENT_POKEMON_TOKEN_OFFSET)
+            # Two consecutive Protects -> 2/8 = 0.25 on the active token only.
+            self.assertAlmostEqual(obs.numeric_features[tok][NUMERIC_STALL_COUNTER], 0.25)
+            # Non-active opponent mons carry nothing.
+            for idx in range(len(state.opponent_team)):
+                token = OPPONENT_POKEMON_TOKEN_OFFSET + idx
+                if token != tok:
+                    self.assertEqual(obs.numeric_features[token][NUMERIC_STALL_COUNTER], 0.0)
+
+    def test_counter_rises_one_eighth_then_two_eighths(self) -> None:
+        base = self._opp_protect_lines("p1")
+        after_one = base[:9] + ["|turn|2"]  # through the first Protect's -singleturn + upkeep
+        state1 = self._state(after_one, player="p2")
+        obs1 = self._encode(state1, V3_REPLAY_OBSERVATION_SPEC)
+        tok1 = self._active_token(state1.opponent_team, OPPONENT_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(obs1.numeric_features[tok1][NUMERIC_STALL_COUNTER], 0.125)
+        state2 = self._state(base, player="p2")
+        obs2 = self._encode(state2, V3_REPLAY_OBSERVATION_SPEC)
+        tok2 = self._active_token(state2.opponent_team, OPPONENT_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(obs2.numeric_features[tok2][NUMERIC_STALL_COUNTER], 0.25)
+
+    def test_counter_on_the_self_active_token_via_request(self) -> None:
+        # The self team is only known through the request; build one so the self active token
+        # is populated and its v3 stall column fires.
+        request = {
+            "active": [{"moves": [{"move": "Protect", "id": "protect"}, {"move": "Drill Peck", "id": "drillpeck"}]}],
+            "side": {
+                "name": "p1",
+                "id": "p1",
+                "pokemon": [
+                    {"ident": "p1: Skarmory", "details": "Skarmory, L76, M", "condition": "100/100", "active": True},
+                    {"ident": "p1: Snorlax", "details": "Snorlax, L80, M", "condition": "100/100", "active": False},
+                ],
+            },
+        }
+        lines = _LEADS[:2] + [
+            "|switch|p1a: Skarmory|Skarmory, L76, M|100/100",
+            "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+            "|turn|1",
+            "|move|p1a: Skarmory|Protect|p1a: Skarmory",
+            "|-singleturn|p1a: Skarmory|Protect",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Skarmory|Protect|p1a: Skarmory",
+            "|-singleturn|p1a: Skarmory|Protect",
+            "|upkeep",
+            "|request|" + json.dumps(request, separators=(",", ":")),
+            "|turn|3",
+        ]
+        state = self._state(lines, player="p1")
+        self.assertEqual(state.self_stall_counter, 2)
+        obs = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        tok = self._active_token(state.self_team, SELF_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(obs.numeric_features[tok][NUMERIC_STALL_COUNTER], 0.25)
+
+    def test_v2_2_encode_of_a_protect_heavy_log_is_byte_identical_prefix_of_v3(self) -> None:
+        # cmp-against-pristine, in-suite form: the Protect-heavy log's v2.2 encoding keeps its
+        # exact 155-column shape and is a byte-prefix of the v3 encode on every shared surface,
+        # so the stall column cannot have perturbed any v2.2 output.
+        lines = self._opp_protect_lines("p1")
+        state = self._state(lines, player="p2")
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+        for row_index, (v22_row, v3_row) in enumerate(
+            zip(v2_2.numeric_features, v3.numeric_features)
+        ):
+            self.assertEqual(len(v22_row), width)
+            self.assertEqual(len(v3_row), width + 5)
+            self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
+        self.assertEqual(
+            [tuple(row) for row in v2_2.categorical_ids],
+            [tuple(row) for row in v3.categorical_ids],
+        )
+        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        # The v3 stall column is the ONLY difference: exactly one active token carries it.
+        tok = self._active_token(state.opponent_team, OPPONENT_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(v3.numeric_features[tok][NUMERIC_STALL_COUNTER], 0.25)
 
 
 class IncrementalFoldParityTest(unittest.TestCase):
