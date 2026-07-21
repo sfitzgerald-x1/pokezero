@@ -458,9 +458,48 @@ NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
 # Public trace: |-start|SLOT|Encore (apply) / |-end|SLOT|Encore (expiry); elapsed is public,
 # remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
 NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
-# EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), and
-# this encore column (+6, change 5), so the v3 numeric width is 162.
-V3_NUMERIC_EXTRA = 7
+# Change 6 — Wrap (partial-trap) turns-so-far on the TRAPPED (active) mon's token, schema >= v3
+# only, the sibling of changes 4/5. Gen3 partial-trap (Wrap) lasts 2..5 turns (max 5): the base
+# ``data/conditions.ts`` partiallytrapped ``duration``/``random(5,7)`` is the MODERN value and is
+# NOT overridden by the gen3 mod, but the authoritative Gen II-IV binding mechanic is 2-5 turns;
+# poke-engine models the trap as a boolean volatile with a flat maxhp/16 residual and NO duration
+# counter, so the elapsed comes from the protocol, not the engine (see docs/observation_v3_spec.md).
+# The encoded value is ``min(1, elapsed/5)`` with CAP = 5. The trap PRESENCE is already the
+# ``volatile:partiallytrapped`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter
+# only. Public trace: |-activate|SLOT|move: Wrap (apply; no -start) / |-end|SLOT|Wrap
+# |[partiallytrapped] (expiry); elapsed is public, remaining hidden. Wrap is the pool's SOLE
+# partial-trap move (Shuckle, sole carrier). Sits above the v2.2 census — legacy modes stay
+# byte-frozen.
+NUMERIC_WRAP_TRAP_TURNS = V3_NUMERIC_BASE + 7
+# Change 7 — per-mon GENDER, two 0/1 bits on EVERY mon token (self and opponent), schema >= v3
+# only. A STATIC public attribute (no parser counter): male -> (MALE=1, FEMALE=0), female ->
+# (0, 1), genderless -> (0, 0). SELF gender comes from the request/known set (candidate.details);
+# OPPONENT gender from the ``details`` string revealed on switch-in (both parsed by the existing
+# ``determinization._gender_from_details``, which reads the ``, M`` / ``, F`` token — genderless
+# has no letter). An OPPONENT mon is 00 before it is ever seen (it is not in the revealed team) and
+# the bits appear on the switch-in reveal. Motivation: gender is public but was unencoded, while
+# the search engine already conditions on it (Cute Charm infatuation; pool carriers
+# Clefable/Wigglytuff/Delcatty) — a policy/search asymmetry the Layer-3 collision audit found. Sits
+# above the v2.2 census — legacy modes stay byte-frozen.
+NUMERIC_GENDER_MALE = V3_NUMERIC_BASE + 8
+NUMERIC_GENDER_FEMALE = V3_NUMERIC_BASE + 9
+# Change 8 — Mean Look / Spider Web move-trap: one 0/1 bit on the TRAPPED (active) mon's token,
+# schema >= v3 only, = "switch-locked by Mean Look / Spider Web". DISTINCT from the Wrap
+# partial-trap column (+7 — chip + can't switch, a DIFFERENT volatile) and from NUMERIC_TRAPPER_ALIVE
+# (ability traps Shadow Tag / Arena Trap / Magnet Pull, whose shape this mirrors). Gen3 Mean Look
+# (Misdreavus) / Spider Web (Ariados) run ``target.addVolatile('trapped', source, move, 'trapper')``:
+# the base ``trapped`` volatile is ``noCopy`` with NO onEnd, applied via ``|-activate|SLOT|trapped``
+# (no ``[of]``), and is removed SILENTLY (no protocol line) when the source's linked ``trapper``
+# volatile drops. poke-engine does not model move-traps at all (its gen3 ``trapped()`` covers only
+# LockedMove / partiallytrapped / trap abilities), so this is a protocol-only signal. The trap ends
+# when the trapper leaves the field, the trapped mon leaves, or either faints — see the parser.
+# Sits above the v2.2 census — legacy modes stay byte-frozen.
+NUMERIC_MEANLOOK_TRAP = V3_NUMERIC_BASE + 10
+# EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
+# encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
+# (+8 / +9, change 7), and this Mean Look move-trap bit (+10, change 8), so the v3 numeric width is
+# 166.
+V3_NUMERIC_EXTRA = 11
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -636,6 +675,27 @@ class ShowdownReplayState:
     # ``noCopy: true`` (not Baton-Pass-copied), so it always drops on switch. Derived ONLY from
     # public protocol lines.
     encore_elapsed: Mapping[str, int]
+    # Wrap (partial-trap) turns-so-far per slot (spec v3 change 6, docs/observation_v3_spec.md):
+    # the public elapsed-duration counter of the active mon's ``partiallytrapped`` volatile.
+    # Advances by 1 on each ``|turn|`` while the volatile is present (like the toxic ramp /
+    # confusion / encore counters), resets to 0 on ``-end <partial-trap move> [partiallytrapped]``
+    # / switch-out / drag / faint. Gen3 partial-trap (Wrap) lasts 2..5 turns (the base condition's
+    # modern ``random(5,7)`` is NOT overridden by the gen3 mod but is the wrong value; poke-engine
+    # tracks no duration at all — see the spec), encoded ``min(1, elapsed/5)`` with CAP 5; the raw
+    # counter is uncapped. Unlike encore, ``partiallytrapped`` IS Baton-Pass-copied, so the switch
+    # reset is gated on the volatile being absent (parallel to confusion). Derived ONLY from public
+    # protocol lines.
+    wrap_trap_elapsed: Mapping[str, int]
+    # Mean Look / Spider Web move-trap per slot (spec v3 change 8, docs/observation_v3_spec.md): a
+    # public 0/1 flag = the mon in this slot is switch-locked by an opposing Mean Look / Spider Web.
+    # Set on ``|-activate|SLOT|trapped`` (the base ``trapped`` volatile's onStart); the trapper is the
+    # opposing active mon (singles). The ``trapped`` volatile is ``noCopy`` with NO onEnd, so no
+    # protocol line marks the end; the parser clears the flag when the trapped mon leaves its slot
+    # (switch/drag/faint) or the trapper leaves its slot (switch/drag/faint of the opposing slot —
+    # the linked source-side volatile is what actually drops the trap). Kept DISTINCT from
+    # partiallytrapped (Wrap) and from the trap-ability signal. Derived ONLY from public protocol
+    # lines.
+    meanlook_trap: Mapping[str, bool]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -794,6 +854,18 @@ class PlayerRelativeBattleState:
     # (gen3 CAP = 6). 0 when the active mon is not encored.
     self_encore_elapsed: int = 0
     opponent_encore_elapsed: int = 0
+    # ---- spec v3 change 6: Wrap (partial-trap) turns-so-far (docs/observation_v3_spec.md).
+    # Per-side public elapsed-duration counter for the ACTIVE mon's partiallytrapped volatile,
+    # from the _ReplayParser tracker; encoded on the trapped mon's token under schema >= v3 only
+    # as min(1, elapsed/5) (gen3 CAP = 5). 0 when the active mon is not partially trapped.
+    self_wrap_trap_elapsed: int = 0
+    opponent_wrap_trap_elapsed: int = 0
+    # ---- spec v3 change 8: Mean Look / Spider Web move-trap (docs/observation_v3_spec.md). Per-side
+    # public 0/1 flag for the ACTIVE mon, from the _ReplayParser tracker; encoded on the trapped
+    # mon's token under schema >= v3 only. False when the active mon is not switch-locked by a
+    # Mean Look / Spider Web.
+    self_meanlook_trap: bool = False
+    opponent_meanlook_trap: bool = False
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -830,6 +902,12 @@ class _ReplayParser:
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
         self.encore_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
+        # Wrap (partial-trap) turns-so-far per slot (spec v3 change 6). See
+        # ShowdownReplayState.wrap_trap_elapsed.
+        self.wrap_trap_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
+        # Mean Look / Spider Web move-trap per slot (spec v3 change 8). See
+        # ShowdownReplayState.meanlook_trap.
+        self.meanlook_trap: dict[str, bool] = {"p1": False, "p2": False}
         self.pending_baton_pass: set[str] = set()
         self.public_events: list[ShowdownPublicEvent] = []
         self.public_lines: list[str] = []
@@ -883,6 +961,12 @@ class _ReplayParser:
         }
         parser.encore_elapsed = {
             slot: int(snapshot.encore_elapsed.get(slot, 0)) for slot in ("p1", "p2")
+        }
+        parser.wrap_trap_elapsed = {
+            slot: int(snapshot.wrap_trap_elapsed.get(slot, 0)) for slot in ("p1", "p2")
+        }
+        parser.meanlook_trap = {
+            slot: bool(snapshot.meanlook_trap.get(slot, False)) for slot in ("p1", "p2")
         }
         parser.public_events = list(snapshot.public_events)
         parser.public_lines = list(snapshot.public_lines)
@@ -1006,6 +1090,21 @@ class _ReplayParser:
                 # volatile-absence gate is kept parallel to the confusion reset for consistency.
                 if "encore" not in self.volatiles[pokemon.showdown_slot]:
                     self.encore_elapsed[pokemon.showdown_slot] = 0
+                # Wrap (partial-trap) turns-so-far (spec v3 change 6) belong to the mon that just
+                # left. Unlike encore, ``partiallytrapped`` IS a Baton-Pass-copied volatile, so — as
+                # with confusion — a plain switch/drag drops it (reset) while a Baton Pass that
+                # carried the trap keeps the counter running on the inheritor; gate the reset on the
+                # volatile being absent from the finalized slot set.
+                if "partiallytrapped" not in self.volatiles[pokemon.showdown_slot]:
+                    self.wrap_trap_elapsed[pokemon.showdown_slot] = 0
+                # Mean Look / Spider Web move-trap (spec v3 change 8): a switch/drag of THIS slot
+                # ends both directions. If the mon leaving was the TARGET, its trap is over (the
+                # ``trapped`` volatile is noCopy, so it never rides a Baton Pass). If the mon leaving
+                # was the TRAPPER, the trap it held on the OPPOSING active mon ends too (the linked
+                # source-side volatile drops when the trapper leaves). Cleared unconditionally on
+                # both slots — in singles the trapper is always the opposing active mon.
+                self.meanlook_trap[pokemon.showdown_slot] = False
+                self.meanlook_trap[_OTHER_SLOT[pokemon.showdown_slot]] = False
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
                 # the mon that just left the slot: both revert to base type on switch-out, and a
                 # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
@@ -1046,6 +1145,14 @@ class _ReplayParser:
             for slot in self.encore_elapsed:
                 if "encore" in self.volatiles.get(slot, ()):
                     self.encore_elapsed[slot] += 1
+            # Wrap (partial-trap) turns-so-far (spec v3 change 6): each turn the partiallytrapped
+            # volatile is publicly present on a slot's active mon, its elapsed-duration counter
+            # advances (same per-|turn| point as the toxic ramp / confusion / encore counters).
+            # Left uncapped in the raw counter; the encode's min(1, elapsed/5) caps the emitted
+            # value at the gen3 5-turn max.
+            for slot in self.wrap_trap_elapsed:
+                if "partiallytrapped" in self.volatiles.get(slot, ()):
+                    self.wrap_trap_elapsed[slot] += 1
         if event_type == "-fail" and len(parts) >= 3:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
@@ -1068,6 +1175,8 @@ class _ReplayParser:
         _update_toxic_stage(parts, self.toxic_stage)
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
+        _update_wrap_trap_elapsed(parts, self.wrap_trap_elapsed)
+        _update_meanlook_trap(parts, self.meanlook_trap)
         _flag_baton_pass(parts, self.pending_baton_pass)
         self._update_induced_sleep(parts, line)
         self._update_stall_counter(parts)
@@ -1405,6 +1514,8 @@ class _ReplayParser:
             toxic_stage=dict(self.toxic_stage),
             confusion_elapsed=dict(self.confusion_elapsed),
             encore_elapsed=dict(self.encore_elapsed),
+            wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
+            meanlook_trap=dict(self.meanlook_trap),
             public_events=tuple(self.public_events),
             public_lines=tuple(self.public_lines),
             weather=self.weather,
@@ -1575,6 +1686,10 @@ def normalize_for_player(
         opponent_confusion_elapsed=int(replay.confusion_elapsed.get(opponent_slot, 0)),
         self_encore_elapsed=int(replay.encore_elapsed.get(showdown_slot, 0)),
         opponent_encore_elapsed=int(replay.encore_elapsed.get(opponent_slot, 0)),
+        self_wrap_trap_elapsed=int(replay.wrap_trap_elapsed.get(showdown_slot, 0)),
+        opponent_wrap_trap_elapsed=int(replay.wrap_trap_elapsed.get(opponent_slot, 0)),
+        self_meanlook_trap=bool(replay.meanlook_trap.get(showdown_slot, False)),
+        opponent_meanlook_trap=bool(replay.meanlook_trap.get(opponent_slot, False)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -1779,6 +1894,8 @@ def observation_from_player_state(
         active_stall_counter=state.self_stall_counter,
         active_confusion_elapsed=state.self_confusion_elapsed,
         active_encore_elapsed=state.self_encore_elapsed,
+        active_wrap_trap_elapsed=state.self_wrap_trap_elapsed,
+        active_meanlook_trap=state.self_meanlook_trap,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
@@ -1808,6 +1925,8 @@ def observation_from_player_state(
         active_stall_counter=state.opponent_stall_counter,
         active_confusion_elapsed=state.opponent_confusion_elapsed,
         active_encore_elapsed=state.opponent_encore_elapsed,
+        active_wrap_trap_elapsed=state.opponent_wrap_trap_elapsed,
+        active_meanlook_trap=state.opponent_meanlook_trap,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -2119,6 +2238,10 @@ _DIRECT_MATERIALIZATION_VOLATILES = frozenset({
 # volatile id, so both arms need this normalization set (audit bug C2). Wrap is the pool's
 # only member; the rest are defensive against set drift.
 _PARTIAL_TRAP_MOVES = frozenset({"wrap", "bind", "clamp", "firespin", "whirlpool", "sandtomb"})
+# Singles slot pairing: the mon in the other seat. Used by the Mean Look / Spider Web move-trap
+# tracker (spec v3 change 8) — the trapper is always the OPPOSING active mon, so when either seat's
+# occupant changes the trap between the two seats ends.
+_OTHER_SLOT = {"p1": "p2", "p2": "p1"}
 # ``|-singlemove|`` volatiles with until-the-mon's-next-move semantics: the sim removes
 # them SILENTLY (onBeforeMove / onMoveAborted, no protocol line), so the parser clears
 # them on the mon's next |move| or |cant| line (audit bug C3). Destiny Bond is the pool's
@@ -2294,6 +2417,65 @@ def _update_encore_elapsed(parts: Sequence[str], encore_elapsed: dict[str, int])
         and _side_condition_identifier(parts[3]) == "encore"
     ):
         encore_elapsed[slot] = 0
+
+
+def _update_wrap_trap_elapsed(parts: Sequence[str], wrap_trap_elapsed: dict[str, int]) -> None:
+    """Reset the Wrap (partial-trap) turns-so-far counter on expiry / faint (spec v3 change 6).
+
+    The per-``|turn|`` advance happens in the parse loop (gated on the public ``partiallytrapped``
+    volatile, mirroring the toxic ramp and the confusion / encore counters). This handles the two
+    RESET lines that are not a switch (which the parse loop resets directly): the partial-trap
+    ``|-end|SLOT|Wrap|[partiallytrapped]`` (the pin wore off, or the vendored sim's silent
+    ``[silent]`` end when the trapper left the field — base ``conditions.ts partiallytrapped.onEnd``
+    emits ``this.add('-end', pokemon, sourceEffect, '[partiallytrapped]')``, where ``sourceEffect``
+    is the MOVE, so ``parts[3]`` is the move NAME like ``Wrap``, NOT the volatile id — the same
+    keying the ``_update_volatiles`` partial-trap arm uses) and ``|faint|SLOT`` (the mon fainted
+    while trapped). The counter is also reset on switch-out/drag in the parse loop, so a stale value
+    can never ride onto a replacement or survive past the volatile.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in wrap_trap_elapsed:
+        return
+    if event_type == "faint":
+        wrap_trap_elapsed[slot] = 0
+    elif (
+        event_type == "-end"
+        and len(parts) >= 4
+        and _side_condition_identifier(parts[3]) in _PARTIAL_TRAP_MOVES
+    ):
+        wrap_trap_elapsed[slot] = 0
+
+
+def _update_meanlook_trap(parts: Sequence[str], meanlook_trap: dict[str, bool]) -> None:
+    """Track the Mean Look / Spider Web move-trap flag per slot (spec v3 change 8).
+
+    SET on ``|-activate|SLOT|trapped`` — the base ``trapped`` volatile's ``onStart`` emits
+    ``this.add('-activate', target, 'trapped')`` with no ``[of]`` and no move prefix, so ``parts[3]``
+    is exactly the volatile id ``trapped``. Gen3 Mean Look / Spider Web are the only movers of this
+    volatile (ability traps use ``onFoeTrapPokemon`` and emit NO ``-activate|trapped``), so the line
+    uniquely marks a move-trap. The trapper is the OPPOSING active mon (singles).
+
+    RESET on ``|faint|SLOT``: the trapped mon fainting clears its own flag, and the fainting mon was
+    the trapper for the other seat (the linked source-side volatile drops when the trapper faints),
+    so BOTH seats clear. Switch/drag resets are handled in the parse loop (the ``trapped`` volatile
+    is ``noCopy``, so it never rides a Baton Pass). There is no ``-end`` line for this volatile (it
+    has no ``onEnd`` and the linked removal is silent), so faint + switch/drag are the only public
+    end signals.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in meanlook_trap:
+        return
+    if event_type == "-activate" and len(parts) >= 4 and _side_condition_identifier(parts[3]) == "trapped":
+        meanlook_trap[slot] = True
+    elif event_type == "faint":
+        meanlook_trap[slot] = False
+        meanlook_trap[_OTHER_SLOT[slot]] = False
 
 
 def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
@@ -2984,6 +3166,7 @@ def _encode_pokemon_tokens(
     active_stall_counter: int = 0,
     active_confusion_elapsed: int = 0,
     active_encore_elapsed: int = 0,
+    active_wrap_trap_elapsed: int = 0,
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
@@ -2993,7 +3176,15 @@ def _encode_pokemon_tokens(
     schema_v3: bool = False,
     tier2_cb_pinned_species: frozenset[str] = frozenset(),
     tier2_investment_pinned: Mapping[str, float] | None = None,
+    active_meanlook_trap: bool = False,
 ) -> None:
+    # Spec v3 change 7: reuse the determinization gender parser (single source of truth for the
+    # ``, M`` / ``, F`` details convention). Imported lazily to avoid a module-load cycle
+    # (determinization imports the observation stack that imports this module) and only when the v3
+    # gender columns actually exist.
+    gender_from_details = None
+    if schema_v3:
+        from .determinization import _gender_from_details as gender_from_details
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
         belief = _belief_for_species(beliefs_by_species, candidate.species)
@@ -3085,6 +3276,17 @@ def _encode_pokemon_tokens(
             if original_hp:
                 _set_numeric(numeric_features[token_index], NUMERIC_BASE_HP, min(1.0, float(original_hp) / 200.0))
         _encode_actual_stats(numeric_features[token_index], candidate.stats)
+        # Spec v3 change 7: per-mon gender on EVERY token, schema >= v3 only. Two 0/1 bits from the
+        # mon's TRUE details (``candidate.details`` — Transform copies species/stats but NOT gender,
+        # so this stays the real mon's sex): male -> (MALE, FEMALE) = (1, 0), female -> (0, 1),
+        # genderless / not-yet-revealed -> (0, 0). Above the v2.2 census, so legacy modes stay
+        # byte-frozen.
+        if schema_v3:
+            gender = gender_from_details(candidate.details)
+            if gender == "M":
+                _set_numeric(numeric_features[token_index], NUMERIC_GENDER_MALE, 1.0)
+            elif gender == "F":
+                _set_numeric(numeric_features[token_index], NUMERIC_GENDER_FEMALE, 1.0)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
             _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
@@ -3116,6 +3318,24 @@ def _encode_pokemon_tokens(
                     NUMERIC_ENCORE_TURNS,
                     min(1.0, active_encore_elapsed / 6.0),
                 )
+            # Spec v3 change 6: Wrap (partial-trap) turns-so-far on the TRAPPED (active) mon's
+            # token, schema >= v3 only. Gen3 partial-trap (Wrap) maxes at 5 turns, so CAP = 5 and
+            # the ramp saturates at 1.0. The column sits above the v2.2 census, so legacy modes stay
+            # byte-frozen; the counter is 0 (unwritten) whenever the active mon is not partially
+            # trapped.
+            if schema_v3 and active_wrap_trap_elapsed:
+                _set_numeric(
+                    numeric_features[token_index],
+                    NUMERIC_WRAP_TRAP_TURNS,
+                    min(1.0, active_wrap_trap_elapsed / 5.0),
+                )
+            # Spec v3 change 8: Mean Look / Spider Web move-trap on the TRAPPED (active) mon's
+            # token, schema >= v3 only — a 0/1 "switch-locked by Mean Look / Spider Web" flag,
+            # DISTINCT from the Wrap partial-trap column above and from the ability-trap signal.
+            # The column sits above the v2.2 census, so legacy modes stay byte-frozen; the bit is
+            # 0 (unwritten) whenever the active mon is not move-trapped.
+            if schema_v3 and active_meanlook_trap:
+                _set_numeric(numeric_features[token_index], NUMERIC_MEANLOOK_TRAP, 1.0)
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")

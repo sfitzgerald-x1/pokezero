@@ -26,6 +26,9 @@ from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
     NUMERIC_CONFUSION_TURNS,
     NUMERIC_ENCORE_TURNS,
+    NUMERIC_GENDER_FEMALE,
+    NUMERIC_GENDER_MALE,
+    NUMERIC_MEANLOOK_TRAP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
     NUMERIC_STALL_COUNTER,
@@ -33,6 +36,7 @@ from pokezero.showdown import (
     NUMERIC_TM2_MISS,
     NUMERIC_TT_FAIL,
     NUMERIC_TT_MISS,
+    NUMERIC_WRAP_TRAP_TURNS,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
     SELF_POKEMON_TOKEN_OFFSET,
@@ -176,6 +180,53 @@ _ENCORE_SELF = [
 ]
 
 
+# ---- change 6: Wrap (partial-trap) turns-so-far. Shuckle is the gen3-randbats pool's SOLE Wrap
+# carrier (1 of 220). Shuckle pins Snorlax with Wrap (|-activate|…|move: Wrap|[of] …, no -start);
+# the trap rides turns 2-3 (elapsed 1, 2) chipping via ``[from] Wrap`` residuals, expires via
+# ``-end … Wrap [partiallytrapped]`` on turn 3, turn 4 clean. Wrap traps the TARGET. ----
+_WRAP_LEADS = [
+    "|player|p1|Alice|",
+    "|player|p2|Bob|",
+    "|switch|p1a: Shuckle|Shuckle, L80|100/100",
+    "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+    "|turn|1",
+]
+_WRAP_RIDE = _WRAP_LEADS + [
+    "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
+    "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
+    "|-damage|p2a: Snorlax|94/100|[from] Wrap",
+    "|upkeep",
+    "|turn|2",
+    "|move|p2a: Snorlax|Body Slam|p1a: Shuckle",
+    "|-damage|p1a: Shuckle|80/100",
+    "|-damage|p2a: Snorlax|88/100|[from] Wrap",
+    "|upkeep",
+    "|turn|3",
+    "|move|p2a: Snorlax|Body Slam|p1a: Shuckle",
+    "|-damage|p1a: Shuckle|60/100",
+    "|-end|p2a: Snorlax|Wrap|[partiallytrapped]",
+    "|upkeep",
+    "|turn|4",
+]
+# p1's OWN mon trapped, with a |request| so the trapped mon lands on a SELF-side token — the
+# reveal-driven opponent token exercises the opponent write path, this the self write path.
+_WRAP_SELF = [
+    "|player|p1|Us|",
+    "|player|p2|Them|",
+    "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+    "|switch|p2a: Shuckle|Shuckle, L80|100/100",
+    "|turn|1",
+    "|move|p2a: Shuckle|Wrap|p1a: Snorlax",
+    "|-activate|p1a: Snorlax|move: Wrap|[of] p2a: Shuckle",
+    "|-damage|p1a: Snorlax|94/100|[from] Wrap",
+    "|upkeep",
+    "|turn|2",
+    '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
+    '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
+    '"details":"Snorlax, L80","condition":"94/100","active":true}]}}',
+]
+
+
 def _through_turn(lines, turn):
     """The log prefix up to and including the ``|turn|<turn>`` decision boundary."""
     return lines[: lines.index(f"|turn|{turn}") + 1]
@@ -197,14 +248,16 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends SEVEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # v3 appends ELEVEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
         # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
-        # change 4 (confusion turns-so-far, +5, #811), and change 5 (encore turns-so-far, +6).
+        # change 4 (confusion turns-so-far, +5, #811), change 5 (encore turns-so-far, +6, #814),
+        # change 6 (Wrap partial-trap turns-so-far, +7), change 7 (the two gender bits, +8/+9),
+        # and change 8 (Mean Look / Spider Web move-trap, +10).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 7,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 11,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 162)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 166)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -214,10 +267,11 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The seven appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # The eleven appended columns start exactly at the v2.2 census end (155) and are pinned in
         # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
-        # confusion-turns(160, #811), encore-turns(161). Every offset +0..+6 (155-161) is
-        # written exactly once.
+        # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162),
+        # gender-male(163), gender-female(164), meanlook-trap(165). Every offset +0..+10 (155-165)
+        # is written exactly once.
         self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
         self.assertEqual(V3_NUMERIC_BASE, 155)
         self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
@@ -229,17 +283,27 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, V3_NUMERIC_BASE + 3)
         self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, 158)
         # Change 3 (consecutive-stall counter, #810) at +4; change 4 (confusion turns-so-far,
-        # #811) at +5; change 5 (encore turns-so-far, this PR) at +6.
+        # #811) at +5; change 5 (encore turns-so-far, #814) at +6; change 6 (Wrap partial-trap
+        # turns-so-far, this PR) at +7.
         self.assertEqual(NUMERIC_STALL_COUNTER, V3_NUMERIC_BASE + 4)
         self.assertEqual(NUMERIC_STALL_COUNTER, 159)
         self.assertEqual(NUMERIC_CONFUSION_TURNS, V3_NUMERIC_BASE + 5)
         self.assertEqual(NUMERIC_CONFUSION_TURNS, 160)
         self.assertEqual(NUMERIC_ENCORE_TURNS, V3_NUMERIC_BASE + 6)
         self.assertEqual(NUMERIC_ENCORE_TURNS, 161)
-        # Width covers through +6; total 162.
+        self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, V3_NUMERIC_BASE + 7)
+        self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, 162)
+        # Change 7 (per-mon gender) at +8/+9; change 8 (Mean Look / Spider Web move-trap) at +10.
+        self.assertEqual(NUMERIC_GENDER_MALE, V3_NUMERIC_BASE + 8)
+        self.assertEqual(NUMERIC_GENDER_MALE, 163)
+        self.assertEqual(NUMERIC_GENDER_FEMALE, V3_NUMERIC_BASE + 9)
+        self.assertEqual(NUMERIC_GENDER_FEMALE, 164)
+        self.assertEqual(NUMERIC_MEANLOOK_TRAP, V3_NUMERIC_BASE + 10)
+        self.assertEqual(NUMERIC_MEANLOOK_TRAP, 165)
+        # Width covers through +10; total 166.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_ENCORE_TURNS + 1,
+            NUMERIC_MEANLOOK_TRAP + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -539,7 +603,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 7)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -709,7 +773,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 7)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -920,7 +984,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 7)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1098,7 +1162,188 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 7)
+            self.assertEqual(len(v3_row), width + 11)
+            self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
+        self.assertEqual(
+            [tuple(row) for row in v2_2.categorical_ids],
+            [tuple(row) for row in v3.categorical_ids],
+        )
+        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+
+
+class WrapTrapElapsedTrackerTest(unittest.TestCase):
+    """Change 6 lifecycle at the public-parser layer (spec acceptance item 6)."""
+
+    def _replay(self, lines):
+        return parse_showdown_replay(lines, battle_id="wrap")
+
+    def test_counter_rises_each_turn_the_volatile_is_present(self) -> None:
+        # 1 turn elapsed at turn 2, 2 at turn 3; the un-trapped side never leaves 0.
+        self.assertEqual(self._replay(_through_turn(_WRAP_RIDE, 2)).wrap_trap_elapsed["p2"], 1)
+        replay3 = self._replay(_through_turn(_WRAP_RIDE, 3))
+        self.assertEqual(replay3.wrap_trap_elapsed["p2"], 2)
+        self.assertEqual(replay3.wrap_trap_elapsed["p1"], 0)
+
+    def test_end_wrap_resets_the_counter(self) -> None:
+        # Turn 4 is past the turn-3 ``-end … Wrap [partiallytrapped]`` expiry.
+        self.assertEqual(self._replay(_through_turn(_WRAP_RIDE, 4)).wrap_trap_elapsed["p2"], 0)
+
+    def test_switch_out_resets_the_counter(self) -> None:
+        # The trapped mon leaving its slot drops the (Baton-Pass-copyable) volatile; a plain switch
+        # additionally guards the parse-loop reset path (drag/faint are the realistic exits).
+        lines = _WRAP_LEADS + [
+            "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
+            "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|100/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
+
+    def test_drag_resets_the_counter(self) -> None:
+        # A phazing |drag| (Whirlwind/Roar) forces the trapped mon out and drops the volatile.
+        lines = _WRAP_LEADS + [
+            "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
+            "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
+            "|upkeep",
+            "|turn|2",
+            "|drag|p2a: Skarmory|Skarmory, L76|100/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
+
+    def test_faint_resets_the_counter(self) -> None:
+        lines = _WRAP_LEADS + [
+            "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
+            "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
+            "|upkeep",
+            "|turn|2",
+            "|faint|p2a: Snorlax",
+            "|upkeep",
+        ]
+        self.assertEqual(self._replay(lines).wrap_trap_elapsed["p2"], 0)
+
+    def test_snapshot_round_trip_preserves_elapsed(self) -> None:
+        replay = self._replay(_through_turn(_WRAP_RIDE, 3))  # mid-trap, elapsed 2
+        self.assertEqual(replay.wrap_trap_elapsed["p2"], 2)
+        resumed = _ReplayParser.from_snapshot(replay)
+        self.assertEqual(resumed.snapshot().wrap_trap_elapsed["p2"], 2)
+        # The reset still fires on the resumed tracker (state, not just the log prefix, carries it).
+        resumed.feed(["|-end|p2a: Snorlax|Wrap|[partiallytrapped]", "|turn|4"])
+        self.assertEqual(resumed.snapshot().wrap_trap_elapsed["p2"], 0)
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class WrapTrapEncodeTest(unittest.TestCase):
+    """Change 6 at the encode layer: the column-pinned rise/reset on the trapped mon's token,
+    the sibling stall/confusion/encore columns staying zero, and the v2.2 byte-identity guard."""
+
+    _STALL_COL = V3_NUMERIC_BASE + 4
+    _CONFUSION_COL = V3_NUMERIC_BASE + 5
+    _ENCORE_COL = V3_NUMERIC_BASE + 6
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="wrap-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
+        observation.validate(spec)
+        return observation
+
+    def _wrap_cells(self, observation):
+        return [
+            (index, row[NUMERIC_WRAP_TRAP_TURNS])
+            for index, row in enumerate(observation.numeric_features)
+            if row[NUMERIC_WRAP_TRAP_TURNS]
+        ]
+
+    def test_column_rises_then_resets_on_the_trapped_opponent_token(self) -> None:
+        for turn, want in ((2, 1 / 5), (3, 2 / 5)):
+            observation = self._encode(
+                self._state(_through_turn(_WRAP_RIDE, turn)), V3_REPLAY_OBSERVATION_SPEC
+            )
+            cells = self._wrap_cells(observation)
+            # Column-position-pinned: exactly ONE token, at the opponent-active slot, in the
+            # wrap-trap column — and the sibling stall (+4), confusion (+5), encore (+6) columns
+            # are untouched.
+            self.assertEqual(len(cells), 1)
+            self.assertEqual(cells[0][0], OPPONENT_POKEMON_TOKEN_OFFSET)
+            self.assertAlmostEqual(cells[0][1], want)
+            self.assertTrue(
+                all(row[self._STALL_COL] == 0.0 for row in observation.numeric_features)
+            )
+            self.assertTrue(
+                all(row[self._CONFUSION_COL] == 0.0 for row in observation.numeric_features)
+            )
+            self.assertTrue(
+                all(row[self._ENCORE_COL] == 0.0 for row in observation.numeric_features)
+            )
+        # Expiry on turn 3 -> the column is empty at turn 4.
+        observation = self._encode(
+            self._state(_through_turn(_WRAP_RIDE, 4)), V3_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertEqual(self._wrap_cells(observation), [])
+
+    def test_column_fills_the_trapped_self_active_token(self) -> None:
+        # The self write path: p1's own trapped Snorlax (via a request) carries the column.
+        observation = self._encode(
+            self._state(_WRAP_SELF, player="p1"), V3_REPLAY_OBSERVATION_SPEC
+        )
+        cells = self._wrap_cells(observation)
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0][0], SELF_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(cells[0][1], 1 / 5)  # 1 turn elapsed
+
+    def test_switch_out_drag_and_faint_zero_the_column(self) -> None:
+        for tail in (
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|drag|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+        ):
+            lines = _WRAP_LEADS + [
+                "|move|p1a: Shuckle|Wrap|p2a: Snorlax",
+                "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Shuckle",
+                "|upkeep",
+                "|turn|2",
+            ] + tail
+            observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
+            self.assertEqual(self._wrap_cells(observation), [])
+
+    def test_v2_2_encode_of_a_wrap_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+        # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the wrap column (2/5), so the
+        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        state = self._state(_through_turn(_WRAP_RIDE, 3))
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+        # The v3 encode is non-vacuous: the wrap-trap column is actually populated.
+        self.assertTrue(any(row[NUMERIC_WRAP_TRAP_TURNS] for row in v3.numeric_features))
+        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        for row_index, (v22_row, v3_row) in enumerate(
+            zip(v2_2.numeric_features, v3.numeric_features)
+        ):
+            self.assertEqual(len(v22_row), width)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],

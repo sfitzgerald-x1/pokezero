@@ -188,6 +188,147 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
   shape change; it sits above the v2.2 census, so every legacy mode stays
   byte-frozen.
 
+## Change 6 — Wrap (partial-trap) turns-so-far (elapsed-duration signal)
+
+Sibling of Changes 4/5: the same per-slot elapsed-duration counter, applied to
+the `partiallytrapped` volatile that Gen 3 binding moves inflict. Wrap is the
+gen3-randbats pool's ONLY partial-trap move and is central to Shuckle's
+pin-and-stall line — it pins the target (no switching) while chipping it 1/16 a
+turn, so a policy that cannot see how many turns the pin has already run cannot
+price how many chip turns remain before the target breaks free. (Offsets `+4` /
+`+5` / `+6` in the v3 numeric block are the consecutive-stall counter
+(`NUMERIC_STALL_COUNTER`, #810), confusion turns-so-far
+(`NUMERIC_CONFUSION_TURNS`, #811), and encore turns-so-far
+(`NUMERIC_ENCORE_TURNS`, #814); this change takes offset `+7`.)
+
+- One numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
+  `wrap_trap_turns` = `min(1, elapsed / 5)`, where `elapsed` is the number of
+  turns the mon has been partially trapped so far. The trap PRESENCE is already
+  the `volatile:partiallytrapped` categorical (`TRACKED_VOLATILES`); this is the
+  turns-so-far counter ONLY (the elapsed clock the presence bit cannot express).
+- **Gen3 mechanic (verified before coding — the base condition's `duration` is
+  the MODERN value and is WRONG for gen3):** the vendored base
+  `data/conditions.ts` `partiallytrapped` declares `duration: 5` with
+  `durationCallback → this.random(5, 7)` = `{5,6}`, which is the Gen 5+ binding
+  duration; **the gen3 mod does NOT override it** (no `partiallytrapped` entry in
+  `data/mods/gen3/conditions.ts`, and no partial-trap move overrides its
+  `condition` in `data/mods/gen3/moves.ts`), so the sim would inherit the modern
+  value — but the authoritative Gen II–IV binding-move mechanic is **2–5 turns**,
+  max **5**. `poke-engine` corroborates that the duration is not an engine fact:
+  it models the trap as a boolean `PokemonVolatileStatus::PARTIALLYTRAPPED` with a
+  flat `maxhp / 16` end-of-turn residual (`src/gen3/generate_instructions.rs`) and
+  **NO duration counter** — the volatile is a set membership, cleared on
+  switch-out, never counted down. So the turn count is unavailable from either
+  engine and MUST come from the PROTOCOL/parser (the public residual/`-end`
+  cadence). We therefore take `CAP = 5` (the gen3 max), so the ramp saturates at
+  `1.0` at the longest possible pin. The raw counter is left uncapped in the
+  parser — mirroring the confusion/encore/toxic ramps — and the encode's
+  `min(1, …)` caps the value. (Unlike confusion/encore, whose hidden
+  move-attempt clock only ticks when the mon actually acts, the partial-trap
+  residual fires every end-of-turn regardless of the trapped mon's action, so the
+  raw counter tracks true elapsed and the cap is purely a saturation/safety
+  bound.)
+- **Reachability:** Wrap is the pool's SOLE partial-trap move, carried by exactly
+  **one** species — Shuckle (from `data/random-battles/gen3/sets.json`, 1 of 220
+  pool species). The column is reachable (it is the Shuckle pin automaton's
+  signal) and is encoded per the owner directive (do NOT gate on incidence).
+- **Public trace / attribution (no hidden state):** the sim never emits a
+  `-start` for partial traps; application is
+  `|-activate|SLOT|move: Wrap|[of] SOURCE` (base `partiallytrapped.onStart`), the
+  per-turn residual is `|-damage|SLOT|…|[from] Wrap`, and expiry is
+  `|-end|SLOT|Wrap|[partiallytrapped]` (`onEnd`) — note the `-end` carries the
+  move NAME (`Wrap`), not the volatile id, exactly as the existing
+  `_update_volatiles` partial-trap arm already handles it. Wrap traps the TARGET
+  (the target cannot switch and takes chip); elapsed (turns-so-far) is public —
+  count decisions since the `-activate` — while the remaining duration is hidden.
+  The `_ReplayParser` per-slot counter advances by 1 on each `|turn|` while the
+  `partiallytrapped` volatile is publicly present on that slot (the same
+  per-`|turn|` advance the `toxic_stage` ramp and Changes 4/5 use), and RESETS to
+  0 on `-end <partial-trap move> [partiallytrapped]`, switch-out, `|drag|`
+  (phazing), or faint. Unlike Encore, `partiallytrapped` IS a Baton-Pass-copied
+  volatile (`_BATON_PASS_TRANSFERRED_VOLATILES`), so — as with confusion — the
+  switch reset is gated on the volatile being absent from the finalized slot set:
+  a plain switch/drag drops the volatile (reset), while a Baton Pass that carried
+  the trap keeps the counter running on the inheritor. (In gen3 the vendored sim
+  also emits a silent `-end` when the TRAPPER leaves the field; the counter
+  follows the public `-end` either way, so it never needs to model the trapper's
+  seat.)
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
+  shape change; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
+## Change 7 — per-mon gender (static public attribute)
+
+Gender is a public fact that was never encoded, yet the search engine already
+conditions on it (Cute Charm infatuation; pool carriers Clefable / Wigglytuff /
+Delcatty). The Layer-3 collision audit flagged this as a policy/search asymmetry:
+the value function sees a coupling the policy is blind to. This change closes it.
+(This is a STATIC per-mon attribute — no `_ReplayParser` counter — so it takes
+the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
+
+- Two 0/1 numeric features on EVERY mon token (self and opponent), schema >= v3
+  only: `gender_male` at `V3_NUMERIC_BASE + 8` and `gender_female` at
+  `V3_NUMERIC_BASE + 9`. male → `(1, 0)`, female → `(0, 1)`, genderless → `(0, 0)`
+  (a two-bit one-hot with an all-zero "genderless/unknown" class — no third
+  column needed).
+- **Source (public only):** SELF gender comes from the request/known set
+  (`candidate.details`); OPPONENT gender from the `details` string Showdown emits
+  on switch-in (`|switch|SLOT|Species, Lxx, M|…`). Both are parsed by the
+  EXISTING `determinization._gender_from_details`, which reads the `, M` / `, F`
+  token (genderless mons carry no gender letter). Reused verbatim (single source
+  of truth for the details convention), imported lazily in the encoder to avoid a
+  module-load cycle.
+- **Opponent pre-reveal = `(0, 0)`:** an opponent mon that has not yet been seen
+  is not in the revealed team, so its token carries no gender bits; the bits
+  appear the moment the switch-in `details` reveal lands. Transform does NOT
+  change gender, so a transformed Ditto keeps its own sex (the bits read
+  `candidate.details`, not the copied identity).
+- Under v2.2 emission the columns do not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
+  so every legacy mode stays byte-frozen.
+
+## Change 8 — Mean Look / Spider Web move-trap
+
+The switch-lock from Mean Look (Misdreavus) and Spider Web (Ariados) is public
+and decision-critical (it is what makes a perish-trap or a slow sweep work), yet
+it had no encoding. It is a DISTINCT mechanic from the Wrap partial-trap (Change
+6): Wrap pins *and* chips 1/16 a turn via the `partiallytrapped` volatile, while
+Mean Look pins with no residual via the `trapped` volatile — and distinct again
+from the trap-ability signal (`NUMERIC_TRAPPER_ALIVE`, Shadow Tag / Arena Trap /
+Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
+
+- One 0/1 numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
+  `meanlook_trap` at `V3_NUMERIC_BASE + 10` = "this mon is switch-locked by an
+  opposing Mean Look / Spider Web."
+- **Gen3 mechanic (verified against the vendored data + poke-engine):** both
+  moves run `target.addVolatile('trapped', source, move, 'trapper')`
+  (`data/moves.ts`; the gen3 mod does not override them). The base
+  `data/conditions.ts` `trapped` volatile is `noCopy` (never Baton-Pass-copied),
+  has an `onStart` that emits `|-activate|SLOT|trapped` (the volatile id, no
+  `[of]`, no move prefix), and has **NO `onEnd`** — so no protocol line marks the
+  trap's end. It is linked to the source's `trapper` volatile: when the trapper
+  leaves the field, `removeLinkedVolatiles` drops the target's `trapped`
+  **silently**. `poke-engine` does not model move-traps at all — its gen3
+  `trapped()` (`src/gen3/state.rs`) covers only LockedMove, `partiallytrapped`,
+  and the trap ABILITIES — so, like the partial-trap counter, this signal is
+  available ONLY from the protocol.
+- **End conditions (gen3, handled in the parser):** the trap ends when (a) the
+  TRAPPED mon leaves its slot (switch / `|drag|` / faint), or (b) the TRAPPER
+  leaves its slot (switch / `|drag|` / faint of the opposing active mon — the
+  linked source-side volatile is what actually drops the trap). The
+  `_ReplayParser` SETS `meanlook_trap[SLOT]` on `|-activate|SLOT|trapped` and
+  clears BOTH seats on any switch/drag (parse loop) or `|faint|` — in singles the
+  trapper is always the opposing active mon, so the two-seat clear is exact.
+  `|-activate|SLOT|trapped` is emitted ONLY by move-traps (ability traps trap at
+  request time via `onFoeTrapPokemon` with no protocol line), keeping this bit
+  cleanly separated from `NUMERIC_TRAPPER_ALIVE`.
+- **Reachability:** Mean Look (Misdreavus, "Staller" set) and Spider Web (Ariados,
+  "Bulky Support" / "Bulky Setup" sets) in `data/random-battles/gen3/sets.json`.
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical**; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -211,6 +352,18 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
 - Change 5 adds one more appended numeric column at `V3_NUMERIC_BASE + 6`
   (`NUMERIC_ENCORE_TURNS`), bumping `V3_NUMERIC_EXTRA` 6 → 7 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 162. The
+  categorical census is unchanged.
+- Change 6 adds one more appended numeric column at `V3_NUMERIC_BASE + 7`
+  (`NUMERIC_WRAP_TRAP_TURNS`), bumping `V3_NUMERIC_EXTRA` 7 → 8 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 163. The
+  categorical census is unchanged.
+- Change 7 adds TWO appended numeric columns at `V3_NUMERIC_BASE + 8`
+  (`NUMERIC_GENDER_MALE`) and `V3_NUMERIC_BASE + 9` (`NUMERIC_GENDER_FEMALE`),
+  bumping `V3_NUMERIC_EXTRA` 8 → 10 so `_V3_NUMERIC_FEATURE_COUNT` and the v3
+  numeric census floor become 165. The categorical census is unchanged.
+- Change 8 adds one more appended numeric column at `V3_NUMERIC_BASE + 10`
+  (`NUMERIC_MEANLOOK_TRAP`), bumping `V3_NUMERIC_EXTRA` 10 → 11 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 166. The
   categorical census is unchanged.
 
 ## Acceptance (tests required)
@@ -237,16 +390,36 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
    `-end Encore`, switch-out, `|drag|`, and faint; the same log's v2.2 encoding
    is byte-identical to before the change (the column does not exist under v2.2);
    snapshot round-trip preserves the elapsed counter.
-6. Existing v2.2 test suites pass untouched.
+6. Wrap partial-trap turns-so-far (change 6): a scripted Shuckle-Wrap game raises
+   the trapped mon's `wrap_trap_turns` column 1/5, 2/5, … under v3, and it resets
+   to 0 on `-end Wrap [partiallytrapped]`, switch-out, `|drag|`, and faint; the
+   same log's v2.2 encoding is byte-identical to before the change (the column
+   does not exist under v2.2); snapshot round-trip preserves the elapsed counter.
+7. Gender (change 7): a male mon encodes `(1, 0)`, a female mon `(0, 1)`, and a
+   genderless mon `(0, 0)` on both the self and opponent tokens under v3; an
+   opponent mon is `(0, 0)` before it is revealed and flips on the switch-in
+   reveal; the same log's v2.2 encoding is byte-identical to before the change
+   (the columns do not exist under v2.2).
+8. Mean Look / Spider Web move-trap (change 8): a scripted Mean Look (or Spider
+   Web) game sets the trapped mon's `meanlook_trap` bit under v3 on `-activate
+   trapped`, and clears it when the trapper switches out, the trapped mon leaves,
+   or either faints; the bit is DISTINCT from the Wrap partial-trap column and the
+   trap-ability signal; the same log's v2.2 encoding is byte-identical to before
+   the change (the column does not exist under v2.2); snapshot round-trip
+   preserves the flag.
+9. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
 The v3 numeric block appends columns above the v2.2 census (155):
 `-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
 the consecutive-stall counter at `+4` (change 3, #810), confusion
-turns-so-far at `+5` (change 4, #811), and encore turns-so-far at `+6`
-(change 5, this PR). With change 5 landed, the v3 numeric feature count is
-**162** (`V3_NUMERIC_BASE + 7`), and every appended column `+0..+6` (155-161)
+turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
+(change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
+this PR), the two gender bits at `+8` / `+9` (change 7, this PR), and the
+Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR).
+With change 8 landed, the v3 numeric feature count is
+**166** (`V3_NUMERIC_BASE + 11`), and every appended column `+0..+10` (155-165)
 is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)
