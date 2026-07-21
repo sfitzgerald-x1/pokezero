@@ -112,6 +112,29 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
         self.assertFalse(ditto.transformed)
         self.assertIsNone(ditto.transform_species)
 
+    def test_transform_flag_resets_when_the_mon_faints(self) -> None:
+        # A fainted Ditto has already reverted in the simulator. The belief token must not retain
+        # the copied target's species, stats, or types while it waits on the bench.
+        lines = [
+            "|start",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            "|switch|p2a: Blissey|Blissey, F|352/352",
+            "|turn|1",
+            "|move|p1a: Ditto|Transform|p2a: Blissey",
+            "|-transform|p1a: Ditto|p2a: Blissey",
+            "|turn|2",
+            "|-damage|p1a: Ditto|0 fnt",
+            "|faint|p1a: Ditto",
+            "|turn|3",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        ditto = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Ditto")
+
+        self.assertFalse(ditto.active)
+        self.assertFalse(ditto.transformed)
+        self.assertIsNone(ditto.transform_species)
+
     def test_random_caller_moves_are_not_recorded_as_revealed(self) -> None:
         # Metronome / Assist / Nature Power invoke a RANDOM move that is NOT part of the caller's set,
         # so the invoked move must not be recorded as revealed. (Sleep Talk is the exception — it can

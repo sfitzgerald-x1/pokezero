@@ -453,6 +453,10 @@ class _IncrementalContextFold:
             hp[side] = 0.0
         elif event_type == "-transform" and side in {"p1", "p2"}:
             transformed[side] = True
+            # Transform copies the target's current public boost stages in Gen 3.
+            target = _slot_from_ident(parts[3]) if len(parts) >= 4 else None
+            if target in {"p1", "p2"}:
+                boosts[side] = dict(boosts[target])
         elif event_type == "-formechange" and side in {"p1", "p2"}:
             # Forecast (Castform): the forme change carries a live typing change.
             type_changed[side] = True

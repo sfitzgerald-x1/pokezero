@@ -212,10 +212,11 @@ def audit_side(acc: Acc, orc: Oracle, obs, team, offset: int, role: str, side: M
         lvl = orc.level_of_mon(m)
         acc.check("level", nf[tok][S.NUMERIC_LEVEL], min(1.0, lvl / 100.0), {**ctx, "lvl": lvl})
 
-        # SPECIES BASE STATS (dex-derived). Transform (Ditto) rewrites the encoded
-        # identity to the COPIED species by design (showdown.py L2339-2352), so the
-        # base/actual stat oracle does not apply -- skip Ditto / any transformed mon.
-        is_transformed = "transform" in vols or sp == "ditto"
+        # SPECIES BASE STATS (dex-derived). A live Transform rewrites the encoded identity
+        # to the copied species by design, so that *active transform state* has no direct
+        # base-stat oracle. A normal or fainted Ditto is still checked: this catches stale
+        # copied identity after the simulator has ended Transform.
+        is_transformed = "transform" in vols
         if not is_transformed:
             bexp = orc.base_stats(sp)
             if bexp:
@@ -232,9 +233,9 @@ def audit_side(acc: Acc, orc: Oracle, obs, team, offset: int, role: str, side: M
                 if v:
                     acc.check(f"actual_stat/{k}", nf[tok][slot], min(1.0, float(v) / 714.0), {**ctx, "stat": k})
 
-        # BOOSTS + TOXIC (active only). Transform (Ditto) copies the target's boosts;
-        # the copied-vs-own boost surface is a Transform artifact, not a defect.
-        if active and not is_transformed:
+        # BOOSTS + TOXIC (active only). Transform also copies the target's public boost
+        # stages, so those remain oracle-checkable even though base stats are not.
+        if active:
             boosts = m.get("boosts") or {}
             for k, slot in BOOST_SLOTS.items():
                 stg = boosts.get(k) or 0
