@@ -329,6 +329,85 @@ Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
   byte-identical**; it sits above the v2.2 census, so every legacy mode stays
   byte-frozen.
 
+## Change 9 — Wish turns-to-land (per-side pending-heal clock)
+
+The v2.2 schema already exposes a per-side **pending-Wish boolean** on the field
+token (`NUMERIC_SELF_WISH_PENDING` = 56, `NUMERIC_OPP_WISH_PENDING` = 57): "a
+Wish is queued to heal this side's slot." That bit says *whether* a Wish is
+in flight but not *when* it lands, and the two are decision-distinct — "the heal
+arrives THIS end-of-turn" licences a sacrificial pivot or an all-out attack that
+"the heal arrives NEXT turn" does not. This change adds the **turns-to-land
+clock** as the sibling of the confusion/encore/Wrap elapsed counters (Changes
+4/5/6), but expressed as turns REMAINING rather than elapsed, and on the field
+token per side (like the sleep-clause pair, Change 2) rather than on a mon token
+— because a Wish is a **per-SIDE slot condition**, not a per-mon volatile. It
+takes the next two contiguous offsets `+11` / `+12` in the v3 numeric block.
+
+- Two numeric features on the FIELD token, schema >= v3 only, on the SAME token as
+  the v2.2 pending bits:
+  - `self_wish_turns` at `V3_NUMERIC_BASE + 11` = `min(1, remaining / 2)`.
+  - `opp_wish_turns` at `V3_NUMERIC_BASE + 12` = the symmetric per-side value.
+
+  where `remaining = 2 - (turn - set_turn)` is the number of turns until the Wish
+  resolves: **2** on the turn it is declared (`set_turn`), **1** on the turn it
+  lands (end of `set_turn + 1`), and 0 (column empty) otherwise. So the column
+  reads `2/2` then `1/2` across a Wish's life and returns to 0 the moment it
+  lands (or when no Wish is pending). This is the SAME `wish_set_turns` tracker
+  the v2.2 pending bit already reads (`_update_wish` in `showdown.py`), re-derived
+  as a remaining-turns clock; it is nonzero on **exactly** the turns the pending
+  bit is set, so the two never disagree about presence.
+- **Gen3 mechanic (verified — the heal is RECIPIENT-based, no engine change):**
+  gen3 Wish is a `slotCondition: 'Wish'` with `duration: 2` that resolves at
+  residual order 7 and heals the RESOLVING active mon's `baseMaxhp / 2`. It is a
+  **per-side slot** condition: the heal lands on whatever mon occupies the slot
+  when it resolves (the "wish-pass" play), scaled to THAT mon's max HP. The
+  engine and the observation materialization are already gen3-correct on the heal
+  amount (`poke-engine` heals the recipient's half-max), so this change adds NO
+  heal-amount column — the landed heal is `½ × the recipient's max HP`, already
+  derivable from that mon's max-HP columns (redundant to encode). The **caster's**
+  max-HP rule is Gen 5+ and is deliberately NOT modelled.
+- **Per-slot, so it survives a wish-pass switch.** `wish_set_turns` is keyed on
+  the SIDE (`p1` / `p2`), not the mon, so the clock persists across a switch
+  within the slot: the mon that Wished can pivot out and the incoming mon reads
+  `self_wish_turns = 1/2` ("the heal lands on ME this turn"). This is the same
+  per-slot semantics the v2.2 pending bit already has.
+- **Reachability:** the Wish move is carried by **16** species in the
+  gen3-randbats pool (`data/random-battles/gen3/sets.json`): Blissey, Jirachi,
+  Vaporeon, Umbreon, Kangaskhan, Togetic, Delcatty, Flareon, Girafarig, Hypno,
+  Lickitung, Minun, Plusle, Spinda, Wigglytuff, Xatu. The column is reachable
+  and encoded per the owner directive (do NOT gate on incidence).
+- **Public trace / attribution (no hidden state):** SET on the `|move|SLOT|Wish`
+  declaration (`wish_set_turns[side] = turn`; a re-declared Wish while one is
+  already pending FAILS in gen3 and does NOT re-arm), CLEARED when the heal lands
+  (`|-heal|SLOT|…|[from] move: Wish` on the slot occupant, end of the next turn).
+  Both are public protocol lines readable by either player, so both sides compute
+  both clocks. Derived ONLY from the public log — no belief-engine state — so this
+  column is gated on the schema alone (not on `masks.exact_state`, which darkens
+  the belief-fed exact-state layer where the v2.2 pending BIT lives). The v2.2
+  pending bits (56/57) are left byte-identical.
+- Under v2.2 emission the columns do not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
+  so every legacy mode stays byte-frozen.
+
+### Belief residual-tag fix (Wish landing heal; #769 pinch-berry class)
+
+A separate correctness fix that ships with this change (belief layer, not the
+observation schema). Wish's landing heal `|-heal|SLOT|…|[from] move: Wish` is an
+END-OF-TURN RESIDUAL heal and, exactly like the Leftovers / Rain Dish residual
+heals already in `belief._RESIDUAL_HP_TAGS`, it must NOT overwrite the
+action-phase HP snapshot (`_hp_after_actions`, gated by
+`_is_action_phase_hp_change`) that the non-proc item pruning reads. This is the
+same mechanism #769 fixed for the Toxic / burn residual DAMAGE tags. Before the
+fix, a Wish landing on a mon that had already fallen to ≤25% during the action
+phase (with no pinch-berry activation) would overwrite the low pre-residual
+snapshot with the healed value, MASKING the action-phase non-proc so the pinch
+variants were left un-pruned; adding `[from] move: Wish` to the residual-tag
+list restores the correct pruning (the snapshot keeps the true action-phase HP,
+so a genuine ≤25% non-proc still rules the pinch variants out even when a Wish
+heal follows in the residual phase) and cannot let a residual Wish heal corrupt
+the pinch-berry (or Leftovers) reasoning. **Ingrain is deliberately NOT added**
+— it has 0 gen3-randbats pool carriers (unreachable).
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -365,6 +444,13 @@ Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
   (`NUMERIC_MEANLOOK_TRAP`), bumping `V3_NUMERIC_EXTRA` 10 → 11 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 166. The
   categorical census is unchanged.
+- Change 9 adds TWO appended numeric columns at `V3_NUMERIC_BASE + 11`
+  (`NUMERIC_SELF_WISH_TURNS`) and `V3_NUMERIC_BASE + 12`
+  (`NUMERIC_OPP_WISH_TURNS`), bumping `V3_NUMERIC_EXTRA` 11 → 13 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 168. The
+  categorical census is unchanged. It also lands a belief-layer fix (append
+  `[from] move: Wish` to `belief._RESIDUAL_HP_TAGS`) that does NOT touch the
+  observation schema.
 
 ## Acceptance (tests required)
 
@@ -407,7 +493,18 @@ Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
    trap-ability signal; the same log's v2.2 encoding is byte-identical to before
    the change (the column does not exist under v2.2); snapshot round-trip
    preserves the flag.
-9. Existing v2.2 test suites pass untouched.
+9. Wish turns-to-land (change 9): a scripted Wish game raises the wishing side's
+   `wish_turns` column on the field token to `2/2` on the declaration turn and
+   `1/2` on the landing turn under v3, and it returns to 0 the turn the Wish lands
+   (and stays 0 when no Wish is pending); both seats symmetric; a wish-pass switch
+   (the wisher pivots out before the Wish resolves) keeps the clock on the side so
+   the incoming mon reads `1/2`; the same log's v2.2 encoding is byte-identical to
+   before the change (the columns do not exist under v2.2) and the v2.2 pending
+   bits 56/57 are unchanged. Belief residual-tag: a Wish landing on a mon that
+   fell to ≤25% during the action phase (no berry eaten) still rules the pinch
+   variants out — the residual Wish heal does not mask the action-phase non-proc
+   (mirrors the #769 pinch-berry class).
+10. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
@@ -417,9 +514,10 @@ the consecutive-stall counter at `+4` (change 3, #810), confusion
 turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
 (change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
 this PR), the two gender bits at `+8` / `+9` (change 7, this PR), and the
-Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR).
-With change 8 landed, the v3 numeric feature count is
-**166** (`V3_NUMERIC_BASE + 11`), and every appended column `+0..+10` (155-165)
+Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR), and the two
+Wish turns-to-land bits at `+11` / `+12` (change 9, this PR).
+With change 9 landed, the v3 numeric feature count is
+**168** (`V3_NUMERIC_BASE + 13`), and every appended column `+0..+12` (155-167)
 is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)
