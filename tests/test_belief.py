@@ -1346,6 +1346,72 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIn("petayaberry", salamence.ruled_out_items)
         self.assertIn("liechiberry", salamence.ruled_out_items)
 
+    def test_wish_landing_heal_does_not_mask_the_action_phase_pinch_non_proc(self) -> None:
+        # #769 pinch-berry class, Wish variant: Wish's landing heal is an END-OF-TURN RESIDUAL
+        # (|-heal|SLOT|…|[from] move: Wish), so — like the Leftovers residual heal — it must NOT
+        # overwrite the action-phase HP snapshot. A mon HIT to <=25% in the action phase without
+        # eating its berry rules the pinch variants out (the berry had its chance to fire); a Wish
+        # heal arriving LATER in the residual phase must not wipe that evidence. Before the
+        # `[from] move: Wish` residual tag, the heal overwrote the low pre-residual snapshot and
+        # MASKED the non-proc, wrongly leaving the pinch variants un-pruned (candidate over-count).
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L76|350/350",
+            "|switch|p2a: Salamence|Salamence, L76|320/320",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Rock Slide|p2a: Salamence",
+            "|-damage|p2a: Salamence|60/320",                     # action-phase to ~19%, no berry
+            "|-heal|p2a: Salamence|220/320|[from] move: Wish",    # residual Wish heal (masks w/o fix)
+            "|upkeep",
+        ])
+        salamence = self.opponent(engine, "Salamence")
+        self.assertIn("salacberry", salamence.ruled_out_items)
+        self.assertIn("petayaberry", salamence.ruled_out_items)
+        self.assertIn("liechiberry", salamence.ruled_out_items)
+
+    def test_wish_landing_heal_after_residual_only_crossing_keeps_the_berry(self) -> None:
+        # Companion to #769 (test_residual_pinch_crossing_keeps_berry_...): a residual-ONLY <=25%
+        # crossing (Toxic, already tagged) leaves the pinch variants un-pruned, and a Wish heal
+        # landing in the SAME residual phase must not change that — the Wish tag keeps the residual
+        # heal off the action-phase snapshot too. Uses the two-Ludicolo Petaya/Leftovers pool.
+        class PinchSetSource:
+            _POOL = (
+                {"item": "Petaya Berry", "item_id": "petayaberry"},
+                {"item": "Leftovers", "item_id": "leftovers"},
+            )
+
+            def summarize(self, *, format_id, species, revealed_moves,
+                          revealed_ability=None, revealed_item=None,
+                          ruled_out_abilities=(), ruled_out_items=()):
+                ruled = {i.lower().replace(" ", "") for i in ruled_out_items}
+                compatible = [v for v in self._POOL if v["item_id"] not in ruled]
+                inconsistent = not compatible
+                variants = compatible or list(self._POOL)
+                return CandidateSetSummary(
+                    species=species,
+                    candidate_count=len(variants),
+                    uncertainty=1.0 if inconsistent else len(variants) / len(self._POOL),
+                    possible_items=tuple(v["item"] for v in variants),
+                    inconsistent=inconsistent,
+                )
+
+        replay = parse_showdown_replay(
+            ["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2",
+             "|switch|p1a: Blissey|Blissey, L80|600/600",
+             "|switch|p2a: Ludicolo|Ludicolo, L78|93/272 tox",
+             "|turn|1",
+             "|-damage|p2a: Ludicolo|42/272 tox|[from] psn",       # residual-only crossing to 15%
+             "|-heal|p2a: Ludicolo|178/272 tox|[from] move: Wish", # residual Wish heal (same phase)
+             "|upkeep"],
+            battle_id="b",
+        )
+        engine = PublicBattleBeliefEngine(set_source=PinchSetSource())
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        ludicolo = self.opponent(engine, "Ludicolo")
+        self.assertNotIn("petayaberry", ludicolo.ruled_out_items)
+        self.assertNotIn("salacberry", ludicolo.ruled_out_items)
+        self.assertNotIn("liechiberry", ludicolo.ruled_out_items)
+
     def test_spikes_chip_counts_as_action_phase_for_leftovers(self) -> None:
         engine = self.engine_from([
             "|switch|p1a: Skarmory|Skarmory, L80|300/300",
