@@ -569,6 +569,45 @@ class V3Traits(unittest.TestCase):
         self.assertEqual(gp.ev["p1"]["cat_struggle"], 1)
 
 
+class ProtectMetric(unittest.TestCase):
+    def test_consecutive_after_success_counts_only_the_repeat(self):
+        gp = parse([
+            "|turn|1", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",   # ok -> chain on
+            "|turn|2", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",   # after success -> counted
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_protect"], 2)
+        self.assertEqual(e["cat_protect_consecutive"], 1)   # only the 2nd
+
+    def test_failed_protect_breaks_the_chain(self):
+        gp = parse([
+            "|turn|1", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",   # ok -> chain on
+            "|turn|2", "|move|p1a: X|Protect|p1a: X", "|-fail|p1a: X",                 # counted, then FAILS
+            "|turn|3", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",   # prev failed -> not counted
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_protect"], 3)
+        self.assertEqual(e["cat_protect_consecutive"], 1)   # only turn 2 (after turn 1's success)
+
+    def test_nonprotect_move_breaks_the_chain(self):
+        gp = parse([
+            "|turn|1", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",
+            "|turn|2", "|move|p1a: X|Tackle|p2a: Y",                                    # non-Protect -> chain off
+            "|turn|3", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",
+        ])
+        self.assertEqual(gp.ev["p1"]["cat_protect_consecutive"], 0)
+
+    def test_switch_breaks_the_chain(self):
+        gp = parse([
+            "|turn|1", "|move|p1a: X|Protect|p1a: X", "|-singleturn|p1a: X|Protect",
+            "|turn|2", "|switch|p1a: Z|Z, M|300/300",                                   # switch -> chain off
+            "|move|p1a: Z|Protect|p1a: Z", "|-singleturn|p1a: Z|Protect",
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["cat_protect"], 2)
+        self.assertEqual(e["cat_protect_consecutive"], 0)
+
+
 class SwitchBehavior(unittest.TestCase):
     def test_immunity_switchin_same_turn_only(self):
         # p1 switches Gengar in; p2's Earthquake that turn is immune -> counts once.

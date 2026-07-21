@@ -219,6 +219,7 @@ TRAJECTORY_CHARTS = [
         ("rest", lambda r: _catrate(r, "cat_rest")),
         ("sleep (excl Yawn)", lambda r: _catrate(r, "cat_sleep")),
         ("knock off", lambda r: _catrate(r, "cat_knockoff")),
+        ("protect/detect", lambda r: _catrate(r, "cat_protect")),
         ("leech seed", lambda r: _catrate(r, "cat_leechseed")),
     ]),
     ("status-inducing moves / seat-game", [
@@ -237,6 +238,7 @@ TRAJECTORY_CHARTS = [
         ("focus punch success %", lambda r: _pct(r.get("focus_punch_success_rate"))),
         ("opp focus punch disrupted %", lambda r: _pct(r.get("opp_focus_punch_disruption_rate"))),
         ("destiny bond success %", lambda r: _pct(r.get("destinybond_success_rate"))),
+        ("protect after successful protect %", lambda r: _pct(r.get("protect_after_success_rate"))),
         ("enemy boom blocked %", lambda r: _pct(r.get("boom_block_rate"))),
     ]),
     ("switch behavior / seat-game", [
