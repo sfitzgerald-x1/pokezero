@@ -152,7 +152,9 @@ def _protocol_census_provenance(
         "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
         "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
         "execution_scope": {
-            "seed_range": {"start": seed_start, "end": seed_start + games - 1, "count": games},
+            "seed_range": (
+                {"start": seed_start, "end": seed_start + games - 1, "count": games} if games else None
+            ),
             "capture_driver": capture_driver,
             "max_decision_rounds": max_decision_rounds,
         },

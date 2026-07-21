@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from pokezero.deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION
 from pokezero.foulplay_collision_capture import (
+    _protocol_census_provenance,
     _resume_protocol_signature_census,
     async_main,
     build_collision_capture_arg_parser,
@@ -27,6 +28,18 @@ from pokezero.policy import RandomLegalPolicy
 
 
 class FoulPlayCollisionCaptureParserTest(unittest.TestCase):
+    def test_zero_game_capture_scope_has_no_invalid_seed_range(self) -> None:
+        provenance = _protocol_census_provenance(
+            source_hash="source-hash",
+            command_arguments=(),
+            seed_start=17,
+            games=0,
+            capture_driver="random-legal",
+            max_decision_rounds=61,
+        )
+
+        self.assertIsNone(provenance["execution_scope"]["seed_range"])
+
     def test_collision_summary_exposes_count_only_protocol_census(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=None,
