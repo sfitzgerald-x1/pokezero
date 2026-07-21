@@ -186,6 +186,12 @@ _SIGNATURE_COVERAGE = (
         handler="-start/-end:perish0..perish3 -> src/pokezero/showdown.py volatile tracker",
         detail="Perish Song counters are the durable decision-state fact; field activation is an announcement.",
     ),
+    ProtocolSignatureCoverage(
+        signature="-mustrecharge",
+        coverage="semantic-alias",
+        handler="cant:recharge -> src/pokezero/transitions.py and src/pokezero/turn_merged.py",
+        detail="The following public cant:recharge action is the model-visible forced-turn fact; this line announces it one turn early.",
+    ),
 )
 
 
