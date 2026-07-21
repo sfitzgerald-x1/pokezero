@@ -27,6 +27,13 @@ fails its terminal validation is **not** audit evidence. It may be retained as
 historical debugging context, but it must not be reported as a clean result or
 used to close a layer.
 
+The final tracked aggregate is generated with
+`scripts/publish_v3_audit_evidence.py`. It validates every terminal input and
+their common provenance tuple, then publishes a whitelist-only summary under
+`docs/audit_artifacts/`. The publisher retains the immutable image digest but
+does not copy private paths, fully qualified image names, or deployment data
+into the public repository.
+
 ## Active Audit Cycle (v5 Source Identity)
 
 The final audit cycle uses source identity schema v5, which hashes the resolved
