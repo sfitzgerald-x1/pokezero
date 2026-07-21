@@ -24,6 +24,7 @@ from pokezero.observation import (
 )
 from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
+    NUMERIC_CONFUSION_TURNS,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
     NUMERIC_STALL_COUNTER,
@@ -36,6 +37,7 @@ from pokezero.showdown import (
     SELF_POKEMON_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
+    V3_NUMERIC_BASE,
     V3_REPLAY_OBSERVATION_SPEC,
     normalize_for_player,
     observation_from_player_state,
@@ -83,6 +85,53 @@ _FAIL_LINES = _LEADS + [
     "|turn|4",
 ]
 
+# ---- change 4: confusion turns-so-far. Signal Beam's 10% secondary is the ONLY gen3-randbats
+# confusion source (venomoth carries it). Snorlax is confused on turn 1; it rides turns 2-3
+# (elapsed 1, 2), snaps out via ``-end`` on turn 3, and turn 4 is clean again. ----
+_CONFUSE_LEADS = [
+    "|player|p1|Alice|",
+    "|player|p2|Bob|",
+    "|switch|p1a: Venomoth|Venomoth, L80|100/100",
+    "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+    "|turn|1",
+]
+_CONFUSE_RIDE = _CONFUSE_LEADS + [
+    "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
+    "|-damage|p2a: Snorlax|80/100",
+    "|-start|p2a: Snorlax|confusion",
+    "|upkeep",
+    "|turn|2",
+    "|-activate|p2a: Snorlax|confusion",
+    "|upkeep",
+    "|turn|3",
+    "|-activate|p2a: Snorlax|confusion",
+    "|-end|p2a: Snorlax|confusion",
+    "|upkeep",
+    "|turn|4",
+]
+# p1's OWN mon confused, with a |request| so the confused mon lands on a SELF-side token — the
+# reveal-driven opponent token exercises the opponent write path, this the self write path.
+_CONFUSE_SELF = [
+    "|player|p1|Us|",
+    "|player|p2|Them|",
+    "|switch|p1a: Snorlax|Snorlax, L80|100/100",
+    "|switch|p2a: Venomoth|Venomoth, L80|100/100",
+    "|turn|1",
+    "|move|p2a: Venomoth|Signal Beam|p1a: Snorlax",
+    "|-damage|p1a: Snorlax|80/100",
+    "|-start|p1a: Snorlax|confusion",
+    "|upkeep",
+    "|turn|2",
+    '|request|{"active":[{"moves":[{"move":"Body Slam","id":"bodyslam"}]}],'
+    '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Snorlax",'
+    '"details":"Snorlax, L80","condition":"80/100","active":true}]}}',
+]
+
+
+def _through_turn(lines, turn):
+    """The log prefix up to and including the ``|turn|<turn>`` decision boundary."""
+    return lines[: lines.index(f"|turn|{turn}") + 1]
+
 
 class SchemaTableTest(unittest.TestCase):
     def test_v3_is_supported_but_not_the_default(self) -> None:
@@ -99,14 +148,15 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
-    def test_v3_widths_append_five_numerics_to_the_v2_2_census(self) -> None:
-        # Change 1/2 added four columns (fail x2, sleep-clause x2); change 3 appends the fifth
-        # (the consecutive-stall counter). v3 is still pre-freeze so the append is legal.
+    def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
+        # v3 appends SIX numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810), and
+        # change 4 (confusion turns-so-far, +5).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 5,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 6,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 160)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 161)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -116,17 +166,24 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The five appended columns start exactly at the v2.2 census end (155) and are pinned
-        # in order: fail(155,156), sleep-clause(157,158), stall-counter(159).
-        self.assertEqual(NUMERIC_TT_FAIL, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
-        self.assertEqual(NUMERIC_TM2_FAIL, NUMERIC_TT_FAIL + 1)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, NUMERIC_TT_FAIL + 2)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, NUMERIC_TT_FAIL + 3)
-        self.assertEqual(NUMERIC_STALL_COUNTER, NUMERIC_TT_FAIL + 4)
+        # The six appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
+        # confusion-turns(160). Every offset +0..+5 (155-160) is written exactly once.
+        self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
+        self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
+        self.assertEqual(NUMERIC_TM2_FAIL, V3_NUMERIC_BASE + 1)
+        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, V3_NUMERIC_BASE + 2)
+        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, V3_NUMERIC_BASE + 3)
+        # Change 3 (consecutive-stall counter, #810) is pinned at +4; change 4
+        # (confusion turns-so-far) at +5.
+        self.assertEqual(NUMERIC_STALL_COUNTER, V3_NUMERIC_BASE + 4)
         self.assertEqual(NUMERIC_STALL_COUNTER, 159)
+        self.assertEqual(NUMERIC_CONFUSION_TURNS, V3_NUMERIC_BASE + 5)
+        self.assertEqual(NUMERIC_CONFUSION_TURNS, 160)
+        # Width covers through +5; total 161.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_STALL_COUNTER + 1,
+            NUMERIC_CONFUSION_TURNS + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -426,7 +483,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 5)
+            self.assertEqual(len(v3_row), width + 6)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -596,7 +653,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 5)
+            self.assertEqual(len(v3_row), width + 6)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -638,6 +695,183 @@ class IncrementalFoldParityTest(unittest.TestCase):
         resumed = FoldState.from_payload(json.loads(canonical))
         self.assertEqual(json.dumps(resumed.to_payload(), sort_keys=True), canonical)
         self.assertEqual(resumed.products().transition_tokens, products.transition_tokens)
+
+
+class ConfusionElapsedTrackerTest(unittest.TestCase):
+    """Change 4 lifecycle at the public-parser layer (spec acceptance item 4)."""
+
+    def _replay(self, lines):
+        return parse_showdown_replay(lines, battle_id="confusion")
+
+    def test_counter_rises_each_turn_the_volatile_is_present(self) -> None:
+        # 1 turn elapsed at turn 2, 2 at turn 3; the un-confused side never leaves 0.
+        self.assertEqual(self._replay(_through_turn(_CONFUSE_RIDE, 2)).confusion_elapsed["p2"], 1)
+        replay3 = self._replay(_through_turn(_CONFUSE_RIDE, 3))
+        self.assertEqual(replay3.confusion_elapsed["p2"], 2)
+        self.assertEqual(replay3.confusion_elapsed["p1"], 0)
+
+    def test_end_confusion_resets_the_counter(self) -> None:
+        # Turn 4 is past the turn-3 ``-end`` snap-out.
+        self.assertEqual(self._replay(_through_turn(_CONFUSE_RIDE, 4)).confusion_elapsed["p2"], 0)
+
+    def test_switch_out_resets_the_counter(self) -> None:
+        lines = _CONFUSE_LEADS + [
+            "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
+            "|-start|p2a: Snorlax|confusion",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|100/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        self.assertEqual(self._replay(lines).confusion_elapsed["p2"], 0)
+
+    def test_faint_resets_the_counter(self) -> None:
+        lines = _CONFUSE_LEADS + [
+            "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
+            "|-start|p2a: Snorlax|confusion",
+            "|upkeep",
+            "|turn|2",
+            "|faint|p2a: Snorlax",
+            "|upkeep",
+        ]
+        self.assertEqual(self._replay(lines).confusion_elapsed["p2"], 0)
+
+    def test_baton_pass_keeps_the_counter_on_the_inheritor(self) -> None:
+        # Confusion is a Baton-Pass-copied volatile, so the switch-out reset is gated on the
+        # volatile being absent: a BP that carried confusion keeps the counter climbing.
+        lines = _CONFUSE_LEADS + [
+            "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
+            "|-start|p2a: Snorlax|confusion",
+            "|upkeep",
+            "|turn|2",
+            "|move|p2a: Snorlax|Baton Pass|p2a: Snorlax",
+            "|switch|p2a: Smeargle|Smeargle, L83|100/100|[from] Baton Pass",
+            "|upkeep",
+            "|turn|3",
+        ]
+        replay = self._replay(lines)
+        self.assertIn("confusion", replay.volatiles["p2"])
+        self.assertEqual(replay.confusion_elapsed["p2"], 2)
+
+    def test_snapshot_round_trip_preserves_elapsed(self) -> None:
+        replay = self._replay(_through_turn(_CONFUSE_RIDE, 3))  # mid-confusion, elapsed 2
+        self.assertEqual(replay.confusion_elapsed["p2"], 2)
+        resumed = _ReplayParser.from_snapshot(replay)
+        self.assertEqual(resumed.snapshot().confusion_elapsed["p2"], 2)
+        # The reset still fires on the resumed tracker (state, not just the log prefix, carries it).
+        resumed.feed(
+            ["|-activate|p2a: Snorlax|confusion", "|-end|p2a: Snorlax|confusion", "|turn|4"]
+        )
+        self.assertEqual(resumed.snapshot().confusion_elapsed["p2"], 0)
+
+
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class ConfusionEncodeTest(unittest.TestCase):
+    """Change 4 at the encode layer: the column-pinned rise/reset on the confused mon's token,
+    the reserved +4 sibling column staying zero, and the v2.2 byte-identity guard."""
+
+    _RESERVED_STALL_COL = V3_NUMERIC_BASE + 4
+
+    @staticmethod
+    def _vocab():
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        return gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+
+    def _state(self, lines, *, player="p1"):
+        replay = parse_showdown_replay(lines, battle_id="confusion-encode")
+        return normalize_for_player(
+            replay,
+            player_id=player,
+            configured_showdown_slot=player,
+            format_id="gen3randombattle",
+            include_turn_merged=True,
+        )
+
+    def _encode(self, state, spec):
+        observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
+        observation.validate(spec)
+        return observation
+
+    def _confusion_cells(self, observation):
+        return [
+            (index, row[NUMERIC_CONFUSION_TURNS])
+            for index, row in enumerate(observation.numeric_features)
+            if row[NUMERIC_CONFUSION_TURNS]
+        ]
+
+    def test_column_rises_then_resets_on_the_confused_opponent_token(self) -> None:
+        from pokezero.showdown import OPPONENT_POKEMON_TOKEN_OFFSET
+
+        for turn, want in ((2, 0.2), (3, 0.4)):
+            observation = self._encode(
+                self._state(_through_turn(_CONFUSE_RIDE, turn)), V3_REPLAY_OBSERVATION_SPEC
+            )
+            cells = self._confusion_cells(observation)
+            # Column-position-pinned: exactly ONE token, at the opponent-active slot, in the
+            # confusion column — and the reserved +4 stall column is untouched.
+            self.assertEqual(len(cells), 1)
+            self.assertEqual(cells[0][0], OPPONENT_POKEMON_TOKEN_OFFSET)
+            self.assertAlmostEqual(cells[0][1], want)
+            self.assertTrue(
+                all(row[self._RESERVED_STALL_COL] == 0.0 for row in observation.numeric_features)
+            )
+        # Snap-out on turn 3 -> the column is empty at turn 4.
+        observation = self._encode(
+            self._state(_through_turn(_CONFUSE_RIDE, 4)), V3_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertEqual(self._confusion_cells(observation), [])
+
+    def test_column_fills_the_confused_self_active_token(self) -> None:
+        # The self write path: p1's own confused Snorlax (via a request) carries the column.
+        observation = self._encode(
+            self._state(_CONFUSE_SELF, player="p1"), V3_REPLAY_OBSERVATION_SPEC
+        )
+        cells = self._confusion_cells(observation)
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0][0], SELF_POKEMON_TOKEN_OFFSET)
+        self.assertAlmostEqual(cells[0][1], 0.2)  # 1 turn elapsed
+
+    def test_switch_out_and_faint_zero_the_column(self) -> None:
+        for tail in (
+            ["|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+            ["|faint|p2a: Snorlax", "|switch|p2a: Skarmory|Skarmory, L76|100/100", "|upkeep", "|turn|3"],
+        ):
+            lines = _CONFUSE_LEADS + [
+                "|move|p1a: Venomoth|Signal Beam|p2a: Snorlax",
+                "|-start|p2a: Snorlax|confusion",
+                "|upkeep",
+                "|turn|2",
+            ] + tail
+            observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
+            self.assertEqual(self._confusion_cells(observation), [])
+
+    def test_v2_2_encode_of_a_confusion_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+        # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the confusion column (0.4), so the
+        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        state = self._state(_through_turn(_CONFUSE_RIDE, 3))
+        v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
+        v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
+        width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
+        # The v3 encode is non-vacuous: the confusion column is actually populated.
+        self.assertTrue(any(row[NUMERIC_CONFUSION_TURNS] for row in v3.numeric_features))
+        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        for row_index, (v22_row, v3_row) in enumerate(
+            zip(v2_2.numeric_features, v3.numeric_features)
+        ):
+            self.assertEqual(len(v22_row), width)
+            self.assertEqual(len(v3_row), width + 6)
+            self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
+        self.assertEqual(
+            [tuple(row) for row in v2_2.categorical_ids],
+            [tuple(row) for row in v3.categorical_ids],
+        )
+        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
+        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
 
 
 if __name__ == "__main__":

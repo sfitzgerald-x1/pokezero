@@ -113,6 +113,41 @@ consecutive successful stall-move uses by that side's currently-active mon:
   numeric census floor go 159 → 160; v2.2 counts untouched. Under v2.2 the
   column does not exist — **v2.2 output stays byte-identical.**
 
+## Change 4 — confusion turns-so-far (elapsed-duration signal)
+
+Owner directive: encode it because it is REACHABLE — do not gate on low
+incidence. (Offset `+4` in the v3 numeric block is the sibling **Change 3 —
+consecutive-stall counter** (`NUMERIC_STALL_COUNTER`, merged in #810); this
+change takes offset `+5`.)
+
+- One numeric feature on the CONFUSED (active) mon's token, schema >= v3 only:
+  `confusion_turns` = `min(1, elapsed / 5)`, where `elapsed` is the number of
+  turns the mon has been confused so far. The confusion PRESENCE is already the
+  `volatile:confusion` categorical (`TRACKED_VOLATILES`); this is the
+  turns-so-far counter ONLY (the elapsed clock the presence bit cannot express).
+- **Gen3 mechanic:** confusion duration is `this.random(2,6)` → `{2,3,4,5}`,
+  max **5** (there is no gen3 duration override), so `CAP = 5` and the ramp
+  saturates at `1.0`. The raw counter is left uncapped in the parser — a mon
+  that is asleep while confused can dwell past 5 real turns without the hidden
+  move-attempt clock ticking — and the encode's `min(1, …)` caps the value.
+- **Reachability:** the ONLY pool source of confusion in gen3 randbats is Signal
+  Beam's 10% secondary (ariados / venomoth / yanma). Rampage moves
+  (outrage / thrash / petaldance) are NOT in the pool, so there is no
+  rampage self-confuse source. Confusion is reachable; the column is not dead.
+- **Public trace / attribution (no hidden state):** `|-start|SLOT|confusion` on
+  application, `|-activate|SLOT|confusion` each confused turn, `|-end|SLOT|
+  confusion` on snap-out. Elapsed (turns-so-far) is public; the remaining
+  duration is hidden. The `_ReplayParser` per-slot counter advances by 1 on each
+  `|turn|` while the `confusion` volatile is publicly present on that slot (the
+  same per-`|turn|` advance the `toxic_stage` ramp uses), and RESETS to 0 on
+  `-end confusion`, switch-out, or faint. Baton Pass copies the confusion
+  volatile, so the reset is gated on the volatile being absent after the switch —
+  a BP that carried confusion keeps the counter running on the inheritor.
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
+  shape change; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -129,6 +164,10 @@ consecutive successful stall-move uses by that side's currently-active mon:
   (`NUMERIC_STALL_COUNTER`), bumping `V3_NUMERIC_EXTRA` 4 → 5 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 160. The
   categorical census is unchanged.
+- Change 4 adds one more appended numeric column at `V3_NUMERIC_BASE + 5`
+  (`NUMERIC_CONFUSION_TURNS`), bumping `V3_NUMERIC_EXTRA` 5 → 6 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 161. The
+  categorical census is unchanged.
 
 ## Acceptance (tests required)
 
@@ -144,7 +183,21 @@ consecutive successful stall-move uses by that side's currently-active mon:
    opponent side symmetric, both seats; snapshot round-trip preserves both
    counters; the v3 column position is pinned; a Protect-heavy log's v2.2
    encoding is byte-identical to before the change.
-4. Existing v2.2 test suites pass untouched.
+4. Confusion turns-so-far (change 4): a scripted Signal-Beam-confusion game
+   raises the confused mon's `confusion_turns` column 1/5, 2/5, … under v3, and
+   it resets to 0 on `-end confusion`, switch-out, and faint; the same log's
+   v2.2 encoding is byte-identical to before the change (the column does not
+   exist under v2.2); snapshot round-trip preserves the elapsed counter.
+5. Existing v2.2 test suites pass untouched.
+
+## Numeric-column accounting
+
+The v3 numeric block appends columns above the v2.2 census (155):
+`-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
+the consecutive-stall counter at `+4` (change 3, #810), and confusion
+turns-so-far at `+5` (change 4, this PR). With both change 3 and change 4
+landed, the v3 numeric feature count is **161** (`V3_NUMERIC_BASE + 6`), and
+every appended column `+0..+5` (155-160) is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)
 
