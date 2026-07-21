@@ -210,6 +210,11 @@ class GameParse:
         self.slept_by = {"p1": set(), "p2": set()}  # opp species this seat move-slept (Sleep Clause set)
         self._move_in_flight = None            # seat whose move is resolving, for -fail attribution
         self._nc_switchin = set()              # seats that switched a Natural Cure mon in this turn
+        # Protect chain: was this seat's immediately-preceding move a *successful* Protect/Detect?
+        # (consecutive Protect has a diminishing success chance in gen3, so repeating after a success
+        # is the risky play we break out.) Reset by any non-Protect move, a failed Protect, or a switch.
+        self.prev_protect_success = {"p1": False, "p2": False}
+        self._protect_pending = None           # seat whose Protect awaits its -singleturn/-fail resolution
 
     def carriers(self, seat, move_id):
         return sum(1 for m in self.movesets.get(seat, []) if move_id in {mid(x) for x in m["moves"]})
@@ -252,6 +257,7 @@ class GameParse:
                     self._close_bd(seat)
                     self._end_tox(seat)   # the outgoing mon's toxic counter resets on switch (gen3)
                     self._end_seed(seat)  # leech seed is cleared on switch — the episode ends here
+                    self.prev_protect_success[seat] = False  # a switch breaks the consecutive-Protect chain
                     self.pending_faint[seat] = False
                     self.active[seat] = sp
                     self.boosts[seat] = defaultdict(int)
@@ -412,6 +418,9 @@ class GameParse:
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and "protect" in mid(a[1]):
                     self.protected[seat] = True   # Protect/Detect succeeded this turn (blocks a boom)
+                    if self._protect_pending == seat:
+                        self.prev_protect_success[seat] = True   # this Protect landed
+                        self._protect_pending = None
             elif tag == "-ability":
                 seat = seat_of(a[0])
                 if seat and len(a) > 1 and mid(a[1]) == INTIMIDATE:
@@ -422,6 +431,10 @@ class GameParse:
                 if self._move_in_flight is not None:
                     self.ev[self._move_in_flight]["move_failed"] += 1
                     self._move_in_flight = None
+                s = seat_of(a[0])
+                if s and self._protect_pending == s:
+                    self.prev_protect_success[s] = False   # this Protect failed (e.g. the consecutive penalty)
+                    self._protect_pending = None
             elif tag == "faint":
                 seat = seat_of(a[0])
                 if seat:
@@ -451,6 +464,7 @@ class GameParse:
                 self._boom_target = None
                 self._nc_switchin = set()
                 self._move_in_flight = None
+                self._protect_pending = None
         # game over: flush any Belly-Drum windows still open (drummer survived to the end) and any
         # toxic episode a still-active mon was in (its peak stage is whatever it reached at game end).
         for s in ("p1", "p2"):
@@ -567,6 +581,15 @@ class GameParse:
             E["aroma_cured"] += sum(1 for s in self.status[seat].values() if s)
         if move == STRUGGLE:
             E["cat_struggle"] += 1       # out of PP on everything (should be very rare)
+        if move in PROTECT_MOVES:
+            E["cat_protect"] += 1
+            if self.prev_protect_success[seat]:
+                # Protect used when the previous move was a *successful* Protect — the risky repeat
+                # (gen3's consecutive-Protect penalty makes the second land far less often).
+                E["cat_protect_consecutive"] += 1
+            self._protect_pending = seat            # its -singleturn (ok) / -fail (failed) resolves it
+        else:
+            self.prev_protect_success[seat] = False  # any non-Protect move breaks the chain
         if move == YAWN:
             E["cat_yawn"] += 1
         if move == WILL_O_WISP:
@@ -681,7 +704,7 @@ def extract(files, lineage=None, milestone=None):
     CATS = {"cat_stat_boost","cat_heal","cat_wish","cat_rest","cat_weather_sun","cat_weather_rain",
             "cat_phaze","cat_spikes","cat_rapidspin_total","cat_toxic","cat_para","cat_sleep","cat_yawn",
             "cat_burn","cat_status_move","cat_knockoff","cat_reversal","cat_bellydrum",
-            "cat_priority","cat_destinybond","cat_aromatherapy",
+            "cat_priority","cat_destinybond","cat_aromatherapy","cat_protect",
             "cat_boom","cat_batonpass","cat_substitute","cat_leechseed","cat_solarbeam","cat_curse"}
     CAT_MOVE = {"cat_stat_boost":STAT_BOOST,"cat_heal":HEAL_NON_REST,"cat_wish":{WISH},"cat_rest":{REST},
         "cat_weather_sun":{k for k,v in WEATHER_PRIMARY.items() if v=="sun"},
@@ -692,7 +715,8 @@ def extract(files, lineage=None, milestone=None):
         "cat_batonpass":{BATON_PASS},"cat_substitute":{SUBSTITUTE},"cat_leechseed":{LEECH_SEED},
         "cat_solarbeam":{SOLAR_BEAM},"cat_curse":{CURSE},"cat_knockoff":{KNOCK_OFF},
         "cat_reversal":REVERSAL_MOVES,"cat_bellydrum":{BELLY_DRUM},
-        "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY}
+        "cat_priority":PRIORITY_MOVES,"cat_destinybond":{DESTINY_BOND},"cat_aromatherapy":AROMATHERAPY,
+        "cat_protect":PROTECT_MOVES}
 
     for g in games:
         gp = GameParse(g.get("movesets", {}))
@@ -739,7 +763,8 @@ def extract(files, lineage=None, milestone=None):
                           "boom_faced","boom_block",
                           # v3-only: sleep-clause, move failures, Aromatherapy cures, Struggle
                           "cat_sleep","sleep_clause_active","move_failed",
-                          "cat_aromatherapy","aroma_cured","cat_struggle"):
+                          "cat_aromatherapy","aroma_cured","cat_struggle",
+                          "cat_protect","cat_protect_consecutive"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -914,6 +939,12 @@ def extract(files, lineage=None, milestone=None):
         # Struggle: total occurrences (should be very rare — everything out of PP).
         "struggle_uses": cat_extra["cat_struggle"],
         "struggle_per_game": round(cat_extra["cat_struggle"] / (n or 1), 5),
+        # Protect/Detect: total uses (also in move_categories, gated), and the fraction thrown right
+        # after a *successful* Protect — the risky repeat gen3's consecutive-Protect penalty punishes.
+        "protect_uses": cat_extra["cat_protect"],
+        "protect_after_success_uses": cat_extra["cat_protect_consecutive"],
+        "protect_after_success_rate": (round(cat_extra["cat_protect_consecutive"] / cat_extra["cat_protect"], 4)
+                                       if cat_extra["cat_protect"] else None),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],
