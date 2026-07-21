@@ -26,6 +26,9 @@ from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
     NUMERIC_CONFUSION_TURNS,
     NUMERIC_ENCORE_TURNS,
+    NUMERIC_GENDER_FEMALE,
+    NUMERIC_GENDER_MALE,
+    NUMERIC_MEANLOOK_TRAP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
     NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
     NUMERIC_STALL_COUNTER,
@@ -245,15 +248,16 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends EIGHT numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
+        # v3 appends ELEVEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
         # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
         # change 4 (confusion turns-so-far, +5, #811), change 5 (encore turns-so-far, +6, #814),
-        # and change 6 (Wrap partial-trap turns-so-far, +7).
+        # change 6 (Wrap partial-trap turns-so-far, +7), change 7 (the two gender bits, +8/+9),
+        # and change 8 (Mean Look / Spider Web move-trap, +10).
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 8,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 11,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 163)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 166)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -263,10 +267,11 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The eight appended columns start exactly at the v2.2 census end (155) and are pinned in
+        # The eleven appended columns start exactly at the v2.2 census end (155) and are pinned in
         # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
-        # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162). Every offset
-        # +0..+7 (155-162) is written exactly once.
+        # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162),
+        # gender-male(163), gender-female(164), meanlook-trap(165). Every offset +0..+10 (155-165)
+        # is written exactly once.
         self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
         self.assertEqual(V3_NUMERIC_BASE, 155)
         self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
@@ -288,10 +293,17 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(NUMERIC_ENCORE_TURNS, 161)
         self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, V3_NUMERIC_BASE + 7)
         self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, 162)
-        # Width covers through +7; total 163.
+        # Change 7 (per-mon gender) at +8/+9; change 8 (Mean Look / Spider Web move-trap) at +10.
+        self.assertEqual(NUMERIC_GENDER_MALE, V3_NUMERIC_BASE + 8)
+        self.assertEqual(NUMERIC_GENDER_MALE, 163)
+        self.assertEqual(NUMERIC_GENDER_FEMALE, V3_NUMERIC_BASE + 9)
+        self.assertEqual(NUMERIC_GENDER_FEMALE, 164)
+        self.assertEqual(NUMERIC_MEANLOOK_TRAP, V3_NUMERIC_BASE + 10)
+        self.assertEqual(NUMERIC_MEANLOOK_TRAP, 165)
+        # Width covers through +10; total 166.
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_WRAP_TRAP_TURNS + 1,
+            NUMERIC_MEANLOOK_TRAP + 1,
         )
 
     def test_cli_choice_maps_to_v3(self) -> None:
@@ -591,7 +603,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 8)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -761,7 +773,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 8)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -972,7 +984,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 8)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1150,7 +1162,7 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 8)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1331,7 +1343,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 8)
+            self.assertEqual(len(v3_row), width + 11)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
