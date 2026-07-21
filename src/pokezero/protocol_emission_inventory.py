@@ -669,6 +669,19 @@ def build_protocol_inventory(
         raise ValueError("unknown observed census kind: " + ", ".join(invalid_census_kinds))
     observed_signatures, observed_sources = load_observed_signatures(observed_paths)
     observed_provenance = load_observed_audit_provenance(observed_paths)
+    observed_counts_by_kind: Counter[str] = Counter()
+    for path, kind in zip(observed_paths, census_kinds, strict=True):
+        counts, _sources = load_observed_signatures((path,))
+        observed_counts_by_kind[kind] += sum(counts.values())
+    learned_policy_status = (
+        "present"
+        if observed_counts_by_kind["learned-selfplay"] > 0
+        else (
+            "empty-learned-v3-census"
+            if "learned-selfplay" in census_kinds
+            else "unavailable-no-trained-v3-checkpoint"
+        )
+    )
     observed_by_tag: Counter[str] = Counter()
     for signature, count in observed_signatures.items():
         observed_by_tag[_signature_tag(signature)] += count
@@ -804,11 +817,15 @@ def build_protocol_inventory(
             "tag_count": len(observed_tags),
             "audit_provenance": observed_provenance,
             "census_input_kinds": [
-                {"kind": kind, "count": census_kinds.count(kind)}
+                {
+                    "kind": kind,
+                    "artifact_count": census_kinds.count(kind),
+                    "observed_signature_count": observed_counts_by_kind[kind],
+                }
                 for kind in sorted(set(census_kinds))
             ],
             "learned_policy_census": {
-                "status": "present" if "learned-selfplay" in census_kinds else "unavailable-no-trained-v3-checkpoint"
+                "status": learned_policy_status
             },
             "signature_coverage": observed_signature_rows,
         },

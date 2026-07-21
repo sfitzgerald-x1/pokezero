@@ -730,6 +730,7 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not isinstance(learned_policy_census, Mapping) or learned_policy_census.get("status") not in {
         "present",
         "unavailable-no-trained-v3-checkpoint",
+        "empty-learned-v3-census",
     }:
         raise ValueError("protocol inventory has an invalid learned-policy census status")
     for label, surface in (("E", engine), ("C", consumed)):
