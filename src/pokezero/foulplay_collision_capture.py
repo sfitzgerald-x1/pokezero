@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
-from typing import Sequence
+import sys
+from typing import Mapping, Sequence
 
+from .audit_provenance import public_repo_commit
+from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION
 from .foulplay_bridge import (
     _config_from_args,
     _remove_optional_argument,
@@ -15,6 +20,10 @@ from .foulplay_bridge import (
     build_arg_parser,
     capture_controlled_foulplay_collision_sketch,
 )
+from .randbat import load_gen3_randbat_source_cached
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_collision_capture_arg_parser() -> argparse.ArgumentParser:
@@ -53,9 +62,93 @@ def build_collision_capture_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resume_protocol_signature_census(
+    *,
+    sketch_path: Path,
+    summary_path: Path | None,
+    expected_provenance: Mapping[str, object],
+    expected_pool_id: str,
+) -> tuple[dict[str, int], tuple[str, ...]]:
+    """Load retry-safe count-only census state from the atomic progress summary.
+
+    A nonempty sketch without a compatible summary cannot be safely resumed:
+    the sketch intentionally omits protocol lines, so recreating its aggregate
+    counts would otherwise silently under- or over-count prior games.
+    """
+
+    if summary_path is None or not summary_path.exists():
+        if sketch_path.exists():
+            raise ValueError(
+                "collision sketch exists without a resumable protocol census summary; "
+                "use a new --out/--summary-out pair rather than publishing incomplete counts"
+            )
+        return {}, ()
+    if not sketch_path.is_file():
+        raise ValueError(
+            "resumable protocol census summary has no matching collision sketch; "
+            "use a new --out/--summary-out pair"
+        )
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read resumable protocol census summary {summary_path}: {exc}") from exc
+    if payload.get("protocol_signature_schema_version") != PROTOCOL_SIGNATURE_SCHEMA_VERSION:
+        raise ValueError(
+            "resumable protocol census summary has an incompatible signature schema; "
+            "use a new --out/--summary-out pair"
+        )
+    provenance = payload.get("audit_provenance")
+    immutable_provenance_fields = (
+        "schema_version",
+        "public_repo_commit",
+        "showdown_source_hash",
+        "observation_schema",
+        "image_digest",
+    )
+    if not isinstance(provenance, Mapping) or any(
+        provenance.get(field) != expected_provenance.get(field) for field in immutable_provenance_fields
+    ):
+        raise ValueError(
+            "resumable protocol census summary has incompatible source, schema, or image provenance; "
+            "use a new --out/--summary-out pair"
+        )
+    counts = payload.get("protocol_signatures")
+    game_ids = payload.get("protocol_signature_game_ids")
+    capture = payload.get("collision_sketch_capture")
+    recorded_sketch_path = capture.get("out") if isinstance(capture, Mapping) else None
+    recorded_pool_id = capture.get("pool_id") if isinstance(capture, Mapping) else None
+    if (
+        not isinstance(counts, Mapping)
+        or not isinstance(game_ids, list)
+        or not isinstance(recorded_sketch_path, str)
+        or Path(recorded_sketch_path).expanduser().resolve() != sketch_path.expanduser().resolve()
+        or recorded_pool_id != expected_pool_id
+    ):
+        raise ValueError(
+            "resumable protocol census summary does not match this sketch or is missing count-only state; "
+            "use a new --out/--summary-out pair"
+        )
+    return dict(counts), tuple(game_ids)
+
+
+def _protocol_census_provenance(*, source_hash: str, command_arguments: Sequence[str]) -> dict[str, object]:
+    """Return the immutable provenance carried by progress and complete summaries."""
+
+    return {
+        "schema_version": "pokezero.protocol-capture-provenance.v1",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "public_repo_commit": public_repo_commit(ROOT),
+        "showdown_source_hash": source_hash,
+        "observation_schema": "pokezero.observation.v3",
+        "image_digest": os.environ.get("POKEZERO_AUDIT_IMAGE_DIGEST", "local-uncontainerized"),
+        "command": [str(Path(__file__).relative_to(ROOT)), *command_arguments],
+    }
+
+
 async def async_main(argv: Sequence[str] | None = None) -> int:
+    command_arguments = list(argv) if argv is not None else list(sys.argv[1:])
     parser = build_collision_capture_arg_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(command_arguments)
     if args.summary_out is not None and args.summary_out.expanduser().resolve() == args.out.expanduser().resolve():
         parser.error("--summary-out must differ from --out so progress cannot replace the collision sketch.")
     if args.showdown_root is None:
@@ -75,9 +168,24 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         if args.observation_schema != "v3":
             parser.error("--capture-driver random-legal requires --observation-schema v3.")
     config = _config_from_args(args, policy_mode="raw")
+    source = load_gen3_randbat_source_cached(config.showdown_root)
+    provenance = _protocol_census_provenance(
+        source_hash=source.metadata.source_hash,
+        command_arguments=command_arguments,
+    )
+    try:
+        initial_protocol_signatures, initial_protocol_signature_game_ids = _resume_protocol_signature_census(
+            sketch_path=args.out,
+            summary_path=args.summary_out,
+            expected_provenance=provenance,
+            expected_pool_id=args.pool_id,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     def capture_progress(payload: dict) -> None:
         if args.summary_out is not None:
+            payload["audit_provenance"] = provenance
             _write_json(args.summary_out, payload)
 
     result = await capture_controlled_foulplay_collision_sketch(
@@ -85,8 +193,16 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         out_path=args.out,
         pool_id=args.pool_id,
         capture_progress_callback=capture_progress,
+        initial_protocol_signatures=initial_protocol_signatures,
+        initial_protocol_signature_game_ids=initial_protocol_signature_game_ids,
     )
     payload = result.to_dict()
+    if (
+        result.observation_schema_version is not None
+        and result.observation_schema_version != provenance["observation_schema"]
+    ):
+        raise RuntimeError("collision sketch capture observation schema disagrees with its provenance")
+    payload["audit_provenance"] = provenance
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
         print(f"controlled_foulplay_collision_capture_summary: {args.summary_out}")
