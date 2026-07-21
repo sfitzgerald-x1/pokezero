@@ -619,6 +619,15 @@ class ShowdownReplayState:
     # turns (encoded ``min(1, elapsed/5)``); the raw counter is uncapped (a mon asleep while
     # confused can dwell past 5). Derived ONLY from public protocol lines.
     confusion_elapsed: Mapping[str, int]
+    # Encore turns-so-far per slot (spec v3 change 5, docs/observation_v3_spec.md): the public
+    # elapsed-duration counter of the active mon's ``encore`` volatile. Advances by 1 on each
+    # ``|turn|`` while the volatile is present (like the toxic ramp / confusion counter), resets
+    # to 0 on ``-end Encore`` / switch-out / drag / faint. Gen3 Encore runs the gen3 mod override
+    # ``durationCallback() { return this.random(3,7) }`` = 3..6 turns (encoded ``min(1, elapsed/6)``,
+    # CAP 6); the raw counter is uncapped (a mon asleep while encored can dwell past 6). Encore is
+    # ``noCopy: true`` (not Baton-Pass-copied), so it always drops on switch. Derived ONLY from
+    # public protocol lines.
+    encore_elapsed: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -771,6 +780,12 @@ class PlayerRelativeBattleState:
     # min(1, elapsed/5) (gen3 CAP = 5). 0 when the active mon is not confused.
     self_confusion_elapsed: int = 0
     opponent_confusion_elapsed: int = 0
+    # ---- spec v3 change 5: encore turns-so-far (docs/observation_v3_spec.md). Per-side public
+    # elapsed-duration counter for the ACTIVE mon's encore volatile, from the _ReplayParser
+    # tracker; encoded on the encored mon's token under schema >= v3 only as min(1, elapsed/6)
+    # (gen3 CAP = 6). 0 when the active mon is not encored.
+    self_encore_elapsed: int = 0
+    opponent_encore_elapsed: int = 0
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -805,6 +820,8 @@ class _ReplayParser:
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
         # Confusion turns-so-far per slot (spec v3 change 4). See ShowdownReplayState.confusion_elapsed.
         self.confusion_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
+        # Encore turns-so-far per slot (spec v3 change 5). See ShowdownReplayState.encore_elapsed.
+        self.encore_elapsed: dict[str, int] = {"p1": 0, "p2": 0}
         self.pending_baton_pass: set[str] = set()
         self.public_events: list[ShowdownPublicEvent] = []
         self.public_lines: list[str] = []
@@ -855,6 +872,9 @@ class _ReplayParser:
         parser.toxic_stage = {slot: int(snapshot.toxic_stage.get(slot, 0)) for slot in ("p1", "p2")}
         parser.confusion_elapsed = {
             slot: int(snapshot.confusion_elapsed.get(slot, 0)) for slot in ("p1", "p2")
+        }
+        parser.encore_elapsed = {
+            slot: int(snapshot.encore_elapsed.get(slot, 0)) for slot in ("p1", "p2")
         }
         parser.public_events = list(snapshot.public_events)
         parser.public_lines = list(snapshot.public_lines)
@@ -972,6 +992,12 @@ class _ReplayParser:
                 # so gate the reset on the volatile being absent from the finalized slot set.
                 if "confusion" not in self.volatiles[pokemon.showdown_slot]:
                     self.confusion_elapsed[pokemon.showdown_slot] = 0
+                # Encore turns-so-far (spec v3 change 5) belong to the mon that just left. Encore is
+                # ``noCopy: true`` (not carried by Baton Pass), so the volatile is always absent from
+                # the finalized slot set after a switch/drag and this reset is unconditional; the
+                # volatile-absence gate is kept parallel to the confusion reset for consistency.
+                if "encore" not in self.volatiles[pokemon.showdown_slot]:
+                    self.encore_elapsed[pokemon.showdown_slot] = 0
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
                 # the mon that just left the slot: both revert to base type on switch-out, and a
                 # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
@@ -1005,6 +1031,13 @@ class _ReplayParser:
             for slot in self.confusion_elapsed:
                 if "confusion" in self.volatiles.get(slot, ()):
                     self.confusion_elapsed[slot] += 1
+            # Encore turns-so-far (spec v3 change 5): each turn the encore volatile is publicly
+            # present on a slot's active mon, its elapsed-duration counter advances (same per-|turn|
+            # point as the toxic ramp / confusion counter). Left uncapped in the raw counter; the
+            # encode's min(1, elapsed/6) caps the emitted value at the gen3 6-turn max.
+            for slot in self.encore_elapsed:
+                if "encore" in self.volatiles.get(slot, ()):
+                    self.encore_elapsed[slot] += 1
         if event_type == "-fail" and len(parts) >= 3:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
@@ -1026,6 +1059,7 @@ class _ReplayParser:
         _update_future_sight(parts, self.future_sight, self.turn_number)
         _update_toxic_stage(parts, self.toxic_stage)
         _update_confusion_elapsed(parts, self.confusion_elapsed)
+        _update_encore_elapsed(parts, self.encore_elapsed)
         _flag_baton_pass(parts, self.pending_baton_pass)
         self._update_induced_sleep(parts, line)
         self._update_stall_counter(parts)
@@ -1362,6 +1396,7 @@ class _ReplayParser:
             future_sight=dict(self.future_sight),
             toxic_stage=dict(self.toxic_stage),
             confusion_elapsed=dict(self.confusion_elapsed),
+            encore_elapsed=dict(self.encore_elapsed),
             public_events=tuple(self.public_events),
             public_lines=tuple(self.public_lines),
             weather=self.weather,
@@ -1530,6 +1565,8 @@ def normalize_for_player(
         opponent_toxic_stage=int(replay.toxic_stage.get(opponent_slot, 0)),
         self_confusion_elapsed=int(replay.confusion_elapsed.get(showdown_slot, 0)),
         opponent_confusion_elapsed=int(replay.confusion_elapsed.get(opponent_slot, 0)),
+        self_encore_elapsed=int(replay.encore_elapsed.get(showdown_slot, 0)),
+        opponent_encore_elapsed=int(replay.encore_elapsed.get(opponent_slot, 0)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -2220,6 +2257,33 @@ def _update_confusion_elapsed(parts: Sequence[str], confusion_elapsed: dict[str,
         and _side_condition_identifier(parts[3]) == "confusion"
     ):
         confusion_elapsed[slot] = 0
+
+
+def _update_encore_elapsed(parts: Sequence[str], encore_elapsed: dict[str, int]) -> None:
+    """Reset the encore turns-so-far counter on expiry / faint (spec v3 change 5).
+
+    The per-``|turn|`` advance happens in the parse loop (gated on the public ``encore``
+    volatile, mirroring the toxic ramp and the confusion counter). This handles the two RESET
+    lines that are not a switch (which the parse loop resets directly): ``|-end|SLOT|Encore``
+    (the lock wore off — vendored gen3 ``encore.condition.onEnd`` emits ``this.add('-end',
+    target, 'Encore')``) and ``|faint|SLOT`` (the mon fainted while encored). The counter is also
+    reset on switch-out/drag in the parse loop (Encore is ``noCopy: true``, so the volatile always
+    clears), so a stale value can never ride onto a replacement or survive past the volatile.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in encore_elapsed:
+        return
+    if event_type == "faint":
+        encore_elapsed[slot] = 0
+    elif (
+        event_type == "-end"
+        and len(parts) >= 4
+        and _side_condition_identifier(parts[3]) == "encore"
+    ):
+        encore_elapsed[slot] = 0
 
 
 def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
