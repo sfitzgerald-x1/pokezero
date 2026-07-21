@@ -39,6 +39,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--showdown-root", type=Path, required=True)
     parser.add_argument("--observed-audit", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--observed-kind",
+        choices=("fixture", "fixed-opponent", "learned-selfplay"),
+        action="append",
+        default=[],
+        help="Public provenance class for the corresponding --observed-audit, in the same order.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--observation-schema",
@@ -56,6 +63,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         showdown_root=args.showdown_root,
         public_root=ROOT,
         observed_audits=args.observed_audit,
+        observed_census_kinds=args.observed_kind,
     )
     run_provenance = {
         "public_repo_commit": public_repo_commit(ROOT),

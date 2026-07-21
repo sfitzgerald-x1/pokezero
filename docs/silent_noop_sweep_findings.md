@@ -18,7 +18,7 @@ Every completed row below must link to a durable aggregate artifact and carry:
 | Public-repository commit | Pins encoder, belief, parser, and audit code. |
 | Showdown/engine source hash | Pins the reachable Gen 3 universe and simulator behavior. |
 | Observation schema | Must be `pokezero.observation.v3` for dynamic lanes. |
-| Protocol-signature census schema (E/O/C only) | Must be `pokezero.protocol-signature-census.v2` for artifacts consumed by the E/O/C differential. |
+| Protocol-signature census schema (E/O/C only) | Must be `pokezero.protocol-signature-census.v2` for observed signatures and `pokezero.protocol-emission-inventory.v3` for the canonical E/C differential. |
 | Immutable image digest | Pins the runtime and bundled dependencies. |
 | Command, seed/shard range, and completion time | Makes the result reproducible and scoped. |
 
@@ -52,6 +52,16 @@ terminal aggregate is retained as diagnostic evidence while the canonical
 inventory, collision-hydration, and v6 engine-source contracts are hardened. A
 rebuilt v6 wave after those contracts land is required before the schema-freeze
 gate can close.
+
+The replacement inventory is canonical-signature based: it distinguishes
+payload-sensitive engine emissions and consumer patterns such as
+`-activate:<effect>` and `cant:<reason>`, and it records dynamic or
+unparseable source calls as unresolved evidence rather than silently reducing
+them to a tag. A terminal inventory can be `clean` only when every tag and
+canonical differential is resolved, both static surfaces are complete, and a
+provenanced learned-v3 self-play O-census is present. Until then its terminal
+status is `needs-triage`, even if fixture and fixed-opponent capture rows are
+otherwise clean.
 
 No trained v3 checkpoint exists yet. The learned-policy production-self-play
 O-census is therefore deliberately **not** included in this wave: using a
@@ -218,8 +228,8 @@ The schema-freeze recommendation is published only after every current-cycle
 layer above has a validated artifact or an evidence-based limitation, every
 candidate has a verdict, and all `ADD` candidates are grouped into one reviewed
 implementation proposal. The remaining open gates are canonical E/O/C
-enumeration with verdicts for all E-O/C-E rows, hydrated 100k collision
-evidence, the learned-policy O-census after a v3 checkpoint exists, and any
-resulting focused harm probes. A clean layer is recorded as a completed row
-with its full provenance; an empty table alone is never evidence of a clean
+enumeration with verdicts for all tag and signature E-O/C-E rows, hydrated 100k
+collision evidence, the learned-policy O-census after a v3 checkpoint exists,
+and any resulting focused harm probes. A clean layer is recorded as a completed
+row with its full provenance; an empty table alone is never evidence of a clean
 audit.

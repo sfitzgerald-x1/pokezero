@@ -694,7 +694,7 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     _require_schema(complete, "pokezero.protocol-inventory-job.v1", label="protocol inventory terminal aggregate")
     _require_terminal_status(complete, label="protocol inventory terminal aggregate")
     inventory = _read_json(inventory_path)
-    _require_schema(inventory, "pokezero.protocol-emission-inventory.v2", label="protocol inventory")
+    _require_schema(inventory, "pokezero.protocol-emission-inventory.v3", label="protocol inventory")
     provenance = _public_provenance(inventory.get("audit_provenance"), label="protocol inventory")
     observed = inventory.get("observed")
     if not isinstance(observed, Mapping):
@@ -725,6 +725,15 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     consumed = inventory.get("consumer_dispatch")
     if not all(isinstance(value, Mapping) for value in (engine, observed, consumed)):
         raise ValueError("protocol inventory is missing E/O/C counts")
+    learned_policy_census = observed.get("learned_policy_census")
+    if not isinstance(learned_policy_census, Mapping) or learned_policy_census.get("status") not in {
+        "present",
+        "unavailable-no-trained-v3-checkpoint",
+    }:
+        raise ValueError("protocol inventory has an invalid learned-policy census status")
+    for label, surface in (("E", engine), ("C", consumed)):
+        if not isinstance(surface.get("canonical_complete"), bool):
+            raise ValueError(f"protocol inventory {label} canonical completeness is missing")
     terminal_counts = (
         _require_nonnegative_int(complete.get("observed_tag_count"), label="inventory terminal observed_tag_count"),
         _require_nonnegative_int(
@@ -734,11 +743,21 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             complete.get("observed_but_unconsumed_unclassified_count"),
             label="inventory terminal observed_but_unconsumed_unclassified_count",
         ),
+        _require_nonnegative_int(
+            complete.get("unresolved_engine_emission_count"),
+            label="inventory terminal unresolved_engine_emission_count",
+        ),
+        _require_nonnegative_int(
+            complete.get("unresolved_consumer_dispatch_count"),
+            label="inventory terminal unresolved_consumer_dispatch_count",
+        ),
     )
     inventory_counts = (
         _require_nonnegative_int(observed.get("tag_count"), label="O tag_count"),
         _differential_count(differential, "observed_but_unconsumed"),
         _differential_count(differential, "observed_but_unconsumed_unclassified"),
+        _require_nonnegative_int(engine.get("unresolved_emission_count"), label="E unresolved_emission_count"),
+        _require_nonnegative_int(consumed.get("unresolved_dispatch_count"), label="C unresolved_dispatch_count"),
     )
     if terminal_counts != inventory_counts:
         raise ValueError("protocol inventory terminal aggregate differs from its inventory artifact")
@@ -747,6 +766,17 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     )
     emittable_but_unobserved_count = _differential_count(differential, "emittable_but_unobserved")
     consumer_not_emittable_count = _differential_count(differential, "consumer_not_emittable")
+    canonical_gap_counts = {
+        key: _differential_count(differential, key)
+        for key in (
+            "emittable_signatures_without_consumer",
+            "emittable_signatures_but_unobserved",
+            "observed_signatures_not_statically_emittable",
+            "observed_signatures_with_unresolved_engine_source",
+            "consumer_exact_signatures_not_statically_emittable",
+            "consumer_exact_signatures_with_unresolved_engine_source",
+        )
+    }
     # Every E/O/C delta needs either a fixture/reachability verdict or a stale
     # handler disposition before the inventory can call itself clean. A
     # signature with a semantic handler is not enough to waive an unobserved
@@ -757,6 +787,10 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             semantic_coverage_gap_count == 0
             and emittable_but_unobserved_count == 0
             and consumer_not_emittable_count == 0
+            and all(count == 0 for count in canonical_gap_counts.values())
+            and engine["canonical_complete"]
+            and consumed["canonical_complete"]
+            and learned_policy_census["status"] == "present"
         ),
         label="protocol inventory terminal aggregate",
     )
@@ -771,6 +805,10 @@ def _inventory(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "observed_signatures_without_semantic_coverage_count": semantic_coverage_gap_count,
         "emittable_but_unobserved_count": emittable_but_unobserved_count,
         "consumer_not_emittable_count": consumer_not_emittable_count,
+        "unresolved_engine_emission_count": inventory_counts[3],
+        "unresolved_consumer_dispatch_count": inventory_counts[4],
+        "canonical_differential_counts": canonical_gap_counts,
+        "learned_policy_census_status": learned_policy_census["status"],
         "command_run": provenance,
     }, [provenance]
 

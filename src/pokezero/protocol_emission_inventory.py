@@ -44,6 +44,7 @@ _CONSUMER_RELATIVE_PATHS = (
 _ADD_CALL_START = re.compile(r"(?:\bthis(?:\.battle)?|\bbattle)\.add\s*\(")
 _PROTOCOL_TAG = re.compile(r"^-?[a-z][a-z0-9:-]*$")
 _TYPESCRIPT_STRING = re.compile(r"^\s*(['\"])(?P<value>(?:\\.|(?!\1).)*)\1\s*$", re.DOTALL)
+_OBSERVED_CENSUS_KINDS = frozenset({"fixture", "fixed-opponent", "learned-selfplay"})
 
 
 @dataclass(frozen=True)
@@ -650,6 +651,7 @@ def build_protocol_inventory(
     showdown_root: Path | str,
     public_root: Path | str,
     observed_audits: Sequence[Path | str] = (),
+    observed_census_kinds: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build the E/O/C differential with source-level evidence and limitations."""
 
@@ -659,6 +661,12 @@ def build_protocol_inventory(
     consumers = discover_consumer_dispatches(public_root)
     consumer_signatures, unresolved_consumers = _canonical_consumer_inventory(consumers)
     observed_paths = tuple(observed_audits)
+    if observed_census_kinds and len(observed_census_kinds) != len(observed_paths):
+        raise ValueError("observed census kinds must have one entry per observed audit")
+    census_kinds = tuple(observed_census_kinds) if observed_census_kinds else ("fixture",) * len(observed_paths)
+    invalid_census_kinds = sorted(set(census_kinds) - _OBSERVED_CENSUS_KINDS)
+    if invalid_census_kinds:
+        raise ValueError("unknown observed census kind: " + ", ".join(invalid_census_kinds))
     observed_signatures, observed_sources = load_observed_signatures(observed_paths)
     observed_provenance = load_observed_audit_provenance(observed_paths)
     observed_by_tag: Counter[str] = Counter()
@@ -725,7 +733,7 @@ def build_protocol_inventory(
             if row["tag"] not in consumer_tags:
                 observed_unconsumed_unclassified.append(row)
     return {
-        "schema_version": "pokezero.protocol-emission-inventory.v2",
+        "schema_version": "pokezero.protocol-emission-inventory.v3",
         "engine_emittable": {
             "tags": [
                 {
@@ -795,6 +803,13 @@ def build_protocol_inventory(
             "signature_count": len(observed_signatures),
             "tag_count": len(observed_tags),
             "audit_provenance": observed_provenance,
+            "census_input_kinds": [
+                {"kind": kind, "count": census_kinds.count(kind)}
+                for kind in sorted(set(census_kinds))
+            ],
+            "learned_policy_census": {
+                "status": "present" if "learned-selfplay" in census_kinds else "unavailable-no-trained-v3-checkpoint"
+            },
             "signature_coverage": observed_signature_rows,
         },
         "differential": {

@@ -141,6 +141,17 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertIn("-activate:bide", mismatch)
         self.assertNotIn("cant:slp", mismatch)
 
+    def test_observed_census_kinds_require_a_one_to_one_public_provenance_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            showdown, public = self._fixture_roots(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "one entry per observed audit"):
+                build_protocol_inventory(
+                    showdown_root=showdown,
+                    public_root=public,
+                    observed_audits=(Path("fixture.json"),),
+                    observed_census_kinds=("fixture", "learned-selfplay"),
+                )
+
     def test_dynamic_tag_is_reported_without_source_expression(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
