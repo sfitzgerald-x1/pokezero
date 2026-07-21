@@ -1079,7 +1079,7 @@ def _normalize_id(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
-_SOURCE_CACHE: dict[Path, "Gen3RandbatSource"] = {}
+_SOURCE_CACHE: dict[tuple[Path, tuple[tuple[str, int, int], ...]], "Gen3RandbatSource"] = {}
 _SOURCE_CACHE_LOCK = threading.Lock()
 
 
@@ -1089,12 +1089,43 @@ def load_gen3_randbat_source_cached(showdown_root: Path | str) -> "Gen3RandbatSo
     The source is immutable and heavy to build (it enumerates every species' candidate set
     universe), and belief engines share it read-only across battles (see ``resolved_player_view``).
     A collector creates one env per battle, so without caching each would rebuild the universe;
-    this mirrors ``load_showdown_dex_cached`` so the cost is paid once per (root, process)."""
+    this mirrors ``load_showdown_dex_cached`` so the cost is paid once per stable Showdown
+    runtime. The cache key includes a cheap stat manifest for every built module that can alter
+    the resolved Gen 3 Dex metadata, so rebuilding the same checkout cannot reuse an old
+    materialized universe or provenance hash within a long-lived worker process."""
     root = Path(showdown_root).expanduser().resolve()
+    cache_key = (root, _showdown_runtime_input_stamp(root))
     with _SOURCE_CACHE_LOCK:
-        cached = _SOURCE_CACHE.get(root)
+        cached = _SOURCE_CACHE.get(cache_key)
         if cached is not None:
             return cached
     loaded = Gen3RandbatSource.from_showdown_root(root, use_cache=True)
     with _SOURCE_CACHE_LOCK:
-        return _SOURCE_CACHE.setdefault(root, loaded)
+        return _SOURCE_CACHE.setdefault(cache_key, loaded)
+
+
+def _showdown_runtime_input_stamp(root: Path) -> tuple[tuple[str, int, int], ...]:
+    """Return the built source inputs whose changes can affect resolved Dex metadata.
+
+    ``_source_hash`` remains the authoritative content identity embedded in artifacts. This
+    manifest only invalidates the process-local object cache without repeatedly launching Node or
+    re-enumerating the randbat universe. The resolved-Dex loader imports from ``dist/sim`` and
+    ``dist/data``; the raw randbat inputs are included separately because they live outside those
+    built directories.
+    """
+
+    explicit_paths = (
+        root / "data" / "random-battles" / "gen3" / "sets.json",
+        root / "data" / "random-battles" / "gen3" / "teams.ts",
+        root / "dist" / "data" / "random-battles" / "gen3" / "teams.js",
+    )
+    runtime_paths: list[Path] = [path for path in explicit_paths if path.is_file()]
+    for directory in (root / "dist" / "sim", root / "dist" / "data"):
+        if directory.is_dir():
+            runtime_paths.extend(path for path in directory.rglob("*") if path.is_file())
+
+    stamp: list[tuple[str, int, int]] = []
+    for path in sorted(set(runtime_paths), key=lambda item: str(item)):
+        stat = path.stat()
+        stamp.append((str(path.relative_to(root)), stat.st_mtime_ns, stat.st_size))
+    return tuple(stamp)
