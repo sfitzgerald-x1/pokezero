@@ -44,7 +44,7 @@ metadata inputs, so a matching v4 hash could still describe a different
 universe. The v5 Jobs will write the only evidence eligible to close this
 schema-freeze gate.
 
-The immutable final v5 execution boundary is public commit
+The immutable source-and-observation boundary is public commit
 `a61ee3e710965fa114cf4889cbe33be09026ff34` (#820). It includes the v3 parser
 and encoder additions for consecutive stall state, confusion turns-so-far,
 Encore turns-so-far, Wrap elapsed turns, per-mon gender, Mean Look / Spider
@@ -52,10 +52,11 @@ Web trapping, and the per-side Wish turns-to-land clock. Its numeric width is
 therefore **168**. The Wish repair also keeps a landing Wish heal out of the
 belief layer's action-phase HP snapshot, so it cannot mask a pinch-item
 non-proc. The first v5 wave from this source boundary is retained as diagnostic
-evidence only. Follow-up audit-contract hardening makes protocol backing
+evidence only. Follow-up audit-contract hardening in public commit
+`250bdf5c533f44087c55aadfde28d50695092bf4` (#822) makes protocol backing
 entity-specific in the silent-mutation lane and hashes collision numerics at
-the model's float32 boundary, so a replacement wave from the post-hardening
-public revision is required before any clean result can close this gate. The
+the model's float32 boundary. The replacement wave from that post-hardening
+revision is the only submitted v5 wave eligible to close this gate. The
 diagnostic wave may still contribute reproducible candidate evidence, but it
 cannot be cited as a final clean result.
 
@@ -71,7 +72,13 @@ additions and the Wish repair.
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Silent engine-mutation lane | Submitted; diagnostic only under the pre-hardening classifier. | Terminal aggregate pending |
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers; diagnostic only. | Terminal aggregate pending |
 | v5 diagnostic | `a61ee3e710965fa114cf4889cbe33be09026ff34` | v3 | N/A | Encoding-collision capture and audit | Submitted; diagnostic only under pre-float32 hashing. | Terminal aggregate pending |
-| replacement pending | Post-hardening public revision | v3 | N/A | Counterfactual harm probes | Runs only for the validated replacement-wave shortlist. | Not started |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | v2 | Exact universe fixtures | Submitted as a final-eligible replacement; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | v2 | Bounded-depth exact fixtures | Submitted behind the static gate; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | v2 | Curated party interactions | Submitted behind the static gate; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | N/A | Silent engine-mutation lane | Submitted with entity-specific protocol backing; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | v2 | E/O/C protocol inventory and census differential | Submitted behind terminal coverage and capture markers; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | N/A | Encoding-collision capture and audit | Submitted with model-float32 numeric hashing; terminal aggregate pending. | Terminal aggregate pending |
+| v5 replacement | `250bdf5c533f44087c55aadfde28d50695092bf4` | v3 | N/A | Counterfactual harm probes | Runs only for the validated replacement-wave shortlist. | Not started |
 
 ## Historical Triage Evidence
 
