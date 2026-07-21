@@ -458,9 +458,23 @@ NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
 # Public trace: |-start|SLOT|Encore (apply) / |-end|SLOT|Encore (expiry); elapsed is public,
 # remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
 NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
-# EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), and
-# this encore column (+6, change 5), so the v3 numeric width is 162.
-V3_NUMERIC_EXTRA = 7
+# Change 6 — Wrap (partial-trap) turns-so-far on the TRAPPED (active) mon's token, schema >= v3
+# only, the sibling of changes 4/5. Gen3 partial-trap (Wrap) lasts 2..5 turns (max 5): the base
+# ``data/conditions.ts`` partiallytrapped ``duration``/``random(5,7)`` is the MODERN value and is
+# NOT overridden by the gen3 mod, but the authoritative Gen II-IV binding mechanic is 2-5 turns;
+# poke-engine models the trap as a boolean volatile with a flat maxhp/16 residual and NO duration
+# counter, so the elapsed comes from the protocol, not the engine (see docs/observation_v3_spec.md).
+# The encoded value is ``min(1, elapsed/5)`` with CAP = 5. The trap PRESENCE is already the
+# ``volatile:partiallytrapped`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter
+# only. Public trace: |-activate|SLOT|move: Wrap (apply; no -start) / |-end|SLOT|Wrap
+# |[partiallytrapped] (expiry); elapsed is public, remaining hidden. Wrap is the pool's SOLE
+# partial-trap move (Shuckle, sole carrier). Sits above the v2.2 census — legacy modes stay
+# byte-frozen.
+NUMERIC_WRAP_TRAP_TURNS = V3_NUMERIC_BASE + 7
+# EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
+# encore column (+6, change 5), and this Wrap partial-trap column (+7, change 6), so the v3 numeric
+# width is 163.
+V3_NUMERIC_EXTRA = 8
 _V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
@@ -1821,6 +1835,7 @@ def observation_from_player_state(
         active_stall_counter=state.self_stall_counter,
         active_confusion_elapsed=state.self_confusion_elapsed,
         active_encore_elapsed=state.self_encore_elapsed,
+        active_wrap_trap_elapsed=state.self_wrap_trap_elapsed,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
@@ -1850,6 +1865,7 @@ def observation_from_player_state(
         active_stall_counter=state.opponent_stall_counter,
         active_confusion_elapsed=state.opponent_confusion_elapsed,
         active_encore_elapsed=state.opponent_encore_elapsed,
+        active_wrap_trap_elapsed=state.opponent_wrap_trap_elapsed,
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
@@ -3056,6 +3072,7 @@ def _encode_pokemon_tokens(
     active_stall_counter: int = 0,
     active_confusion_elapsed: int = 0,
     active_encore_elapsed: int = 0,
+    active_wrap_trap_elapsed: int = 0,
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
@@ -3187,6 +3204,17 @@ def _encode_pokemon_tokens(
                     numeric_features[token_index],
                     NUMERIC_ENCORE_TURNS,
                     min(1.0, active_encore_elapsed / 6.0),
+                )
+            # Spec v3 change 6: Wrap (partial-trap) turns-so-far on the TRAPPED (active) mon's
+            # token, schema >= v3 only. Gen3 partial-trap (Wrap) maxes at 5 turns, so CAP = 5 and
+            # the ramp saturates at 1.0. The column sits above the v2.2 census, so legacy modes stay
+            # byte-frozen; the counter is 0 (unwritten) whenever the active mon is not partially
+            # trapped.
+            if schema_v3 and active_wrap_trap_elapsed:
+                _set_numeric(
+                    numeric_features[token_index],
+                    NUMERIC_WRAP_TRAP_TURNS,
+                    min(1.0, active_wrap_trap_elapsed / 5.0),
                 )
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
