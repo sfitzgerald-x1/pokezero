@@ -15,6 +15,7 @@ from pokezero.deep_line_audit import (
     _numeric_features_equal_except,
     _raw_request_action_mask,
     _raw_side_condition_counts,
+    _canonical_protocol_signature,
     audit_protocol_cut_fixture,
     protocol_cut_fixtures,
     census_protocol_cooccurrences,
@@ -45,6 +46,20 @@ _CLI_SPEC.loader.exec_module(deep_line_audit_cli)
 
 
 class DeepLineAuditReportTest(unittest.TestCase):
+    def test_protocol_signature_normalizes_effect_prefixes_and_fieldactivate(self) -> None:
+        self.assertEqual(
+            _canonical_protocol_signature(("", "-singleturn", "p1a: A", "move: Protect")),
+            "-singleturn:protect",
+        )
+        self.assertEqual(
+            _canonical_protocol_signature(("", "-activate", "p1a: A", "ability: Shed Skin")),
+            "-activate:shedskin",
+        )
+        self.assertEqual(
+            _canonical_protocol_signature(("", "-fieldactivate", "move: Perish Song")),
+            "-fieldactivate:perishsong",
+        )
+
     def test_begin_game_resets_candidate_history_without_losing_aggregate_counts(self) -> None:
         report = DeepLineAuditReport()
         report.begin_game("random-seed-1")

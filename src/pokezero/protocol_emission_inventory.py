@@ -5,8 +5,10 @@ The inventory deliberately separates three different kinds of evidence:
 ``E`` engine-emittable protocol tags found in the Gen 3 module or shared
 simulator source, ``O`` canonical signatures observed in audited public play,
 and ``C`` tags syntactically dispatched by the public observation/belief path.
-It is a candidate generator, not a proof that a handler preserves every
-argument or subtype.  Collision and harm-probe lanes adjudicate that later.
+Payload-sensitive direct handlers and justified redundant announcements are
+recorded separately, so a handled tag cannot hide an unhandled subtype. It is
+still a candidate generator, not proof that a handler preserves every argument
+or subtype. Collision and harm-probe lanes adjudicate that later.
 """
 
 from __future__ import annotations
@@ -51,6 +53,128 @@ class ProtocolSourceLocation:
 
     def to_json_dict(self) -> dict[str, Any]:
         return {"path": self.path, "line": self.line, "evidence": self.evidence}
+
+
+@dataclass(frozen=True)
+class ProtocolSignatureCoverage:
+    """One audited semantic treatment of a canonical protocol signature.
+
+    ``direct`` means the listed protocol signature itself is consumed by a
+    public observation, replay, or belief path. ``semantic-alias`` means the
+    line is intentionally redundant because another public line in the same
+    mechanic carries the model-visible fact. Aliases stay outside C so the
+    inventory distinguishes a true handler from a justified omission.
+    """
+
+    signature: str
+    coverage: str
+    handler: str
+    detail: str
+
+    def matches(self, signature: str) -> bool:
+        if self.signature.endswith(":*"):
+            return signature.startswith(self.signature[:-1])
+        return self.signature == signature
+
+    def to_json_dict(self) -> dict[str, str]:
+        return {
+            "signature": self.signature,
+            "coverage": self.coverage,
+            "handler": self.handler,
+            "detail": self.detail,
+        }
+
+
+# This registry complements AST tag discovery with the small payload-sensitive
+# surface whose semantics are intentionally non-generic. Keep aliases out of
+# C: they document why an announcement can be absent from model state without
+# pretending that the announcement itself was parsed.
+_SIGNATURE_COVERAGE = (
+    ProtocolSignatureCoverage(
+        signature="cant:*",
+        coverage="direct",
+        handler="src/pokezero/showdown.py turn-merged cant reason + src/pokezero/belief.py sleep bookkeeping",
+        detail="The public lost-turn reason is retained in turn-merged history; sleep has additional belief bookkeeping.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-activate:protect",
+        coverage="direct",
+        handler="src/pokezero/transitions.py damage-outcome fold",
+        detail="Protect activation marks the opposing action as blocked.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-activate:detect",
+        coverage="direct",
+        handler="src/pokezero/transitions.py damage-outcome fold",
+        detail="Detect activation marks the opposing action as blocked.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-activate:substitute",
+        coverage="direct",
+        handler="src/pokezero/transitions.py damage-outcome fold",
+        detail="Substitute activation records the hit-sub damage outcome.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-activate:endure",
+        coverage="direct",
+        handler="src/pokezero/transitions.py damage-outcome fold",
+        detail="Endure activation records the endured damage outcome.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-activate:shedskin",
+        coverage="direct",
+        handler="src/pokezero/belief.py Shed Skin public inference",
+        detail="The ability activation is paired with the following public cure-status event.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-start:futuresight",
+        coverage="direct",
+        handler="src/pokezero/showdown.py _update_future_sight",
+        detail="The delayed attack landing turn is encoded on the field token.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-end:futuresight",
+        coverage="direct",
+        handler="src/pokezero/showdown.py _update_future_sight",
+        detail="Landing clears the delayed-attack field state.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-start:doomdesire",
+        coverage="direct",
+        handler="src/pokezero/showdown.py _update_future_sight",
+        detail="The delayed attack landing turn is encoded on the field token.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-end:doomdesire",
+        coverage="direct",
+        handler="src/pokezero/showdown.py _update_future_sight",
+        detail="Landing clears the delayed-attack field state.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-singleturn:protect",
+        coverage="semantic-alias",
+        handler="-activate:protect -> src/pokezero/transitions.py",
+        detail="The same-turn Protect activation carries the model-visible blocked outcome.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-singleturn:endure",
+        coverage="semantic-alias",
+        handler="-activate:endure -> src/pokezero/transitions.py",
+        detail="The same-turn Endure activation carries the model-visible endured outcome.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-fieldactivate:perishsong",
+        coverage="semantic-alias",
+        handler="-start:perish3 -> src/pokezero/showdown.py volatile tracker",
+        detail="Perish Song counters are the durable decision-state fact; field activation is an announcement.",
+    ),
+    ProtocolSignatureCoverage(
+        signature="-mustrecharge",
+        coverage="semantic-alias",
+        handler="src/pokezero/engine_search.py _recharging_slots",
+        detail="Search derives the forced recharge from the preceding public Hyper Beam action and hit anchor; no player decision occurs during the recharge turn.",
+    ),
+)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -209,6 +333,12 @@ def _signature_tag(signature: str) -> str:
     return signature.split(":", 1)[0]
 
 
+def _signature_coverage(signature: str) -> ProtocolSignatureCoverage | None:
+    """Return direct consumption or a documented semantic alias for a signature."""
+
+    return next((coverage for coverage in _SIGNATURE_COVERAGE if coverage.matches(signature)), None)
+
+
 def build_protocol_inventory(
     *,
     showdown_root: Path | str,
@@ -229,8 +359,28 @@ def build_protocol_inventory(
     engine_tags = set(engine)
     consumer_tags = set(consumers)
     observed_tags = set(observed_by_tag)
+    observed_signature_rows: list[dict[str, Any]] = []
+    observed_without_direct_consumer: list[dict[str, Any]] = []
+    observed_without_semantic_coverage: list[dict[str, Any]] = []
+    for signature, count in sorted(observed_signatures.items(), key=lambda item: (-item[1], item[0])):
+        coverage = _signature_coverage(signature)
+        row: dict[str, Any] = {
+            "signature": signature,
+            "tag": _signature_tag(signature),
+            "count": count,
+            "sources": observed_sources[signature],
+            "coverage": coverage.coverage if coverage is not None else "unclassified",
+        }
+        if coverage is not None:
+            row["handler"] = coverage.handler
+            row["detail"] = coverage.detail
+        observed_signature_rows.append(row)
+        if coverage is None or coverage.coverage != "direct":
+            observed_without_direct_consumer.append(row)
+        if coverage is None:
+            observed_without_semantic_coverage.append(row)
     return {
-        "schema_version": "pokezero.protocol-emission-inventory.v1",
+        "schema_version": "pokezero.protocol-emission-inventory.v2",
         "engine_emittable": {
             "tags": [
                 {
@@ -249,6 +399,15 @@ def build_protocol_inventory(
             ],
             "tag_count": len(consumer_tags),
         },
+        "consumer_signatures": {
+            "entries": [coverage.to_json_dict() for coverage in _SIGNATURE_COVERAGE],
+            "direct_signature_count": sum(
+                coverage.coverage == "direct" for coverage in _SIGNATURE_COVERAGE
+            ),
+            "semantic_alias_count": sum(
+                coverage.coverage == "semantic-alias" for coverage in _SIGNATURE_COVERAGE
+            ),
+        },
         "observed": {
             "signature_counts": [
                 {
@@ -262,12 +421,15 @@ def build_protocol_inventory(
             "signature_count": len(observed_signatures),
             "tag_count": len(observed_tags),
             "audit_provenance": observed_provenance,
+            "signature_coverage": observed_signature_rows,
         },
         "differential": {
             "observed_but_unconsumed": [
                 {"tag": tag, "count": observed_by_tag[tag]}
                 for tag in sorted(observed_tags - consumer_tags, key=lambda tag: (-observed_by_tag[tag], tag))
             ],
+            "observed_signatures_without_direct_consumer": observed_without_direct_consumer,
+            "observed_signatures_without_semantic_coverage": observed_without_semantic_coverage,
             "emittable_but_unobserved": sorted(engine_tags - observed_tags),
             "consumer_not_emittable": sorted(consumer_tags - engine_tags),
         },
@@ -275,6 +437,7 @@ def build_protocol_inventory(
             "Engine discovery records literal this.add/battle.add tags only; dynamic tag expressions require dynamic census evidence.",
             "Shared-simulator source locations are potential Gen 3 emissions, not standalone Gen 3 reachability proof.",
             "Consumer discovery records event_type comparisons only. It does not prove that every tag argument or subtype is encoded.",
+            "Canonical signature coverage records direct handlers separately from semantic aliases; aliases are justified redundant announcements, not members of C.",
             "Observed signatures are public audit-census counts. They do not include private requests or raw protocol payloads.",
         ],
     }

@@ -62,7 +62,12 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             observed = root / "observed.json"
             observed.write_text(
                 json.dumps({
-                    "protocol_signatures": {"-fail": 3, "-activate:movebide": 2, "-mystery": 5},
+                    "protocol_signatures": {
+                        "-activate:protect": 2,
+                        "-fieldactivate:perishsong": 1,
+                        "-mystery": 5,
+                        "-singleturn:protect": 3,
+                    },
                     "audit_provenance": {
                         "observation_schema": "pokezero.observation.v3",
                         "showdown_source_hash": "fixture-source",
@@ -79,8 +84,24 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
 
         self.assertEqual(report["engine_emittable"]["tag_count"], 5)
         self.assertEqual(report["consumer_dispatch"]["tag_count"], 5)
-        self.assertEqual(report["observed"]["signature_count"], 3)
-        self.assertEqual(report["differential"]["observed_but_unconsumed"], [{"tag": "-mystery", "count": 5}])
+        self.assertEqual(report["observed"]["signature_count"], 4)
+        self.assertEqual(
+            report["differential"]["observed_but_unconsumed"],
+            [
+                {"tag": "-mystery", "count": 5},
+                {"tag": "-singleturn", "count": 3},
+                {"tag": "-fieldactivate", "count": 1},
+            ],
+        )
+        coverage = {row["signature"]: row for row in report["observed"]["signature_coverage"]}
+        self.assertEqual(coverage["-activate:protect"]["coverage"], "direct")
+        self.assertEqual(coverage["-singleturn:protect"]["coverage"], "semantic-alias")
+        self.assertEqual(coverage["-fieldactivate:perishsong"]["coverage"], "semantic-alias")
+        self.assertEqual(coverage["-mystery"]["coverage"], "unclassified")
+        self.assertEqual(
+            [row["signature"] for row in report["differential"]["observed_signatures_without_semantic_coverage"]],
+            ["-mystery"],
+        )
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
         self.assertEqual(report["observed"]["audit_provenance"][0]["audit_provenance"]["image_digest"], "fixture-image")

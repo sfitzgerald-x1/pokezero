@@ -307,7 +307,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             deep_line_audit._canonical_protocol_signature(
                 "|-activate|p1a: Gengar|ability: Cursed Body".split("|")
             ),
-            "-activate:abilitycursedbody",
+            "-activate:cursedbody",
         )
         self.assertEqual(
             deep_line_audit._canonical_protocol_signature(
@@ -414,7 +414,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             )
 
         self.assertEqual(dict(report.protocol_events), {"move": 1, "-fail": 1})
-        self.assertEqual(dict(report.protocol_signatures), {"-fail:movetoxic": 1, "move:movea": 1})
+        self.assertEqual(dict(report.protocol_signatures), {"-fail:toxic": 1, "move:movea": 1})
         audit_boundary.assert_not_called()
 
     def test_non_depth_lane_does_not_require_protocol_telemetry(self) -> None:
@@ -510,7 +510,7 @@ class CoverageEnumerationDriverTests(unittest.TestCase):
             )
 
         self.assertEqual(dict(report.protocol_events), {"move": 2, "-fail": 1})
-        self.assertEqual(dict(report.protocol_signatures), {"-fail:movetoxic": 1, "move:movea": 2})
+        self.assertEqual(dict(report.protocol_signatures), {"-fail:toxic": 1, "move:movea": 2})
         self.assertEqual(audit_boundary.call_count, 2)
 
     def test_trace_keeps_native_candidate_while_exposing_copied_public_ability(self) -> None:
