@@ -16,12 +16,10 @@ from .belief import CandidateSetSummary
 
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
-# v4: relaxed move-combo STAB / setup-incompatibility narrowing to match Showdown's actual
-# gen3 generator (see ``_required_stab_types``). The universe CONTENT changed, and the disk
-# cache is keyed on this schema (folded into ``_source_hash``), so the bump is REQUIRED — it
-# forces a rebuild and stops stale v3 caches (the old over-pruned universe) from shadowing the
-# fix in training/collection, where ``load_gen3_randbat_source_cached`` reads ``use_cache=True``.
-_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v4"
+# v5: source identity includes the resolved Gen 3 Dex metadata used to enumerate legal move
+# combinations. The variant universe depends on that metadata, not only sets.json and teams.js;
+# omitting it let different built Showdown trees share a cache/provenance hash.
+_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v5"
 _UNOWN_COSMETIC_FORM_SUFFIXES = frozenset("abcdefghijklmnopqrstuvwxyz") | {"exclamation", "question"}
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
 SPECIAL_TYPES = {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}
@@ -237,7 +235,11 @@ class Gen3RandbatSource:
                 f"{dist_generator_path}. Run `node build` in the Showdown checkout, or point "
                 "`--showdown-root` at a built checkout."
             )
-        source_hash = _source_hash(path for path in (sets_path, source_generator_path, dist_generator_path) if path.exists())
+        move_metadata, species_metadata = _load_showdown_metadata(root)
+        source_hash = _source_hash(
+            (path for path in (sets_path, source_generator_path, dist_generator_path) if path.exists()),
+            resolved_metadata={"moves": move_metadata, "species": species_metadata},
+        )
         metadata = RandbatSourceMetadata(
             format_id="gen3randombattle",
             generation=3,
@@ -256,7 +258,6 @@ class Gen3RandbatSource:
         data = json.loads(sets_path.read_text(encoding="utf-8"))
         if not isinstance(data, Mapping):
             raise ValueError(f"Gen 3 random battle sets at {sets_path} must be a JSON object.")
-        move_metadata, species_metadata = _load_showdown_metadata(root)
         source = cls.from_data(
             data,
             metadata=metadata,
@@ -1004,12 +1005,21 @@ console.log(JSON.stringify(out));
     )
 
 
-def _source_hash(paths: Iterable[Path]) -> str:
+def _source_hash(
+    paths: Iterable[Path],
+    *,
+    resolved_metadata: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
+) -> str:
+    """Hash every input that can change the materialized randbat variant universe."""
+
     digest = hashlib.sha256()
     digest.update(_SOURCE_CACHE_SCHEMA.encode("utf-8"))
     for path in sorted(paths, key=lambda item: str(item)):
         digest.update(str(path.name).encode("utf-8"))
         digest.update(path.read_bytes())
+    if resolved_metadata is not None:
+        digest.update(b"resolved-dex-metadata")
+        digest.update(json.dumps(resolved_metadata, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     return digest.hexdigest()[:16]
 
 

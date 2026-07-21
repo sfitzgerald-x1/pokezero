@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from pokezero.belief import PublicBattleBeliefEngine
-from pokezero.randbat import Gen3RandbatSource
+from pokezero.randbat import Gen3RandbatSource, _source_hash
 from pokezero.showdown import parse_showdown_replay
 
 
@@ -120,6 +120,23 @@ def source() -> Gen3RandbatSource:
 
 
 class Gen3RandbatSourceTest(unittest.TestCase):
+    def test_source_hash_covers_resolved_dex_metadata(self) -> None:
+        temp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(temp_dir))
+        source_file = temp_dir / "sets.json"
+        source_file.write_text('{"fixture": true}', encoding="utf-8")
+
+        base = _source_hash(
+            (source_file,),
+            resolved_metadata={"moves": {"surf": {"type": "Water"}}, "species": {}},
+        )
+        changed = _source_hash(
+            (source_file,),
+            resolved_metadata={"moves": {"surf": {"type": "Normal"}}, "species": {}},
+        )
+
+        self.assertNotEqual(base, changed)
+
     def test_loads_source_and_builds_variant_universe(self) -> None:
         set_source = source()
         universe = set_source.universe_for("Xatu")
