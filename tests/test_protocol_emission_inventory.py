@@ -12,6 +12,7 @@ from pokezero.protocol_emission_inventory import (
     discover_engine_emissions,
     load_observed_audit_provenance,
     load_observed_signatures,
+    require_expected_observed_audit_provenance,
 )
 
 
@@ -204,6 +205,24 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "protocol signature schema"):
                 load_observed_audit_provenance((path,))
+
+    def test_observed_provenance_requires_current_full_identity(self) -> None:
+        provenance = {
+            "public_repo_commit": "a" * 40,
+            "showdown_source_hash": "source-hash",
+            "observation_schema": "pokezero.observation.v3",
+            "image_digest": "example.invalid/pokezero@sha256:" + ("b" * 64),
+        }
+        entries = ({"audit_provenance": provenance},)
+
+        self.assertEqual(
+            require_expected_observed_audit_provenance(entries, expected=provenance), provenance
+        )
+        with self.assertRaisesRegex(ValueError, "differs from this inventory run"):
+            require_expected_observed_audit_provenance(
+                entries,
+                expected={**provenance, "image_digest": "example.invalid/pokezero@sha256:" + ("c" * 64)},
+            )
 
 
 if __name__ == "__main__":
