@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -185,6 +187,23 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         )
         return coverage
 
+    def _targeted_party_root(self, root: Path) -> Path:
+        coverage = self._coverage_root(root)
+        audit_path = coverage / "party" / "audit.json"
+        summary_path = coverage / "party" / "summary.json"
+        complete_path = coverage / "complete.json"
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        audit["audit_provenance"]["execution_scope"]["scenario_names"] = ["natural_cure_switch"]
+        write_json(audit_path, audit)
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["audit_provenance"] = audit["audit_provenance"]
+        write_json(summary_path, summary)
+        complete = json.loads(complete_path.read_text(encoding="utf-8"))
+        complete["terminal_stage"] = "party"
+        complete["stages"] = {"party": summary}
+        write_json(complete_path, complete)
+        return coverage
+
     def _silent_root(self, root: Path) -> Path:
         silent = root / "silent"
         write_json(
@@ -356,6 +375,62 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         self.assertNotIn("registry.example.invalid", serialized)
         self.assertNotIn("/shared/private", serialized)
         self.assertIn("<artifact-path>", serialized)
+
+    def test_publishes_targeted_party_evidence_without_private_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "public" / "targeted-party.json"
+            payload = PUBLISHER.publish_targeted_party(
+                targeted_party_root=self._targeted_party_root(root), output=output
+            )
+            serialized = output.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            payload["schema_version"], "pokezero.v3-audit-targeted-party-evidence.v1"
+        )
+        self.assertEqual(payload["layer"]["terminal_stage"], "party")
+        self.assertEqual(payload["layer"]["required_scenario"], "natural_cure_switch")
+        self.assertNotIn("registry.example.invalid", serialized)
+        self.assertNotIn("/shared/private", serialized)
+
+    def test_targeted_party_cli_mode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "public" / "targeted-party.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = PUBLISHER.main(
+                    [
+                        "--targeted-party-root",
+                        str(self._targeted_party_root(root)),
+                        "--targeted-party-out",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertTrue(output.is_file())
+
+    def test_rejects_targeted_party_without_natural_cure_scenario(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            coverage = self._targeted_party_root(root)
+            audit_path = coverage / "party" / "audit.json"
+            summary_path = coverage / "party" / "summary.json"
+            complete_path = coverage / "complete.json"
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            audit["audit_provenance"]["execution_scope"]["scenario_names"] = ["wish"]
+            write_json(audit_path, audit)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["audit_provenance"] = audit["audit_provenance"]
+            write_json(summary_path, summary)
+            complete = json.loads(complete_path.read_text(encoding="utf-8"))
+            complete["stages"] = {"party": summary}
+            write_json(complete_path, complete)
+            output = root / "public" / "targeted-party.json"
+
+            with self.assertRaisesRegex(ValueError, "natural_cure_switch"):
+                PUBLISHER.publish_targeted_party(targeted_party_root=coverage, output=output)
+            self.assertFalse(output.exists())
 
     def test_rejects_mixed_provenance_before_writing_output(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -24,6 +24,7 @@ from typing import Any
 
 
 PUBLIC_SCHEMA_VERSION = "pokezero.v3-audit-public-evidence.v2"
+TARGETED_PARTY_PUBLIC_SCHEMA_VERSION = "pokezero.v3-audit-targeted-party-evidence.v1"
 OBSERVATION_SCHEMA = "pokezero.observation.v3"
 PROTOCOL_SIGNATURE_SCHEMA = "pokezero.protocol-signature-census.v2"
 SILENT_MUTATION_AUDIT_SCHEMA = "pokezero.silent-mutation-audit.v1"
@@ -596,6 +597,42 @@ def _coverage(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return {"status": status, "terminal_stage": "full", "stages": stages}, provenance
 
 
+def _targeted_party(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Validate a party-only run without pretending it completed every audit lane."""
+
+    complete = _read_json(root / "complete.json")
+    _require_schema(complete, "pokezero.coverage-audit-job.v1", label="targeted party terminal aggregate")
+    _require_terminal_status(complete, label="targeted party terminal aggregate")
+    if complete.get("terminal_stage") != "party":
+        raise ValueError("targeted party terminal aggregate did not finish the party stage")
+    terminal_stages = complete.get("stages")
+    if not isinstance(terminal_stages, Mapping) or set(terminal_stages) != {"party"}:
+        raise ValueError("targeted party terminal aggregate declares stages beyond the party run")
+
+    summary = _read_json(root / "party" / "summary.json")
+    if terminal_stages["party"] != summary:
+        raise ValueError("targeted party terminal aggregate differs from the party summary")
+    party, provenance = _coverage_stage(root, "party")
+    common = _require_matching_provenance(provenance)
+    terminal_digest = _immutable_digest(complete.get("image_digest"), label="targeted party terminal aggregate")
+    if terminal_digest != common["image_digest"]:
+        raise ValueError("targeted party terminal image digest differs from party provenance")
+
+    scenario_names = party["command_runs"][0]["execution_scope"].get("scenario_names", [])
+    if "natural_cure_switch" not in scenario_names:
+        raise ValueError("targeted party audit does not include the natural_cure_switch scenario")
+    clean = party["finding_count"] == 0 and party["failure_artifact_count"] == 0
+    status = _require_derived_status(
+        status=complete.get("status"), clean=clean, label="targeted party terminal aggregate"
+    )
+    return {
+        "status": status,
+        "terminal_stage": "party",
+        "required_scenario": "natural_cure_switch",
+        "party": party,
+    }, provenance
+
+
 def _silent(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     complete = _read_json(root / "complete.json")
     audit = _read_json(root / "audit.json")
@@ -861,6 +898,25 @@ def publish(
     return payload
 
 
+def publish_targeted_party(*, targeted_party_root: Path, output: Path) -> dict[str, Any]:
+    """Publish public-safe evidence for the current Natural Cure party addendum."""
+
+    party, provenance_entries = _targeted_party(targeted_party_root)
+    provenance = _require_matching_provenance(provenance_entries)
+    payload = {
+        "schema_version": TARGETED_PARTY_PUBLIC_SCHEMA_VERSION,
+        "artifact_id": (
+            f"v3-observation-targeted-party-{provenance['public_repo_commit'][:12]}-"
+            f"{provenance['showdown_source_hash'][:12]}"
+        ),
+        "published_at": datetime.now(timezone.utc).isoformat(),
+        "provenance": provenance,
+        "layer": party,
+    }
+    _write_json_atomic(output, payload)
+    return payload
+
+
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -874,30 +930,54 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--coverage-root", type=Path, required=True)
-    parser.add_argument("--silent-root", type=Path, required=True)
-    parser.add_argument("--collision-root", type=Path, required=True)
-    parser.add_argument("--inventory-root", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--coverage-root", type=Path)
+    parser.add_argument("--silent-root", type=Path)
+    parser.add_argument("--collision-root", type=Path)
+    parser.add_argument("--inventory-root", type=Path)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--targeted-party-root", type=Path)
+    parser.add_argument("--targeted-party-out", type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    targeted_mode = args.targeted_party_root is not None or args.targeted_party_out is not None
+    full_inputs = (args.coverage_root, args.silent_root, args.collision_root, args.inventory_root, args.out)
     try:
-        payload = publish(
-            coverage_root=args.coverage_root,
-            silent_root=args.silent_root,
-            collision_root=args.collision_root,
-            inventory_root=args.inventory_root,
-            output=args.out,
-        )
+        if targeted_mode:
+            if args.targeted_party_root is None or args.targeted_party_out is None:
+                parser.error("--targeted-party-root and --targeted-party-out must be supplied together")
+            if any(value is not None for value in full_inputs):
+                parser.error("targeted party publication cannot be combined with full audit inputs")
+            payload = publish_targeted_party(
+                targeted_party_root=args.targeted_party_root,
+                output=args.targeted_party_out,
+            )
+            status = "targeted-party"
+            output = args.targeted_party_out
+        else:
+            if any(value is None for value in full_inputs):
+                parser.error(
+                    "full publication requires --coverage-root, --silent-root, --collision-root, "
+                    "--inventory-root, and --out"
+                )
+            payload = publish(
+                coverage_root=args.coverage_root,
+                silent_root=args.silent_root,
+                collision_root=args.collision_root,
+                inventory_root=args.inventory_root,
+                output=args.out,
+            )
+            status = "complete"
+            output = args.out
     except ValueError as exc:
         print(f"audit evidence publication failed: {exc}", file=sys.stderr)
         return 2
     print(
         "V3_AUDIT_EVIDENCE_PUBLISHED "
-        f"artifact_id={payload['artifact_id']} status=complete output={args.out}"
+        f"artifact_id={payload['artifact_id']} status={status} output={output}"
     )
     return 0
 

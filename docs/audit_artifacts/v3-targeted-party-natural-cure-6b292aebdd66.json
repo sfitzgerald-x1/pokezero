@@ -1,0 +1,83 @@
+{
+  "artifact_id": "v3-observation-targeted-party-6b292aebdd66-9d01efb72af4",
+  "layer": {
+    "party": {
+      "command_runs": [
+        {
+          "command": [
+            "scripts/deep_line_audit.py",
+            "--observation-schema",
+            "v3",
+            "--random-games",
+            "0",
+            "--scenarios",
+            "--interaction-registry",
+            "--protocol-fixtures",
+            "--json",
+            "<artifact-path>"
+          ],
+          "execution_scope": {
+            "max_rounds": 250,
+            "protocol_fixtures": true,
+            "scenario_names": [
+              "attract_snorlax",
+              "baton_pass_boundary",
+              "bellydrum_snorlax",
+              "berry_eat_chesto",
+              "castform_forecast_formechange",
+              "colorchange_kecleon",
+              "counter_mirrorcoat",
+              "deoxys_forme_swap",
+              "ditto_transform",
+              "encore_wobbuffet",
+              "flashfire_houndoom",
+              "future_sight_pending",
+              "ghost_curse",
+              "hyperbeam_recharge",
+              "intimidate_switchin",
+              "natural_cure_switch",
+              "perish_song",
+              "resttalk_snorlax",
+              "roar_drag_reset",
+              "sand_shedinja",
+              "sand_stream_permanence",
+              "screens_jirachi",
+              "spikes_stack",
+              "substitute_focuspunch",
+              "toxic_stall",
+              "trick_berry_pinch",
+              "trick_swap_exchange",
+              "truant_slaking",
+              "voltabsorb_lanturn",
+              "waterabsorb_quagsire",
+              "wish_boundary"
+            ],
+            "seed_range": null
+          },
+          "image_digest": "sha256:80c53db660591c6a6992efe030fed0af8b75d45b30e17cd6a1a6d5248a74fbdc",
+          "observation_schema": "pokezero.observation.v3",
+          "public_repo_commit": "6b292aebdd66bca799fa419c8c58f5ba269abde5",
+          "recorded_at": "2026-07-21T23:00:35.398044+00:00",
+          "showdown_source_hash": "9d01efb72af41473"
+        }
+      ],
+      "coverage_complete": true,
+      "decisions_checked": 495,
+      "failure_artifact_count": 0,
+      "finding_count": 0,
+      "status": "complete",
+      "uncovered": {}
+    },
+    "required_scenario": "natural_cure_switch",
+    "status": "clean",
+    "terminal_stage": "party"
+  },
+  "provenance": {
+    "image_digest": "sha256:80c53db660591c6a6992efe030fed0af8b75d45b30e17cd6a1a6d5248a74fbdc",
+    "observation_schema": "pokezero.observation.v3",
+    "public_repo_commit": "6b292aebdd66bca799fa419c8c58f5ba269abde5",
+    "showdown_source_hash": "9d01efb72af41473"
+  },
+  "published_at": "2026-07-21T23:30:40.389138+00:00",
+  "schema_version": "pokezero.v3-audit-targeted-party-evidence.v1"
+}
