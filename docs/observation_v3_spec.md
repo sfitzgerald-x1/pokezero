@@ -148,6 +148,46 @@ change takes offset `+5`.)
   shape change; it sits above the v2.2 census, so every legacy mode stays
   byte-frozen.
 
+## Change 5 — encore turns-so-far (elapsed-duration signal)
+
+Sibling of Change 4: the same per-slot elapsed-duration counter, applied to the
+`encore` volatile. Encore locks the target into repeating its last move for the
+duration, so a policy that cannot see how long the lock has run cannot price when
+it is about to break. (Offsets `+4` / `+5` in the v3 numeric block are the
+consecutive-stall counter (`NUMERIC_STALL_COUNTER`, #810) and confusion
+turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
+
+- One numeric feature on the ENCORED (active) mon's token, schema >= v3 only:
+  `encore_turns` = `min(1, elapsed / 6)`, where `elapsed` is the number of turns
+  the mon has been encored so far. The encore PRESENCE is already the
+  `volatile:encore` categorical (`TRACKED_VOLATILES`); this is the turns-so-far
+  counter ONLY (the elapsed clock the presence bit cannot express).
+- **Gen3 mechanic (verified before coding, vendored gen3 mod
+  `data/mods/gen3/moves.ts` `encore.condition.durationCallback`):**
+  `return this.random(3, 7)` → `{3,4,5,6}`, max **6** (the gen3 override; base
+  Showdown's `duration: 3` is replaced), so `CAP = 6` and the ramp saturates at
+  `1.0`. The raw counter is left uncapped in the parser — mirroring the
+  confusion/toxic ramps — and the encode's `min(1, …)` caps the value.
+- **Reachability:** Encore is a reachable gen3-randbats move. Pool count from
+  `data/random-battles/gen3/sets.json`: **16 carriers**, so the column is not
+  dead.
+- **Public trace / attribution (no hidden state):** `|-start|SLOT|Encore` on
+  application (vendored `encore.condition.onStart` → `this.add('-start', target,
+  'Encore')`), `|-end|SLOT|Encore` on expiry (`onEnd` → `this.add('-end',
+  target, 'Encore')`). Elapsed (turns-so-far) is public — count decisions since
+  the `-start` — while the remaining duration is hidden. The `_ReplayParser`
+  per-slot counter advances by 1 on each `|turn|` while the `encore` volatile is
+  publicly present on that slot (the same per-`|turn|` advance the `toxic_stage`
+  ramp and Change 4 use), and RESETS to 0 on `-end Encore`, switch-out, `|drag|`,
+  or faint. Encore is `noCopy: true` (not Baton-Pass-copied), so — unlike
+  confusion — the volatile is always dropped on switch-out and the reset is
+  unconditional there; the volatile-absence gate is kept parallel to Change 4 and
+  is trivially satisfied.
+- Under v2.2 emission the column does not exist: **v2.2 output stays
+  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
+  shape change; it sits above the v2.2 census, so every legacy mode stays
+  byte-frozen.
+
 ## Schema plumbing
 
 - New id `pokezero.observation.v3`, CLI choice `v3`
@@ -167,6 +207,10 @@ change takes offset `+5`.)
 - Change 4 adds one more appended numeric column at `V3_NUMERIC_BASE + 5`
   (`NUMERIC_CONFUSION_TURNS`), bumping `V3_NUMERIC_EXTRA` 5 → 6 so
   `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 161. The
+  categorical census is unchanged.
+- Change 5 adds one more appended numeric column at `V3_NUMERIC_BASE + 6`
+  (`NUMERIC_ENCORE_TURNS`), bumping `V3_NUMERIC_EXTRA` 6 → 7 so
+  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 162. The
   categorical census is unchanged.
 
 ## Acceptance (tests required)
@@ -188,16 +232,22 @@ change takes offset `+5`.)
    it resets to 0 on `-end confusion`, switch-out, and faint; the same log's
    v2.2 encoding is byte-identical to before the change (the column does not
    exist under v2.2); snapshot round-trip preserves the elapsed counter.
-5. Existing v2.2 test suites pass untouched.
+5. Encore turns-so-far (change 5): a scripted Encore game raises the encored
+   mon's `encore_turns` column 1/6, 2/6, … under v3, and it resets to 0 on
+   `-end Encore`, switch-out, `|drag|`, and faint; the same log's v2.2 encoding
+   is byte-identical to before the change (the column does not exist under v2.2);
+   snapshot round-trip preserves the elapsed counter.
+6. Existing v2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
 The v3 numeric block appends columns above the v2.2 census (155):
 `-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
-the consecutive-stall counter at `+4` (change 3, #810), and confusion
-turns-so-far at `+5` (change 4, this PR). With both change 3 and change 4
-landed, the v3 numeric feature count is **161** (`V3_NUMERIC_BASE + 6`), and
-every appended column `+0..+5` (155-160) is written exactly once.
+the consecutive-stall counter at `+4` (change 3, #810), confusion
+turns-so-far at `+5` (change 4, #811), and encore turns-so-far at `+6`
+(change 5, this PR). With change 5 landed, the v3 numeric feature count is
+**162** (`V3_NUMERIC_BASE + 7`), and every appended column `+0..+6` (155-161)
+is written exactly once.
 
 ## Coordination (v3-stream / Rust fold)
 

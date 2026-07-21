@@ -36,12 +36,14 @@ OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # APPENDED numeric bits on top of v2.2 — (1) the ``-fail`` transition event on action transition
 # tokens (window-scoped corrective signal, mirroring the miss bit's emission convention on both
 # turn-merged sub-blocks), (2) the public sleep-clause block bits on the field token (per-side
-# "our sleep moves will fail" state), (3) the consecutive-stall counter (sibling PR), and (4)
-# confusion turns-so-far on the confused mon's token (public elapsed-duration counter, gen3
-# CAP 5, min(1, elapsed/5)). All derived ONLY from public protocol lines — no engine-side hidden
-# state. Every v2.2 block carries forward unchanged and v2.2 output stays byte-identical; same
-# checkpoint-driven resolution mechanism. NOT the fresh default until the Rust fold encoder
-# mirrors it and the golden corpus regenerates at v3 (spec's coordination section).
+# "our sleep moves will fail" state), (3) the consecutive-stall counter (#810), (4) confusion
+# turns-so-far on the confused mon's token (public elapsed-duration counter, gen3 CAP 5,
+# min(1, elapsed/5)), and (5) encore turns-so-far on the encored mon's token (public
+# elapsed-duration counter, gen3 CAP 6, min(1, elapsed/6)). All derived ONLY from public protocol
+# lines — no engine-side hidden state. Every v2.2 block carries forward unchanged and v2.2 output
+# stays byte-identical; same checkpoint-driven resolution mechanism. NOT the fresh default until
+# the Rust fold encoder mirrors it and the golden corpus regenerates at v3 (spec's coordination
+# section).
 OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
