@@ -11,6 +11,7 @@ Showdown checkout (same gate as the golden-corpus scenario sweep).
 
 from __future__ import annotations
 
+import copy
 import os
 import random
 import shutil
@@ -51,6 +52,7 @@ class RegistryWellFormedTests(unittest.TestCase):
         # The two retype bugs (Castform + Color Change) must stay in the registry.
         self.assertIn("castform_forecast_formechange", names)
         self.assertIn("colorchange_kecleon", names)
+        self.assertIn("natural_cure_switch", names)
 
 
 @unittest.skipIf(not _live_showdown_available(), "requires a built local Showdown checkout")
@@ -86,6 +88,9 @@ class RegistryEncodingTests(unittest.TestCase):
         self.env.reset_with_start_override(seed=spec.seed, start_override=override)
         pols = {"p1": ScriptedPreferencePolicy(spec.p1_prefs), "p2": ScriptedPreferencePolicy(spec.p2_prefs)}
         obs_by_round = {"p1": [], "p2": []}
+        # Tests that assert protocol lifecycle handling need the state after a
+        # switch resolves but before a later re-entry can infer the same fact.
+        self._states_after_step = {"p1": [], "p2": []}
         rng = random.Random(0)
         for _ in range(spec.max_decision_rounds):
             requested = self.env.requested_players()
@@ -97,6 +102,8 @@ class RegistryEncodingTests(unittest.TestCase):
                 obs_by_round[pl].append(obs)
                 actions[pl] = pols[pl].select_action(obs, rng=rng).action_index
             result = self.env.step(actions)
+            for pl in ("p1", "p2"):
+                self._states_after_step[pl].append(copy.deepcopy(self.env._state_for_player(pl)))
             if getattr(result, "terminal", None) is not None:
                 break
         for pl in ("p1", "p2"):
@@ -135,6 +142,36 @@ class RegistryEncodingTests(unittest.TestCase):
         obs = self._drive("intimidate_switchin")["p1"][0]
         tok = self.S.SELF_POKEMON_TOKEN_OFFSET
         self.assertAlmostEqual(obs.numeric_features[tok][self.S.NUMERIC_BOOST_ATK], -1.0 / 6.0, places=4)
+
+    def test_natural_cure_switch_clears_status_on_both_views_and_reentry(self) -> None:
+        rounds = self._drive("natural_cure_switch")
+        toxic = self.vocab.encode("status:tox")
+        active_self = self.S.SELF_POKEMON_TOKEN_OFFSET
+        self.assertTrue(
+            any(
+                observation.categorical_ids[active_self][self.S.CATEGORY_SECONDARY] == toxic
+                for observation in rounds["p1"]
+            ),
+            "Toxic must land before the Natural Cure switch lifecycle is asserted",
+        )
+        # This is the p2 state immediately after Starmie switches out, before
+        # the re-entry heuristic has a chance to infer Natural Cure from a
+        # clean return. It specifically proves the public -curestatus ability
+        # line was consumed on switch-out.
+        p2_after_switch = self._states_after_step["p2"][1]
+        p2_starmie_after_switch = next(mon for mon in p2_after_switch.opponent_team if mon.species == "Starmie")
+        self.assertFalse(p2_starmie_after_switch.active)
+        self.assertNotIn("tox", p2_starmie_after_switch.condition.split())
+        self.assertEqual(p2_starmie_after_switch.ability, "naturalcure")
+        p1_state = self.env._state_for_player("p1")
+        p2_state = self.env._state_for_player("p2")
+        p1_starmie = next(mon for mon in p1_state.self_team if mon.species == "Starmie")
+        p2_starmie = next(mon for mon in p2_state.opponent_team if mon.species == "Starmie")
+        for starmie in (p1_starmie, p2_starmie):
+            self.assertTrue(starmie.active, "Starmie should have re-entered after the cure")
+            self.assertNotIn("tox", starmie.condition.split())
+        # The public ability line is visible from p2 and must identify the cure source.
+        self.assertEqual(p2_starmie.ability, "naturalcure")
 
     def test_bellydrum_maxes_attack(self) -> None:
         rounds = self._drive("bellydrum_snorlax")["p1"]

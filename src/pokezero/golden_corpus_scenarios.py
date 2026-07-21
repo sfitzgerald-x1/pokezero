@@ -384,6 +384,18 @@ def interaction_registry_specs() -> tuple[ScenarioSpec, ...]:
             p2_prefs=(("dragondance",),),
             seed=91023, max_decision_rounds=3,
         ),
+        # --- Natural Cure: Gen 3 singles emits its public -curestatus ability
+        # line before a statused holder leaves the field. Re-entry must remain
+        # status-free in both seats' public views. (The showCure=false branch
+        # exists only for multi-active ambiguity, outside randbats singles.)
+        ScenarioSpec(
+            "natural_cure_switch",
+            (_mon("Starmie", ("Recover", "Surf", "Psychic", "Rapid Spin"), ability="Natural Cure"), swampert),
+            (blissey, snorlax),
+            p1_prefs=(("recover",), ("switch:swampert",), ("switch:starmie",)),
+            p2_prefs=(("toxic",), ("seismictoss",), ("softboiled",)),
+            seed=91032, max_decision_rounds=3,
+        ),
         # --- Belly Drum: -setboost atk 6 on the user.
         ScenarioSpec(
             "bellydrum_snorlax",
