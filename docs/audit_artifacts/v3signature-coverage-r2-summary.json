@@ -1,0 +1,92 @@
+{
+  "artifact_id": "v3signature-coverage-r2",
+  "image_digest": "sha256:0a5de863336b035902bd1552b2247d9b4d350796b95a204ef71d488163993949",
+  "provenance": {
+    "observation_schema": "pokezero.observation.v3",
+    "protocol_signature_schema": "pokezero.protocol-signature-census.v2",
+    "public_repo_commit": "996ea5489c48e8a8415057ce0258d8f144f65079",
+    "showdown_source_hash": "754b71cfed643fa0"
+  },
+  "schema_version": "pokezero.v3-audit-public-evidence.v1",
+  "stages": {
+    "depth": {
+      "command_template": [
+        "scripts/coverage_enumeration_audit.py",
+        "--exact-variants",
+        "--observation-schema",
+        "v3",
+        "--no-universal-lane",
+        "--depth-rounds",
+        "8",
+        "--shard",
+        "<0..7>/8"
+      ],
+      "coverage_complete": true,
+      "decisions_checked": 9594,
+      "failure_artifact_count": 0,
+      "finding_count": 0,
+      "recorded_at": "2026-07-21T03:09:04.317774+00:00",
+      "seed_range": {
+        "end": 9300840,
+        "start": 9300000
+      },
+      "shards": 8,
+      "status": "complete",
+      "uncovered": {
+        "ability_pairs": [],
+        "items": [],
+        "moves": [],
+        "species": [],
+        "variants": []
+      }
+    },
+    "party": {
+      "command_template": [
+        "scripts/deep_line_audit.py",
+        "--observation-schema",
+        "v3",
+        "--random-games",
+        "0",
+        "--scenarios",
+        "--interaction-registry",
+        "--protocol-fixtures"
+      ],
+      "decisions_checked": 489,
+      "finding_count": 0,
+      "recorded_at": "2026-07-21T03:10:00.423877+00:00",
+      "seed_range": null,
+      "status": "complete"
+    },
+    "static": {
+      "command_template": [
+        "scripts/coverage_enumeration_audit.py",
+        "--exact-variants",
+        "--observation-schema",
+        "v3",
+        "--no-universal-lane",
+        "--shard",
+        "<0..7>/8"
+      ],
+      "coverage_complete": true,
+      "decisions_checked": 1682,
+      "failure_artifact_count": 0,
+      "finding_count": 0,
+      "recorded_at": "2026-07-21T03:08:55.845942+00:00",
+      "seed_range": {
+        "end": 9300840,
+        "start": 9300000
+      },
+      "shards": 8,
+      "status": "complete",
+      "uncovered": {
+        "ability_pairs": [],
+        "items": [],
+        "moves": [],
+        "species": [],
+        "variants": []
+      }
+    }
+  },
+  "status": "clean",
+  "terminal_stage": "full"
+}

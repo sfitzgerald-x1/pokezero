@@ -1,0 +1,24 @@
+{
+  "artifact_id": "v3signature-silent-r2",
+  "command": [
+    "scripts/silent_mutation_audit.py",
+    "--observation-schema",
+    "v3",
+    "--random-games",
+    "8",
+    "--max-rounds",
+    "120",
+    "--interaction-registry"
+  ],
+  "image_digest": "sha256:0a5de863336b035902bd1552b2247d9b4d350796b95a204ef71d488163993949",
+  "provenance": {
+    "observation_schema": "pokezero.observation.v3",
+    "public_repo_commit": "996ea5489c48e8a8415057ce0258d8f144f65079",
+    "showdown_source_hash": "754b71cfed643fa0"
+  },
+  "recorded_at": "2026-07-21T03:08:46.479277+00:00",
+  "schema_version": "pokezero.v3-audit-public-evidence.v1",
+  "silent_candidate_count": 0,
+  "status": "clean",
+  "steps_audited": 675
+}
