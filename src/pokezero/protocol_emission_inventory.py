@@ -195,12 +195,6 @@ _SIGNATURE_COVERAGE = (
         handler="cant:recharge -> src/pokezero/transitions.py and src/pokezero/turn_merged.py",
         detail="The following public cant:recharge action is the model-visible forced-turn fact; this line announces it one turn early.",
     ),
-    ProtocolSignatureCoverage(
-        signature="-singleturn:focuspunch",
-        coverage="semantic-alias",
-        handler="move:focuspunch and cant:focuspunch -> src/pokezero/transitions.py",
-        detail="Focus Punch's declared move and any public interruption are retained; the one-turn charge announcement has no later state of its own.",
-    ),
     *(
         ProtocolSignatureCoverage(
             signature=signature,
@@ -414,7 +408,7 @@ def build_protocol_inventory(
     observed_signature_rows: list[dict[str, Any]] = []
     observed_without_direct_consumer: list[dict[str, Any]] = []
     observed_without_semantic_coverage: list[dict[str, Any]] = []
-    observed_unconsumed_unclassified: Counter[str] = Counter()
+    observed_unconsumed_unclassified: list[dict[str, Any]] = []
     for signature, count in sorted(observed_signatures.items(), key=lambda item: (-item[1], item[0])):
         coverage = _signature_coverage(signature)
         row: dict[str, Any] = {
@@ -433,7 +427,7 @@ def build_protocol_inventory(
         if coverage is None:
             observed_without_semantic_coverage.append(row)
             if row["tag"] not in consumer_tags:
-                observed_unconsumed_unclassified[row["tag"]] += count
+                observed_unconsumed_unclassified.append(row)
     return {
         "schema_version": "pokezero.protocol-emission-inventory.v2",
         "engine_emittable": {
@@ -487,11 +481,7 @@ def build_protocol_inventory(
                 for tag in sorted(observed_tags - consumer_tags, key=lambda tag: (-observed_by_tag[tag], tag))
             ],
             "observed_but_unconsumed_unclassified": [
-                {"tag": tag, "count": observed_unconsumed_unclassified[tag]}
-                for tag in sorted(
-                    observed_unconsumed_unclassified,
-                    key=lambda tag: (-observed_unconsumed_unclassified[tag], tag),
-                )
+                row for row in observed_unconsumed_unclassified
             ],
             "observed_signatures_without_direct_consumer": observed_without_direct_consumer,
             "observed_signatures_without_semantic_coverage": observed_without_semantic_coverage,

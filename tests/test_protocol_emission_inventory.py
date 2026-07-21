@@ -109,7 +109,13 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             report["differential"]["observed_but_unconsumed_unclassified"],
-            [{"tag": "-mystery", "count": 5}],
+            [{
+                "signature": "-mystery",
+                "tag": "-mystery",
+                "count": 5,
+                "sources": [str(observed)],
+                "coverage": "unclassified",
+            }],
         )
         self.assertIn("-miss", report["differential"]["emittable_but_unobserved"])
         self.assertIn("switch", report["differential"]["consumer_not_emittable"])
@@ -120,7 +126,7 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
         self.assertEqual(_signature_coverage("move:protect").coverage, "direct")
         self.assertEqual(_signature_coverage("-start:perish3").coverage, "direct")
 
-    def test_inventory_distinguishes_non_model_and_semantic_o_minus_c_rows(self) -> None:
+    def test_inventory_keeps_focus_punch_charge_as_an_unclassified_o_minus_c_row(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             showdown, public = self._fixture_roots(root)
@@ -147,8 +153,17 @@ class ProtocolEmissionInventoryTests(unittest.TestCase):
 
         coverage = {row["signature"]: row for row in report["observed"]["signature_coverage"]}
         self.assertEqual(coverage["debug"]["coverage"], "non-model")
-        self.assertEqual(coverage["-singleturn:focuspunch"]["coverage"], "semantic-alias")
-        self.assertEqual(report["differential"]["observed_but_unconsumed_unclassified"], [])
+        self.assertEqual(coverage["-singleturn:focuspunch"]["coverage"], "unclassified")
+        self.assertEqual(
+            report["differential"]["observed_but_unconsumed_unclassified"],
+            [{
+                "signature": "-singleturn:focuspunch",
+                "tag": "-singleturn",
+                "count": 2,
+                "sources": [str(observed)],
+                "coverage": "unclassified",
+            }],
+        )
 
     def test_consumer_discovery_only_counts_event_type_comparisons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
