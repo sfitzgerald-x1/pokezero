@@ -22,7 +22,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
 )
-from pokezero.showdown import observation_from_player_state
+from pokezero.showdown import TRANSITION_TOKEN_OFFSET, observation_from_player_state
 from pokezero.transitions_fold import FoldState
 
 
@@ -239,6 +239,84 @@ class RustEncoderV3ParityTest(unittest.TestCase):
                 numpy.ascontiguousarray(second_got[name]).tobytes(),
                 numpy.ascontiguousarray(second_want[name]).tobytes(),
                 f"second-sub-block {name}",
+            )
+
+    def test_native_encoder_honors_checkpoint_sized_history_budget(self) -> None:
+        header = copy.deepcopy(self.corpus.header)
+        header["observation"].update(
+            {
+                "schema_version": OBSERVATION_SCHEMA_VERSION_V3,
+                "token_count": 87,
+                "categorical_feature_count": 51,
+                "numeric_feature_count": 155,
+            }
+        )
+        header["observation"]["feature_masks"]["transition_token_budget"] = 32
+        inputs = self.backends.row_inputs_from_decision_row(self.corpus.decision_rows[0])
+        inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V3
+        metadata = inputs["observation_metadata"]
+        protocol_lines = [
+            "|switch|p1a: Snorlax|Snorlax, L91, M|100/100",
+            "|switch|p2a: Machamp|Machamp, L82, F|100/100",
+            "|turn|1",
+        ]
+        for turn in range(1, 41):
+            protocol_lines.extend(
+                (
+                    "|move|p1a: Snorlax|Body Slam|p2a: Machamp",
+                    "|-damage|p2a: Machamp|70/100",
+                    "|move|p2a: Machamp|Cross Chop|p1a: Snorlax",
+                    "|-damage|p1a: Snorlax|70/100",
+                    f"|turn|{turn + 1}",
+                )
+            )
+        fold, products = FoldState.initial(
+            perspective_slot=metadata["showdown_slot"]
+        ).advance(protocol_lines)
+        self.assertGreater(len(products.transition_tokens), 32)
+
+        spec, masks = self.backends.observation_contract_from_header(header)
+        reference = self.backends.PythonReferenceBackend(
+            showdown_root=_showdown_root(), header=header
+        )
+        state = self.backends.state_from_row_inputs(inputs)
+        state = replace(
+            state,
+            transition_tokens=products.transition_tokens,
+            turn_merged_tokens=products.turn_merged_tokens,
+            tendency_stats=products.tendency_stats,
+        )
+        observation = observation_from_player_state(
+            state,
+            category_vocab=reference._vocab,
+            spec=spec,
+            dex=reference._dex,
+            feature_masks=masks,
+        )
+        want = self.backends.arrays_dict_from_observation_arrays(
+            self.backends.GoldenObservationArrays.from_observation(observation)
+        )
+        self.assertEqual(
+            int(numpy.count_nonzero(want["attention_mask"][TRANSITION_TOKEN_OFFSET:])),
+            32,
+        )
+
+        tables = self.exporter.build_tables(
+            str(_showdown_root()),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+        )
+        tables["layout"]["default_feature_masks"]["transition_token_budget"] = 32
+        rust = self.backends.RustFoldBackend(
+            tables_json=json.dumps(tables, sort_keys=True, separators=(",", ":")),
+            header=header,
+        )
+        got = rust.encode_with_fold(inputs, fold.to_payload())
+
+        for name in self.backends.ARRAY_NAMES:
+            self.assertEqual(
+                numpy.ascontiguousarray(got[name]).tobytes(),
+                numpy.ascontiguousarray(want[name]).tobytes(),
+                f"budget-32 {name}",
             )
 
 

@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import random
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
 from collections import Counter
 from dataclasses import replace
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy  # noqa: E402
+from pokezero.engine_search import (  # noqa: E402
+    EngineMctsConfig,
+    EngineMctsPolicy,
+    EngineSearchFallbackError,
+    _latch_encoder_tables_to_model_config,
+)
 
 
 class _FakeObservation:
@@ -415,6 +425,7 @@ class ModelConfigValidationTests(unittest.TestCase):
             EngineMctsConfig(
                 leaf_eval="model",
                 model_path="x.pt",
+                checkpoint_path="checkpoint.pt",
                 tables_path="t.json",
                 search_sims=8,
                 search_batch=16,
@@ -429,9 +440,114 @@ class ModelConfigValidationTests(unittest.TestCase):
                 config=EngineMctsConfig(
                     leaf_eval="model",
                     model_path="/nonexistent/model_ts.pt",
+                    checkpoint_path="/nonexistent/checkpoint.pt",
                     tables_path="/nonexistent/tables.json",
                 ),
             )
+
+
+class ModelObservationContractTests(unittest.TestCase):
+    @staticmethod
+    def _model_config(*, budget: int = 32):
+        return SimpleNamespace(
+            observation_schema_version="pokezero.observation.v3",
+            token_count=87,
+            categorical_feature_count=51,
+            numeric_feature_count=155,
+            stats_block_enabled=True,
+            exact_state_enabled=True,
+            transition_token_budget=budget,
+            tier2_residuals=True,
+            tier2_investment=False,
+        )
+
+    @staticmethod
+    def _tables(*, schema: str = "pokezero.observation.v3") -> dict:
+        return {
+            "layout": {
+                "schema_version": schema,
+                "token_count": 87,
+                "categorical_feature_count": 51,
+                "numeric_feature_count": 155,
+                "default_feature_masks": {
+                    "stats_block": True,
+                    "exact_state": True,
+                    "transition_token_budget": 64,
+                    "tier2_residuals": True,
+                    "tier2_investment": False,
+                },
+            }
+        }
+
+    def test_tables_history_budget_is_latched_to_checkpoint(self) -> None:
+        encoded = _latch_encoder_tables_to_model_config(
+            json.dumps(self._tables()), self._model_config(budget=32)
+        )
+
+        masks = json.loads(encoded)["layout"]["default_feature_masks"]
+        self.assertEqual(masks["transition_token_budget"], 32)
+
+    def test_tables_schema_mismatch_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "observation contract"):
+            _latch_encoder_tables_to_model_config(
+                json.dumps(self._tables(schema="pokezero.observation.v2.2")),
+                self._model_config(),
+            )
+
+    def test_policy_init_latches_real_table_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            model_path = root / "model_ts.pt"
+            checkpoint_path = root / "checkpoint.pt"
+            tables_path = root / "tables.json"
+            model_path.touch()
+            checkpoint_path.touch()
+            tables_path.write_text(json.dumps(self._tables()), encoding="utf-8")
+            with patch(
+                "pokezero.neural_policy.load_transformer_model_config",
+                return_value=self._model_config(budget=32),
+            ):
+                policy = EngineMctsPolicy(
+                    dex=None,
+                    set_source=None,
+                    module=object(),
+                    config=EngineMctsConfig(
+                        leaf_eval="model",
+                        model_path=str(model_path),
+                        checkpoint_path=str(checkpoint_path),
+                        tables_path=str(tables_path),
+                    ),
+                )
+
+        masks = json.loads(policy._tables_json)["layout"]["default_feature_masks"]
+        self.assertEqual(masks["transition_token_budget"], 32)
+
+    def test_root_history_wider_than_checkpoint_fails_closed(self) -> None:
+        policy = object.__new__(EngineMctsPolicy)
+        policy._model_config = self._model_config(budget=32)
+        prefix = (True,) * 23
+        observation = SimpleNamespace(
+            schema_version="pokezero.observation.v3",
+            attention_mask=prefix + (True,) * 33 + (False,) * 31,
+            categorical_ids=tuple((0,) * 51 for _ in range(87)),
+            numeric_features=tuple((0.0,) * 155 for _ in range(87)),
+        )
+
+        with self.assertRaisesRegex(EngineSearchFallbackError, "exceeding checkpoint budget 32"):
+            policy._validate_model_root_observation(observation)
+
+    def test_root_history_at_checkpoint_budget_is_valid(self) -> None:
+        policy = object.__new__(EngineMctsPolicy)
+        policy._model_config = self._model_config(budget=32)
+        prefix = (True,) * 23
+        observation = SimpleNamespace(
+            schema_version="pokezero.observation.v3",
+            attention_mask=prefix + (True,) * 32 + (False,) * 32,
+            categorical_ids=tuple((0,) * 51 for _ in range(87)),
+            numeric_features=tuple((0.0,) * 155 for _ in range(87)),
+        )
+
+        policy._validate_model_root_observation(observation)
 
 
 class _FakeEvent:

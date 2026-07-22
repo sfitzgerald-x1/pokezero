@@ -45,6 +45,7 @@ except ImportError:  # pragma: no cover
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMMITTED_SAMPLE_DIR = Path(__file__).parent / "data" / "golden_corpus_sample"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+SEARCH_TEST_TRANSITION_TOKEN_BUDGET = 32
 
 from pokezero.golden_corpus import (  # noqa: E402
     GOLDEN_CORPUS_SCHEMA_VERSION,
@@ -53,7 +54,6 @@ from pokezero.golden_corpus import (  # noqa: E402
 from pokezero.golden_corpus_fold import iter_fold_records  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     OBSERVATION_SCHEMA_VERSION_V3,
-    V3_TRANSITION_TOKEN_COUNT,
 )
 
 _crate_ready = bool(
@@ -68,6 +68,9 @@ def _tables_json() -> str | None:
     if local.exists():
         payload = json.loads(local.read_text(encoding="utf-8"))
         if payload.get("layout", {}).get("schema_version") == OBSERVATION_SCHEMA_VERSION_V3:
+            payload["layout"]["default_feature_masks"][
+                "transition_token_budget"
+            ] = SEARCH_TEST_TRANSITION_TOKEN_BUDGET
             return json.dumps(payload, sort_keys=True, separators=(",", ":"))
     try:
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
@@ -77,11 +80,15 @@ def _tables_json() -> str | None:
         sys.path.insert(0, str(SCRIPTS_DIR))
         from export_encoder_tables import build_tables  # noqa: E402
 
+        payload = build_tables(
+            str(DEFAULT_SHOWDOWN_ROOT),
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+        )
+        payload["layout"]["default_feature_masks"][
+            "transition_token_budget"
+        ] = SEARCH_TEST_TRANSITION_TOKEN_BUDGET
         return json.dumps(
-            build_tables(
-                str(DEFAULT_SHOWDOWN_ROOT),
-                observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
-            ),
+            payload,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
@@ -202,7 +209,7 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
             feedforward_dim=64,
             dropout=0.0,
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
-            transition_token_budget=V3_TRANSITION_TOKEN_COUNT,
+            transition_token_budget=SEARCH_TEST_TRANSITION_TOKEN_BUDGET,
         )
         torch.manual_seed(20260719)
         model = EntityTokenTransformerPolicy(config).eval()
