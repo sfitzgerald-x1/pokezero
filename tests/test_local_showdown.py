@@ -408,12 +408,26 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         start_override = BattleStartOverride(
             player_teams={
                 "p1": pack_team(
-                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                    (
+                        FixturePokemon(
+                            species="Charmander",
+                            ability="Blaze",
+                            moves=("Ember", "Tackle"),
+                            gender="M",
+                        ),
+                    )
                 ),
                 "p2": pack_team(
                     # Withdraw is never selected in the source battle, so it
                     # must remain absent from p1's public materialization.
-                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Withdraw")),)
+                    (
+                        FixturePokemon(
+                            species="Squirtle",
+                            ability="Torrent",
+                            moves=("Water Gun", "Withdraw"),
+                            gender="F",
+                        ),
+                    )
                 ),
             },
         )
@@ -445,7 +459,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 [],
                 "public materialization must remain a bridge-free capture of the live battle",
             )
-            public_payload = json.dumps(_public_materialization_payload(materialization), sort_keys=True)
+            materialization_payload = _public_materialization_payload(materialization)
+            self.assertIn(", M", materialization_payload["sides"]["p1"]["pokemon"][0]["details"])
+            self.assertIn(", F", materialization_payload["sides"]["p2"]["pokemon"][0]["details"])
+            public_payload = json.dumps(materialization_payload, sort_keys=True)
             self.assertNotIn("withdraw", public_payload.lower())
 
             # A separate belief-sampled search world may retain a bridge

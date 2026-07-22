@@ -129,9 +129,14 @@ class BuildPokeEngineStateTest(unittest.TestCase):
         self.assertFalse(hasattr(bare, "ability"))
         self.assertFalse(hasattr(bare, "item"))
         self.assertFalse(hasattr(bare, "nature"))
+        self.assertFalse(hasattr(bare, "gender"))
 
         decorated_member = replace(
-            base.side_one.pokemon[0], ability="blaze", item="charcoal", nature="adamant"
+            base.side_one.pokemon[0],
+            ability="blaze",
+            item="charcoal",
+            nature="adamant",
+            gender="F",
         )
         decorated = build_poke_engine_state(
             replace(base, side_one=SideSpec(pokemon=(decorated_member,), active_index=0)),
@@ -141,6 +146,7 @@ class BuildPokeEngineStateTest(unittest.TestCase):
         self.assertEqual(member.ability, "blaze")
         self.assertEqual(member.item, "charcoal")
         self.assertEqual(member.nature, "adamant")
+        self.assertEqual(member.gender, "female")
 
     def test_side_conditions_built_via_engine_type(self) -> None:
         engine = fake_construction_module()
@@ -195,6 +201,12 @@ class BuildPokeEngineStateValidationTest(unittest.TestCase):
             self._build(spec)
         self.assertIn("side_one", str(ctx.exception))
         self.assertIn("at least one Pokemon", str(ctx.exception))
+
+    def test_invalid_gender_fails_closed(self) -> None:
+        member = replace(self.base.side_one.pokemon[0], gender="unknown")
+        spec = replace(self.base, side_one=SideSpec(pokemon=(member,), active_index=0))
+        with self.assertRaisesRegex(ValueError, "gender must be M, F, N, or None"):
+            self._build(spec)
 
     def test_active_index_out_of_range_raises_value_error(self) -> None:
         spec = replace(

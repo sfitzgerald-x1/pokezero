@@ -66,11 +66,9 @@ _WEATHER_IDS = {
 # ``attract`` needs no duration either (Gen 3 infatuation runs until the holder
 # switches or the source leaves — no countdown): the parser sets it on the
 # public ``-start``/``-activate move: Attract`` line and clears it on
-# ``-end``/switch, and the gen3 engine (patched:
-# ``third_party/poke-engine-gen3-attract.patch``) prices the 50%-per-turn move
-# immobilization as a chance branch. Source-leave is NOT tracked in-search, so
-# attract persists across the horizon even if the source switches out — a
-# bounded over-model in the immobilizing direction (docs/engine_fidelity_findings.md).
+# ``-end``/switch. The patched Gen 3 engine prices the 50%-per-turn move
+# immobilization as a chance branch and, in singles, clears the relationship
+# when either active switches.
 _SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire", "attract"})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
@@ -870,6 +868,7 @@ def _build_pokemon_spec(
         is_self=is_self,
         self_benched_move_history=self_benched_move_history,
     )
+    public_gender = _gender_from_details(str(row.get("details") or "")) if row else None
 
     return PokemonSpec(
         id=species_id,
@@ -896,8 +895,17 @@ def _build_pokemon_spec(
             if item_override
             else (None if item_removed else (normalize_id(mon.item) if mon.item else None))
         ),
+        gender=public_gender or mon.gender,
         weight_kg=info.weight_kg if info.weight_kg > 0 else None,
     )
+
+
+def _gender_from_details(details: str) -> str | None:
+    for part in details.split(","):
+        token = part.strip().upper()
+        if token in {"M", "F", "N"}:
+            return token
+    return None
 
 
 def _hp_and_status(

@@ -58,7 +58,8 @@ use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::instruction::{Instruction, StateInstructions};
 use poke_engine::state::{
-    PokemonBoostableStat, PokemonIndex, PokemonSideCondition, PokemonStatus, SideReference, State,
+    PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
+    SideReference, State,
 };
 
 use crate::parse_state;
@@ -124,6 +125,21 @@ impl EventContext {
         list.get(i)
             .cloned()
             .unwrap_or_else(|| format!("unknown{}", i))
+    }
+
+    fn details(&self, state: &State, side: SideReference, index: PokemonIndex) -> String {
+        let pokemon = &state.get_side_immutable(&side).pokemon[index];
+        let level = if pokemon.level == 100 {
+            String::new()
+        } else {
+            format!(", L{}", pokemon.level)
+        };
+        let gender = match pokemon.gender {
+            PokemonGender::MALE => ", M",
+            PokemonGender::FEMALE => ", F",
+            PokemonGender::NONE => "",
+        };
+        format!("{}{level}{gender}", self.display(side, index))
     }
 
     fn ident(&self, side: SideReference, index: PokemonIndex) -> String {
@@ -849,11 +865,10 @@ fn render_switch_phase(
             }
             Instruction::Switch(switch) => {
                 sim.apply(ins);
-                let display = ctx.display(switch.side_ref, switch.next_index);
+                let details = ctx.details(sim.state, switch.side_ref, switch.next_index);
                 let ident = ctx.ident(switch.side_ref, switch.next_index);
                 let condition = sim.hp_condition(switch.side_ref);
-                let mut line =
-                    format!("|switch|{ident}|{display}|{condition}");
+                let mut line = format!("|switch|{ident}|{details}|{condition}");
                 if baton_pass {
                     line.push_str("|[from] Baton Pass");
                 }
@@ -1854,11 +1869,11 @@ fn render_move_phase(
             Instruction::Switch(switch) => {
                 // Drag (Whirlwind/Roar): the forced switch renders as |drag|.
                 sim.apply(ins);
-                let display = ctx.display(switch.side_ref, switch.next_index);
+                let details = ctx.details(sim.state, switch.side_ref, switch.next_index);
                 let ident = ctx.ident(switch.side_ref, switch.next_index);
                 let condition = sim.hp_condition(switch.side_ref);
                 out.lines
-                    .push(format!("|drag|{ident}|{display}|{condition}"));
+                    .push(format!("|drag|{ident}|{details}|{condition}"));
             }
             _ => sim.apply(ins),
         }
@@ -2345,6 +2360,51 @@ mod tests {
             turn: 4,
             hp_percent: [false, false],
         }
+    }
+
+    #[test]
+    fn switch_details_preserve_showdown_level_and_gender() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let pokemon = &mut state.side_one.pokemon[PokemonIndex::P1];
+        pokemon.hp = 100;
+        pokemon.maxhp = 100;
+        pokemon.level = 84;
+        pokemon.gender = PokemonGender::MALE;
+        let mut context = ctx();
+        context.species[0].push("Charmeleon".to_string());
+        assert_eq!(
+            context.details(&state, SideReference::SideOne, PokemonIndex::P0),
+            "Charmander"
+        );
+        let serialized = state.serialize();
+        let restored = State::deserialize(&serialized);
+        assert_eq!(
+            restored.side_one.pokemon[PokemonIndex::P1].gender,
+            PokemonGender::MALE
+        );
+
+        let segment = vec![Instruction::Switch(
+            poke_engine::instruction::SwitchInstruction {
+                side_ref: SideReference::SideOne,
+                previous_index: PokemonIndex::P0,
+                next_index: PokemonIndex::P1,
+            },
+        )];
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        render_switch_phase(
+            &mut sim,
+            SideReference::SideOne,
+            &segment,
+            &context,
+            &mut rendered,
+        );
+        assert_eq!(
+            rendered.lines,
+            ["|switch|p1a: Charmeleon|Charmeleon, L84, M|100/100"]
+        );
+        sim.finish();
+        assert_eq!(state.serialize(), serialized);
     }
 
     #[test]

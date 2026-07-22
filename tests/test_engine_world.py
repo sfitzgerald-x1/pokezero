@@ -202,6 +202,15 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.slot_sides, {"p1": "side_one", "p2": "side_two"})
         self.assertEqual(world.party_species["p2"], ("snorlax", "starmie"))
 
+    def test_public_gender_overrides_sampled_world_gender(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["details"] = "Swampert, L84, M"
+        payload["sides"]["p2"]["pokemon"][0]["details"] = "Snorlax, L80, F"
+        world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+
+        self.assertEqual(world.spec.side_one.pokemon[0].gender, "M")
+        self.assertEqual(world.spec.side_two.pokemon[0].gender, "F")
+
     def test_removed_item_species_clears_only_the_named_mon(self) -> None:
         # Knock Off removal: the sampled set's item is the battle-START
         # assignment; the CURRENT public state is "holds nothing". The world

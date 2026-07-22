@@ -34,8 +34,9 @@
 #   the struggle-patched tree, applied AFTER struggle-typeless.
 #   poke-engine-gen3-ability-fidelity.patch — full Gen 3 randbats ability audit
 #   corrections. Includes exact chance branches and status/volatile immunity,
-#   recoil/Wonder Guard/Sturdy, Forecast/weather suppression, Intimidate through
-#   Substitute, Gen 3 Lightning Rod singles semantics, and speed-tie isolation.
+#   recoil/Wonder Guard/Sturdy, Forecast/weather suppression, gender-aware Cute
+#   Charm, Intimidate through Substitute, Gen 3 Lightning Rod singles semantics,
+#   and speed-tie isolation.
 #   Authored against the rapidspin-patched tree and applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.

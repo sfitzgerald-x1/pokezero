@@ -1816,6 +1816,7 @@ def _active_leech_seed_source_sides(replay: ShowdownReplayState) -> dict[str, st
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
     return {
         "species": pokemon.species,
+        "details": pokemon.details,
         "condition": pokemon.condition,
         "active": pokemon.active,
     }
@@ -1888,6 +1889,7 @@ def _request_materialization_rows(
         rows.append(
             {
                 "species": species,
+                "details": details,
                 "condition": condition,
                 "active": bool(raw_row.get("active")),
                 "moves": [dict(move) for move in self_move_states.get(_request_pokemon_identity(raw_row), ())],

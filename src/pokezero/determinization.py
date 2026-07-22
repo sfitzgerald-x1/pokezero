@@ -1073,6 +1073,7 @@ def _sample_revealed_opponent_fixture(
     witnessed_fallback: bool = False,
     canonicalize_revealed_variants: bool = False,
 ) -> FixturePokemon | None:
+    sampled_gender = pokemon.gender or _sample_gender(pokemon.species, set_source=set_source, rng=rng)
     if canonicalize_revealed_variants:
         # Candidate variants are serialized observation cache data and can be
         # stale or incomplete. V2 Root-PUCT revalidates them against the local
@@ -1142,6 +1143,7 @@ def _sample_revealed_opponent_fixture(
                 fallback_species=pokemon.species,
                 set_source=set_source,
                 move_slot_constraints=species_constraints,
+                gender=sampled_gender,
             )
             is not None
         )
@@ -1164,6 +1166,7 @@ def _sample_revealed_opponent_fixture(
         fallback_species=pokemon.species,
         set_source=set_source,
         move_slot_constraints=species_constraints,
+        gender=sampled_gender,
     )
     if fixture is not None:
         return fixture
@@ -1303,11 +1306,13 @@ def _witnessed_opponent_fixture(
         "ability": pokemon.revealed_ability
         or (abilities[rng.randrange(len(abilities))] if abilities else None),
     }
+    gender = pokemon.gender or _sample_gender(pokemon.species, set_source=set_source, rng=rng)
     fixture = _fixture_from_variant_payload(
         payload,
         fallback_species=pokemon.species,
         set_source=set_source,
         move_slot_constraints=move_slot_constraints,
+        gender=gender,
     )
     if fixture is not None:
         return fixture
@@ -1318,6 +1323,7 @@ def _witnessed_opponent_fixture(
         fallback_species=pokemon.species,
         set_source=set_source,
         move_slot_constraints=None,
+        gender=gender,
     )
 
 
@@ -1409,6 +1415,7 @@ def _sample_constrained_hidden_backline(
             fallback_species=universe.species,
             set_source=set_source,
             move_slot_constraints=species_move_slot_constraints,
+            gender=_sample_gender(universe.species, set_source=set_source, rng=rng),
         )
         if fixture is None:
             return None
@@ -1437,7 +1444,7 @@ def _sample_hidden_backline(
         universe = candidates.pop(universe_index)
         variant = universe.variants[rng.randrange(len(universe.variants))]
         used_species.add(_normalize_species_id(universe.species))
-        fixture = _fixture_from_variant(variant, set_source=set_source)
+        fixture = _fixture_from_variant(variant, set_source=set_source, rng=rng)
         if fixture is None:
             return None
         team.append(fixture)
@@ -1468,6 +1475,29 @@ def _base_stats_for_species(
             return None
         stats[stat] = value
     return stats
+
+
+def _sample_gender(
+    species: str,
+    *,
+    set_source: Gen3RandbatSource,
+    rng: random.Random,
+) -> str:
+    metadata = set_source.species_metadata.get(_normalize_species_id(species), {})
+    if not isinstance(metadata, Mapping):
+        return "N"
+    fixed = str(metadata.get("gender") or "").upper()
+    if fixed in {"M", "F", "N"}:
+        return fixed
+    ratio = metadata.get("genderRatio")
+    if not isinstance(ratio, Mapping):
+        return "N"
+    male = float(ratio.get("M") or 0.0)
+    female = float(ratio.get("F") or 0.0)
+    total = male + female
+    if total <= 0.0:
+        return "N"
+    return "M" if rng.random() < male / total else "F"
 
 
 def _stats_from_payload(payload: Any) -> dict[str, int] | None:
@@ -1620,6 +1650,7 @@ def _fixture_from_determinized(pokemon: Any, *, set_source: Gen3RandbatSource) -
         ability=_optional_text(getattr(pokemon, "ability", None)),
         item=item,
         level=level,
+        gender=_optional_text(getattr(pokemon, "gender", None)),
         evs=spread["evs"],
         ivs=spread["ivs"],
     )
@@ -1631,6 +1662,7 @@ def _fixture_from_variant_payload(
     fallback_species: str,
     set_source: Gen3RandbatSource,
     move_slot_constraints: Mapping[int, str] | None = None,
+    gender: str | None = None,
 ) -> FixturePokemon | None:
     moves = _moves_from_payload(payload.get("moves"))
     if not moves:
@@ -1657,6 +1689,7 @@ def _fixture_from_variant_payload(
         ability=_optional_text(payload.get("ability")),
         item=item,
         level=resolved_level,
+        gender=gender,
         evs=spread["evs"],
         ivs=spread["ivs"],
     )
@@ -1710,6 +1743,7 @@ def _fixture_from_variant(
     variant: Gen3RandbatVariant,
     *,
     set_source: Gen3RandbatSource,
+    rng: random.Random,
 ) -> FixturePokemon | None:
     spread = _gen3_randbat_fixture_spread(
         {},
@@ -1727,6 +1761,7 @@ def _fixture_from_variant(
         ability=variant.ability,
         item=variant.item,
         level=variant.level,
+        gender=_sample_gender(variant.species, set_source=set_source, rng=rng),
         evs=spread["evs"],
         ivs=spread["ivs"],
     )
@@ -1745,6 +1780,7 @@ def _revealed_pokemon_from_payload(payload: Any) -> RevealedPokemonBelief | None
         condition=_optional_text(payload.get("condition")),
         status=_optional_text(payload.get("status")),
         active=bool(payload.get("active")),
+        gender=_optional_text(payload.get("gender")),
         revealed_moves=_moves_from_payload(payload.get("revealed_moves")),
         revealed_ability=_optional_text(payload.get("revealed_ability")),
         revealed_item=_optional_text(payload.get("revealed_item")),

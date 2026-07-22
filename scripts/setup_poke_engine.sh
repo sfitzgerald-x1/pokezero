@@ -29,8 +29,9 @@
 #   poke-engine-gen3-ability-fidelity.patch — randbats ability audit fixes:
 #   recoil/Struggle/Wonder Guard/Sturdy, exact contact and Shed Skin chance
 #   branches, status and volatile immunities, Synchronize/Early Bird, Sand Veil,
-#   Forecast/weather suppression, Gen 3 Lightning Rod singles semantics, and
-#   speed-tie Choice isolation. Applied AFTER rapidspin-fidelity.
+#   Forecast/weather suppression, gender-aware Cute Charm, Gen 3 Lightning Rod
+#   singles semantics, and speed-tie Choice isolation. Applied AFTER
+#   rapidspin-fidelity.
 #   --fuzz=0 so a future version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #

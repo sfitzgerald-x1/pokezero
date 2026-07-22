@@ -78,10 +78,12 @@ class AbilityMechanicsTests(unittest.TestCase):
         sleep_turns: int = 0,
         pp: int = 16,
         item: str = "none",
+        gender: str = "none",
     ):
         return poke_engine.Pokemon(
             id=species,
             level=80,
+            gender=gender,
             types=types,
             base_types=types,
             hp=hp,
@@ -179,6 +181,61 @@ class AbilityMechanicsTests(unittest.TestCase):
                     "splash",
                 )
                 self.assertFalse(any("ChangeStatus SideOne" in self._text(branch) for branch in behind_sub))
+
+    def test_cute_charm_uses_public_gender_and_gen3_contact_gates(self) -> None:
+        attacker = self._mon(
+            "tauros", "intimidate", "tackle", speed=200, gender="male"
+        )
+        defender = self._mon("delcatty", "cutecharm", "splash", gender="female")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "tackle", "splash"
+        )
+        self.assertAlmostEqual(self._mass(branches, "ATTRACT"), 100.0 / 3.0, places=4)
+
+        blocked_cases = (
+            ("same gender", self._mon("delcatty", "cutecharm", "splash", gender="male"), {}),
+            ("genderless", self._mon("delcatty", "cutecharm", "splash"), {}),
+            ("substitute", defender, {"defender_volatiles": {"SUBSTITUTE"}, "substitute_health": 100}),
+            (
+                "oblivious",
+                defender,
+                {
+                    "attacker": self._mon(
+                        "slowbro", "oblivious", "tackle", speed=200, gender="male"
+                    )
+                },
+            ),
+        )
+        for label, case_defender, options in blocked_cases:
+            with self.subTest(label=label):
+                state_options = dict(options)
+                case_attacker = state_options.pop("attacker", attacker)
+                case_branches = poke_engine.generate_instructions(
+                    self._state(case_attacker, case_defender, **state_options), "tackle", "splash"
+                )
+                self.assertEqual(self._mass(case_branches, "ATTRACT"), 0.0)
+
+    def test_cute_charm_attract_ends_when_its_source_switches(self) -> None:
+        attacker = self._mon(
+            "tauros", "intimidate", "splash", speed=200, gender="male"
+        )
+        source = self._mon("delcatty", "cutecharm", "splash", gender="female")
+        replacement = self._mon("snorlax", "immunity", "splash", gender="male")
+        branches = poke_engine.generate_instructions(
+            self._state(
+                attacker,
+                source,
+                attacker_volatiles={"ATTRACT"},
+                defender_party=(replacement,),
+            ),
+            "splash",
+            "snorlax",
+        )
+
+        self.assertTrue(branches)
+        self.assertTrue(
+            all("RemoveVolatileStatus SideOne: ATTRACT" in self._text(branch) for branch in branches)
+        )
 
     def test_contact_status_abilities_respect_safeguard(self) -> None:
         attacker = self._mon("tauros", "intimidate", "tackle", speed=200)

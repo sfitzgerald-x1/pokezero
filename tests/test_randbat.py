@@ -302,6 +302,12 @@ class Gen3RandbatSourceTest(unittest.TestCase):
                 for variant in xatu.variants
             )
         )
+        self.assertEqual(
+            set_source.species_metadata["delcatty"]["genderRatio"],
+            {"M": 0.25, "F": 0.75},
+        )
+        self.assertEqual(set_source.species_metadata["tauros"]["gender"], "M")
+        self.assertEqual(set_source.species_metadata["starmie"]["gender"], "N")
 
 
 class Gen3RandbatBeliefPruningTest(unittest.TestCase):
