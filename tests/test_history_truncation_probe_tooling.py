@@ -96,6 +96,23 @@ class AnalyzeHistoryTruncationProbeTest(unittest.TestCase):
         self.assertEqual(report["verdict"], "flat")
         self.assertEqual(report["k_stars_by_checkpoint"]["m50"], 16)
 
+    def test_flat_down_to_k_star_above_min_is_still_flat(self) -> None:
+        # A positive ceiling wobble at k=16 (better, not degraded) must NOT flip the verdict to
+        # mixed: both checkpoints are flat from k=32 up, with no degradation anywhere.
+        base = {"max-damage": 0.72, "simple-legal": 0.96, "random-legal": 0.99}
+        better16 = {"max-damage": 0.72, "simple-legal": 0.96, "random-legal": 0.999}
+        cells = [
+            self._cell("m50", 128, base), self._cell("m50", 64, base),
+            self._cell("m50", 32, base), self._cell("m50", 16, base),
+            self._cell("S", 128, base), self._cell("S", 64, base),
+            self._cell("S", 32, base), self._cell("S", 16, better16),
+        ]
+        report = self._verdict(cells)
+        self.assertEqual(report["verdict"], "flat")
+        # No degradation on either checkpoint.
+        self.assertEqual(report["checkpoints"]["m50"]["degraded_ks"], [])
+        self.assertEqual(report["checkpoints"]["S"]["degraded_ks"], [])
+
     def test_small_k_degradation_keeps_128(self) -> None:
         cells = [
             self._cell("m50", 128, {"max-damage": 0.72, "simple-legal": 0.96, "random-legal": 0.99}),

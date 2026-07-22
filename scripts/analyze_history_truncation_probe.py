@@ -208,16 +208,17 @@ def analyze(cells: list[dict[str, Any]]) -> dict[str, Any]:
             "rows": rows,
         }
 
-    # Cross-checkpoint verdict per the pre-registered asymmetry.
-    all_flat_to_min = all(
-        v["k_star"] is not None
-        and v["k_star"] == min(r["k"] for r in v["rows"])
-        for v in checkpoint_verdicts.values()
-    )
+    # Cross-checkpoint verdict per the pre-registered asymmetry ("Degradation ... proves
+    # usage"). The flat case is "flat down to SOME k*" — every checkpoint has a k below full
+    # at which it (and every larger truncation) stays within 2xSE — NOT "flat to the minimum
+    # tested k". A positive deviation is not degradation, so it never flips the verdict to
+    # usage/mixed; only a delta < -2xSE (degraded_ks) does.
+    all_have_k_star = all(v["k_star"] is not None for v in checkpoint_verdicts.values())
     any_degraded = any(v["degraded_ks"] for v in checkpoint_verdicts.values())
+    all_degraded = all(v["degraded_ks"] for v in checkpoint_verdicts.values())
     k_stars = [v["k_star"] for v in checkpoint_verdicts.values() if v["k_star"] is not None]
 
-    if all_flat_to_min and not any_degraded:
+    if all_have_k_star and not any_degraded:
         agreed_k_star = max(k_stars) if k_stars else None
         next_pow2 = 1 << (agreed_k_star - 1).bit_length() if agreed_k_star else None
         verdict = "flat"
@@ -226,9 +227,7 @@ def analyze(cells: list[dict[str, Any]]) -> dict[str, Any]:
             f"history region (margin -> next power of two = {next_pow2}); sequence shrinks 151 -> "
             f"{23 + (next_pow2 or 0)}. Evidence-backed layout decision for the cutover."
         )
-    elif any_degraded and all(
-        v["degraded_ks"] for v in checkpoint_verdicts.values()
-    ):
+    elif all_degraded:
         verdict = "degraded"
         recommendation = (
             "Usage PROVEN — small-k degrades on both checkpoints. Keep 128 (or run one S-scale "
