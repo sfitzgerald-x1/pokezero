@@ -192,7 +192,7 @@ record; neither substitutes for collision or silent-mutation evidence.
 ## Constraints
 
 - **v2.2 byte-identity is absolute** for any ADD — same dual-schema gating
-  and byte-prefix tests as #779. All additions ride schema v3, pre-freeze
+  and V2.2 byte-identity plus V3 permutation-map tests as #779. All additions ride schema v3, pre-freeze
   only; after freeze, changes wait for v4.
 - Layers 1--2 are local and bounded. Layer 3 is a new CPU tool and may sample
   existing captures, but must emit incremental artifacts and provenance rather
@@ -276,7 +276,8 @@ Numeric scalars on the OWNING token — per-mon automata (confusion, encore,
 trap, ramp, stockpile) on that mon's token, side/field automata (weather
 countdown, Protect count of the active) on the field token — normalized
 like `NUMERIC_SLEEP_TURNS` (`min(1, x/cap)`). No categorical vocab growth.
-Every ADD rides schema v3 pre-freeze with the #779 byte-identity pattern,
+Every ADD rides schema v3 pre-freeze with V2.2 byte identity and the V3
+permutation-map pattern,
 and each gets the same interpretability property as the sleep-clause bits:
 a counterfactual flag/count-flip probe is the acceptance demonstration.
 

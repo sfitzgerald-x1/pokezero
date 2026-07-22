@@ -87,7 +87,12 @@ spec = V2_2_REPLAY_OBSERVATION_SPEC
 numeric_consts = {
     name: value
     for name, value in vars(sd).items()
-    if name.startswith("NUMERIC_") and isinstance(value, int)
+    # V3 retains a private writer surface beyond the V2.2 public schema.  This
+    # extractor documents the frozen V2.2 fixture, so ignore out-of-census
+    # constants rather than letting later schema additions alter its names.
+    if name.startswith("NUMERIC_")
+    and isinstance(value, int)
+    and 0 <= value < spec.numeric_feature_count
 }
 RANGE_BASES = {
     "NUMERIC_OPP_MOVE_PP_OFFSET": sd.BELIEF_MOVE_BUCKET_COUNT,  # 76..91
@@ -585,14 +590,14 @@ layout = {
 
 masks_section = {
     "feature_masks": {
-        "stats_block": masks.stats_block,
+        "stats_block": masks.opponent_tendency_stats_block,
         "exact_state": masks.exact_state,
         "transition_token_budget": masks.transition_token_budget,
         "tier2_residuals": masks.tier2_residuals,
         "tier2_investment": masks.tier2_investment,
     },
     "live_feature_blocks": {
-        "stats_block": bool(masks.stats_block and state.tendency_stats is not None),
+        "stats_block": bool(masks.opponent_tendency_stats_block and state.tendency_stats is not None),
         "exact_state_layer": masks.exact_state,
         "tier2_residual_gate": masks.tier2_residuals,
         "tier2_investment_gate": masks.tier2_investment,

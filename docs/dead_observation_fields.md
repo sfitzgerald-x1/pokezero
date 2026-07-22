@@ -10,7 +10,7 @@ encoding of **reachable** states; this doc records **spare** encoding of
 Dead fields are **not bugs** — a column that is always `0` is harmless. They are
 tracked because:
 
-- they can be **reclaimed** at a future schema bump (v4+) instead of growing the
+- they can be removed at the next untrained-schema cutover instead of growing the
   tensor, and
 - each row pins an explicit **reachability assumption**. If the pool ever gains
   one of these moves, the field goes live and the row must be revisited (and the
@@ -25,9 +25,10 @@ Power in the pool. Verified against the vendored gen3 pool (125 distinct moves).
 
 ## Dead numeric columns
 
-Indices are into the per-token numeric vector in `src/pokezero/showdown.py`.
-All listed columns are v2.x base columns (they predate the reachable-only
-encoding discipline) and are carried into v2.1 / v2.2 / v3 unchanged.
+Indices are historical V2.x writer positions in `src/pokezero/showdown.py`.
+They remain frozen in V2/v2.1/v2.2. The untrained V3 layout cutover removes all
+14 from its public tensor while retaining the writer positions privately for the
+V2.x-compatible encoder path.
 
 | Mechanic | Trigger move(s) | Pool carriers | Dead column(s) | Notes |
 | --- | --- | ---: | --- | --- |
