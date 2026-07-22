@@ -4,6 +4,10 @@ Status: 2026-07-20, owner-directed. Companion to `observation_v3_spec.md`.
 This sweep is the gate before the v3 observation schema is declared FROZEN
 and the Rust mirror + corpus regeneration begin.
 
+The final execution contract, including the token-format-refactor prerequisite,
+source-identity rules, lane outputs, and completion criteria, is recorded in
+[`v3_end_of_cycle_evaluation_plan.md`](v3_end_of_cycle_evaluation_plan.md).
+
 ## Principle (the meta-learning of the Toxic incident)
 
 **Any engine outcome that renders as a silent no-op in the encoding — or
