@@ -69,18 +69,18 @@ from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 from fidelity_gate_events import chosen_candidate, truant_loaf_slots  # noqa: E402
 from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
 
-TOKEN_BLOCKS = (
+FIXED_TOKEN_BLOCKS = (
     ("field", 0, 1),
     ("self_team", 1, 7),
     ("opponent_team", 7, 13),
     ("action", 13, 22),
     ("stats", 22, 23),
-    ("transition", 23, 151),
 )
 
 
-def block_of(token: int) -> str:
-    for name, start, stop in TOKEN_BLOCKS:
+def block_of(token: int, token_count: int) -> str:
+    blocks = (*FIXED_TOKEN_BLOCKS, ("transition", 23, token_count))
+    for name, start, stop in blocks:
         if start <= token < stop:
             return name
     return f"token{token}"
@@ -106,6 +106,7 @@ def run_corpus(
 ) -> dict[str, Any]:
     corpus = load_golden_corpus(corpus_dir)
     names = column_names(tables)
+    token_count = int(tables["layout"]["token_count"])
 
     fold_states: dict[int, Mapping[str, Any]] = {}
     chains: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
@@ -234,7 +235,11 @@ def run_corpus(
                     if name == "legal_action_mask":
                         token, column = -1, int(position[0])
                         colname = f"action{column}"
-                family = (name, block_of(token) if token >= 0 else name, colname)
+                family = (
+                    name,
+                    block_of(token, token_count) if token >= 0 else name,
+                    colname,
+                )
                 row_families.add(family)
                 if family not in family_examples:
                     index = tuple(int(v) for v in position)

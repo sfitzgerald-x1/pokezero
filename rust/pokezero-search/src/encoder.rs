@@ -665,7 +665,8 @@ fn transition_row_count(layout: &Layout) -> PyResult<usize> {
 
 /// Encode one row-inputs value, optionally consuming fold PRODUCTS natively
 /// (in-crate; no Python payload crossing) for the history-derived cells:
-/// turn-merged transition rows 23..=150, the stats-token tendency counters,
+/// turn-merged transition rows 23 through the schema-bound final row,
+/// the stats-token tendency counters,
 /// the per-opponent-mon tendency triple, the pinned Tier-2 conclusions, and
 /// the transition extent of the attention mask.
 pub(crate) fn encode_row_value(
@@ -2286,8 +2287,9 @@ fn opt_str_nonempty(value: &Option<String>) -> Option<&str> {
 }
 
 /// Every history-derived observation cell, written from the fold products —
-/// the native mirror of `_encode_turn_merged_transition_tokens` (rows
-/// 23..=150), `_encode_stats_token` (token 22), `_encode_mon_tendency` +
+/// the native mirror of `_encode_turn_merged_transition_tokens` (rows 23
+/// through the schema-bound final row), `_encode_stats_token` (token 22),
+/// `_encode_mon_tendency` +
 /// the pinned Tier-2 conclusions (opponent-team tokens).
 fn write_history_cells(
     tables: &Tables,
@@ -2816,7 +2818,8 @@ pub fn encode_decision(
 /// Persistent encoder handle: parses the tables artifact ONCE and serves
 /// per-row encodes, with or without a fold state. `encode_with_fold` consumes
 /// the fold's products natively in-crate (no `products_payload` Python
-/// crossing) — transition rows 23..=150, tendency/stats counters, pinned
+/// crossing) — transition rows 23 through the schema-bound final row,
+/// tendency/stats counters, pinned
 /// Tier-2 conclusions, and the transition attention extent become real.
 #[pyclass(name = "NativeEncoder", module = "pokezero_search")]
 pub struct NativeEncoder {

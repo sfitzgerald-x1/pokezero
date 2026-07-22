@@ -322,6 +322,16 @@ def _through_turn(lines, turn):
     return lines[: lines.index(f"|turn|{turn}") + 1]
 
 
+def _assert_shared_non_numeric_surface(test, v2_2, v3) -> None:
+    row_count = V3_REPLAY_OBSERVATION_SPEC.token_count
+    test.assertEqual(
+        [tuple(row) for row in v2_2.categorical_ids[:row_count]],
+        [tuple(row) for row in v3.categorical_ids],
+    )
+    test.assertEqual(v2_2.attention_mask[:row_count], v3.attention_mask)
+    test.assertEqual(v2_2.token_type_ids[:row_count], v3.token_type_ids)
+
+
 class SchemaTableTest(unittest.TestCase):
     def test_v3_is_supported_but_not_the_default(self) -> None:
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
@@ -349,9 +359,8 @@ class SchemaTableTest(unittest.TestCase):
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
         )
-        self.assertEqual(
-            V3_REPLAY_OBSERVATION_SPEC.token_count, V2_2_REPLAY_OBSERVATION_SPEC.token_count
-        )
+        self.assertEqual(V2_2_REPLAY_OBSERVATION_SPEC.token_count, 151)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.token_count, 87)
 
     def test_v3_column_layout(self) -> None:
         # The public map is the V3 spec artifact: every physical output index has exactly one
@@ -682,13 +691,8 @@ class V3EncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        # No categorical additions: the rows agree everywhere.
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        # No categorical additions: the shared V3 row extent agrees everywhere.
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
 
     def test_sleep_clause_bits_encode_on_the_field_token_under_v3_only(self) -> None:
         lines = _LEADS + [
@@ -852,12 +856,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
         # The v3 stall column is the ONLY difference: exactly one active token carries it.
         tok = self._active_token(state.opponent_team, OPPONENT_POKEMON_TOKEN_OFFSET)
         self.assertAlmostEqual(v3.numeric_features[tok][NUMERIC_STALL_COUNTER], 0.25)
@@ -1090,12 +1089,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
 
 
 class EncoreElapsedTrackerTest(unittest.TestCase):
@@ -1268,12 +1262,7 @@ class EncoreEncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
 
 
 class WrapTrapElapsedTrackerTest(unittest.TestCase):
@@ -1449,12 +1438,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
 
 
 class WishTurnsTrackerTest(unittest.TestCase):
@@ -1589,12 +1573,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
             self.assertEqual(len(v22_row), width)
             self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
-        self.assertEqual(
-            [tuple(row) for row in v2_2.categorical_ids],
-            [tuple(row) for row in v3.categorical_ids],
-        )
-        self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-        self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+        _assert_shared_non_numeric_surface(self, v2_2, v3)
 
 
 # Change 10 fixture: p2 Skarmory (faster) attacks p1 Snorlax for 0.17, then the SLOWER
@@ -1681,12 +1660,7 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
             self.assertAlmostEqual(v2_2.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.27)
             self.assertAlmostEqual(v3.numeric_features[flagged_row][NUMERIC_TT_DAMAGE_FRACTION], 0.17)
             # Categoricals, masks, and token types are wholly untouched by change 10.
-            self.assertEqual(
-                [tuple(row) for row in v2_2.categorical_ids],
-                [tuple(row) for row in v3.categorical_ids],
-            )
-            self.assertEqual(v2_2.attention_mask, v3.attention_mask)
-            self.assertEqual(v2_2.token_type_ids, v3.token_type_ids)
+            _assert_shared_non_numeric_surface(self, v2_2, v3)
 
 
 if __name__ == "__main__":

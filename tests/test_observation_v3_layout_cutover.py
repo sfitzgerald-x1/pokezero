@@ -13,6 +13,7 @@ from pokezero.showdown import (
     NUMERIC_TM2_FAIL,
     NUMERIC_SELF_SCREENS,
     NUMERIC_TOXIC_STAGE,
+    NUMERIC_TT_ABS_TURN,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
     OPPONENT_POKEMON_TOKEN_OFFSET,
@@ -128,7 +129,7 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
     def test_public_layout_matches_the_independent_physical_manifest(self) -> None:
         self.assertEqual(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX, _EXPECTED_V3_LEGACY_INDEX_BY_NEW_INDEX)
 
-    def test_token_block_offsets_and_total_are_frozen(self) -> None:
+    def test_v3_shortens_only_the_history_tail(self) -> None:
         self.assertEqual(
             (
                 FIELD_TOKEN_OFFSET,
@@ -139,9 +140,29 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
                 TRANSITION_TOKEN_OFFSET,
                 V3_REPLAY_OBSERVATION_SPEC.token_count,
             ),
-            (0, 1, 7, 13, 22, 23, 151),
+            (0, 1, 7, 13, 22, 23, 87),
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.token_count - TRANSITION_TOKEN_OFFSET, 128)
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.transition_token_count, 64)
+        self.assertEqual(V2_2_REPLAY_OBSERVATION_SPEC.transition_token_count, 128)
+        self.assertEqual(V2_2_REPLAY_OBSERVATION_SPEC.token_count, 151)
+
+    def test_v3_history_keeps_the_most_recent_64_turn_rows(self) -> None:
+        state = self._state()
+        template = state.turn_merged_tokens[-1]
+        turn_merged_tokens = tuple(replace(template, turn=turn) for turn in range(1, 71))
+        observation = self._encode(
+            V3_REPLAY_OBSERVATION_SPEC,
+            state=replace(state, turn_number=70, turn_merged_tokens=turn_merged_tokens),
+        )
+
+        history_mask = observation.attention_mask[TRANSITION_TOKEN_OFFSET:]
+        self.assertEqual(len(history_mask), 64)
+        self.assertEqual(sum(history_mask), 64)
+        turn_column = v3_numeric_index(NUMERIC_TT_ABS_TURN)
+        self.assertAlmostEqual(
+            observation.numeric_features[TRANSITION_TOKEN_OFFSET][turn_column], 7 / 1000
+        )
+        self.assertAlmostEqual(observation.numeric_features[-1][turn_column], 70 / 1000)
 
     def test_numeric_group_boundaries_and_total_are_frozen(self) -> None:
         expected = (
@@ -219,9 +240,10 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
                     continue
                 self.assertEqual(v3_row[new_index], v2_row[legacy_index])
 
-        self.assertEqual(v3.categorical_ids, v2_2.categorical_ids)
-        self.assertEqual(v3.attention_mask, v2_2.attention_mask)
-        self.assertEqual(v3.token_type_ids, v2_2.token_type_ids)
+        v3_rows = V3_REPLAY_OBSERVATION_SPEC.token_count
+        self.assertEqual(v3.categorical_ids, v2_2.categorical_ids[:v3_rows])
+        self.assertEqual(v3.attention_mask, v2_2.attention_mask[:v3_rows])
+        self.assertEqual(v3.token_type_ids, v2_2.token_type_ids[:v3_rows])
 
         # The fixture has both first- and second-sub-block fail events. These checks use the
         # physical v3 rows rather than the semantic compatibility view used by lifecycle tests.

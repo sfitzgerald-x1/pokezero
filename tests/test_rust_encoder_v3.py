@@ -89,7 +89,7 @@ class RustEncoderV3ParityTest(unittest.TestCase):
         header["observation"].update(
             {
                 "schema_version": OBSERVATION_SCHEMA_VERSION_V3,
-                "token_count": 151,
+                "token_count": 87,
                 "categorical_feature_count": 51,
                 "numeric_feature_count": 155,
             }

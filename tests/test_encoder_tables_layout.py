@@ -37,7 +37,7 @@ class EncoderTablesLayoutTest(unittest.TestCase):
         layout = exporter._layout_payload("pokezero.observation.v3")
 
         self.assertEqual(layout["schema_version"], "pokezero.observation.v3")
-        self.assertEqual(layout["token_count"], 151)
+        self.assertEqual(layout["token_count"], 87)
         self.assertEqual(layout["numeric_feature_count"], 155)
         self.assertEqual(layout["categorical_feature_count"], 51)
         self.assertLess(max(layout["numeric_columns"].values()), 155)
@@ -58,6 +58,7 @@ class EncoderTablesLayoutTest(unittest.TestCase):
             ["raindance", "sunnyday", "sandstorm"],
         )
         self.assertEqual(layout["constants"]["timed_condition_slots"], [])
+        self.assertEqual(layout["default_feature_masks"]["transition_token_budget"], 64)
 
     def test_exported_offsets_and_default_masks_match_the_runtime_contract(self) -> None:
         layout = _load_exporter()._layout_payload()

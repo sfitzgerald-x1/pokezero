@@ -634,7 +634,9 @@ def generate_scenario_corpus(
             "feature_masks": {
                 "stats_block": masks.opponent_tendency_stats_block,
                 "exact_state": masks.exact_state,
-                "transition_token_budget": masks.transition_token_budget,
+                "transition_token_budget": min(
+                    masks.transition_token_budget, spec.transition_token_count
+                ),
                 "tier2_residuals": masks.tier2_residuals,
                 "tier2_investment": masks.tier2_investment,
             },

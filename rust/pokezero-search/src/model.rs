@@ -41,7 +41,7 @@ use crate::tree::{
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
-/// Observation tensor shape (v2.2 export contract; see export_manifest.json).
+/// Observation tensor shape from the selected schema's export manifest.
 #[derive(Clone, Copy, Debug)]
 pub struct ObsSpec {
     pub window: i64,
@@ -989,7 +989,7 @@ impl NativeLeafModel {
         model_path,
         device = "cpu",
         window = 1,
-        tokens = 151,
+        tokens = None,
         categorical_features = 51,
         numeric_features = 155,
     ))]
@@ -997,10 +997,15 @@ impl NativeLeafModel {
         model_path: &str,
         device: &str,
         window: i64,
-        tokens: i64,
+        tokens: Option<i64>,
         categorical_features: i64,
         numeric_features: i64,
     ) -> PyResult<Self> {
+        let tokens = tokens.ok_or_else(|| {
+            PyValueError::new_err(
+                "tokens is required; pass the checkpoint/export manifest token count",
+            )
+        })?;
         let spec = ObsSpec {
             window,
             tokens,

@@ -45,6 +45,7 @@ from .observation import (
     OPPONENT_POKEMON_TOKEN_COUNT,
     OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
+    V3_TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
     ObservationPerspective,
     ObservationSpec,
@@ -742,6 +743,7 @@ V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
 V3_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_V3_CATEGORICAL_FEATURE_COUNT,
     numeric_feature_count=_V3_NUMERIC_FEATURE_COUNT,
+    transition_token_count=V3_TRANSITION_TOKEN_COUNT,
     schema_version=OBSERVATION_SCHEMA_VERSION_V3,
 )
 REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {

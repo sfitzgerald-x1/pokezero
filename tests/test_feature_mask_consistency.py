@@ -193,6 +193,35 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
 
 
 class MaskDerivationTest(unittest.TestCase):
+    def test_v3_checkpoint_budget_is_schema_bounded_and_defaults_to_64_on_load(self) -> None:
+        from pokezero.neural_policy import TransformerPolicyConfig
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3
+        from pokezero.showdown import V3_REPLAY_OBSERVATION_SPEC
+
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=2,
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+            categorical_feature_count=V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+            numeric_feature_count=V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+            token_count=V3_REPLAY_OBSERVATION_SPEC.token_count,
+            transition_token_budget=64,
+        )
+        payload = config.to_dict()
+        payload.pop("transition_token_budget")
+        self.assertEqual(TransformerPolicyConfig.from_dict(payload).transition_token_budget, 64)
+
+        with self.assertRaisesRegex(ValueError, "1..64"):
+            TransformerPolicyConfig.compact_category(
+                category_vocab=("species:a",),
+                category_oov_buckets=2,
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+                categorical_feature_count=V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+                numeric_feature_count=V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                token_count=V3_REPLAY_OBSERVATION_SPEC.token_count,
+                transition_token_budget=65,
+            )
+
     def test_feature_masks_from_model_config_round_trips(self) -> None:
         if not _torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
