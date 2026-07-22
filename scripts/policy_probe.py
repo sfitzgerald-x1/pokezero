@@ -49,6 +49,7 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     NUMERIC_TOXIC_STAGE,
     SELF_POKEMON_TOKEN_OFFSET,
+    numeric_index_for_schema,
     observation_from_player_state,
 )
 
@@ -92,6 +93,11 @@ def _hp_token(condition: str | None) -> str:
     """The bare HP token ('180/281') from a condition string, dropping any status word."""
     parts = str(condition or "100/100").split()
     return parts[0] if parts else "100/100"
+
+
+def _numeric_feature(observation, token: int, legacy_index: int) -> float:
+    physical_index = numeric_index_for_schema(observation.schema_version, legacy_index)
+    return float(observation.numeric_features[token][physical_index])
 
 
 def capture_base_state(
@@ -225,7 +231,7 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, base_state
         )
         token = _active_token_index(state)
         seen_status = obs.categorical_ids[token][CATEGORY_SECONDARY]
-        seen_ramp = obs.numeric_features[token][NUMERIC_TOXIC_STAGE]
+        seen_ramp = _numeric_feature(obs, token, NUMERIC_TOXIC_STAGE)
         # Verify the engineering landed: at a toxic stage the active token must read status:tox
         # and the ramp must equal stage/15; healthy must read status:none and ramp 0.
         if stage is None:

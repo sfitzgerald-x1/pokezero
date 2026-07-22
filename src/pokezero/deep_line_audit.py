@@ -81,6 +81,8 @@ from .showdown import (
     OPPONENT_POKEMON_TOKEN_OFFSET,
     SELF_POKEMON_TOKEN_OFFSET,
     _normalize_identifier,
+    numeric_index_if_present_for_schema,
+    numeric_index_for_schema,
     normalize_for_player,
     observation_from_player_state,
     parse_showdown_replay,
@@ -1341,19 +1343,27 @@ def _audit_field_surface(
             actual=_numeric(observation, FIELD_TOKEN_OFFSET, hazard_slot),
             detail="Spikes layers must match the bridge side-condition state",
         )
-        _compare(
-            report,
-            kind="bridge_field_oracle",
-            player_id=player_id,
-            turn=turn,
-            column=f"field.{label}_screens",
-            expected=expected_screens,
-            actual=_numeric(observation, FIELD_TOKEN_OFFSET, screen_slot),
-            detail="active Reflect/Light Screen flags must match bridge side conditions",
-        )
+        actual_screens = _numeric_if_present(observation, FIELD_TOKEN_OFFSET, screen_slot)
+        if actual_screens is not None:
+            _compare(
+                report,
+                kind="bridge_field_oracle",
+                player_id=player_id,
+                turn=turn,
+                column=f"field.{label}_screens",
+                expected=expected_screens,
+                actual=actual_screens,
+                detail="active Reflect/Light Screen flags must match bridge side conditions",
+            )
         for condition, self_slot, opponent_slot in _TIMED_FIELD_SLOTS:
             value = counts.get(condition, 0)
             expected_duration = max(0.0, min(1.0, float(value) / 5.0)) if value else 0.0
+            legacy_slot = self_slot if timed_slot_index == 1 else opponent_slot
+            actual_duration = _numeric_if_present(
+                observation, FIELD_TOKEN_OFFSET, legacy_slot
+            )
+            if actual_duration is None:
+                continue
             _compare(
                 report,
                 kind="bridge_field_oracle",
@@ -1361,11 +1371,7 @@ def _audit_field_surface(
                 turn=turn,
                 column=f"field.{label}_{condition}_turns",
                 expected=expected_duration,
-                actual=_numeric(
-                    observation,
-                    FIELD_TOKEN_OFFSET,
-                    self_slot if timed_slot_index == 1 else opponent_slot,
-                ),
+                actual=actual_duration,
                 detail="timed side-condition duration must match the bridge side-condition state",
             )
 
@@ -1619,7 +1625,9 @@ def _audit_incremental_vs_batch(
         expected=batch,
         actual=live,
         detail="fresh replay/belief fold must match the incremental encoder outside live-only annotations",
-        ignored_numeric_columns=_LIVE_INCREMENTAL_ANNOTATION_COLUMNS,
+        ignored_numeric_columns=_numeric_columns_for_observation(
+            live, _LIVE_INCREMENTAL_ANNOTATION_COLUMNS
+        ),
     )
 
 
@@ -1885,7 +1893,32 @@ def attach_audit_vocabulary(
 
 
 def _numeric(observation: PokeZeroObservationV0, token: int, slot: int) -> float:
-    return float(observation.numeric_features[token][slot])
+    physical_slot = numeric_index_for_schema(observation.schema_version, slot)
+    return float(observation.numeric_features[token][physical_slot])
+
+
+def _numeric_if_present(
+    observation: PokeZeroObservationV0, token: int, slot: int
+) -> float | None:
+    """Read a semantic numeric field, returning ``None`` when its schema omits it."""
+
+    physical_slot = numeric_index_if_present_for_schema(observation.schema_version, slot)
+    if physical_slot is None:
+        return None
+    return float(observation.numeric_features[token][physical_slot])
+
+
+def _numeric_columns_for_observation(
+    observation: PokeZeroObservationV0, slots: Sequence[int]
+) -> frozenset[int]:
+    """Translate semantic column ids into this observation's physical ignore set."""
+
+    physical: set[int] = set()
+    for slot in slots:
+        physical_slot = numeric_index_if_present_for_schema(observation.schema_version, slot)
+        if physical_slot is not None:
+            physical.add(physical_slot)
+    return frozenset(physical)
 
 
 def _active_pokemon_token(observation: PokeZeroObservationV0, offset: int) -> int | None:

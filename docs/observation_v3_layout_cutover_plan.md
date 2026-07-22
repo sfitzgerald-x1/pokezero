@@ -1,7 +1,7 @@
 # Observation v3 layout cutover — plan
 
 Status: 2026-07-22, implemented and independently reviewed in the V3 layout-cutover
-PR; pending Rust mirroring and fresh audit/corpus artifacts. Companion to
+PR; Rust mirroring is complete, with fresh audit/corpus artifacts still pending. Companion to
 `observation_v3_spec.md` (content) and `silent_noop_sweep_plan.md` (the
 input-audit program). This doc governs the one-time DESTRUCTIVE
 reorganization of the v3 observation layout before the schema freeze.
@@ -106,6 +106,6 @@ The cutover inserts ~2–4 agent-days before the freeze; the smoke arms'
   projection test and a real V2.2/V3 encode test. It checks every carried column
   through the old-to-new map, with the two confusion-self-hit damage corrections
   (first and second sub-block) as the documented semantic exceptions.
-- **Still required before EOC:** the V3 Rust mirror, fresh golden corpus/audit
-  captures, and the final EOC run described in
+- **Still required before EOC:** fresh V3 golden corpus/audit captures and the
+  final EOC run described in
   `v3_end_of_cycle_evaluation_plan.md`. No historical V3 artifact may be reused.

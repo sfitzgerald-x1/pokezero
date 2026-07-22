@@ -138,12 +138,16 @@ Reading:
   ~1.7k MPS b=64); the native loop's job is to make everything around the
   forward free, which these numbers demonstrate.
 
+## Observation encoder
+
+- The native encoder supports schema-bound V2.2 and V3 table artifacts. V2.2
+  remains bit-exact against the committed golden corpus; V3 has a focused
+  Python/Rust full-surface parity gate and awaits the fresh V3 corpus/EOC run.
+- `NativeEncoder.encode_with_fold` consumes the incremental public-event fold
+  in-crate, including V3 fail and confusion-self-hit history semantics.
+
 ## What is deliberately not here yet
 
-- The Rust v2.2 encoder (track B's deliverable; validated bit-exactly by the
-  golden corpus before anything is trusted). Until it lands, model-priced
-  search leaves carry a caller-supplied template observation — throughput is
-  real, leaf content is not (`docs/crate_model_integration.md`).
 - Model priors in selection (needs the action-index → `MoveChoice` mapping;
   the evaluator already emits masked-softmax priors per the contract).
 

@@ -7,19 +7,29 @@ from dataclasses import replace
 
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3
 from pokezero.showdown import (
+    ACTION_CANDIDATE_TOKEN_OFFSET,
+    FIELD_TOKEN_OFFSET,
     NUMERIC_TM2_DAMAGE_FRACTION,
     NUMERIC_TM2_FAIL,
+    NUMERIC_SELF_SCREENS,
+    NUMERIC_TOXIC_STAGE,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
+    OPPONENT_POKEMON_TOKEN_OFFSET,
+    OPPONENT_TENDENCY_STATS_TOKEN_OFFSET,
+    SELF_POKEMON_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
     V3_DROPPED_LEGACY_NUMERIC_INDICES,
-    V3_LEGACY_NUMERIC_FEATURE_COUNT,
+    V3_NUMERIC_LAYOUT_GROUPS,
+    V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     V3_NUMERIC_INDEX_BY_LEGACY_INDEX,
     V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
     V3_REPLAY_OBSERVATION_SPEC,
     _project_v3_numeric_rows,
+    numeric_index_if_present_for_schema,
+    numeric_index_for_schema,
     normalize_for_player,
     observation_from_player_state,
     parse_showdown_replay,
@@ -103,7 +113,10 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
 
     def test_projection_moves_every_writer_column_exactly_once(self) -> None:
         legacy_rows = [
-            [float((row_index + 1) * 10_000 + column) for column in range(V3_LEGACY_NUMERIC_FEATURE_COUNT)]
+            [
+                float((row_index + 1) * 10_000 + column)
+                for column in range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
+            ]
             for row_index in range(3)
         ]
         projected = _project_v3_numeric_rows(legacy_rows)
@@ -114,6 +127,68 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
 
     def test_public_layout_matches_the_independent_physical_manifest(self) -> None:
         self.assertEqual(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX, _EXPECTED_V3_LEGACY_INDEX_BY_NEW_INDEX)
+
+    def test_token_block_offsets_and_total_are_frozen(self) -> None:
+        self.assertEqual(
+            (
+                FIELD_TOKEN_OFFSET,
+                SELF_POKEMON_TOKEN_OFFSET,
+                OPPONENT_POKEMON_TOKEN_OFFSET,
+                ACTION_CANDIDATE_TOKEN_OFFSET,
+                OPPONENT_TENDENCY_STATS_TOKEN_OFFSET,
+                TRANSITION_TOKEN_OFFSET,
+                V3_REPLAY_OBSERVATION_SPEC.token_count,
+            ),
+            (0, 1, 7, 13, 22, 23, 151),
+        )
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.token_count - TRANSITION_TOKEN_OFFSET, 128)
+
+    def test_numeric_group_boundaries_and_total_are_frozen(self) -> None:
+        expected = (
+            ("core", 0, 5, 6),
+            ("pokemon_state", 6, 38, 33),
+            ("belief", 39, 91, 53),
+            ("action", 92, 97, 6),
+            ("field", 98, 109, 12),
+            ("tendency", 110, 120, 11),
+            ("history", 121, 154, 34),
+        )
+        cursor = 0
+        actual = []
+        for name, legacy_indices in V3_NUMERIC_LAYOUT_GROUPS:
+            start = cursor
+            cursor += len(legacy_indices)
+            actual.append((name, start, cursor - 1, len(legacy_indices)))
+        self.assertEqual(tuple(actual), expected)
+        self.assertEqual(cursor, V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
+
+    def test_schema_aware_numeric_lookup_maps_or_rejects(self) -> None:
+        self.assertEqual(
+            numeric_index_for_schema(
+                V2_2_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_TOXIC_STAGE
+            ),
+            NUMERIC_TOXIC_STAGE,
+        )
+        self.assertEqual(
+            numeric_index_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_TOXIC_STAGE
+            ),
+            17,
+        )
+        with self.assertRaisesRegex(ValueError, "dropped from v3"):
+            numeric_index_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
+            )
+        self.assertIsNone(
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
 
     def test_legacy_v2_2_surface_is_fully_accounted_for(self) -> None:
         legacy_v2_2_indices = set(range(V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count))

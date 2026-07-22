@@ -50,7 +50,7 @@ from pokezero.showdown import (
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
     V3_DROPPED_LEGACY_NUMERIC_INDICES,
-    V3_LEGACY_NUMERIC_FEATURE_COUNT,
+    V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     V3_NUMERIC_INDEX_BY_LEGACY_INDEX,
     V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REPLAY_OBSERVATION_SPEC,
@@ -85,7 +85,7 @@ def _legacy_v3_semantic_view(observation):
             0.0
             if legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
             else row[V3_NUMERIC_INDEX_BY_LEGACY_INDEX[legacy_index]]
-            for legacy_index in range(V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            for legacy_index in range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
         )
         for row in observation.numeric_features
     )
@@ -330,8 +330,8 @@ class SchemaTableTest(unittest.TestCase):
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3),
             V3_REPLAY_OBSERVATION_SPEC,
         )
-        # v2.2 keeps the fresh-selection default: v3 launches only after the Rust fold
-        # encoder mirrors it and the golden corpus regenerates (spec coordination section).
+        # v2.2 keeps the fresh-selection default: v3 launches only after the fresh
+        # golden corpus and EOC audit pass (spec coordination section).
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
         # v3 shares v2.2's turn-merged transition surface.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
@@ -361,7 +361,7 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(len(set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)), 155)
         self.assertEqual(
             set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V3_DROPPED_LEGACY_NUMERIC_INDICES,
-            set(range(V3_LEGACY_NUMERIC_FEATURE_COUNT)),
+            set(range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
         )
         self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), 32)
         self.assertEqual(v3_numeric_index(NUMERIC_CONFUSION_TURNS), 33)
@@ -680,7 +680,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -850,7 +850,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -864,9 +864,7 @@ class StallCounterEncodeTest(unittest.TestCase):
 
 
 class IncrementalFoldParityTest(unittest.TestCase):
-    """The incremental fold twin (transitions_fold) mirrors the fail marker, and its
-    serialized payload stays byte-stable for fail-free games (the committed golden
-    corpus predates the field)."""
+    """The incremental fold mirrors V3 history fields without changing clean payloads."""
 
     def test_incremental_fold_matches_batch_on_a_fail_log(self) -> None:
         from pokezero.transitions_fold import FoldState
@@ -889,6 +887,35 @@ class IncrementalFoldParityTest(unittest.TestCase):
         state, products = FoldState.initial(perspective_slot="p1").advance(_FAIL_LINES)
         canonical = json.dumps(state.to_payload(), sort_keys=True)
         self.assertIn('"fail": true', canonical)
+        resumed = FoldState.from_payload(json.loads(canonical))
+        self.assertEqual(json.dumps(resumed.to_payload(), sort_keys=True), canonical)
+        self.assertEqual(resumed.products().transition_tokens, products.transition_tokens)
+
+    def test_incremental_fold_matches_batch_on_confusion_self_hit(self) -> None:
+        from pokezero.transitions_fold import FoldState
+
+        replay = parse_showdown_replay(_CONFUSE_SELFHIT_LINES, battle_id="confusion-fold")
+        batch = extract_transition_tokens(replay, perspective_slot="p1")
+        _, products = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES
+        )
+        self.assertEqual(products.transition_tokens, batch)
+        self.assertTrue(any(token.confusion_selfhit for token in products.transition_tokens))
+
+    def test_payload_round_trip_carries_confusion_and_omits_it_when_clean(self) -> None:
+        from pokezero.transitions_fold import FoldState
+
+        clean, _ = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES[: len(_LEADS) + 2]
+        )
+        self.assertNotIn(
+            '"confusion_selfhit"', json.dumps(clean.to_payload(), sort_keys=True)
+        )
+        state, products = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES
+        )
+        canonical = json.dumps(state.to_payload(), sort_keys=True)
+        self.assertIn('"confusion_selfhit": true', canonical)
         resumed = FoldState.from_payload(json.loads(canonical))
         self.assertEqual(json.dumps(resumed.to_payload(), sort_keys=True), canonical)
         self.assertEqual(resumed.products().transition_tokens, products.transition_tokens)
@@ -1061,7 +1088,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1239,7 +1266,7 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1420,7 +1447,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1560,7 +1587,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],

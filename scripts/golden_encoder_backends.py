@@ -42,9 +42,12 @@ import numpy
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.belief import PlayerBeliefView, RevealedPokemonBelief
+from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import load_showdown_dex_cached
 from pokezero.golden_corpus import GOLDEN_ARRAY_FIELDS, GoldenObservationArrays
 from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
     ObservationFeatureMasks,
     ObservationPerspective,
 )
@@ -111,7 +114,7 @@ def observation_contract_from_header(header: Mapping[str, Any]) -> tuple[Any, Ob
     if not isinstance(raw_masks, Mapping):
         raise ValueError("corpus header is missing its feature masks.")
     masks = ObservationFeatureMasks(
-        stats_block=bool(raw_masks["stats_block"]),
+        opponent_tendency_stats_block=bool(raw_masks["stats_block"]),
         exact_state=bool(raw_masks["exact_state"]),
         transition_token_budget=int(raw_masks["transition_token_budget"]),
         tier2_residuals=bool(raw_masks["tier2_residuals"]),
@@ -150,6 +153,7 @@ def _pokemon_from_metadata(entry: Mapping[str, Any]) -> ShowdownPokemon:
         ability=entry.get("ability"),
         item=entry.get("item"),
         stats={str(k): int(v) for k, v in stats.items()} if isinstance(stats, Mapping) else None,
+        live_type_source=entry.get("live_type_source"),
     )
 
 
@@ -384,6 +388,20 @@ def state_from_row_inputs(row_inputs: Mapping[str, Any]) -> PlayerRelativeBattle
         opponent_wish_pending=bool(metadata.get("opponent_wish_pending")),
         self_sleep_clause_used=bool(metadata.get("self_sleep_clause_used")),
         opponent_sleep_clause_used=bool(metadata.get("opponent_sleep_clause_used")),
+        self_sleep_clause_blocks=bool(metadata.get("self_sleep_clause_blocks")),
+        opponent_sleep_clause_blocks=bool(metadata.get("opponent_sleep_clause_blocks")),
+        self_wish_turns=int(metadata.get("self_wish_turns") or 0),
+        opponent_wish_turns=int(metadata.get("opponent_wish_turns") or 0),
+        self_stall_counter=int(metadata.get("self_stall_counter") or 0),
+        opponent_stall_counter=int(metadata.get("opponent_stall_counter") or 0),
+        self_confusion_elapsed=int(metadata.get("self_confusion_elapsed") or 0),
+        opponent_confusion_elapsed=int(metadata.get("opponent_confusion_elapsed") or 0),
+        self_encore_elapsed=int(metadata.get("self_encore_elapsed") or 0),
+        opponent_encore_elapsed=int(metadata.get("opponent_encore_elapsed") or 0),
+        self_wrap_trap_elapsed=int(metadata.get("self_wrap_trap_elapsed") or 0),
+        opponent_wrap_trap_elapsed=int(metadata.get("opponent_wrap_trap_elapsed") or 0),
+        self_meanlook_trap=bool(metadata.get("self_meanlook_trap")),
+        opponent_meanlook_trap=bool(metadata.get("opponent_meanlook_trap")),
     )
 
 
@@ -394,9 +412,19 @@ class PythonReferenceBackend:
 
     def __init__(self, *, showdown_root: Path | str, header: Mapping[str, Any]) -> None:
         self._spec, self._masks = observation_contract_from_header(header)
-        include_turn_merged = self._spec.schema_version.endswith("v2.2")
-        self._vocab = gen3_category_vocabulary(
+        include_turn_merged = self._spec.schema_version in {
+            OBSERVATION_SCHEMA_VERSION_V2_2,
+            OBSERVATION_SCHEMA_VERSION_V3,
+        }
+        cached_vocab = gen3_category_vocabulary(
             showdown_root, include_turn_merged=include_turn_merged
+        )
+        # OOV observations are mutable diagnostics. Keep corpus validation from
+        # polluting the process-wide cached vocabulary used by unrelated tests.
+        self._vocab = CategoryVocabulary(
+            tokens=cached_vocab.tokens,
+            oov_buckets=cached_vocab.oov_buckets,
+            aliases=cached_vocab.aliases,
         )
         self._dex = load_showdown_dex_cached(showdown_root)
 

@@ -12,6 +12,9 @@ from pokezero.deep_line_audit import (
     _audit_side_tokens,
     _encode_species_category,
     _forecast_form_types,
+    _numeric,
+    _numeric_columns_for_observation,
+    _numeric_if_present,
     _numeric_features_equal_except,
     _raw_request_action_mask,
     _raw_side_condition_counts,
@@ -34,8 +37,12 @@ from pokezero.showdown import (
     NUMERIC_HP_FRACTION,
     NUMERIC_LEGAL,
     NUMERIC_PRESENT,
+    NUMERIC_SELF_SCREENS,
+    NUMERIC_TIER2_CB_PINNED,
+    NUMERIC_TOXIC_STAGE,
     SELF_POKEMON_TOKEN_OFFSET,
     V3_REPLAY_OBSERVATION_SPEC,
+    numeric_index_for_schema,
     parse_showdown_replay,
 )
 
@@ -150,6 +157,33 @@ class DeepLineAuditReportTest(unittest.TestCase):
         self.assertTrue(_numeric_features_equal_except(expected, annotation_only, frozenset({1})))
         self.assertFalse(_numeric_features_equal_except(expected, public_difference, frozenset({1})))
 
+    def test_numeric_access_maps_semantic_columns_for_v3(self) -> None:
+        spec = V3_REPLAY_OBSERVATION_SPEC
+        numeric = [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+        token = SELF_POKEMON_TOKEN_OFFSET
+        physical = numeric_index_for_schema(spec.schema_version, NUMERIC_TOXIC_STAGE)
+        numeric[token][physical] = 0.6
+        numeric[token][NUMERIC_TOXIC_STAGE] = 0.9
+        observation = PokeZeroObservationV0(
+            categorical_ids=tuple(
+                (0,) * spec.categorical_feature_count for _ in range(spec.token_count)
+            ),
+            numeric_features=tuple(tuple(row) for row in numeric),
+            token_type_ids=(0,) * spec.token_count,
+            attention_mask=(False,) * spec.token_count,
+            legal_action_mask=(False,) * 9,
+            schema_version=spec.schema_version,
+        )
+
+        self.assertEqual(_numeric(observation, token, NUMERIC_TOXIC_STAGE), 0.6)
+        self.assertIsNone(_numeric_if_present(observation, token, NUMERIC_SELF_SCREENS))
+        self.assertEqual(
+            _numeric_columns_for_observation(observation, (NUMERIC_TIER2_CB_PINNED,)),
+            frozenset(
+                {numeric_index_for_schema(spec.schema_version, NUMERIC_TIER2_CB_PINNED)}
+            ),
+        )
+
     def test_known_finding_suppression_preserves_audit_incidence(self) -> None:
         report = DeepLineAuditReport(suppressed_kinds=frozenset({"known"}))
         report.add(
@@ -204,16 +238,15 @@ class DeepLineAuditReportTest(unittest.TestCase):
         categorical[token][CATEGORY_SECONDARY] = vocab.encode("status:none")
         categorical[token][CATEGORY_TYPE_1] = vocab.encode("type:water")
         categorical[token][CATEGORY_TYPE_2] = vocab.encode("")
-        numeric[token][NUMERIC_PRESENT] = 1.0
-        numeric[token][NUMERIC_ACTIVE] = 1.0
-        numeric[token][NUMERIC_LEGAL] = 1.0
-        numeric[token][NUMERIC_HP_FRACTION] = 1.0
+        for slot in (NUMERIC_PRESENT, NUMERIC_ACTIVE, NUMERIC_LEGAL, NUMERIC_HP_FRACTION):
+            numeric[token][numeric_index_for_schema(spec.schema_version, slot)] = 1.0
         observation = PokeZeroObservationV0(
             categorical_ids=tuple(tuple(row) for row in categorical),
             numeric_features=tuple(tuple(row) for row in numeric),
             token_type_ids=tuple(0 for _ in range(spec.token_count)),
             attention_mask=tuple(False for _ in range(spec.token_count)),
             legal_action_mask=(False,) * 9,
+            schema_version=spec.schema_version,
         )
         dex = SimpleNamespace(species_info=lambda species: SimpleNamespace(types=("Water",)))
         report = DeepLineAuditReport()

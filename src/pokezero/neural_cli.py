@@ -502,11 +502,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Defender-side investment channel (#513): populate + encode the reserved "
-            "investment columns (NUMERIC_TT_INVESTMENT_BIT 120, "
-            "NUMERIC_TIER2_INVESTMENT_PINNED 139) behind the investment precision gate. "
+            "NUMERIC_TT_INVESTMENT_BIT and NUMERIC_TIER2_INVESTMENT_PINNED semantic "
+            "columns behind the investment precision gate. Physical offsets are "
+            "observation-schema-specific. "
             "A SEPARATE switch from --tier2-residuals (different provenance). Default for a "
             "fresh train: OFF (byte-identical to the pre-investment encoder). Only meaningful "
-            "under --observation-schema v2.1/v2.2; a no-op under v2. With --initial-checkpoint "
+            "under --observation-schema v2.1/v2.2/v3; a no-op under v2. With --initial-checkpoint "
             "the checkpoint's value wins and an explicitly disagreeing flag hard-fails."
         ),
     )

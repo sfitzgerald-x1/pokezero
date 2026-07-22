@@ -1,4 +1,4 @@
-"""Golden-corpus bit-exactness harness for candidate v2.2 encoders (track B).
+"""Golden-corpus bit-exactness harness for schema-bound native encoders (track B).
 
 Streams golden corpus rows, re-encodes each row's SANCTIONED input surface
 through a pluggable backend, and diffs all five observation arrays

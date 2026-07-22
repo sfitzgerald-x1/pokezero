@@ -1,17 +1,17 @@
-"""Export the v2.2 encoder's vocabulary + layout + dex tables to one JSON artifact.
+"""Export a schema-bound encoder vocabulary + layout + dex artifact.
 
 The Rust encoder (rust/pokezero-search, ``encode_decision``) loads this file —
 NO table is ever hand-transcribed into Rust. Everything here is read from the
 Python source of truth:
 
 - ``vocab``: the exact ``CategoryVocabulary`` row mapping for the closed gen3
-  randbat universe (turn-merged families included, matching the v2.2 encode),
+  randbat universe (turn-merged families included, matching V2.2/V3),
   as an explicit normalized-string -> row-id index (aliases pre-resolved),
   plus the OOV policy constants (blake2b-8 big-endian mod oov_buckets, offset
   1 + len(tokens)) and the pad row (0).
 - ``layout``: the token-section offsets and every categorical/numeric column
-  index the encoder writes (``CATEGORY_*`` / ``NUMERIC_*``), the v2.2 spec
-  census, and the numeric normalization constants.
+  physical index the encoder writes (``CATEGORY_*`` / ``NUMERIC_*``), the
+  selected schema census, and the numeric normalization constants.
 - ``dex``: the gen3-resolved per-species and per-move tables exactly as
   ``pokezero.dex`` resolves them (effect labels/chances pre-derived).
 
@@ -21,7 +21,8 @@ SHA-256 is stable for a given Showdown build.
 Usage:
 
     PYTHONPATH=src python scripts/export_encoder_tables.py \
-        --showdown-root <built-showdown> --out corpus/encoder_tables.json
+        --showdown-root <built-showdown> --observation-schema v3 \
+        --out corpus/encoder_tables.json
 """
 
 from __future__ import annotations
@@ -42,10 +43,15 @@ from pokezero.category_vocab import normalize_category_value  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
 from pokezero.observation import (  # noqa: E402
     OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
     ObservationFeatureMasks,
 )
 from pokezero.randbat_vocab import gen3_category_vocabulary  # noqa: E402
-from pokezero.showdown import observation_spec_for_schema  # noqa: E402
+from pokezero.showdown import (  # noqa: E402
+    numeric_index_if_present_for_schema,
+    observation_schema_version_from_choice,
+    observation_spec_for_schema,
+)
 
 TABLES_SCHEMA_VERSION = "pokezero.encoder-tables.v1"
 
@@ -72,19 +78,45 @@ def _vocab_payload(showdown_root: str) -> dict[str, Any]:
     }
 
 
-def _layout_payload() -> dict[str, Any]:
-    spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)
+def _numeric_column_payload(schema_version: str) -> dict[str, int]:
+    columns: dict[str, int] = {}
+    spec = observation_spec_for_schema(schema_version)
+    for name in dir(showdown):
+        value = getattr(showdown, name)
+        if not name.startswith("NUMERIC_") or not isinstance(value, int):
+            continue
+        if schema_version != OBSERVATION_SCHEMA_VERSION_V3 and not (
+            0 <= value < spec.numeric_feature_count
+        ):
+            continue
+        physical = numeric_index_if_present_for_schema(schema_version, value)
+        if physical is not None:
+            columns[name] = physical
+    return columns
+
+
+def _numeric_slot(schema_version: str, legacy_index: int) -> int:
+    physical = numeric_index_if_present_for_schema(schema_version, legacy_index)
+    if physical is None:
+        raise ValueError(
+            f"encoder table slot {legacy_index} is absent from schema {schema_version!r}"
+        )
+    return physical
+
+
+def _layout_payload(
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
+) -> dict[str, Any]:
+    spec = observation_spec_for_schema(schema_version)
     masks = ObservationFeatureMasks()
     categorical_columns = {
         name: int(getattr(showdown, name))
         for name in dir(showdown)
-        if name.startswith("CATEGORY_") and isinstance(getattr(showdown, name), int)
+        if name.startswith("CATEGORY_")
+        and isinstance(getattr(showdown, name), int)
+        and 0 <= int(getattr(showdown, name)) < spec.categorical_feature_count
     }
-    numeric_columns = {
-        name: int(getattr(showdown, name))
-        for name in dir(showdown)
-        if name.startswith("NUMERIC_") and isinstance(getattr(showdown, name), int)
-    }
+    numeric_columns = _numeric_column_payload(schema_version)
     return {
         "schema_version": spec.schema_version,
         "token_count": spec.token_count,
@@ -126,17 +158,34 @@ def _layout_payload() -> dict[str, Any]:
             "screen_conditions": list(showdown._SCREEN_CONDITIONS),
             "trap_abilities": sorted(showdown._TRAP_ABILITIES),
             "pinch_berries": sorted(showdown._PINCH_BERRIES),
-            "weather_reveal_order": list(showdown._WEATHER_REVEAL_ORDER),
-            "boost_stat_slots": [[stat, slot] for stat, slot in showdown._BOOST_STAT_SLOTS],
-            "base_stat_slots": [[stat, slot] for stat, slot in showdown._BASE_STAT_SLOTS],
-            "actual_stat_slots": [[stat, slot] for stat, slot in showdown._ACTUAL_STAT_SLOTS],
+            "weather_reveal_order": list(showdown._WEATHER_REVEAL_ORDER)[
+                : 3 if schema_version == OBSERVATION_SCHEMA_VERSION_V3 else None
+            ],
+            "boost_stat_slots": [
+                [stat, _numeric_slot(schema_version, slot)]
+                for stat, slot in showdown._BOOST_STAT_SLOTS
+            ],
+            "base_stat_slots": [
+                [stat, _numeric_slot(schema_version, slot)]
+                for stat, slot in showdown._BASE_STAT_SLOTS
+            ],
+            "actual_stat_slots": [
+                [stat, _numeric_slot(schema_version, slot)]
+                for stat, slot in showdown._ACTUAL_STAT_SLOTS
+            ],
             "timed_condition_slots": [
-                [condition, self_slot, opp_slot]
+                [
+                    condition,
+                    _numeric_slot(schema_version, self_slot),
+                    _numeric_slot(schema_version, opp_slot),
+                ]
                 for condition, self_slot, opp_slot in showdown._TIMED_CONDITION_SLOTS
+                if numeric_index_if_present_for_schema(schema_version, self_slot) is not None
+                and numeric_index_if_present_for_schema(schema_version, opp_slot) is not None
             ],
         },
         "default_feature_masks": {
-            "stats_block": masks.stats_block,
+            "stats_block": masks.opponent_tendency_stats_block,
             "exact_state": masks.exact_state,
             "transition_token_budget": masks.transition_token_budget,
             "tier2_residuals": masks.tier2_residuals,
@@ -186,11 +235,15 @@ def _dex_payload(showdown_root: str) -> dict[str, Any]:
     return {"species": species, "moves": moves}
 
 
-def build_tables(showdown_root: str) -> dict[str, Any]:
+def build_tables(
+    showdown_root: str,
+    *,
+    observation_schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
+) -> dict[str, Any]:
     return {
         "schema_version": TABLES_SCHEMA_VERSION,
         "vocab": _vocab_payload(showdown_root),
-        "layout": _layout_payload(),
+        "layout": _layout_payload(observation_schema_version),
         "dex": _dex_payload(showdown_root),
     }
 
@@ -198,10 +251,21 @@ def build_tables(showdown_root: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", required=True)
+    parser.add_argument(
+        "--observation-schema",
+        choices=("v2.2", "v3"),
+        default="v2.2",
+        help="Observation layout to export (default: v2.2 for compatibility).",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    tables = build_tables(str(args.showdown_root))
+    schema_version = observation_schema_version_from_choice(args.observation_schema)
+    if schema_version not in {OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3}:
+        parser.error(f"unsupported encoder-table schema: {args.observation_schema!r}")
+    tables = build_tables(
+        str(args.showdown_root), observation_schema_version=schema_version
+    )
     encoded = json.dumps(tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(encoded + "\n", encoding="utf-8")

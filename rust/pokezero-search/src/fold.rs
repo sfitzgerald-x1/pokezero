@@ -74,7 +74,9 @@ impl Kind {
             "move" => Ok(Kind::Move),
             "switch" => Ok(Kind::Switch),
             "cant" => Ok(Kind::Cant),
-            other => Err(PyValueError::new_err(format!("unknown token kind {other:?}"))),
+            other => Err(PyValueError::new_err(format!(
+                "unknown token kind {other:?}"
+            ))),
         }
     }
     // Sub-blocks default to kind "" (NEGATED/PENDING/ABSENT).
@@ -191,7 +193,9 @@ impl SideEffect {
             "boost" => SideEffect::Boost,
             "none" => SideEffect::None_,
             other => {
-                return Err(PyValueError::new_err(format!("unknown side effect {other:?}")))
+                return Err(PyValueError::new_err(format!(
+                    "unknown side effect {other:?}"
+                )))
             }
         })
     }
@@ -629,9 +633,12 @@ struct Window {
     weather: Option<String>,
     damage_fraction: f64,
     self_hp_cost: f64,
+    confusion_selfhit_fraction: f64,
+    confusion_selfhit: bool,
     outcome: Outcome,
     crit: bool,
     miss: bool,
+    fail: bool,
     ko: bool,
     pursuit_intercept: bool,
     n_hits: i64,
@@ -677,9 +684,12 @@ impl Window {
             weather,
             damage_fraction: 0.0,
             self_hp_cost: 0.0,
+            confusion_selfhit_fraction: 0.0,
+            confusion_selfhit: false,
             outcome: Outcome::Normal,
             crit: false,
             miss: false,
+            fail: false,
             ko: false,
             pursuit_intercept: false,
             n_hits: 1,
@@ -716,9 +726,12 @@ pub(crate) struct TransitionToken {
     pub(crate) called: bool,
     pub(crate) transformed: bool,
     pub(crate) damage_fraction: f64,
+    pub(crate) confusion_selfhit_fraction: f64,
+    pub(crate) confusion_selfhit: bool,
     pub(crate) damage_outcome: Outcome,
     pub(crate) crit: bool,
     pub(crate) miss: bool,
+    pub(crate) fail: bool,
     pub(crate) ko: bool,
     pub(crate) pursuit_intercept: bool,
     pub(crate) n_hits: i64,
@@ -746,9 +759,12 @@ fn token_from_window(window: &Window) -> TransitionToken {
         called: window.called,
         transformed: window.transformed,
         damage_fraction: window.damage_fraction,
+        confusion_selfhit_fraction: window.confusion_selfhit_fraction,
+        confusion_selfhit: window.confusion_selfhit,
         damage_outcome: window.outcome,
         crit: window.crit,
         miss: window.miss,
+        fail: window.fail,
         ko: window.ko,
         pursuit_intercept: window.pursuit_intercept,
         n_hits: window.n_hits,
@@ -781,9 +797,12 @@ pub(crate) struct SubBlock {
     pub(crate) transformed: bool,
     pub(crate) damage_fraction: f64,
     pub(crate) self_hp_cost: f64,
+    pub(crate) confusion_selfhit_fraction: f64,
+    pub(crate) confusion_selfhit: bool,
     pub(crate) damage_outcome: Outcome,
     pub(crate) crit: bool,
     pub(crate) miss: bool,
+    pub(crate) fail: bool,
     pub(crate) ko: bool,
     pub(crate) pursuit_intercept: bool,
     pub(crate) n_hits: i64,
@@ -810,9 +829,12 @@ impl SubBlock {
             transformed: false,
             damage_fraction: 0.0,
             self_hp_cost: 0.0,
+            confusion_selfhit_fraction: 0.0,
+            confusion_selfhit: false,
             damage_outcome: Outcome::Normal,
             crit: false,
             miss: false,
+            fail: false,
             ko: false,
             pursuit_intercept: false,
             n_hits: 1,
@@ -875,9 +897,12 @@ fn action_sub_block(
         transformed: window.transformed,
         damage_fraction: window.damage_fraction,
         self_hp_cost: window.self_hp_cost,
+        confusion_selfhit_fraction: window.confusion_selfhit_fraction,
+        confusion_selfhit: window.confusion_selfhit,
         damage_outcome: window.outcome,
         crit: window.crit,
         miss: window.miss,
+        fail: window.fail,
         ko: window.ko,
         pursuit_intercept: window.pursuit_intercept,
         n_hits: window.n_hits,
@@ -1222,6 +1247,7 @@ pub struct FoldStateInner {
     pending_faint_replacement: [bool; 2],
     lead_seen: [bool; 2],
     pending_charge: [Option<String>; 2],
+    pending_confusion_selfhit_slot: Option<u8>,
     current_window: Option<Window>,
     pursuit_buffer: Vec<String>,
 
@@ -1279,6 +1305,7 @@ impl FoldStateInner {
             pending_faint_replacement: [false, false],
             lead_seen: [false, false],
             pending_charge: [None, None],
+            pending_confusion_selfhit_slot: None,
             current_window: None,
             pursuit_buffer: Vec::new(),
             lead_done: false,
@@ -1349,11 +1376,13 @@ impl FoldStateInner {
     }
 
     fn open_window(&mut self, window: Window) {
+        self.pending_confusion_selfhit_slot = None;
         self.close_window();
         self.current_window = Some(window);
     }
 
     fn close_window(&mut self) {
+        self.pending_confusion_selfhit_slot = None;
         if let Some(window) = self.current_window.take() {
             let token = token_from_window(&window);
             self.action_tail.push_back(token.clone());
@@ -1394,7 +1423,8 @@ impl FoldStateInner {
                 self.occupant[0].as_ref().map(|stay| stay.species.clone()),
                 self.occupant[1].as_ref().map(|stay| stay.species.clone()),
             ];
-            self.turn_start_occupants.insert(self.turn_number, occupants);
+            self.turn_start_occupants
+                .insert(self.turn_number, occupants);
             self.prune_turn_maps();
             return Ok(());
         }
@@ -1599,6 +1629,9 @@ impl FoldStateInner {
             let target = target.unwrap();
             let new_fraction = condition_hp_fraction(Some(parts[3]));
             let previous_fraction = self.hp_fraction[target as usize].unwrap_or(1.0);
+            let is_confusion_selfhit =
+                self.pending_confusion_selfhit_slot == Some(target) && from_payload.is_none();
+            self.pending_confusion_selfhit_slot = None;
             if let Some(current) = self.current_window.as_mut() {
                 if Some(target) == current.defender_side {
                     if from_payload.is_none() {
@@ -1607,6 +1640,10 @@ impl FoldStateInner {
                                 let delta = previous_fraction - new_fraction;
                                 if delta > 0.0 {
                                     current.damage_fraction += delta;
+                                    if is_confusion_selfhit {
+                                        current.confusion_selfhit_fraction += delta;
+                                        current.confusion_selfhit = true;
+                                    }
                                 }
                                 current.defender_hit_by_move = true;
                             }
@@ -1617,9 +1654,8 @@ impl FoldStateInner {
                 }
                 if target == current.side && current.kind == Kind::Move {
                     if let Some(new_fraction) = new_fraction {
-                        let normalized_from = from_payload
-                            .as_deref()
-                            .map(side_condition_identifier);
+                        let normalized_from =
+                            from_payload.as_deref().map(side_condition_identifier);
                         let counts_as_cost = from_payload.is_none()
                             || normalized_from
                                 .as_deref()
@@ -1648,9 +1684,9 @@ impl FoldStateInner {
                     && target == current.side
                     && current.kind == Kind::Move
                     && condition_fraction.is_some()
-                    && from_payload
-                        .as_deref()
-                        .map_or(false, |payload| side_condition_identifier(payload) == "painsplit")
+                    && from_payload.as_deref().map_or(false, |payload| {
+                        side_condition_identifier(payload) == "painsplit"
+                    })
                 {
                     let sethp_delta = previous_fraction - condition_fraction.unwrap();
                     if sethp_delta > 0.0 {
@@ -1722,9 +1758,9 @@ impl FoldStateInner {
                 if let Some(current) = self.current_window.as_mut() {
                     current.upgrade_side_effect(SideEffect::WeatherSet);
                 }
-                let from_ability = from_payload
-                    .as_deref()
-                    .map_or(false, |payload| payload.to_lowercase().starts_with("ability:"));
+                let from_ability = from_payload.as_deref().map_or(false, |payload| {
+                    payload.to_lowercase().starts_with("ability:")
+                });
                 let setter = of_tag_slot(raw_line).or(current_side);
                 if let Some(setter) = setter {
                     let key = (setter, identifier);
@@ -1787,8 +1823,15 @@ impl FoldStateInner {
                     current.n_hits = value.max(1);
                 }
             }
+        } else if event_type == "-fail" {
+            if let Some(current) = self.current_window.as_mut() {
+                current.fail = true;
+            }
         } else if event_type == "-activate" && parts.len() >= 4 {
             let identifier = side_condition_identifier(parts[3]);
+            if identifier == "confusion" {
+                self.pending_confusion_selfhit_slot = target;
+            }
             if let Some(current) = self.current_window.as_mut() {
                 if target == current.defender_side {
                     if identifier == "protect" || identifier == "detect" {
@@ -1810,8 +1853,7 @@ impl FoldStateInner {
         }
 
         if (event_type == "-heal" || event_type == "-start")
-            && (is_absorb_signature(from_payload.as_deref())
-                || is_absorb_start(event_type, parts))
+            && (is_absorb_signature(from_payload.as_deref()) || is_absorb_start(event_type, parts))
         {
             if let Some(current) = self.current_window.as_mut() {
                 if target == current.defender_side {
@@ -1831,11 +1873,10 @@ impl FoldStateInner {
     fn accumulate_tendency(&mut self, window: &Window, token: &TransitionToken) {
         let opponent = self.opponent_slot();
         let voluntary_switch = token.kind == Kind::Switch && window.voluntary_switch;
-        let is_decision = (token.kind == Kind::Move
-            && !token.called
-            && !window.locked_continuation)
-            || voluntary_switch
-            || (token.kind == Kind::Cant && !is_cant_no_choice_reason(&token.action));
+        let is_decision =
+            (token.kind == Kind::Move && !token.called && !window.locked_continuation)
+                || voluntary_switch
+                || (token.kind == Kind::Cant && !is_cant_no_choice_reason(&token.action));
         if is_decision
             && token.actor_slot == opponent
             && self.last_opponent_opportunity_turn != Some(token.turn)
@@ -1879,8 +1920,10 @@ impl FoldStateInner {
         for token in merged {
             let mut first_rep: Option<i64> = None;
             let mut second_rep: Option<i64> = None;
-            for (position, sub) in [(RepPos::First, &token.first), (RepPos::Second, &token.second)]
-            {
+            for (position, sub) in [
+                (RepPos::First, &token.first),
+                (RepPos::Second, &token.second),
+            ] {
                 if sub.status != Status::Action {
                     continue;
                 }
@@ -1889,7 +1932,8 @@ impl FoldStateInner {
                     RepPos::First => first_rep = Some(rep),
                     RepPos::Second => second_rep = Some(rep),
                 }
-                self.rep_index_map.insert(rep, (self.merged_total, position));
+                self.rep_index_map
+                    .insert(rep, (self.merged_total, position));
                 self.expansion_cursor += expansion_length(sub);
             }
             self.merged_done.push_back((token, first_rep, second_rep));
@@ -1914,9 +1958,7 @@ impl FoldStateInner {
 
     fn prune_turn_maps(&mut self) {
         let keep_from = self.turn_number - 1;
-        self.turn_start_occupants = self
-            .turn_start_occupants
-            .split_off(&keep_from);
+        self.turn_start_occupants = self.turn_start_occupants.split_off(&keep_from);
         self.completed_turns = self.completed_turns.split_off(&keep_from);
         self.fainted_turns = self.fainted_turns.split_off(&keep_from);
     }
@@ -1936,10 +1978,7 @@ impl FoldStateInner {
     // ------------------------------------------------------------------ annotations
 
     /// `FoldState.apply_annotations_in_place` (overlay entries pre-sorted by index).
-    fn apply_annotations_in_place(
-        &mut self,
-        overlay: &[(i64, AnnotationValues)],
-    ) -> PyResult<()> {
+    fn apply_annotations_in_place(&mut self, overlay: &[(i64, AnnotationValues)]) -> PyResult<()> {
         for (index, values) in overlay {
             let index = *index;
             let values = values.clone();
@@ -2031,11 +2070,10 @@ impl FoldStateInner {
                 Some(rep) => rep,
                 None => continue,
             };
-            let (residual, residual_valid, cb_bit, investment) =
-                match self.annotations.get(&rep) {
-                    Some(values) => values.clone(),
-                    None => continue,
-                };
+            let (residual, residual_valid, cb_bit, investment) = match self.annotations.get(&rep) {
+                Some(values) => values.clone(),
+                None => continue,
+            };
             if residual == sub.residual
                 && residual_valid == sub.residual_valid
                 && cb_bit == sub.cb_bit
@@ -2056,7 +2094,10 @@ impl FoldStateInner {
         let mut cursor = cursor;
         let mut first_rep: Option<i64> = None;
         let mut second_rep: Option<i64> = None;
-        for (position, sub) in [(RepPos::First, &token.first), (RepPos::Second, &token.second)] {
+        for (position, sub) in [
+            (RepPos::First, &token.first),
+            (RepPos::Second, &token.second),
+        ] {
             if sub.status != Status::Action {
                 continue;
             }
@@ -2151,11 +2192,10 @@ impl FoldStateInner {
         if let Some(window) = virtual_window {
             let token = token_from_window(window);
             let voluntary_switch = token.kind == Kind::Switch && window.voluntary_switch;
-            let is_decision = (token.kind == Kind::Move
-                && !token.called
-                && !window.locked_continuation)
-                || voluntary_switch
-                || (token.kind == Kind::Cant && !is_cant_no_choice_reason(&token.action));
+            let is_decision =
+                (token.kind == Kind::Move && !token.called && !window.locked_continuation)
+                    || voluntary_switch
+                    || (token.kind == Kind::Cant && !is_cant_no_choice_reason(&token.action));
             if is_decision
                 && token.actor_slot == opponent
                 && self.last_opponent_opportunity_turn != Some(token.turn)
@@ -2278,6 +2318,27 @@ fn py_opt_i64(value: &Bound<'_, PyAny>) -> PyResult<Option<i64>> {
     }
 }
 
+fn py_optional_bool(payload: &Bound<'_, PyAny>, key: &str) -> PyResult<bool> {
+    match payload.downcast::<PyDict>()?.get_item(key)? {
+        Some(value) => value.is_truthy(),
+        None => Ok(false),
+    }
+}
+
+fn py_optional_f64(payload: &Bound<'_, PyAny>, key: &str) -> PyResult<f64> {
+    match payload.downcast::<PyDict>()?.get_item(key)? {
+        Some(value) => value.extract::<f64>(),
+        None => Ok(0.0),
+    }
+}
+
+fn py_optional_str(payload: &Bound<'_, PyAny>, key: &str) -> PyResult<Option<String>> {
+    match payload.downcast::<PyDict>()?.get_item(key)? {
+        Some(value) => py_opt_str(&value),
+        None => Ok(None),
+    }
+}
+
 fn window_to_py<'py>(py: Python<'py>, window: &Window) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
     out.set_item("event_index", window.event_index)?;
@@ -2314,6 +2375,16 @@ fn window_to_py<'py>(py: Python<'py>, window: &Window) -> PyResult<Bound<'py, Py
         "other_side_pending_replacement",
         window.other_side_pending_replacement,
     )?;
+    if window.fail {
+        out.set_item("fail", true)?;
+    }
+    if window.confusion_selfhit {
+        out.set_item("confusion_selfhit", true)?;
+        out.set_item(
+            "confusion_selfhit_fraction",
+            window.confusion_selfhit_fraction,
+        )?;
+    }
     Ok(out)
 }
 
@@ -2342,9 +2413,12 @@ fn window_from_py(payload: &Bound<'_, PyAny>) -> PyResult<Window> {
         weather: py_opt_str(&py_get(payload, "weather")?)?,
         damage_fraction: py_get(payload, "damage_fraction")?.extract::<f64>()?,
         self_hp_cost: py_get(payload, "self_hp_cost")?.extract::<f64>()?,
+        confusion_selfhit_fraction: py_optional_f64(payload, "confusion_selfhit_fraction")?,
+        confusion_selfhit: py_optional_bool(payload, "confusion_selfhit")?,
         outcome: Outcome::parse(&py_get(payload, "outcome")?.extract::<String>()?)?,
         crit: py_get(payload, "crit")?.is_truthy()?,
         miss: py_get(payload, "miss")?.is_truthy()?,
+        fail: py_optional_bool(payload, "fail")?,
         ko: py_get(payload, "ko")?.is_truthy()?,
         pursuit_intercept: py_get(payload, "pursuit_intercept")?.is_truthy()?,
         n_hits: py_get(payload, "n_hits")?.extract::<i64>()?,
@@ -2391,6 +2465,16 @@ fn transition_token_to_py<'py>(
     out.set_item("residual_valid", token.residual_valid)?;
     out.set_item("cb_bit", token.cb_bit)?;
     out.set_item("investment", token.investment)?;
+    if token.fail {
+        out.set_item("fail", true)?;
+    }
+    if token.confusion_selfhit {
+        out.set_item("confusion_selfhit", true)?;
+        out.set_item(
+            "confusion_selfhit_fraction",
+            token.confusion_selfhit_fraction,
+        )?;
+    }
     Ok(out)
 }
 
@@ -2404,9 +2488,12 @@ fn transition_token_from_py(payload: &Bound<'_, PyAny>) -> PyResult<TransitionTo
         called: py_get(payload, "called")?.is_truthy()?,
         transformed: py_get(payload, "transformed")?.is_truthy()?,
         damage_fraction: py_get(payload, "damage_fraction")?.extract::<f64>()?,
+        confusion_selfhit_fraction: py_optional_f64(payload, "confusion_selfhit_fraction")?,
+        confusion_selfhit: py_optional_bool(payload, "confusion_selfhit")?,
         damage_outcome: Outcome::parse(&py_get(payload, "damage_outcome")?.extract::<String>()?)?,
         crit: py_get(payload, "crit")?.is_truthy()?,
         miss: py_get(payload, "miss")?.is_truthy()?,
+        fail: py_optional_bool(payload, "fail")?,
         ko: py_get(payload, "ko")?.is_truthy()?,
         pursuit_intercept: py_get(payload, "pursuit_intercept")?.is_truthy()?,
         n_hits: py_get(payload, "n_hits")?.extract::<i64>()?,
@@ -2452,6 +2539,13 @@ fn sub_block_to_py<'py>(py: Python<'py>, sub: &SubBlock) -> PyResult<Bound<'py, 
     out.set_item("residual_valid", sub.residual_valid)?;
     out.set_item("cb_bit", sub.cb_bit)?;
     out.set_item("investment", sub.investment)?;
+    if sub.fail {
+        out.set_item("fail", true)?;
+    }
+    if sub.confusion_selfhit {
+        out.set_item("confusion_selfhit", true)?;
+        out.set_item("confusion_selfhit_fraction", sub.confusion_selfhit_fraction)?;
+    }
     Ok(out)
 }
 
@@ -2466,9 +2560,12 @@ fn sub_block_from_py(payload: &Bound<'_, PyAny>) -> PyResult<SubBlock> {
         transformed: py_get(payload, "transformed")?.is_truthy()?,
         damage_fraction: py_get(payload, "damage_fraction")?.extract::<f64>()?,
         self_hp_cost: py_get(payload, "self_hp_cost")?.extract::<f64>()?,
+        confusion_selfhit_fraction: py_optional_f64(payload, "confusion_selfhit_fraction")?,
+        confusion_selfhit: py_optional_bool(payload, "confusion_selfhit")?,
         damage_outcome: Outcome::parse(&py_get(payload, "damage_outcome")?.extract::<String>()?)?,
         crit: py_get(payload, "crit")?.is_truthy()?,
         miss: py_get(payload, "miss")?.is_truthy()?,
+        fail: py_optional_bool(payload, "fail")?,
         ko: py_get(payload, "ko")?.is_truthy()?,
         pursuit_intercept: py_get(payload, "pursuit_intercept")?.is_truthy()?,
         n_hits: py_get(payload, "n_hits")?.extract::<i64>()?,
@@ -2572,6 +2669,9 @@ impl FoldStateInner {
         charge.set_item("p1", self.pending_charge[0].as_deref())?;
         charge.set_item("p2", self.pending_charge[1].as_deref())?;
         out.set_item("pending_charge", charge)?;
+        if let Some(side) = self.pending_confusion_selfhit_slot {
+            out.set_item("pending_confusion_selfhit_slot", side_str(side))?;
+        }
 
         out.set_item(
             "current_window",
@@ -2617,7 +2717,10 @@ impl FoldStateInner {
             "last_opponent_opportunity_turn",
             self.last_opponent_opportunity_turn,
         )?;
-        out.set_item("blocked_on_our_attack_count", self.blocked_on_our_attack_count)?;
+        out.set_item(
+            "blocked_on_our_attack_count",
+            self.blocked_on_our_attack_count,
+        )?;
         out.set_item(
             "pursuit_intercept_predict_count",
             self.pursuit_intercept_predict_count,
@@ -2767,6 +2870,11 @@ impl FoldStateInner {
             let side = parse_side(&side_key.extract::<String>()?)?;
             state.pending_charge[side as usize] = py_opt_str(&value)?;
         }
+        state.pending_confusion_selfhit_slot =
+            match py_optional_str(payload, "pending_confusion_selfhit_slot")? {
+                Some(side) => Some(parse_side(&side)?),
+                None => None,
+            };
 
         let current_window = py_get(payload, "current_window")?;
         state.current_window = if current_window.is_none() {
@@ -2794,12 +2902,13 @@ impl FoldStateInner {
         state.expansion_cursor = py_get(payload, "expansion_cursor")?.extract::<i64>()?;
 
         for entry in py_get(payload, "action_tail")?.try_iter()? {
-            state.action_tail.push_back(transition_token_from_py(&entry?)?);
+            state
+                .action_tail
+                .push_back(transition_token_from_py(&entry?)?);
         }
         state.action_total = py_get(payload, "action_total")?.extract::<i64>()?;
 
-        state.opponent_switch_count =
-            py_get(payload, "opponent_switch_count")?.extract::<i64>()?;
+        state.opponent_switch_count = py_get(payload, "opponent_switch_count")?.extract::<i64>()?;
         state.opponent_decision_opportunities =
             py_get(payload, "opponent_decision_opportunities")?.extract::<i64>()?;
         state.last_opponent_opportunity_turn =
@@ -2836,16 +2945,19 @@ impl FoldStateInner {
             let (side, weather) = key.split_once('|').ok_or_else(|| {
                 PyValueError::new_err(format!("malformed weather_reveals key {key:?}"))
             })?;
-            state
-                .weather_reveals
-                .insert((parse_side(side)?, weather.to_string()), from_ability.is_truthy()?);
+            state.weather_reveals.insert(
+                (parse_side(side)?, weather.to_string()),
+                from_ability.is_truthy()?,
+            );
         }
 
         let occupants_map = py_get(payload, "turn_start_occupants")?;
         for (turn_key, occupants) in occupants_map.downcast::<PyDict>()?.iter() {
-            let turn = turn_key.extract::<String>()?.trim().parse::<i64>().map_err(|_| {
-                PyValueError::new_err("malformed turn_start_occupants turn key")
-            })?;
+            let turn = turn_key
+                .extract::<String>()?
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| PyValueError::new_err("malformed turn_start_occupants turn key"))?;
             let mut entry: [Option<String>; 2] = [None, None];
             for (side_key, species) in occupants.downcast::<PyDict>()?.iter() {
                 let side = parse_side(&side_key.extract::<String>()?)?;
@@ -3097,7 +3209,30 @@ impl PyFoldState {
 
 #[cfg(test)]
 mod tests {
-    use super::condition_hp_fraction;
+    use super::{condition_hp_fraction, is_protocol_constant, Kind, Window};
+
+    #[test]
+    fn protocol_constant_ignores_v3_annotations_to_preserve_v2_merge_shape() {
+        let mut window = Window::new(
+            0,
+            1,
+            0,
+            "Snorlax".to_string(),
+            Kind::Cant,
+            "slp".to_string(),
+            None,
+            None,
+            false,
+            false,
+            0,
+            0,
+            None,
+        );
+        assert!(is_protocol_constant(&window));
+        window.fail = true;
+        window.confusion_selfhit = true;
+        assert!(is_protocol_constant(&window));
+    }
 
     /// LOW-2 (PR #724 review): literal-NaN/inf HP fields must reproduce the
     /// Python reference's `max(0.0, min(1.0, v))` exactly — NaN and +inf clamp

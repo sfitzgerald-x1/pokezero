@@ -12,7 +12,7 @@ the fail marker wrong for most fails and would break counterfactual
 flag-flip probes. The model learns the correlation itself.
 
 **v3 is still PRE-FREEZE** (the freeze gate is the input-audit program; the Rust
-fold mirror + golden-corpus regeneration have not happened yet), so its layout
+fold mirror is implemented, while golden-corpus regeneration has not happened yet), so its layout
 was reorganized in place before any checkpoint trained on it. V2/v2.1/v2.2 keep
 their frozen positions and remain byte-identical. V3 removes the 14
 evidence-backed dead numeric columns listed in [dead observation
@@ -458,14 +458,15 @@ touching the folded `damage_fraction` field:
 - New id `pokezero.observation.v3`, CLI choice `v3`, and a fixed **155 numeric /
   51 categorical** census. V2/v2.1/v2.2 specs, count maps, checkpoint latching,
   and direct encoder writes remain unchanged.
-- V3 allocates a private 169-column legacy-writer row so existing named writers
+- V3 allocates a private 169-column writer row so existing named writers
   can remain shared with frozen V2.x code. `_project_v3_numeric_rows` performs the
   sole V3-only layout projection after every token writer completes.
 - `V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX` is the ordered physical V3 map;
-  `V3_NUMERIC_INDEX_BY_LEGACY_INDEX` is its inverse. `v3_numeric_index()` is the
-  only supported way for a consumer or test to translate a historical
-  `NUMERIC_*` writer constant into a V3 physical index. The layout table is
-  exported as `V3_NUMERIC_LAYOUT_GROUPS`.
+  `V3_NUMERIC_INDEX_BY_LEGACY_INDEX` is its inverse. `v3_numeric_index()` maps a
+  historical writer constant specifically for V3; cross-schema consumers use
+  `numeric_index_for_schema()`. A public-tensor consumer must never index with a
+  `NUMERIC_*` writer constant directly. The layout table is exported as
+  `V3_NUMERIC_LAYOUT_GROUPS`.
 - The map accounts for every private legacy writer column: 155 are carried, 14
   are explicitly dropped under the reachability evidence in
   [dead observation fields](dead_observation_fields.md), and two carried semantic
@@ -583,7 +584,7 @@ flowchart TB
     STATS -. owns aggregate tendency .-> TENDENCYGROUP["110-120 tendency\nswitch and weather-reveal evidence"]
     HISTORY -. owns past turns .-> HISTORYGROUP["121-154 history\npaired action summaries, fail, confusion self-hit"]
 
-    PRIVATE["Private writer surface: 169 historical columns"] --> PROJECT["V3 projection map"]
+    PRIVATE["Private writer surface: 169 columns (never model input)"] --> PROJECT["V3 projection map"]
     PROJECT --> DROP["Drop 14 unreachable fields\nscreens, Future Sight, hail reveal"]
     PROJECT --> PUBLIC["Public grouped layout: 155 columns"]
 ```
@@ -598,12 +599,12 @@ are implementation-private and must not be used as physical V3 positions.
 
 ## Coordination (v3-stream / Rust fold)
 
-The golden-corpus bit-exactness gate means this schema lands in BOTH
-encoders: after this (production) implementation merges, the Rust fold
-encoder (`rust/pokezero-search`) mirrors it and the golden corpus is
-regenerated at v3. Until then the corpus stays on v2.2 and the gate is
-unaffected (v2.2 output unchanged). The new generation run launches only
-after both sides agree.
+The schema now lands in BOTH encoders: `rust/pokezero-search` consumes the same
+schema-bound exported layout table as Python and passes a focused V3
+Python/Rust byte-exactness gate, including the incremental fold additions.
+The committed corpus remains on v2.2 until it is regenerated at V3; the legacy
+V2.2 Python/Rust gate remains all-exact. The new generation run launches only
+after the fresh V3 corpus and EOC audit agree.
 
 ## Review dispositions (2026-07-20, post-implementation Opus review: SHIP)
 
@@ -614,8 +615,8 @@ after both sides agree.
   reveals the opponent's ability class — informative signal, not noise.
 - **Known accepted loss (v3-only, rare):** a Baton Pass completion switch is
   collapsed into `baton_pass_species` during turn-merging, dropping a
-  `fail=True` from a BP-into-Clear-Body Intimidate block. To revisit at the
-  Rust-mirror/corpus-regeneration milestone with a scenario test; either
-  preserve fail onto the collapse or re-accept the loss explicitly.
+  `fail=True` from a BP-into-Clear-Body Intimidate block. Re-audited during the
+  Rust mirror: both encoders preserve the existing collapse, and this rare
+  omission remains an explicitly accepted V3 loss.
 - Golden-corpus tooling migrated to the schema-family membership tuple so a
   future default-schema bump cannot silently disable turn-merged capture.

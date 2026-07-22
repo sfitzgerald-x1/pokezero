@@ -533,7 +533,7 @@ NUMERIC_TT_CONFUSION_SELFHIT = V3_LEGACY_NUMERIC_BASE + 13
 # bits (+11 / +12, change 9), and the confusion self-hit flag (+13, change 10). This is the
 # private, pre-cutover writer surface; the public v3 width is derived from the layout map below.
 V3_LEGACY_NUMERIC_EXTRA = 14
-V3_LEGACY_NUMERIC_FEATURE_COUNT = V3_LEGACY_NUMERIC_BASE + V3_LEGACY_NUMERIC_EXTRA
+V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT = V3_LEGACY_NUMERIC_BASE + V3_LEGACY_NUMERIC_EXTRA
 
 # Evidence-backed unreachable mechanics from docs/dead_observation_fields.md. These columns
 # remain part of every legacy schema's frozen layout but are intentionally absent from v3.
@@ -711,7 +711,7 @@ V3_NUMERIC_INDEX_BY_LEGACY_INDEX = {
 if len(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) != len(set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)):
     raise AssertionError("v3 numeric layout maps a legacy column more than once")
 if set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V3_DROPPED_LEGACY_NUMERIC_INDICES != set(
-    range(V3_LEGACY_NUMERIC_FEATURE_COUNT)
+    range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
 ):
     raise AssertionError("v3 numeric layout must account for every legacy v3 writer column")
 
@@ -820,6 +820,43 @@ def observation_spec_for_schema(schema_version: str) -> ObservationSpec:
             "(docs/model_versioning.md)."
         )
     return spec
+
+
+def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
+    """Physical numeric index for a named historical ``NUMERIC_*`` column.
+
+    Named numeric constants are writer-semantic identifiers, not universally physical
+    positions. V2-family layouts retain those historical positions; V3 projects them into
+    semantic groups and drops unreachable fields. Public-tensor consumers must resolve through
+    this function rather than indexing with a ``NUMERIC_*`` constant directly.
+    """
+
+    spec = observation_spec_for_schema(schema_version)
+    if schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+        return v3_numeric_index(legacy_index)
+    if legacy_index < 0 or legacy_index >= spec.numeric_feature_count:
+        raise ValueError(
+            f"legacy numeric column {legacy_index} is outside the "
+            f"{spec.numeric_feature_count}-column public layout for schema {schema_version!r}"
+        )
+    return legacy_index
+
+
+def numeric_index_if_present_for_schema(
+    schema_version: str, legacy_index: int
+) -> int | None:
+    """Physical numeric index, or ``None`` only for an explicitly omitted field.
+
+    Invalid and out-of-range semantic indices still raise. This keeps audit code fail-closed
+    while allowing one implementation to span schemas that intentionally omit a field.
+    """
+
+    if (
+        schema_version == OBSERVATION_SCHEMA_VERSION_V3
+        and legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
+    ):
+        return None
+    return numeric_index_for_schema(schema_version, legacy_index)
 
 
 FIELD_TOKEN_OFFSET = 0
@@ -2138,7 +2175,7 @@ def observation_from_player_state(
         # this internal row after encoding so its public 155-column layout can freely reorder
         # and drop evidence-backed dead fields without perturbing a legacy writer.
         internal_numeric_feature_count=(
-            V3_LEGACY_NUMERIC_FEATURE_COUNT if schema_v3 else spec.numeric_feature_count
+            V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT if schema_v3 else spec.numeric_feature_count
         ),
     )
     _encode_field_token(
@@ -3120,10 +3157,10 @@ def _project_v3_numeric_rows(legacy_rows: Sequence[Sequence[float]]) -> list[lis
 
     projected: list[list[float]] = []
     for row_index, row in enumerate(legacy_rows):
-        if len(row) != V3_LEGACY_NUMERIC_FEATURE_COUNT:
+        if len(row) != V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT:
             raise ValueError(
                 "v3 numeric projection requires the complete legacy writer surface "
-                f"({V3_LEGACY_NUMERIC_FEATURE_COUNT} columns), got {len(row)} on row {row_index}."
+                f"({V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT} columns), got {len(row)} on row {row_index}."
             )
         projected.append([row[legacy_index] for legacy_index in V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX])
     return projected
@@ -4474,6 +4511,22 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "weather_permanent": state.weather_permanent,
         "self_wish_pending": state.self_wish_pending,
         "opponent_wish_pending": state.opponent_wish_pending,
+        # V3 public-state inputs. These remain metadata-only under V2.x and let the
+        # schema-bound Rust/golden encoders reproduce V3 without replaying private data.
+        "self_sleep_clause_blocks": state.self_sleep_clause_blocks,
+        "opponent_sleep_clause_blocks": state.opponent_sleep_clause_blocks,
+        "self_wish_turns": state.self_wish_turns,
+        "opponent_wish_turns": state.opponent_wish_turns,
+        "self_stall_counter": state.self_stall_counter,
+        "opponent_stall_counter": state.opponent_stall_counter,
+        "self_confusion_elapsed": state.self_confusion_elapsed,
+        "opponent_confusion_elapsed": state.opponent_confusion_elapsed,
+        "self_encore_elapsed": state.self_encore_elapsed,
+        "opponent_encore_elapsed": state.opponent_encore_elapsed,
+        "self_wrap_trap_elapsed": state.self_wrap_trap_elapsed,
+        "opponent_wrap_trap_elapsed": state.opponent_wrap_trap_elapsed,
+        "self_meanlook_trap": state.self_meanlook_trap,
+        "opponent_meanlook_trap": state.opponent_meanlook_trap,
     }
 
 
@@ -4538,6 +4591,7 @@ def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
         "ability": pokemon.ability,
         "item": pokemon.item,
         "stats": dict(pokemon.stats) if pokemon.stats is not None else None,
+        "live_type_source": pokemon.live_type_source,
     }
 
 
