@@ -37,10 +37,13 @@ LINEAGES = {
     "v22-flat2m":    (r"^emeta-v2-2-flat2m-.*$", []),   # fork of v22-lr3m at 2M (flat-LR twin)
     "m50-seq":       (r"^metamon-m-50m-.*-seq-20260710$", []),
     "l200-seq":      (r"^metamon-l-200m-.*-seq-20260710$", []),
-    # v3 models are tracked in a SEPARATE report (trait_report_v3.html; run gen3 with Sleep Clause
-    # and the v3 observation schema, PR #779). Add each v3 lineage's run-id pattern here AND its key
-    # to trait_report.py:V3_LINEAGES + trait_extract_all.sh:ACTIVE once the v3 runs exist. Example:
-    #   "v3-<name>":  (r"^emeta-v3-<name>-.*$", []),
+    # v3 models are tracked in a SEPARATE report (trait_report_v3.html; gen3 with the v3 observation
+    # schema, PR #779). One lineage per history-length arm. The patterns are anchored on the
+    # `v3hist-` run prefix so the many `v3audit-*`/`v3signature-*`/`v3-*-smoke` diagnostic dirs in
+    # the experiment root can never be swept in as legs.
+    "v3-k16": (r"^v3hist-k16-.*$", []),
+    "v3-k32": (r"^v3hist-k32-.*$", []),
+    "v3-k64": (r"^v3hist-k64-.*$", []),
 }
 
 

@@ -18,7 +18,9 @@ from collections import defaultdict
 # stable lineage order + display names
 # v22-flat2m is a FORK of v22-lr3m at 2M (flat-LR twin) — a separate entity, ordered next to its
 # parent so the post-fork divergence is easy to read off the trajectories.
-LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m", "m50-seq", "l200-seq"]
+LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
+                 "v3-k16", "v3-k32", "v3-k64",   # v3 history-length arms (v3 report)
+                 "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
 # Lineages dropped from the report entirely (every section). The seq lineages stalled at 1000k;
@@ -310,10 +312,12 @@ V3_EXTRA_CHARTS = [
     ]),
 ]
 
-# Report sets → each renders its own standalone HTML. v3 models are tracked separately from v2
-# (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and get the v3-only chart groups. Populate V3_LINEAGES with
-# the v3 lineage keys once the v3 runs exist (their inventory patterns live in trait_inventory.py).
-V3_LINEAGES = set()
+# Report sets → each renders its own standalone HTML. Membership is a RULE, not a curated list
+# (owner decision): any lineage with "v3" in its name belongs to the v3 report and gets the v3-only
+# chart groups; everything else renders in the v2 report. New v3 arms added to the inventory land in
+# the v3 report automatically. ("v22-*" does not contain the substring "v3", so v2.2 stays in v2.)
+def is_v3(lineage):
+    return "v3" in (lineage or "")
 
 
 def _series(rows, fn):
@@ -669,12 +673,12 @@ def build_html(rows, report_set="v2"):
     # Each report set is a standalone HTML. v3 renders only the v3 lineages plus the v3-only chart
     # groups; v2 renders everything else (minus the fully-excluded lineages).
     if report_set == "v3":
-        rows = [r for r in rows if r.get("lineage") in V3_LINEAGES]
+        rows = [r for r in rows if is_v3(r.get("lineage"))]
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
         title = "PokeZero checkpoint trait tracking — v3"
     else:
         rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES
-                and r.get("lineage") not in V3_LINEAGES]
+                and not is_v3(r.get("lineage"))]
         charts = TRAJECTORY_CHARTS
         title = "PokeZero checkpoint trait tracking"
     rows_self = [r for r in rows if r.get("opponent") == "self"]
