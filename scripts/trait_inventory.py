@@ -173,12 +173,15 @@ def main():
         # pin sha for the 500k milestone (G0 requirement). A forked lineage starts at its fork point
         # and legitimately has no 500k of its own — G0 only binds where the lineage actually spans
         # 500k (i.e. some leg begins before it). Failing a fork for missing pre-fork history would
-        # be a false alarm; its ancestry lives in the parent lineage.
+        # be a false alarm; its ancestry lives in the parent lineage. Likewise a YOUNG lineage that
+        # starts at 0 but hasn't trained to 500k yet (every fresh v3 arm in its first days) isn't
+        # failed — G0 becomes due only once the frontier crosses 500k.
         spans_500k = any(l["offset"] < 500_000 for l in legs)
+        due_500k = spans_500k and frontier >= 500_000
         m500 = next((m for m in grid if m["milestone"] == 500_000), None)
         if m500 and os.path.isfile(m500["checkpoint"]):
             m500["sha256"] = sha256(m500["checkpoint"])
-        elif spans_500k:
+        elif due_500k:
             g0_ok = False
         inv["lineages"][key] = {
             "pattern": pattern, "folded_in": extras,
@@ -192,7 +195,8 @@ def main():
             "fork_point_games": min((l["offset"] for l in legs), default=0),
         }
         k500 = ('sha ' + m500['sha256'][:12] if m500 and m500.get('sha256')
-                else ('n/a (forked at %s)' % f"{min((l['offset'] for l in legs), default=0):,}" if not spans_500k else 'MISSING'))
+                else ('n/a (forked at %s)' % f"{min((l['offset'] for l in legs), default=0):,}" if not spans_500k
+                      else (f'pending (frontier {frontier:,} < 500k)' if not due_500k else 'MISSING')))
         print(f"{key}: legs={[l['run'] for l in legs]} frontier={frontier:,} milestones={len(grid)} 500k={k500} src={verdict}")
 
     inv["gate_g0"] = {"passed": g0_ok, "requirement": "every lineage has a 500k checkpoint pinned by sha"}
