@@ -15,7 +15,7 @@ output onto its child decision node's options. These tests pin the surface:
 Values-vs-exploration invariance is pinned Rust-side
 (tree.rs `priors_reweight_exploration_not_values`); the mapping itself is
 gated by tests/test_prior_action_mapping.py + scripts/prior_mapping_assert.py.
-Random-weights artifact at the real v2.2 shape — never a strength claim.
+Random-weights artifact at the real v3 shape — never a strength claim.
 """
 
 from __future__ import annotations
@@ -51,6 +51,10 @@ from pokezero.golden_corpus import (  # noqa: E402
     load_golden_corpus,
 )
 from pokezero.golden_corpus_fold import iter_fold_records  # noqa: E402
+from pokezero.observation import (  # noqa: E402
+    OBSERVATION_SCHEMA_VERSION_V3,
+    V3_TRANSITION_TOKEN_COUNT,
+)
 
 _crate_ready = bool(
     pokezero_search is not None
@@ -62,7 +66,9 @@ _crate_ready = bool(
 def _tables_json() -> str | None:
     local = REPO_ROOT / "corpus" / "encoder_tables.json"
     if local.exists():
-        return local.read_text(encoding="utf-8")
+        payload = json.loads(local.read_text(encoding="utf-8"))
+        if payload.get("layout", {}).get("schema_version") == OBSERVATION_SCHEMA_VERSION_V3:
+            return json.dumps(payload, sort_keys=True, separators=(",", ":"))
     try:
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
 
@@ -72,7 +78,10 @@ def _tables_json() -> str | None:
         from export_encoder_tables import build_tables  # noqa: E402
 
         return json.dumps(
-            build_tables(str(DEFAULT_SHOWDOWN_ROOT)),
+            build_tables(
+                str(DEFAULT_SHOWDOWN_ROOT),
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+            ),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
@@ -150,9 +159,14 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
                 state = build_poke_engine_state(world.spec)
             except EngineWorldUnsupported:
                 continue
+            row_inputs = row_inputs_from_decision_row(row)
+            # The committed sample predates V3, but this mechanics gate consumes only its
+            # schema-independent public/belief inputs. Stamp the schema the live V3 policy
+            # supplies so the native encoder exercises the current layout fail-closed.
+            row_inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V3
             cls.position = {
                 "state_str": state.to_string(),
-                "row_inputs": json.dumps(row_inputs_from_decision_row(row), sort_keys=True),
+                "row_inputs": json.dumps(row_inputs, sort_keys=True),
                 "ctx": json.dumps(
                     {
                         "p1": list(world.party_species["p1"]),
@@ -167,7 +181,7 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
         if cls.position is None:
             raise unittest.SkipTest("no committed-sample row could be driven")
 
-        # Random-weights artifact at the REAL v2.2 shape (throughput/mechanics
+        # Random-weights artifact at the REAL v3 shape (throughput/mechanics
         # only — never a strength claim).
         export = _load_export_module()
         from pokezero.neural_policy import (
@@ -187,7 +201,8 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
             attention_heads=2,
             feedforward_dim=64,
             dropout=0.0,
-            observation_schema_version="pokezero.observation.v2.2",
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+            transition_token_budget=V3_TRANSITION_TOKEN_COUNT,
         )
         torch.manual_seed(20260719)
         model = EntityTokenTransformerPolicy(config).eval()
