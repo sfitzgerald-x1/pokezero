@@ -262,6 +262,14 @@ class TransformerPolicyConfig:
     stats_block_enabled: bool = True
     exact_state_enabled: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
+    # Physical transition-token REGION of the model's token sequence — the rows the
+    # checkpoint is built for — as opposed to ``transition_token_budget`` (how many of
+    # those rows the encoder fills). 0 is a sentinel meaning "the stamped schema's full
+    # region" (resolved in __post_init__; schema-aware so v3's 64-row region resolves
+    # correctly), which keeps every existing artifact and direct construction unchanged.
+    # The region-trim converter (scripts/convert_region_trim.py) is the only writer of
+    # smaller values; shrink-to-budget is the only safe direction.
+    transition_token_count: int = 0
     # Tier-2 residual channel (#505). Dataclass default True: a NEW checkpoint under the
     # mask-on decision self-describes as trained with the channel live. from_dict defaults
     # the field FALSE for payloads that lack it: a pre-#505 checkpoint trained on
@@ -332,14 +340,33 @@ class TransformerPolicyConfig:
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
-        transition_token_capacity = observation_spec_for_schema(
-            self.observation_schema_version
-        ).transition_token_count
-        if not 0 < self.transition_token_budget <= transition_token_capacity:
+        schema_spec = observation_spec_for_schema(self.observation_schema_version)
+        transition_token_capacity = schema_spec.transition_token_count
+        if self.transition_token_count == 0:
+            # Sentinel: default to the stamped schema's full region.
+            object.__setattr__(self, "transition_token_count", transition_token_capacity)
+        if not 0 < self.transition_token_count <= transition_token_capacity:
             raise ValueError(
-                "transition_token_budget must be in "
+                "transition_token_count must be in "
                 f"1..{transition_token_capacity} for observation schema "
                 f"{self.observation_schema_version!r}."
+            )
+        if not 0 < self.transition_token_budget <= self.transition_token_count:
+            raise ValueError(
+                "transition_token_budget must be in "
+                f"1..{self.transition_token_count} (the model's transition region) — "
+                "a budget above the physical region cannot have been trained."
+            )
+        # Region/token-count coherence: the transition region is the FINAL layout segment,
+        # so the total token count is always the schema's fixed prefix plus the region. A
+        # hand-edited payload that trims one without the other must fail loudly here.
+        fixed_tokens = schema_spec.token_count - schema_spec.transition_token_count
+        expected_token_count = fixed_tokens + self.transition_token_count
+        if self.token_count != expected_token_count:
+            raise ValueError(
+                f"token_count {self.token_count} does not equal the fixed prefix "
+                f"({fixed_tokens}) + transition_token_count "
+                f"({self.transition_token_count}); expected {expected_token_count}."
             )
         if self.categorical_vocab_size <= 1:
             raise ValueError("categorical_vocab_size must be greater than 1.")
@@ -441,6 +468,14 @@ class TransformerPolicyConfig:
             transition_token_budget=_int_field(
                 payload,
                 "transition_token_budget",
+                default_spec.transition_token_count,
+            ),
+            # Same schema-aware default as the budget: payloads that predate the region
+            # field (every artifact before the region-trim converter) resolve to their
+            # schema's full region and parse unchanged.
+            transition_token_count=_int_field(
+                payload,
+                "transition_token_count",
                 default_spec.transition_token_count,
             ),
             # Provenance latch: checkpoints saved before the Tier-2 channel existed carry no
@@ -2420,6 +2455,12 @@ def observation_spec_from_model_config(config: TransformerPolicyConfig) -> Obser
         base,
         categorical_feature_count=config.categorical_feature_count,
         numeric_feature_count=config.numeric_feature_count,
+        # Region-trim threading: a converted checkpoint stamps a smaller physical
+        # transition region, and every consumer that resolves its spec from the
+        # checkpoint (collectors, trainer, evals, online client) then produces and
+        # expects trimmed arrays automatically. Inert for existing artifacts (the
+        # parsed default is the schema's full region).
+        transition_token_count=config.transition_token_count,
     )
 
 
