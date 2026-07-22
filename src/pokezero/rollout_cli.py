@@ -261,8 +261,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Claim-suffix identity (default: hostname, matching the shell fleet worker).",
     )
     selfplay_worker.add_argument(
-        "--max-rss-mb", type=float, default=12000.0,
-        help="Self-recycle (clean exit 0, at a task boundary) once resident memory exceeds this. 0 disables.",
+        "--max-rss-mb", type=float, default=3300.0,
+        help="Self-recycle (clean exit 0, at a task boundary) once resident memory exceeds this. "
+             "Set below the container memory limit so this fires before the kernel OOM-killer. 0 disables.",
     )
     selfplay_worker.add_argument(
         "--max-tasks", type=int, default=None,

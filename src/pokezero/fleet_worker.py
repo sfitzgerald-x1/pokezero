@@ -22,7 +22,9 @@ Death/OOM posture (the two operational risks of persistence):
 - The worker SELF-RECYCLES (clean exit 0) once resident memory exceeds
   ``max_rss_mb`` or after ``max_tasks`` tasks, bounding leak accumulation over
   long runs — the respawn loop turns that into a fresh process at a task
-  boundary, never mid-game.
+  boundary, never mid-game. Set ``max_rss_mb`` BELOW the container memory
+  limit, or the kernel OOM-killer fires first and the recycle degrades into a
+  mid-task kill (wasted slice + stale claim until the reaper requeues it).
 
 Every claim/commit/failure line is timestamped, which doubles as the
 collect-queue plan's Step-0 instrumentation (task-duration histogram and the
@@ -136,7 +138,7 @@ def run_worker(
     worker_id: str | None = None,
     static_argv: Sequence[str],
     collect_fn: Callable[[list[str]], int],
-    max_rss_mb: float | None = 12000.0,
+    max_rss_mb: float | None = 3300.0,
     max_tasks: int | None = None,
     idle_exit_seconds: float | None = None,
     sleep_seconds: float = 2.0,
