@@ -28,19 +28,20 @@ play itself, here applied to an imperfect-information, simultaneous-move game.
   scenarios, and a calibrated value leaf. In paired evaluation it beats the same checkpoint
   without search. See [`docs/test_time_search_plan_v2.md`](docs/test_time_search_plan_v2.md).
 
-## What the model sees (v2.2)
+## What the model sees (v3)
 
-![v2.2 observation structure](docs/observation_v22_tokens.svg)
+![V3 observation token input](docs/observation_v3_tokens.svg)
 
-One decision is **151 tokens**: a global field token (weather, hazards, screens, turn count,
-request kind), six self-team tokens (full knowledge: exact stats, PP, status, boosts), six
-opponent tokens (public knowledge only: revealed facts plus belief buckets and uncertainty),
-nine action-candidate tokens (the 4 moves and 5 switches the policy chooses among), one stats
-token, and **128 turn-merged transition tokens** — the model's memory, encoding what happened
-per resolved action since its last decision (the run configuration is window-size 1; history
-lives in these tokens, not in stacked past frames). Every token carries **51 categorical ids**
-(direct closed-vocabulary lookups into 841 embedding rows — no feature hashing) and **155
-numeric features**.
+V3 is the next training schema; its Python layout is frozen while the Rust mirror and fresh audit
+artifacts are completed. One decision is **151 tokens**: a global field token (weather, hazards,
+clauses, Wish, turn count, request kind), six self-team tokens (full knowledge: exact stats, PP,
+status, boosts, public volatile clocks), six opponent tokens (public reveals plus belief candidates,
+expected stats, and PP evidence), nine action-candidate tokens (the 4 moves and 5 switches the
+policy chooses among), one opponent-tendency token, and **128 turn-merged history tokens**. History
+lives in these tokens rather than stacked past frames. Every token carries **51 categorical ids**
+(direct closed-vocabulary lookups into 841 embedding rows — no feature hashing) and **155 numeric
+features**, grouped by semantic role. The exact layout is documented in
+[`docs/observation_v3_spec.md`](docs/observation_v3_spec.md).
 
 ## Quickstart
 
