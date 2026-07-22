@@ -54,7 +54,11 @@ for patch in \
   poke-engine-gen3-struggle-typeless.patch \
   poke-engine-gen3-rapidspin-fidelity.patch \
   poke-engine-gen3-ability-fidelity.patch; do
-  (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
+  if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
+    echo "ERROR: failed to apply $patch" >&2
+    exit 1
+  fi
+  echo "      $patch: applied"
 done
 
 echo "[3/3] build + install (gen3 features) into $PYTHON"

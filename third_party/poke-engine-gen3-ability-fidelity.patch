@@ -54,7 +54,8 @@ index 62ea3c6..dbf8267 100644
 +    {
 +        return false;
 +    }
-++    match status {
++
++    match status {
 +        PokemonStatus::POISON => {
 +            !target.has_type(&PokemonType::POISON)
 +                && !target.has_type(&PokemonType::STEEL)
@@ -68,7 +69,8 @@ index 62ea3c6..dbf8267 100644
 +        _ => false,
 +    }
 +}
-++pub fn update_forecast(state: &mut State, instructions: &mut StateInstructions) {
++
++pub fn update_forecast(state: &mut State, instructions: &mut StateInstructions) {
 +    let weather = if state.weather_is_active(&state.weather.weather_type) {
 +        state.weather.weather_type
 +    } else {
@@ -80,7 +82,8 @@ index 62ea3c6..dbf8267 100644
 +        Weather::HAIL => PokemonType::ICE,
 +        Weather::SAND | Weather::NONE => PokemonType::NORMAL,
 +    };
-++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
++
++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
 +        let mon = state.get_side(&side_ref).get_active();
 +        if mon.id != PokemonName::CASTFORM || mon.ability != Abilities::FORECAST {
 +            continue;
@@ -99,7 +102,8 @@ index 62ea3c6..dbf8267 100644
 +        }
 +    }
 +}
-+ define_enum_with_from_str! {
++
+ define_enum_with_from_str! {
      #[repr(i16)]
      #[derive(PartialEq, Debug, Clone, Copy)]
 @@ -191,13 +254,12 @@ pub fn ability_end_of_turn_order5(
@@ -149,7 +153,8 @@ index 62ea3c6..dbf8267 100644
 +                new_status: PokemonStatus::NONE,
 +            }));
 +    }
-++    let cured_volatile = match active_ability {
++
++    let cured_volatile = match active_ability {
 +        Abilities::OWNTEMPO => Some(PokemonVolatileStatus::CONFUSION),
 +        Abilities::OBLIVIOUS => Some(PokemonVolatileStatus::ATTRACT),
 +        _ => None,
@@ -167,7 +172,8 @@ index 62ea3c6..dbf8267 100644
 +                ));
 +        }
 +    }
-++    match active_ability {
++
++    match active_ability {
          Abilities::DROUGHT => {
 -            if state.weather.weather_type != Weather::SUN {
 +            if state.weather.weather_type != Weather::SUN
@@ -227,7 +233,8 @@ index 62ea3c6..dbf8267 100644
          }
          _ => {}
      }
-++    // Entry weather, suppressor switches, and Castform switches all converge here.
++
++    // Entry weather, suppressor switches, and Castform switches all converge here.
 +    update_forecast(state, instructions);
  }
  
@@ -256,7 +263,8 @@ index 62ea3c6..dbf8267 100644
 +    if attacker_choice.target != MoveTarget::Opponent {
 +        return;
 +    }
-+     match target_pkmn.ability {
++
+     match target_pkmn.ability {
          Abilities::SOUNDPROOF => {
              if attacker_choice.flags.sound {
 @@ -461,32 +599,22 @@ pub fn ability_modify_attack_against(
@@ -532,7 +540,8 @@ index 2354139..9058106 100644
          })
      };
      incoming_instructions.instruction_list.push(instruction);
-++    if synchronize && status_was_applied {
++
++    if synchronize && status_was_applied {
 +        // Gen 3 reflects bad poison as regular poison. The reflected status still
 +        // respects the source's typing, current status, Safeguard, and ability.
 +        let reflected_status = if status.status == PokemonStatus::TOXIC {
@@ -578,7 +587,8 @@ index 2354139..9058106 100644
                      damage_dealt,
                      &mut incoming_instructions,
                  );
-++                // In Gen 3, damaging Fire moves thaw the target after a real HP
++
++                // In Gen 3, damaging Fire moves thaw the target after a real HP
 +                // hit. Hidden Power and Weather Ball use their base move type for
 +                // this check and therefore do not thaw when dynamically Fire.
 +                let defending_side_ref = attacking_side_ref.get_other_side();
@@ -794,7 +804,8 @@ index 2354139..9058106 100644
 +            },
 +        ];
 +        state.reverse_instructions(&base.instruction_list);
-++        let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
++
++        let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
 +        for mask in 0..combinations {
 +            let mut branch = base.clone();
 +            let mut activation = [false; 2];
@@ -814,7 +825,8 @@ index 2354139..9058106 100644
 +        }
 +    }
 +}
-+ fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
++
+ fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
      !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
          && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
 @@ -2949,9 +3122,11 @@ pub fn generate_instructions_from_move_pair(
@@ -859,7 +871,8 @@ index 2354139..9058106 100644
 +            let mut side_two_second_choice = side_two_choice.clone();
 +            let mut side_two_first_choice = side_two_choice.clone();
 +            let mut side_one_second_choice = side_one_choice.clone();
-+             // side_one moves first
++
+             // side_one moves first
              handle_both_moves(
                  state,
 -                &mut side_one_choice,
