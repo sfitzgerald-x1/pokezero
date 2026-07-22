@@ -32,10 +32,15 @@
 #   Showdown (scripts/rapidspin_differential.py). Touches generate_instructions.rs
 #   + choice_effects.rs only (no overlap with the other patches); authored against
 #   the struggle-patched tree, applied AFTER struggle-typeless.
+#   poke-engine-gen3-ability-fidelity.patch — full Gen 3 randbats ability audit
+#   corrections. Includes exact chance branches and status/volatile immunity,
+#   recoil/Wonder Guard/Sturdy, Forecast/weather suppression, Intimidate through
+#   Substitute, Gen 3 Lightning Rod singles semantics, and speed-tie isolation.
+#   Authored against the rapidspin-patched tree and applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
-# Requires: uv. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
+# Requires: uv, rsync. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
@@ -50,11 +55,18 @@ tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch poke-engine-gen3-rapidspin-fidelity.patch; do
+for patch in \
+  poke-engine-gen3-residual-order.patch \
+  poke-engine-gen3-attract.patch \
+  poke-engine-gen3-struggle-typeless.patch \
+  poke-engine-gen3-rapidspin-fidelity.patch \
+  poke-engine-gen3-ability-fidelity.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 
 echo "[3/3] install into $DEST"
-rm -rf "$DEST"
-mv "$SRC" "$DEST"
+# Keep the destination directory stable. Finder can recreate .DS_Store between
+# rm and mv on macOS, making a clean vendor operation fail with ENOTEMPTY.
+mkdir -p "$DEST"
+rsync -a --delete --exclude='.DS_Store' "$SRC/" "$DEST/"
 echo "vendored poke-engine $VERSION (gen3-patched) at third_party/poke-engine-src/"

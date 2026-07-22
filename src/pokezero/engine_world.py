@@ -30,7 +30,7 @@ for poke-engine's construction conventions; no code is copied from it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -398,6 +398,7 @@ def battle_spec_from_payload(
             )
 
     weather, weather_turns = _weather_fields(payload)
+    built_sides = _apply_forecast_types(built_sides, weather=weather)
     spec = BattleSpec(
         side_one=built_sides["p1"],
         side_two=built_sides["p2"],
@@ -409,6 +410,37 @@ def battle_spec_from_payload(
         slot_sides={"p1": "side_one", "p2": "side_two"},
         party_species=party_species,
     )
+
+
+def _apply_forecast_types(sides: Mapping[str, SideSpec], *, weather: str) -> dict[str, SideSpec]:
+    """Latch Castform's current type into the engine root state.
+
+    Poke-engine updates Forecast after weather changes inside a searched line,
+    but the initial world is reconstructed from base Pokédex types. Apply the
+    current public weather here so root and leaf evaluations agree.
+    """
+
+    result = dict(sides)
+    active = tuple(side.pokemon[side.active_index] for side in result.values())
+    weather_suppressed = any(
+        mon.hp > 0 and mon.ability in {"airlock", "cloudnine"} for mon in active
+    )
+    forecast_type = {
+        "rain": "Water",
+        "sun": "Fire",
+        "hail": "Ice",
+    }.get(weather, "Normal")
+    if weather_suppressed:
+        forecast_type = "Normal"
+
+    for slot, side in tuple(result.items()):
+        mon = side.pokemon[side.active_index]
+        if mon.id != "castform" or mon.ability != "forecast":
+            continue
+        party = list(side.pokemon)
+        party[side.active_index] = replace(mon, types=(forecast_type,))
+        result[slot] = replace(side, pokemon=tuple(party))
+    return result
 
 
 def world_battle_spec(

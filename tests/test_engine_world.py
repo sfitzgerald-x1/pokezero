@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
+    _apply_forecast_types,
     battle_spec_from_payload,
     unpack_pokemon,
     unpack_team,
@@ -19,6 +20,7 @@ from pokezero.engine_world import (  # noqa: E402
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
+from pokezero.poke_engine_adapter import MoveSpec, PokemonSpec, SideSpec  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_pokemon, pack_team  # noqa: E402
 
 
@@ -918,6 +920,46 @@ class ShedinjaAndRechargeTests(unittest.TestCase):
         )
         self.assertIn("mustrecharge", world.spec.side_two.volatile_statuses)
         self.assertNotIn("mustrecharge", world.spec.side_one.volatile_statuses)
+
+
+class ForecastRootTypeTests(unittest.TestCase):
+    @staticmethod
+    def _mon(species: str, ability: str, types: tuple[str, ...]) -> PokemonSpec:
+        return PokemonSpec(
+            id=species,
+            level=80,
+            types=types,
+            hp=200,
+            maxhp=200,
+            attack=100,
+            defense=100,
+            special_attack=100,
+            special_defense=100,
+            speed=100,
+            moves=(MoveSpec("tackle"),),
+            ability=ability,
+        )
+
+    def test_active_forecast_type_is_latched_from_root_weather(self) -> None:
+        castform = self._mon("castform", "forecast", ("Normal",))
+        other = self._mon("snorlax", "immunity", ("Normal",))
+        sides = {"p1": SideSpec((castform,)), "p2": SideSpec((other,))}
+
+        self.assertEqual(_apply_forecast_types(sides, weather="rain")["p1"].pokemon[0].types, ("Water",))
+        self.assertEqual(_apply_forecast_types(sides, weather="sun")["p1"].pokemon[0].types, ("Fire",))
+        self.assertEqual(_apply_forecast_types(sides, weather="hail")["p1"].pokemon[0].types, ("Ice",))
+        self.assertEqual(_apply_forecast_types(sides, weather="sand")["p1"].pokemon[0].types, ("Normal",))
+
+    def test_air_lock_or_cloud_nine_suppresses_forecast(self) -> None:
+        castform = self._mon("castform", "forecast", ("Normal",))
+        for ability in ("airlock", "cloudnine"):
+            with self.subTest(ability=ability):
+                suppressor = self._mon("golduck", ability, ("Water",))
+                sides = {"p1": SideSpec((castform,)), "p2": SideSpec((suppressor,))}
+                self.assertEqual(
+                    _apply_forecast_types(sides, weather="rain")["p1"].pokemon[0].types,
+                    ("Normal",),
+                )
 
 
 class BatonPassBoundaryTests(unittest.TestCase):

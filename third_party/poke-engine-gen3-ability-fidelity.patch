@@ -1,0 +1,946 @@
+diff --git a/src/choices.rs b/src/choices.rs
+index 15330a4..8130fdc 100644
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -16384,6 +16384,13 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
+                 protect: true,
+                 ..Default::default()
+             },
++            // Gen 3 Struggle deals one quarter of damage dealt as recoil.
++            // Rock Head explicitly does not suppress this special recoil.
++            recoil: if cfg!(feature = "gen1") {
++                Some(0.5)
++            } else {
++                Some(0.25)
++            },
+             ..Default::default()
+         },
+     );
+diff --git a/src/gen3/abilities.rs b/src/gen3/abilities.rs
+index 62ea3c6..dbf8267 100644
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -3,19 +3,82 @@ use super::damage_calc::type_effectiveness_modifier;
+ use super::generate_instructions::{add_remove_status_instructions, apply_boost_instruction};
+ use super::state::{PokemonVolatileStatus, Weather};
+ use crate::choices::{
+-    Boost, Choice, Choices, Effect, Heal, MoveCategory, MoveTarget, Secondary, StatBoosts,
+-    VolatileStatus,
++    Choice, Choices, Effect, Heal, MoveCategory, MoveTarget, Secondary, VolatileStatus,
+ };
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+     BoostInstruction, ChangeAbilityInstruction, ChangeStatusInstruction, ChangeType, ChangeWeather,
+-    DamageInstruction, HealInstruction, Instruction, StateInstructions,
++    DamageInstruction, HealInstruction, Instruction, RemoveVolatileStatusInstruction,
++    StateInstructions,
+ };
++use crate::pokemon::PokemonName;
+ use crate::state::{PokemonBoostableStat, PokemonStatus, PokemonType, SideReference, State};
+ use std::cmp;
+ 
+ pub const WEATHER_ABILITY_TURNS: i8 = -1;
+ 
++fn effect_spore_status_is_valid(
++    state: &State,
++    target_side_ref: &SideReference,
++    status: &PokemonStatus,
++) -> bool {
++    let target_side = state.get_side_immutable(target_side_ref);
++    let target = target_side.get_active_immutable();
++    if target.hp <= 0
++        || target.status != PokemonStatus::NONE
++        || target_side.side_conditions.safeguard > 0
++    {
++        return false;
++    }
+++    match status {
++        PokemonStatus::POISON => {
++            !target.has_type(&PokemonType::POISON)
++                && !target.has_type(&PokemonType::STEEL)
++                && target.ability != Abilities::IMMUNITY
++        }
++        PokemonStatus::PARALYZE => target.ability != Abilities::LIMBER,
++        PokemonStatus::SLEEP => {
++            ![Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&target.ability)
++                && !target_side.has_alive_non_rested_sleeping_pkmn()
++        }
++        _ => false,
++    }
++}
+++pub fn update_forecast(state: &mut State, instructions: &mut StateInstructions) {
++    let weather = if state.weather_is_active(&state.weather.weather_type) {
++        state.weather.weather_type
++    } else {
++        Weather::NONE
++    };
++    let new_type = match weather {
++        Weather::SUN => PokemonType::FIRE,
++        Weather::RAIN => PokemonType::WATER,
++        Weather::HAIL => PokemonType::ICE,
++        Weather::SAND | Weather::NONE => PokemonType::NORMAL,
++    };
+++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
++        let mon = state.get_side(&side_ref).get_active();
++        if mon.id != PokemonName::CASTFORM || mon.ability != Abilities::FORECAST {
++            continue;
++        }
++        let new_types = (new_type, PokemonType::TYPELESS);
++        if mon.types != new_types {
++            let old_types = mon.types;
++            mon.types = new_types;
++            instructions
++                .instruction_list
++                .push(Instruction::ChangeType(ChangeType {
++                    side_ref,
++                    new_types,
++                    old_types,
++                }));
++        }
++    }
++}
++ define_enum_with_from_str! {
+     #[repr(i16)]
+     #[derive(PartialEq, Debug, Clone, Copy)]
+@@ -191,13 +254,12 @@ pub fn ability_end_of_turn_order5(
+     state: &mut State,
+     side_ref: &SideReference,
+     instructions: &mut StateInstructions,
++    shed_skin_activates: bool,
+ ) {
+     let (attacking_side, _defending_side) = state.get_both_sides(side_ref);
+     let active_pkmn = attacking_side.get_active();
+     match active_pkmn.ability {
+-        // Shed skin only has a 1/3 chance of activating at the end of the turn
+-        // but I'm not going to branch on that here
+-        Abilities::SHEDSKIN => {
++        Abilities::SHEDSKIN if shed_skin_activates => {
+             if active_pkmn.status != PokemonStatus::NONE {
+                 let attacking_side = state.get_side(side_ref);
+                 let active_index = attacking_side.active_index;
+@@ -290,9 +352,57 @@ pub fn ability_on_switch_in(
+         active_pkmn.ability = defending_pkmn.ability;
+     }
+ 
+-    match active_pkmn.ability {
++    // Abilities that prevent a persistent condition also remove it immediately
++    // when gained (most importantly through Trace in the randbat format).
++    let active_ability = attacking_side.get_active_immutable().ability;
++    let active_status = attacking_side.get_active_immutable().status;
++    let cures_status = match active_status {
++        PokemonStatus::BURN => active_ability == Abilities::WATERVEIL,
++        PokemonStatus::FREEZE => active_ability == Abilities::MAGMAARMOR,
++        PokemonStatus::PARALYZE => active_ability == Abilities::LIMBER,
++        PokemonStatus::POISON | PokemonStatus::TOXIC => active_ability == Abilities::IMMUNITY,
++        PokemonStatus::SLEEP => {
++            [Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&active_ability)
++        }
++        _ => false,
++    };
++    if cures_status {
++        let active_index = attacking_side.active_index;
++        attacking_side.get_active().status = PokemonStatus::NONE;
++        instructions
++            .instruction_list
++            .push(Instruction::ChangeStatus(ChangeStatusInstruction {
++                side_ref: *side_ref,
++                pokemon_index: active_index,
++                old_status: active_status,
++                new_status: PokemonStatus::NONE,
++            }));
++    }
+++    let cured_volatile = match active_ability {
++        Abilities::OWNTEMPO => Some(PokemonVolatileStatus::CONFUSION),
++        Abilities::OBLIVIOUS => Some(PokemonVolatileStatus::ATTRACT),
++        _ => None,
++    };
++    if let Some(volatile) = cured_volatile {
++        if attacking_side.volatile_statuses.contains(&volatile) {
++            attacking_side.volatile_statuses.remove(&volatile);
++            instructions
++                .instruction_list
++                .push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: volatile,
++                    },
++                ));
++        }
++    }
+++    match active_ability {
+         Abilities::DROUGHT => {
+-            if state.weather.weather_type != Weather::SUN {
++            if state.weather.weather_type != Weather::SUN
++                || state.weather.turns_remaining != WEATHER_ABILITY_TURNS
++            {
+                 instructions
+                     .instruction_list
+                     .push(Instruction::ChangeWeather(ChangeWeather {
+@@ -306,7 +416,9 @@ pub fn ability_on_switch_in(
+             }
+         }
+         Abilities::SANDSTREAM => {
+-            if state.weather.weather_type != Weather::SAND {
++            if state.weather.weather_type != Weather::SAND
++                || state.weather.turns_remaining != WEATHER_ABILITY_TURNS
++            {
+                 instructions
+                     .instruction_list
+                     .push(Instruction::ChangeWeather(ChangeWeather {
+@@ -320,17 +432,26 @@ pub fn ability_on_switch_in(
+             }
+         }
+         Abilities::INTIMIDATE => {
+-            apply_boost_instruction(
+-                defending_side,
+-                &PokemonBoostableStat::Attack,
+-                &-1,
+-                side_ref,
+-                &side_ref.get_other_side(),
+-                instructions,
+-            );
++            // Gen 3 Intimidate does not affect (or reveal itself to) a target
++            // protected by Substitute.
++            if !defending_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::SUBSTITUTE)
++            {
++                apply_boost_instruction(
++                    defending_side,
++                    &PokemonBoostableStat::Attack,
++                    &-1,
++                    side_ref,
++                    &side_ref.get_other_side(),
++                    instructions,
++                );
++            }
+         }
+         Abilities::DRIZZLE => {
+-            if state.weather.weather_type != Weather::RAIN {
++            if state.weather.weather_type != Weather::RAIN
++                || state.weather.turns_remaining != WEATHER_ABILITY_TURNS
++            {
+                 instructions
+                     .instruction_list
+                     .push(Instruction::ChangeWeather(ChangeWeather {
+@@ -345,6 +466,9 @@ pub fn ability_on_switch_in(
+         }
+         _ => {}
+     }
+++    // Entry weather, suppressor switches, and Castform switches all converge here.
++    update_forecast(state, instructions);
+ }
+ 
+ pub fn ability_modify_attack_being_used(
+@@ -356,6 +480,13 @@ pub fn ability_modify_attack_being_used(
+     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
+     let attacking_pkmn = attacking_side.get_active_immutable();
+     match attacking_pkmn.ability {
++        Abilities::ROCKHEAD => {
++            // Gen 3 Rock Head suppresses ordinary move recoil, but never Struggle's
++            // special recoil and never miss/crash damage from moves such as Hi Jump Kick.
++            if attacker_choice.move_id != Choices::STRUGGLE {
++                attacker_choice.recoil = None;
++            }
++        }
+         Abilities::PUREPOWER => {
+             if attacker_choice.category == MoveCategory::Physical {
+                 attacker_choice.base_power *= 2.0;
+@@ -453,6 +584,13 @@ pub fn ability_modify_attack_against(
+     let attacking_pkmn = attacking_side.get_active_immutable();
+     let target_pkmn = defending_side.get_active_immutable();
+ 
++    // Defender abilities only intercept moves that actually target the defender.
++    // Without this guard, self/field moves such as Rain Dance and Heal Bell are
++    // incorrectly consumed by Water Absorb, Soundproof, Flash Fire, and friends.
++    if attacker_choice.target != MoveTarget::Opponent {
++        return;
++    }
++     match target_pkmn.ability {
+         Abilities::SOUNDPROOF => {
+             if attacker_choice.flags.sound {
+@@ -461,32 +599,22 @@ pub fn ability_modify_attack_against(
+             }
+         }
+         Abilities::POISONPOINT => {
+-            if attacker_choice.flags.contact {
++            if attacker_choice.flags.contact
++                && !defending_side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++            {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 33.0,
++                    chance: 100.0 / 3.0,
+                     target: MoveTarget::User,
+                     effect: Effect::Status(PokemonStatus::POISON),
+                 })
+             }
+         }
+         Abilities::LIGHTNINGROD => {
+-            if attacker_choice.move_type == PokemonType::ELECTRIC {
+-                attacker_choice.remove_all_effects();
+-                attacker_choice.accuracy = 100.0;
+-                attacker_choice.target = MoveTarget::Opponent;
+-                attacker_choice.boost = Some(Boost {
+-                    boosts: StatBoosts {
+-                        attack: 0,
+-                        defense: 0,
+-                        special_attack: 1,
+-                        special_defense: 0,
+-                        speed: 0,
+-                        accuracy: 0,
+-                    },
+-                    target: MoveTarget::Opponent,
+-                });
+-                attacker_choice.category = MoveCategory::Status;
+-            }
++            // Gen 3 Lightning Rod redirects single-target Electric moves in
++            // doubles. It grants neither immunity nor a SpA boost, so it is
++            // behaviorally inert in this singles-only engine.
+         }
+         Abilities::MARVELSCALE => {
+             if target_pkmn.status != PokemonStatus::NONE
+@@ -496,28 +624,41 @@ pub fn ability_modify_attack_against(
+             }
+         }
+         Abilities::EFFECTSPORE => {
+-            if attacker_choice.flags.contact {
+-                attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 3.30,
+-                    target: MoveTarget::User,
+-                    effect: Effect::Status(PokemonStatus::POISON),
+-                });
+-                attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 3.30,
+-                    target: MoveTarget::User,
+-                    effect: Effect::Status(PokemonStatus::PARALYZE),
+-                });
+-                attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 3.30,
+-                    target: MoveTarget::User,
+-                    effect: Effect::Status(PokemonStatus::SLEEP),
+-                });
++            if attacker_choice.flags.contact
++                && !defending_side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++            {
++                // Gen 3 first rolls a 1/10 proc, then chooses one of three
++                // statuses uniformly. Invalid outcomes remain no-ops rather than
++                // transferring their probability to another status. Engine
++                // secondaries are independent, so conditional probabilities keep
++                // each valid outcome at an unconditional 1/30.
++                let mut remaining = 30.0;
++                for status in [
++                    PokemonStatus::POISON,
++                    PokemonStatus::PARALYZE,
++                    PokemonStatus::SLEEP,
++                ] {
++                    if effect_spore_status_is_valid(state, attacking_side_ref, &status) {
++                        attacker_choice.add_or_create_secondaries(Secondary {
++                            chance: 100.0 / remaining,
++                            target: MoveTarget::User,
++                            effect: Effect::Status(status),
++                        });
++                        remaining -= 1.0;
++                    }
++                }
+             }
+         }
+         Abilities::FLAMEBODY => {
+-            if attacker_choice.flags.contact {
++            if attacker_choice.flags.contact
++                && !defending_side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++            {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 30.0,
++                    chance: 100.0 / 3.0,
+                     target: MoveTarget::User,
+                     effect: Effect::Status(PokemonStatus::BURN),
+                 });
+@@ -528,6 +669,7 @@ pub fn ability_modify_attack_against(
+         }
+         Abilities::WONDERGUARD => {
+             if attacker_choice.category != MoveCategory::Status
++                && attacker_choice.move_id != Choices::STRUGGLE
+                 && type_effectiveness_modifier(&attacker_choice.move_type, &target_pkmn) <= 1.0
+             {
+                 attacker_choice.remove_all_effects();
+@@ -543,9 +685,13 @@ pub fn ability_modify_attack_against(
+             }
+         }
+         Abilities::STATIC => {
+-            if attacker_choice.flags.contact {
++            if attacker_choice.flags.contact
++                && !defending_side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++            {
+                 attacker_choice.add_or_create_secondaries(Secondary {
+-                    chance: 30.0,
++                    chance: 100.0 / 3.0,
+                     target: MoveTarget::User,
+                     effect: Effect::Status(PokemonStatus::PARALYZE),
+                 })
+@@ -558,8 +704,27 @@ pub fn ability_modify_attack_against(
+                 attacker_choice.base_power /= 2.0;
+             }
+         }
++        Abilities::SANDVEIL => {
++            if state.weather_is_active(&Weather::SAND) {
++                attacker_choice.accuracy *= 0.8;
++            }
++        }
+         Abilities::FLASHFIRE => {
+             if attacker_choice.move_type == PokemonType::FIRE {
++                // A damaging Fire hit thaws a frozen target instead of activating
++                // Flash Fire in Gen 3.
++                if target_pkmn.status == PokemonStatus::FREEZE {
++                    return;
++                }
++                if attacker_choice.move_id == Choices::WILLOWISP
++                    && (target_pkmn.has_type(&PokemonType::FIRE)
++                        || target_pkmn.status != PokemonStatus::NONE
++                        || defending_side
++                            .volatile_statuses
++                            .contains(&PokemonVolatileStatus::SUBSTITUTE))
++                {
++                    return;
++                }
+                 attacker_choice.remove_all_effects();
+                 attacker_choice.volatile_status = Some(VolatileStatus {
+                     target: MoveTarget::Opponent,
+diff --git a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+index 65a0a51..07c2306 100644
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -1,4 +1,4 @@
+-use super::abilities::Abilities;
++use super::abilities::{update_forecast, Abilities};
+ use super::damage_calc::type_effectiveness_modifier;
+ use super::generate_instructions::add_remove_status_instructions;
+ use super::items::{get_choice_move_disable_instructions, Items};
+@@ -65,7 +65,9 @@ pub fn modify_choice(
+             attacker_choice.base_power *= 2.0;
+         }
+         Choices::MORNINGSUN | Choices::MOONLIGHT | Choices::SYNTHESIS => {
++            let active_weather = state.weather_is_active(&state.weather.weather_type);
+             match state.weather.weather_type {
++                _ if !active_weather => {}
+                 Weather::SUN => {
+                     attacker_choice.heal = Some(Heal {
+                         target: MoveTarget::User,
+@@ -95,6 +97,7 @@ pub fn modify_choice(
+             }
+         }
+         Choices::WEATHERBALL => match state.weather.weather_type {
++            _ if !state.weather_is_active(&state.weather.weather_type) => {}
+             Weather::SUN => {
+                 attacker_choice.base_power = 100.0;
+                 attacker_choice.move_type = PokemonType::FIRE;
+@@ -116,9 +119,7 @@ pub fn modify_choice(
+         Choices::SOLARBEAM => {
+             if state.weather_is_active(&Weather::SUN) {
+                 attacker_choice.flags.charge = false;
+-            } else if !state.weather_is_active(&Weather::SUN)
+-                && state.weather.weather_type != Weather::NONE
+-            {
++            } else if state.weather_is_active(&state.weather.weather_type) {
+                 attacker_choice.base_power /= 2.0;
+             }
+         }
+@@ -858,6 +859,7 @@ pub fn choice_special_effect(
+         }
+         _ => {}
+     }
++    update_forecast(state, instructions);
+ }
+ 
+ pub fn charge_choice_to_volatile(choice: &Choices) -> PokemonVolatileStatus {
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+index 2354139..9058106 100644
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1,7 +1,7 @@
+ use super::abilities::{
+     ability_after_damage_hit, ability_end_of_turn, ability_end_of_turn_order5,
+-    ability_modify_attack_against,
+-    ability_modify_attack_being_used, ability_on_switch_in, ability_on_switch_out, Abilities,
++    ability_modify_attack_against, ability_modify_attack_being_used, ability_on_switch_in,
++    ability_on_switch_out, update_forecast, Abilities,
+ };
+ use super::choice_effects::{
+     charge_choice_to_volatile, choice_after_damage_hit, choice_before_move, choice_hazard_clear,
+@@ -27,8 +27,7 @@ use super::damage_calc::calculate_futuresight_damage;
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+     item_before_move, item_end_of_turn, item_end_of_turn_order5, item_modify_attack_against,
+-    item_modify_attack_being_used,
+-    Items,
++    item_modify_attack_being_used, Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+@@ -53,7 +52,17 @@ const PROTECT_VOLATILES: [PokemonVolatileStatus; 2] = [
+     PokemonVolatileStatus::ENDURE,
+ ];
+ 
+-fn chance_to_wake_up(turns_asleep: i8) -> f32 {
++fn chance_to_wake_up(turns_asleep: i8, early_bird: bool) -> f32 {
++    if early_bird {
++        // Showdown Gen 3 samples a 1-4 turn sleep duration and Early Bird
++        // decrements the remaining counter twice per attempted action. Given
++        // survival of earlier checks, the wake chances are 1/4, 2/3, then 1.
++        return match turns_asleep {
++            0 => 1.0 / 4.0,
++            1 => 2.0 / 3.0,
++            _ => 1.0,
++        };
++    }
+     if turns_asleep == 0 {
+         0.0
+     } else {
+@@ -493,6 +502,16 @@ fn get_instructions_from_status_effects(
+     let target_side = state.get_side(&target_side_ref);
+     let target_side_active = target_side.active_index;
+     let target_pkmn = target_side.get_active();
++    let synchronize = target_pkmn.ability == Abilities::SYNCHRONIZE
++        && status.target == MoveTarget::Opponent
++        && [
++            PokemonStatus::BURN,
++            PokemonStatus::PARALYZE,
++            PokemonStatus::POISON,
++            PokemonStatus::TOXIC,
++        ]
++        .contains(&status.status);
++    let mut status_was_applied = false;
+ 
+     let instruction = if target_pkmn.item == Items::LUMBERRY {
+         target_pkmn.item = Items::NONE;
+@@ -511,6 +530,7 @@ fn get_instructions_from_status_effects(
+     } else {
+         let old_status = target_pkmn.status;
+         target_pkmn.status = status.status;
++        status_was_applied = true;
+         Instruction::ChangeStatus(ChangeStatusInstruction {
+             side_ref: target_side_ref,
+             pokemon_index: target_side_active,
+@@ -519,6 +539,36 @@ fn get_instructions_from_status_effects(
+         })
+     };
+     incoming_instructions.instruction_list.push(instruction);
+++    if synchronize && status_was_applied {
++        // Gen 3 reflects bad poison as regular poison. The reflected status still
++        // respects the source's typing, current status, Safeguard, and ability.
++        let reflected_status = if status.status == PokemonStatus::TOXIC {
++            PokemonStatus::POISON
++        } else {
++            status.status
++        };
++        if !immune_to_status(
++            state,
++            &MoveTarget::Opponent,
++            attacking_side_reference,
++            &reflected_status,
++        ) {
++            let source_side = state.get_side(attacking_side_reference);
++            let source_index = source_side.active_index;
++            let source = source_side.get_active();
++            let old_status = source.status;
++            source.status = reflected_status;
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::ChangeStatus(ChangeStatusInstruction {
++                    side_ref: *attacking_side_reference,
++                    pokemon_index: source_index,
++                    old_status,
++                    new_status: reflected_status,
++                }));
++        }
++    }
+ }
+ 
+ pub fn get_boost_amount(side: &Side, boost: &PokemonBoostableStat, amount: i8) -> i8 {
+@@ -1029,8 +1079,7 @@ fn generate_instructions_from_damage(
+             damage_dealt = cmp::min(calculated_damage, defending_pokemon.hp);
+             if damage_dealt != 0 {
+                 if has_endure
+-                    || ((defending_pokemon.ability == Abilities::STURDY
+-                        || defending_pokemon.item == Items::FOCUSSASH)
++                    || (defending_pokemon.item == Items::FOCUSSASH
+                         && defending_pokemon.maxhp == defending_pokemon.hp)
+                 {
+                     damage_dealt -= 1;
+@@ -1082,14 +1131,40 @@ fn generate_instructions_from_damage(
+                     damage_dealt,
+                     &mut incoming_instructions,
+                 );
+++                // In Gen 3, damaging Fire moves thaw the target after a real HP
++                // hit. Hidden Power and Weather Ball use their base move type for
++                // this check and therefore do not thaw when dynamically Fire.
++                let defending_side_ref = attacking_side_ref.get_other_side();
++                let defending_side = state.get_side(&defending_side_ref);
++                let defending_index = defending_side.active_index;
++                let defending_pokemon = defending_side.get_active();
++                if choice.move_type == PokemonType::FIRE
++                    && choice.category != MoveCategory::Status
++                    && ![Choices::HIDDENPOWER, Choices::WEATHERBALL].contains(&choice.move_id)
++                    && defending_pokemon.status == PokemonStatus::FREEZE
++                {
++                    defending_pokemon.status = PokemonStatus::NONE;
++                    incoming_instructions
++                        .instruction_list
++                        .push(Instruction::ChangeStatus(ChangeStatusInstruction {
++                            side_ref: defending_side_ref,
++                            pokemon_index: defending_index,
++                            old_status: PokemonStatus::FREEZE,
++                            new_status: PokemonStatus::NONE,
++                        }));
++                }
+             }
+         }
+ 
+         let attacking_pokemon = state.get_side(attacking_side_ref).get_active();
+         if let Some(drain_fraction) = choice.drain {
+             let drain_amount = (damage_dealt as f32 * drain_fraction) as i16;
+-            let heal_amount =
+-                cmp::min(drain_amount, attacking_pokemon.maxhp - attacking_pokemon.hp);
++            let heal_amount = if drain_amount < 0 {
++                cmp::max(drain_amount, -attacking_pokemon.hp)
++            } else {
++                cmp::min(drain_amount, attacking_pokemon.maxhp - attacking_pokemon.hp)
++            };
+             if heal_amount != 0 {
+                 let drain_instruction = Instruction::Heal(HealInstruction {
+                     side_ref: *attacking_side_ref,
+@@ -1250,6 +1325,7 @@ fn generate_instructions_from_existing_status_conditions(
+ ) {
+     let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
+     let current_active_index = attacking_side.active_index;
++    let attacker_ability = attacking_side.get_active_immutable().ability;
+     let attacker_active = attacking_side.get_active();
+     match attacker_active.status {
+         PokemonStatus::PARALYZE => {
+@@ -1282,7 +1358,10 @@ fn generate_instructions_from_existing_status_conditions(
+                 // Pokemon is not asleep because of Rest.
+                 0 => {
+                     let current_sleep_turns = attacker_active.sleep_turns;
+-                    let chance_to_wake = chance_to_wake_up(current_sleep_turns);
++                    let chance_to_wake = chance_to_wake_up(
++                        current_sleep_turns,
++                        attacker_active.ability == Abilities::EARLYBIRD,
++                    );
+                     if chance_to_wake == 1.0 {
+                         attacker_active.status = PokemonStatus::NONE;
+                         attacker_active.sleep_turns = 0;
+@@ -1397,6 +1476,27 @@ fn generate_instructions_from_existing_status_conditions(
+                         final_instructions.push(do_nothing_instructions);
+                     }
+                 }
++                // Early Bird decrements Rest's counter twice. At 1 or 2 it
++                // therefore wakes now; at 3 it skips this action and lands at 1.
++                1 | 2 if attacker_active.ability == Abilities::EARLYBIRD => {
++                    attacker_active.status = PokemonStatus::NONE;
++                    incoming_instructions
++                        .instruction_list
++                        .push(Instruction::ChangeStatus(ChangeStatusInstruction {
++                            side_ref: *attacking_side_ref,
++                            pokemon_index: current_active_index,
++                            old_status: PokemonStatus::SLEEP,
++                            new_status: PokemonStatus::NONE,
++                        }));
++                    for _ in 0..attacker_active.rest_turns {
++                        incoming_instructions.instruction_list.push(
++                            Instruction::DecrementRestTurns(DecrementRestTurnsInstruction {
++                                side_ref: *attacking_side_ref,
++                            }),
++                        );
++                    }
++                    attacker_active.rest_turns = 0;
++                }
+                 // Pokemon is asleep because of Rest, and will wake up this turn
+                 1 => {
+                     attacker_active.status = PokemonStatus::NONE;
+@@ -1417,6 +1517,16 @@ fn generate_instructions_from_existing_status_conditions(
+                             },
+                         ));
+                 }
++                3 if attacker_active.ability == Abilities::EARLYBIRD => {
++                    attacker_active.rest_turns = 1;
++                    for _ in 0..2 {
++                        incoming_instructions.instruction_list.push(
++                            Instruction::DecrementRestTurns(DecrementRestTurnsInstruction {
++                                side_ref: *attacking_side_ref,
++                            }),
++                        );
++                    }
++                }
+                 // Pokemon is asleep because of Rest, and will stay asleep this turn
+                 2 | 3 => {
+                     attacker_active.rest_turns -= 1;
+@@ -1437,6 +1547,7 @@ fn generate_instructions_from_existing_status_conditions(
+     if attacking_side
+         .volatile_statuses
+         .contains(&PokemonVolatileStatus::CONFUSION)
++        && attacker_ability != Abilities::OWNTEMPO
+     {
+         let mut hit_yourself_instruction = incoming_instructions.clone();
+         hit_yourself_instruction.update_percentage(HIT_SELF_IN_CONFUSION_CHANCE);
+@@ -1500,6 +1611,7 @@ fn generate_instructions_from_existing_status_conditions(
+     if attacking_side
+         .volatile_statuses
+         .contains(&PokemonVolatileStatus::ATTRACT)
++        && attacker_ability != Abilities::OBLIVIOUS
+     {
+         let mut immobilized_instruction = incoming_instructions.clone();
+         immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
+@@ -1921,10 +2033,12 @@ fn get_effective_speed(state: &State, side_reference: &SideReference) -> i16 {
+ 
+     let mut boosted_speed = side.calculate_boosted_stat(PokemonBoostableStat::Speed) as f32;
+ 
+-    match state.weather.weather_type {
+-        Weather::SUN if active_pkmn.ability == Abilities::CHLOROPHYLL => boosted_speed *= 2.0,
+-        Weather::RAIN if active_pkmn.ability == Abilities::SWIFTSWIM => boosted_speed *= 2.0,
+-        _ => {}
++    if state.weather_is_active(&state.weather.weather_type) {
++        match state.weather.weather_type {
++            Weather::SUN if active_pkmn.ability == Abilities::CHLOROPHYLL => boosted_speed *= 2.0,
++            Weather::RAIN if active_pkmn.ability == Abilities::SWIFTSWIM => boosted_speed *= 2.0,
++            _ => {}
++        }
+     }
+ 
+     if side
+@@ -1995,6 +2109,7 @@ fn add_end_of_turn_instructions(
+     state: &mut State,
+     mut incoming_instructions: &mut StateInstructions,
+     first_move_side: &SideReference,
++    shed_skin_activations: [bool; 2],
+ ) {
+     state.apply_instructions(&incoming_instructions.instruction_list);
+     if state.side_one.force_switch || state.side_two.force_switch {
+@@ -2022,6 +2137,7 @@ fn add_end_of_turn_instructions(
+                 .instruction_list
+                 .push(weather_end_instruction);
+             state.weather.weather_type = Weather::NONE;
++            update_forecast(state, &mut incoming_instructions);
+         }
+     }
+ 
+@@ -2079,6 +2195,7 @@ fn add_end_of_turn_instructions(
+                 || active_pkmn.has_type(&PokemonType::GROUND)
+                 || active_pkmn.has_type(&PokemonType::STEEL)
+                 || active_pkmn.has_type(&PokemonType::ROCK)
++                || active_pkmn.ability == Abilities::SANDVEIL
+             {
+                 continue;
+             }
+@@ -2168,7 +2285,16 @@ fn add_end_of_turn_instructions(
+             continue;
+         }
+         item_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
+-        ability_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
++        let shed_skin_activates = match side_ref {
++            SideReference::SideOne => shed_skin_activations[0],
++            SideReference::SideTwo => shed_skin_activations[1],
++        };
++        ability_end_of_turn_order5(
++            state,
++            side_ref,
++            &mut incoming_instructions,
++            shed_skin_activates,
++        );
+     }
+ 
+     // leechseed sap
+@@ -2428,7 +2554,9 @@ fn add_end_of_turn_instructions(
+                     side.volatile_status_durations.yawn -= 1;
+ 
+                     let active = side.get_active();
+-                    if active.status == PokemonStatus::NONE {
++                    if active.status == PokemonStatus::NONE
++                        && ![Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&active.ability)
++                    {
+                         active.status = PokemonStatus::SLEEP;
+                         incoming_instructions
+                             .instruction_list
+@@ -2668,6 +2796,51 @@ fn add_end_of_turn_instructions(
+     state.reverse_instructions(&incoming_instructions.instruction_list);
+ }
+ 
++fn add_end_of_turn_branches(
++    state: &mut State,
++    instructions: &mut Vec<StateInstructions>,
++    first_move_side: &SideReference,
++) {
++    let incoming = std::mem::take(instructions);
++    for base in incoming {
++        state.apply_instructions(&base.instruction_list);
++        let eligible = [
++            {
++                let mon = state.side_one.get_active_immutable();
++                mon.hp > 0
++                    && mon.ability == Abilities::SHEDSKIN
++                    && mon.status != PokemonStatus::NONE
++            },
++            {
++                let mon = state.side_two.get_active_immutable();
++                mon.hp > 0
++                    && mon.ability == Abilities::SHEDSKIN
++                    && mon.status != PokemonStatus::NONE
++            },
++        ];
++        state.reverse_instructions(&base.instruction_list);
+++        let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
++        for mask in 0..combinations {
++            let mut branch = base.clone();
++            let mut activation = [false; 2];
++            let mut probability = 1.0;
++            let mut bit = 0;
++            for side in 0..2 {
++                if !eligible[side] {
++                    continue;
++                }
++                activation[side] = (mask & (1 << bit)) != 0;
++                probability *= if activation[side] { 0.33 } else { 0.67 };
++                bit += 1;
++            }
++            branch.update_percentage(probability);
++            add_end_of_turn_instructions(state, &mut branch, first_move_side, activation);
++            instructions.push(branch);
++        }
++    }
++}
++ fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
+     !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
+         && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
+@@ -2949,9 +3122,11 @@ pub fn generate_instructions_from_move_pair(
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(side_one_move, side_two_move) {
+-                for state_instruction in state_instructions_vec.iter_mut() {
+-                    add_end_of_turn_instructions(state, state_instruction, &SideReference::SideOne);
+-                }
++                add_end_of_turn_branches(
++                    state,
++                    &mut state_instructions_vec,
++                    &SideReference::SideOne,
++                );
+             }
+         }
+         SideMovesFirst::SideTwo => {
+@@ -2965,9 +3140,11 @@ pub fn generate_instructions_from_move_pair(
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(side_one_move, side_two_move) {
+-                for state_instruction in state_instructions_vec.iter_mut() {
+-                    add_end_of_turn_instructions(state, state_instruction, &SideReference::SideTwo);
+-                }
++                add_end_of_turn_branches(
++                    state,
++                    &mut state_instructions_vec,
++                    &SideReference::SideTwo,
++                );
+             }
+         }
+         SideMovesFirst::SpeedTie => {
+@@ -2975,37 +3152,50 @@ pub fn generate_instructions_from_move_pair(
+             incoming_instructions.update_percentage(0.5);
+             side_one_moves_first_instruction.update_percentage(0.5);
+ 
++            // before_move mutates Choice (abilities/items append secondaries and
++            // alter power/accuracy). Each speed-tie ordering must start from the
++            // same pristine choices; otherwise the second ordering applies those
++            // modifiers twice (for example a 1/3 Static proc becomes 5/9).
++            let mut side_one_first_choice = side_one_choice.clone();
++            let mut side_two_second_choice = side_two_choice.clone();
++            let mut side_two_first_choice = side_two_choice.clone();
++            let mut side_one_second_choice = side_one_choice.clone();
++             // side_one moves first
+             handle_both_moves(
+                 state,
+-                &mut side_one_choice,
+-                &mut side_two_choice,
++                &mut side_one_first_choice,
++                &mut side_two_second_choice,
+                 SideReference::SideOne,
+                 side_one_moves_first_instruction,
+                 &mut state_instructions_vec,
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(side_one_move, side_two_move) {
+-                for state_instruction in state_instructions_vec.iter_mut() {
+-                    add_end_of_turn_instructions(state, state_instruction, &SideReference::SideOne);
+-                }
++                add_end_of_turn_branches(
++                    state,
++                    &mut state_instructions_vec,
++                    &SideReference::SideOne,
++                );
+             }
+ 
+             // side_two moves first
+             let mut side_two_moves_first_si = Vec::with_capacity(4);
+             handle_both_moves(
+                 state,
+-                &mut side_two_choice,
+-                &mut side_one_choice,
++                &mut side_two_first_choice,
++                &mut side_one_second_choice,
+                 SideReference::SideTwo,
+                 incoming_instructions,
+                 &mut side_two_moves_first_si,
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(side_one_move, side_two_move) {
+-                for state_instruction in side_two_moves_first_si.iter_mut() {
+-                    add_end_of_turn_instructions(state, state_instruction, &SideReference::SideTwo);
+-                }
++                add_end_of_turn_branches(
++                    state,
++                    &mut side_two_moves_first_si,
++                    &SideReference::SideTwo,
++                );
+             }
+ 
+             // combine both vectors into the final vector
+diff --git a/src/gen3/state.rs b/src/gen3/state.rs
+index ecc152b..da0c6b3 100644
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -286,11 +286,14 @@ impl Pokemon {
+                 true
+             }
+             PokemonVolatileStatus::CONFUSION => {
+-                if active_volatiles.contains(&PokemonVolatileStatus::SUBSTITUTE) {
++                if self.ability == Abilities::OWNTEMPO
++                    || active_volatiles.contains(&PokemonVolatileStatus::SUBSTITUTE)
++                {
+                     return false;
+                 }
+                 true
+             }
++            PokemonVolatileStatus::ATTRACT => self.ability != Abilities::OBLIVIOUS,
+             PokemonVolatileStatus::SUBSTITUTE => self.hp > self.maxhp / 4,
+             PokemonVolatileStatus::FLINCH => {
+                 if !first_move || [Abilities::INNERFOCUS].contains(&self.ability) {
+@@ -754,10 +757,12 @@ impl State {
+         let s1_active = self.side_one.get_active_immutable();
+         let s2_active = self.side_two.get_active_immutable();
+         &self.weather.weather_type == weather
+-            && s1_active.ability != Abilities::AIRLOCK
+-            && s1_active.ability != Abilities::CLOUDNINE
+-            && s2_active.ability != Abilities::AIRLOCK
+-            && s2_active.ability != Abilities::CLOUDNINE
++            && (s1_active.hp <= 0
++                || (s1_active.ability != Abilities::AIRLOCK
++                    && s1_active.ability != Abilities::CLOUDNINE))
++            && (s2_active.hp <= 0
++                || (s2_active.ability != Abilities::AIRLOCK
++                    && s2_active.ability != Abilities::CLOUDNINE))
+     }
+ 
+     fn _state_contains_any_move(&self, moves: &[Choices]) -> bool {

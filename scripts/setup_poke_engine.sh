@@ -26,6 +26,11 @@
 #   Rapid Spin now also clears the user's Leech Seed + partial-trap. Regression
 #   gate: scripts/rapidspin_differential.py + tests/test_engine_rapidspin_fidelity.py.
 #   Applied AFTER struggle-typeless.
+#   poke-engine-gen3-ability-fidelity.patch — randbats ability audit fixes:
+#   recoil/Struggle/Wonder Guard/Sturdy, exact contact and Shed Skin chance
+#   branches, status and volatile immunities, Synchronize/Early Bird, Sand Veil,
+#   Forecast/weather suppression, Gen 3 Lightning Rod singles semantics, and
+#   speed-tie Choice isolation. Applied AFTER rapidspin-fidelity.
 #   --fuzz=0 so a future version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -43,7 +48,12 @@ tar xzf "$BUILD_DIR"/poke_engine-"$VERSION".tar.gz -C "$BUILD_DIR"
 SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in poke-engine-gen3-residual-order.patch poke-engine-gen3-attract.patch poke-engine-gen3-struggle-typeless.patch poke-engine-gen3-rapidspin-fidelity.patch; do
+for patch in \
+  poke-engine-gen3-residual-order.patch \
+  poke-engine-gen3-attract.patch \
+  poke-engine-gen3-struggle-typeless.patch \
+  poke-engine-gen3-rapidspin-fidelity.patch \
+  poke-engine-gen3-ability-fidelity.patch; do
   (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch") && echo "      $patch: applied"
 done
 
