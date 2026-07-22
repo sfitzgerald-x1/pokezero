@@ -196,6 +196,7 @@ class FoldState:
     pending_charge: dict[str, Optional[str]] = field(
         default_factory=lambda: {"p1": None, "p2": None}
     )
+    pending_confusion_selfhit_slot: Optional[str] = None
     current_window: Optional[_Window] = None
     # Pursuit ring buffer (probe #3): raw lines since the last _PURSUIT_SCAN_BOUNDARY
     # line (blank | separators included — they do NOT break the batch scan).
@@ -587,6 +588,12 @@ class FoldState:
         if event_type == "-damage" and target in {"p1", "p2"} and len(parts) >= 4:
             condition = _condition_features(parts[3])
             new_fraction = condition.hp_fraction
+            is_confusion_selfhit = (
+                self.pending_confusion_selfhit_slot is not None
+                and target == self.pending_confusion_selfhit_slot
+                and from_payload is None
+            )
+            self.pending_confusion_selfhit_slot = None
             if current is not None and target == current.defender_side:
                 if from_payload is None:
                     if current.kind == TOKEN_KIND_MOVE and new_fraction is not None:
@@ -594,6 +601,9 @@ class FoldState:
                         delta = previous_fraction - new_fraction
                         if delta > 0:
                             current.damage_fraction += delta
+                            if is_confusion_selfhit:
+                                current.confusion_selfhit_fraction += delta
+                                current.confusion_selfhit = True
                         current.defender_hit_by_move = True
                 else:
                     current.defender_hit_by_move = False
@@ -724,6 +734,8 @@ class FoldState:
 
         elif event_type == "-activate" and len(parts) >= 4:
             identifier = _side_condition_identifier(parts[3])
+            if identifier == "confusion" and target in {"p1", "p2"}:
+                self.pending_confusion_selfhit_slot = target
             if current is not None and target == current.defender_side:
                 if identifier in {"protect", "detect"}:
                     current.upgrade_outcome(DAMAGE_OUTCOME_BLOCKED)
@@ -760,10 +772,12 @@ class FoldState:
         return self.mon_counters.setdefault((side, species), _MonCounters())
 
     def _open_window(self, window: _Window) -> None:
+        self.pending_confusion_selfhit_slot = None
         self._close_window()
         self.current_window = window
 
     def _close_window(self) -> None:
+        self.pending_confusion_selfhit_slot = None
         window = self.current_window
         if window is None:
             return
@@ -1036,6 +1050,7 @@ class FoldState:
         clone.pending_faint_replacement = dict(self.pending_faint_replacement)
         clone.lead_seen = dict(self.lead_seen)
         clone.pending_charge = dict(self.pending_charge)
+        clone.pending_confusion_selfhit_slot = self.pending_confusion_selfhit_slot
         clone.current_window = (
             replace(self.current_window) if self.current_window is not None else None
         )
@@ -1077,7 +1092,7 @@ class FoldState:
 
     def to_payload(self) -> dict:
         """JSON-safe, deterministic export (schema v2 stores this per corpus row)."""
-        return {
+        payload = {
             "schema": "pokezero.fold-state.v1",
             "perspective_slot": self.perspective_slot,
             "merged_tail_limit": self.merged_tail_limit,
@@ -1156,6 +1171,9 @@ class FoldState:
                 for species, (index, code) in sorted(self.investment_pinned_state.items())
             },
         }
+        if self.pending_confusion_selfhit_slot is not None:
+            payload["pending_confusion_selfhit_slot"] = self.pending_confusion_selfhit_slot
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping) -> "FoldState":
@@ -1187,6 +1205,7 @@ class FoldState:
         }
         state.lead_seen = {side: bool(v) for side, v in payload["lead_seen"].items()}
         state.pending_charge = dict(payload["pending_charge"])
+        state.pending_confusion_selfhit_slot = payload.get("pending_confusion_selfhit_slot")
         state.current_window = (
             _window_from_payload(payload["current_window"])
             if payload["current_window"] is not None
@@ -1272,6 +1291,8 @@ def _token_from_window(window: _Window) -> TransitionToken:
         transformed=window.transformed,
         damage_fraction=window.damage_fraction,
         self_hp_cost=window.self_hp_cost,
+        confusion_selfhit_fraction=window.confusion_selfhit_fraction,
+        confusion_selfhit=window.confusion_selfhit,
         damage_outcome=window.outcome,
         crit=window.crit,
         miss=window.miss,
@@ -1406,6 +1427,9 @@ def _window_to_payload(window: _Window) -> dict:
     }
     if window.fail:
         payload["fail"] = True
+    if window.confusion_selfhit:
+        payload["confusion_selfhit"] = True
+        payload["confusion_selfhit_fraction"] = window.confusion_selfhit_fraction
     return payload
 
 
@@ -1426,6 +1450,8 @@ def _window_from_payload(payload: Mapping) -> _Window:
         weather=payload["weather"],
         damage_fraction=float(payload["damage_fraction"]),
         self_hp_cost=float(payload["self_hp_cost"]),
+        confusion_selfhit_fraction=float(payload.get("confusion_selfhit_fraction", 0.0)),
+        confusion_selfhit=bool(payload.get("confusion_selfhit", False)),
         outcome=str(payload["outcome"]),
         crit=bool(payload["crit"]),
         miss=bool(payload["miss"]),
@@ -1477,12 +1503,17 @@ def _transition_token_to_payload(token: TransitionToken) -> dict:
     # Omit-when-default (spec v3): see _window_to_payload's rationale.
     if token.fail:
         payload["fail"] = True
+    if token.confusion_selfhit:
+        payload["confusion_selfhit"] = True
+        payload["confusion_selfhit_fraction"] = token.confusion_selfhit_fraction
     return payload
 
 
 def _transition_token_from_payload(payload: Mapping) -> TransitionToken:
     return TransitionToken(
         fail=bool(payload.get("fail", False)),
+        confusion_selfhit=bool(payload.get("confusion_selfhit", False)),
+        confusion_selfhit_fraction=float(payload.get("confusion_selfhit_fraction", 0.0)),
         **{name: payload[name] for name in _TRANSITION_TOKEN_FIELDS},
     )
 
@@ -1520,12 +1551,17 @@ def _sub_block_to_payload(sub: TurnSubBlock) -> dict:
     # Omit-when-default (spec v3): see _window_to_payload's rationale.
     if sub.fail:
         payload["fail"] = True
+    if sub.confusion_selfhit:
+        payload["confusion_selfhit"] = True
+        payload["confusion_selfhit_fraction"] = sub.confusion_selfhit_fraction
     return payload
 
 
 def _sub_block_from_payload(payload: Mapping) -> TurnSubBlock:
     return TurnSubBlock(
         fail=bool(payload.get("fail", False)),
+        confusion_selfhit=bool(payload.get("confusion_selfhit", False)),
+        confusion_selfhit_fraction=float(payload.get("confusion_selfhit_fraction", 0.0)),
         **{name: payload[name] for name in _SUB_BLOCK_FIELDS},
     )
 

@@ -1,4 +1,4 @@
-//! Native v2.2 observation encoder (track B of the engine-swap plan).
+//! Native schema-bound observation encoder (track B of the engine-swap plan).
 //!
 //! Port of `pokezero.showdown.observation_from_player_state` for the golden
 //! corpus's sanctioned per-row input surface (`observation_metadata` +
@@ -10,18 +10,9 @@
 //! is loaded from the JSON artifact produced by
 //! `scripts/export_encoder_tables.py` — nothing is hand-transcribed.
 //!
-//! IMPLEMENTED (bit-exact target): token_type_ids, legal_action_mask,
-//! attention_mask (to the stored-surface ceiling: the transition extent is
-//! not derivable per-row), and the categorical + numeric surfaces of tokens
-//! 0..=22 (field, self team, opponent team + belief overlay, action
-//! candidates, stats token).
-//!
-//! NOT IMPLEMENTED (documented 0%): the turn-merged transition tokens
-//! (23..=150) and every history-derived column (tendency triples, pinned
-//! Tier-2 conclusions, stats-token counters) — the corpus rows do not store
-//! the public event stream they are extracted from, so the Python reference
-//! itself cannot reproduce them from the same surface (track B phase 1
-//! finding). Those cells stay zero, matching the reference backend.
+//! The boundary-only entry point reproduces the sanctioned per-row surface.
+//! `NativeEncoder.encode_with_fold` additionally consumes the incremental
+//! public-event fold and reproduces the complete history surface.
 
 use std::collections::HashMap;
 
@@ -122,6 +113,7 @@ fn normalize_identifier(value: &str) -> String {
 // ---------------------------------------------------------------------------
 
 struct Layout {
+    schema_version: String,
     token_count: usize,
     categorical_width: usize,
     numeric_width: usize,
@@ -153,6 +145,10 @@ struct Layout {
 }
 
 impl Layout {
+    fn is_v3(&self) -> bool {
+        self.schema_version == "pokezero.observation.v3"
+    }
+
     fn cat_col(&self, name: &str) -> PyResult<usize> {
         self.cat
             .get(name)
@@ -165,6 +161,10 @@ impl Layout {
             .get(name)
             .copied()
             .ok_or_else(|| err(format!("layout missing numeric column {name}")))
+    }
+
+    fn num_col_opt(&self, name: &str) -> Option<usize> {
+        self.num.get(name).copied()
     }
 
     fn offset(&self, name: &str) -> PyResult<usize> {
@@ -261,7 +261,17 @@ impl Tables {
         let constants = get(layout_value, "constants");
         let buckets = get(layout_value, "belief_buckets");
         let masks = get(layout_value, "default_feature_masks");
+        let schema_version = str_or_empty(get(layout_value, "schema_version"));
+        if !matches!(
+            schema_version.as_str(),
+            "pokezero.observation.v2.2" | "pokezero.observation.v3"
+        ) {
+            return Err(err(format!(
+                "unsupported observation layout schema {schema_version:?}"
+            )));
+        }
         let layout = Layout {
+            schema_version,
             token_count: as_i64(get(layout_value, "token_count")) as usize,
             categorical_width: as_i64(get(layout_value, "categorical_feature_count")) as usize,
             numeric_width: as_i64(get(layout_value, "numeric_feature_count")) as usize,
@@ -391,7 +401,9 @@ impl Tables {
         let mut hasher = Blake2bVar::new(8).expect("blake2b-8");
         hasher.update(normalized.as_bytes());
         let mut digest = [0u8; 8];
-        hasher.finalize_variable(&mut digest).expect("blake2b-8 output");
+        hasher
+            .finalize_variable(&mut digest)
+            .expect("blake2b-8 output");
         let bucket = u64::from_be_bytes(digest) % self.oov_buckets;
         (self.oov_offset + bucket) as i32
     }
@@ -607,6 +619,9 @@ impl<'a> MonToken<'a> {
     fn details(&self) -> Option<&str> {
         as_str(get(self.entry, "details"))
     }
+    fn live_type_source(&self) -> Option<&str> {
+        as_str(get(self.entry, "live_type_source")).filter(|value| !value.is_empty())
+    }
     /// The mon's own request-side move ids (`ShowdownPokemon.moves`) — the fallback source for
     /// resolving generic Hidden Power's typed variant ("hiddenpowerice", ...); see
     /// `self_move_mechanics_id`.
@@ -666,11 +681,21 @@ pub(crate) fn encode_row_value(
         ));
     }
     let layout = &tables.layout;
+    let row_schema = str_or_empty(get(row, "observation_schema_version"));
+    if row_schema != layout.schema_version {
+        return Err(err(format!(
+            "row observation schema {row_schema:?} does not match encoder-table layout {:?}",
+            layout.schema_version
+        )));
+    }
 
     let self_team = as_array(get(md, "self_team"));
     let opponent_team = as_array(get(md, "opponent_team"));
     let self_mons: Vec<MonToken> = self_team.iter().map(|entry| MonToken { entry }).collect();
-    let opponent_mons: Vec<MonToken> = opponent_team.iter().map(|entry| MonToken { entry }).collect();
+    let opponent_mons: Vec<MonToken> = opponent_team
+        .iter()
+        .map(|entry| MonToken { entry })
+        .collect();
 
     // --- legal action mask (sanctioned source: metadata action candidates). ---
     let mut legal = vec![0u8; layout.action_count];
@@ -760,15 +785,7 @@ pub(crate) fn encode_row_value(
         Role::Opponent,
         md,
     )?;
-    encode_action_tokens(
-        tables,
-        &mut grid,
-        md,
-        pm,
-        &self_mons,
-        action_offset,
-        &legal,
-    )?;
+    encode_action_tokens(tables, &mut grid, md, pm, &self_mons, action_offset, &legal)?;
     // Stats token: role + presence. The tendency counters are history-derived:
     // zero without fold products (the stored-surface ceiling), real when the
     // fold state is supplied.
@@ -805,10 +822,7 @@ fn side_condition_features(counts: &Value, layout: &Layout) -> (f64, f64) {
         .iter()
         .filter(|name| as_bool(get(counts, name)))
         .count() as f64;
-    (
-        (hazards as f64 / 3.0).min(1.0),
-        (screens / 2.0).min(1.0),
-    )
+    ((hazards as f64 / 3.0).min(1.0), (screens / 2.0).min(1.0))
 }
 
 /// `showdown._timed_condition_turns`, reconstructed from the materialization
@@ -861,8 +875,12 @@ fn encode_field_token(
         side_condition_features(get(md, "opponent_side_condition_counts"), layout);
     grid.set_num(token, layout.num_col("NUMERIC_SELF_HAZARDS")?, self_haz);
     grid.set_num(token, layout.num_col("NUMERIC_OPP_HAZARDS")?, opp_haz);
-    grid.set_num(token, layout.num_col("NUMERIC_SELF_SCREENS")?, self_scr);
-    grid.set_num(token, layout.num_col("NUMERIC_OPP_SCREENS")?, opp_scr);
+    if let Some(column) = layout.num_col_opt("NUMERIC_SELF_SCREENS") {
+        grid.set_num(token, column, self_scr);
+    }
+    if let Some(column) = layout.num_col_opt("NUMERIC_OPP_SCREENS") {
+        grid.set_num(token, column, opp_scr);
+    }
     let turn_number = as_i64(get(md, "turn_number"));
     if turn_number != 0 {
         grid.set_num(
@@ -873,19 +891,47 @@ fn encode_field_token(
     }
     let self_future = as_i64(get(md, "self_future_sight_turns"));
     if self_future != 0 {
-        grid.set_num(
-            token,
-            layout.num_col("NUMERIC_SELF_FUTURE_SIGHT")?,
-            (self_future as f64 / 2.0).min(1.0),
-        );
+        if let Some(column) = layout.num_col_opt("NUMERIC_SELF_FUTURE_SIGHT") {
+            grid.set_num(token, column, (self_future as f64 / 2.0).min(1.0));
+        }
     }
     let opp_future = as_i64(get(md, "opponent_future_sight_turns"));
     if opp_future != 0 {
-        grid.set_num(
-            token,
-            layout.num_col("NUMERIC_OPP_FUTURE_SIGHT")?,
-            (opp_future as f64 / 2.0).min(1.0),
-        );
+        if let Some(column) = layout.num_col_opt("NUMERIC_OPP_FUTURE_SIGHT") {
+            grid.set_num(token, column, (opp_future as f64 / 2.0).min(1.0));
+        }
+    }
+    if layout.is_v3() {
+        if as_bool(get(md, "self_sleep_clause_blocks")) {
+            grid.set_num(
+                token,
+                layout.num_col("NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF")?,
+                1.0,
+            );
+        }
+        if as_bool(get(md, "opponent_sleep_clause_blocks")) {
+            grid.set_num(
+                token,
+                layout.num_col("NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP")?,
+                1.0,
+            );
+        }
+        let self_wish_turns = as_i64(get(md, "self_wish_turns"));
+        if self_wish_turns != 0 {
+            grid.set_num(
+                token,
+                layout.num_col("NUMERIC_SELF_WISH_TURNS")?,
+                (self_wish_turns as f64 / 2.0).min(1.0),
+            );
+        }
+        let opponent_wish_turns = as_i64(get(md, "opponent_wish_turns"));
+        if opponent_wish_turns != 0 {
+            grid.set_num(
+                token,
+                layout.num_col("NUMERIC_OPP_WISH_TURNS")?,
+                (opponent_wish_turns as f64 / 2.0).min(1.0),
+            );
+        }
     }
     if !layout.exact_state {
         return Ok(());
@@ -947,6 +993,46 @@ fn encode_field_token(
 enum Role {
     SelfTeam,
     Opponent,
+}
+
+fn gender_from_details(details: Option<&str>) -> Option<&str> {
+    details.and_then(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .find(|part| matches!(*part, "M" | "F"))
+    })
+}
+
+fn live_type_slots(tables: &Tables, source: &str) -> Option<(String, Option<String>)> {
+    let (kind, payload) = source.split_once(':')?;
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return None;
+    }
+    if kind == "type" {
+        let mut types = payload
+            .split('/')
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let first = types.next()?;
+        return Some((first.to_string(), types.next().map(str::to_string)));
+    }
+    if kind != "forme" {
+        return None;
+    }
+    if let Some(info) = tables.species_info(payload) {
+        if let Some(first) = info.types.first() {
+            return Some((first.clone(), info.types.get(1).cloned()));
+        }
+    }
+    match normalize_identifier(payload).as_str() {
+        "castformsunny" => Some(("Fire".to_string(), None)),
+        "castformrainy" => Some(("Water".to_string(), None)),
+        "castformsnowy" => Some(("Ice".to_string(), None)),
+        "castform" => Some(("Normal".to_string(), None)),
+        _ => None,
+    }
 }
 
 struct BeliefEntry<'a> {
@@ -1073,10 +1159,18 @@ fn encode_species_type_categories(
     let layout = &tables.layout;
     if let Some(info) = tables.species_info(species) {
         if let Some(first) = info.types.first() {
-            grid.set_cat(token, layout.cat_col("CATEGORY_TYPE_1")?, format!("type:{first}"));
+            grid.set_cat(
+                token,
+                layout.cat_col("CATEGORY_TYPE_1")?,
+                format!("type:{first}"),
+            );
         }
         if let Some(second) = info.types.get(1) {
-            grid.set_cat(token, layout.cat_col("CATEGORY_TYPE_2")?, format!("type:{second}"));
+            grid.set_cat(
+                token,
+                layout.cat_col("CATEGORY_TYPE_2")?,
+                format!("type:{second}"),
+            );
         }
     }
     Ok(())
@@ -1121,7 +1215,11 @@ fn encode_actual_stats(
     for (stat, column) in &layout.actual_stat_slots {
         let value = mon.stat(stat).unwrap_or(0);
         if value != 0 {
-            grid.set_num(token, *column, (value as f64 / layout.actual_stat_divisor).min(1.0));
+            grid.set_num(
+                token,
+                *column,
+                (value as f64 / layout.actual_stat_divisor).min(1.0),
+            );
         }
     }
     Ok(())
@@ -1180,7 +1278,10 @@ fn encode_belief_fact(
         ),
         _ => return Err(err(format!("unsupported belief fact kind {kind}"))),
     };
-    for (index, value) in compact_belief_values(values, Some(buckets)).iter().enumerate() {
+    for (index, value) in compact_belief_values(values, Some(buckets))
+        .iter()
+        .enumerate()
+    {
         grid.set_cat(
             token,
             offset + index,
@@ -1244,8 +1345,7 @@ fn encode_expected_stats(
             .unwrap_or(0);
         if let Some(level) = level {
             if hp_base != 0 {
-                let hp_value =
-                    (gen3_stat(hp_base, level, 85, 31, true) as f64 / divisor).min(1.0);
+                let hp_value = (gen3_stat(hp_base, level, 85, 31, true) as f64 / divisor).min(1.0);
                 for column_name in [
                     "NUMERIC_EXPECTED_HP",
                     "NUMERIC_EXPECTED_HP_LOW",
@@ -1291,7 +1391,9 @@ fn encode_expected_stats(
     let hp_baseline = gen3_stat(hp_base, level, 85, 31, true);
     let (mut atk_low, mut atk_high) = (atk_baseline, atk_baseline);
     let (mut hp_low, mut hp_high) = (hp_baseline, hp_baseline);
-    let variants = belief.map(|b| b.candidate_variants()).filter(|v| !v.is_empty());
+    let variants = belief
+        .map(|b| b.candidate_variants())
+        .filter(|v| !v.is_empty());
     if let Some(variants) = variants {
         let mut atk_values: Vec<i64> = Vec::new();
         let mut hp_values: Vec<i64> = Vec::new();
@@ -1336,7 +1438,11 @@ fn encode_expected_stats(
         ("NUMERIC_EXPECTED_ATK_LOW", atk_low),
         ("NUMERIC_EXPECTED_ATK_HIGH", atk_high),
     ] {
-        grid.set_num(token, layout.num_col(column_name)?, (value as f64 / divisor).min(1.0));
+        grid.set_num(
+            token,
+            layout.num_col(column_name)?,
+            (value as f64 / divisor).min(1.0),
+        );
     }
     Ok(())
 }
@@ -1422,7 +1528,9 @@ fn encode_pokemon_tokens(
                 let possible_abilities = revealed_ability
                     .map(|a| vec![a.to_string()])
                     .unwrap_or_default();
-                let possible_items = revealed_item.map(|i| vec![i.to_string()]).unwrap_or_default();
+                let possible_items = revealed_item
+                    .map(|i| vec![i.to_string()])
+                    .unwrap_or_default();
                 (
                     revealed_ability,
                     revealed_item,
@@ -1489,6 +1597,22 @@ fn encode_pokemon_tokens(
             format!("species:{enc_species}"),
         );
         encode_species_type_categories(tables, grid, token, &enc_species)?;
+        if let Some(source) = candidate.live_type_source() {
+            if let Some((type1, type2)) = live_type_slots(tables, source) {
+                grid.set_cat(
+                    token,
+                    layout.cat_col("CATEGORY_TYPE_1")?,
+                    format!("type:{type1}"),
+                );
+                grid.set_cat(
+                    token,
+                    layout.cat_col("CATEGORY_TYPE_2")?,
+                    type2
+                        .map(|value| format!("type:{value}"))
+                        .unwrap_or_default(),
+                );
+            }
+        }
         encode_pokemon_stats(tables, grid, token, &enc_species, candidate.details())?;
         if transformed {
             let original_hp = tables
@@ -1504,6 +1628,13 @@ fn encode_pokemon_tokens(
             }
         }
         encode_actual_stats(tables, grid, token, candidate)?;
+        if layout.is_v3() {
+            match gender_from_details(candidate.details()) {
+                Some("M") => grid.set_num(token, layout.num_col("NUMERIC_GENDER_MALE")?, 1.0),
+                Some("F") => grid.set_num(token, layout.num_col("NUMERIC_GENDER_FEMALE")?, 1.0),
+                _ => {}
+            }
+        }
         if candidate.active() {
             encode_active_boosts(grid, token, boosts, layout);
             encode_active_volatiles(tables, grid, token, &volatiles)?;
@@ -1513,6 +1644,31 @@ fn encode_pokemon_tokens(
                     layout.num_col("NUMERIC_TOXIC_STAGE")?,
                     (toxic_stage as f64 / 15.0).min(1.0),
                 );
+            }
+            if layout.is_v3() {
+                let prefix = if role == Role::SelfTeam {
+                    "self"
+                } else {
+                    "opponent"
+                };
+                for (suffix, column, divisor) in [
+                    ("stall_counter", "NUMERIC_STALL_COUNTER", 8.0),
+                    ("confusion_elapsed", "NUMERIC_CONFUSION_TURNS", 5.0),
+                    ("encore_elapsed", "NUMERIC_ENCORE_TURNS", 6.0),
+                    ("wrap_trap_elapsed", "NUMERIC_WRAP_TRAP_TURNS", 5.0),
+                ] {
+                    let value = as_i64(get(md, &format!("{prefix}_{suffix}")));
+                    if value != 0 {
+                        grid.set_num(
+                            token,
+                            layout.num_col(column)?,
+                            (value as f64 / divisor).min(1.0),
+                        );
+                    }
+                }
+                if as_bool(get(md, &format!("{prefix}_meanlook_trap"))) {
+                    grid.set_num(token, layout.num_col("NUMERIC_MEANLOOK_TRAP")?, 1.0);
+                }
             }
         }
         let status = belief
@@ -1662,15 +1818,12 @@ fn encode_pokemon_tokens(
                                 continue;
                             }
                             grid.set_num(token, valid_offset + index, 1.0);
-                            let max_pp = tables
-                                .move_info(&key)
-                                .map(|info| info.max_pp)
-                                .unwrap_or(0);
+                            let max_pp =
+                                tables.move_info(&key).map(|info| info.max_pp).unwrap_or(0);
                             if max_pp <= 0 {
                                 continue;
                             }
-                            let remaining =
-                                (max_pp - uses.get(&key).copied().unwrap_or(0)).max(0);
+                            let remaining = (max_pp - uses.get(&key).copied().unwrap_or(0)).max(0);
                             grid.set_num(
                                 token,
                                 pp_offset + index,
@@ -1737,9 +1890,9 @@ fn request_moves(md: &Value, pm: &Value) -> Vec<RequestMove> {
             break; // absent request slot — request move lists are dense prefixes
         }
         let move_id = str_or_empty(get(candidate, "move_id"));
-        let payload = payload_moves.get(cursor).filter(|entry| {
-            get(entry, "id").as_str() == Some(move_id.as_str())
-        });
+        let payload = payload_moves
+            .get(cursor)
+            .filter(|entry| get(entry, "id").as_str() == Some(move_id.as_str()));
         match payload {
             Some(entry) => {
                 cursor += 1;
@@ -1964,8 +2117,7 @@ fn encode_action_tokens(
         .and_then(|mon| tables.species_info(&mon.species()))
         .map(|info| info.types.clone())
         .unwrap_or_default();
-    let user_hp_fraction =
-        active.and_then(|mon| condition_features(mon.condition()).hp_fraction);
+    let user_hp_fraction = active.and_then(|mon| condition_features(mon.condition()).hp_fraction);
     // The acting mon's own typed move ids ("hiddenpowerice", ...) — the request-side fallback for
     // resolving generic Hidden Power's real type/base power (see self_move_mechanics_id).
     let own_move_ids: Vec<String> = active.map(|mon| mon.moves()).unwrap_or_default();
@@ -2058,7 +2210,11 @@ fn encode_action_tokens(
             encode_pokemon_stats(tables, grid, token, &mon.species(), mon.details())?;
             encode_actual_stats(tables, grid, token, mon)?;
         }
-        grid.set_cat(token, layout.cat_col("CATEGORY_SECONDARY")?, "action:switch");
+        grid.set_cat(
+            token,
+            layout.cat_col("CATEGORY_SECONDARY")?,
+            "action:switch",
+        );
         grid.set_cat(token, layout.cat_col("CATEGORY_ROLE")?, "action");
         grid.set_cat(
             token,
@@ -2232,10 +2388,18 @@ fn write_turn_merged_rows(
             );
         }
         if let Some(cant) = opt_str_nonempty(&first.cant_reason) {
-            grid.set_cat(row, layout.cat_col("CATEGORY_TM_FIRST_CANT")?, format!("cant:{cant}"));
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_FIRST_CANT")?,
+                format!("cant:{cant}"),
+            );
         }
         if let Some(bp) = opt_str_nonempty(&first.baton_pass_species) {
-            grid.set_cat(row, layout.cat_col("CATEGORY_TM_FIRST_BP")?, format!("species:{bp}"));
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_FIRST_BP")?,
+                format!("species:{bp}"),
+            );
         }
         grid.set_num(row, layout.num_col("NUMERIC_PRESENT")?, 1.0);
         write_sub_block_numerics(tables, grid, row, first, SubBlockColumns::FIRST)?;
@@ -2323,10 +2487,18 @@ fn write_turn_merged_rows(
             }
         }
         if let Some(cant) = opt_str_nonempty(&second.cant_reason) {
-            grid.set_cat(row, layout.cat_col("CATEGORY_TM_SECOND_CANT")?, format!("tt2_cant:{cant}"));
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_CANT")?,
+                format!("tt2_cant:{cant}"),
+            );
         }
         if let Some(bp) = opt_str_nonempty(&second.baton_pass_species) {
-            grid.set_cat(row, layout.cat_col("CATEGORY_TM_SECOND_BP")?, format!("tt2_species:{bp}"));
+            grid.set_cat(
+                row,
+                layout.cat_col("CATEGORY_TM_SECOND_BP")?,
+                format!("tt2_species:{bp}"),
+            );
         }
         grid.set_num(row, layout.num_col("NUMERIC_TM2_PRESENT")?, 1.0);
         write_sub_block_numerics(tables, grid, row, second, SubBlockColumns::SECOND)?;
@@ -2349,6 +2521,7 @@ struct SubBlockColumns {
     cb_bit: &'static str,
     investment: &'static str,
     self_hp_cost: &'static str,
+    fail: &'static str,
 }
 
 impl SubBlockColumns {
@@ -2366,6 +2539,7 @@ impl SubBlockColumns {
         cb_bit: "NUMERIC_TT_CB_BIT",
         investment: "NUMERIC_TT_INVESTMENT_BIT",
         self_hp_cost: "NUMERIC_TT_SELF_HP_COST",
+        fail: "NUMERIC_TT_FAIL",
     };
     const SECOND: SubBlockColumns = SubBlockColumns {
         damage_fraction: "NUMERIC_TM2_DAMAGE_FRACTION",
@@ -2381,6 +2555,7 @@ impl SubBlockColumns {
         cb_bit: "NUMERIC_TM2_CB_BIT",
         investment: "NUMERIC_TM2_INVESTMENT",
         self_hp_cost: "NUMERIC_TM2_SELF_HP_COST",
+        fail: "NUMERIC_TM2_FAIL",
     };
 }
 
@@ -2394,15 +2569,24 @@ fn write_sub_block_numerics(
     columns: SubBlockColumns,
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    if sub.damage_fraction != 0.0 {
+    let damage_fraction = if layout.is_v3() && sub.confusion_selfhit {
+        (sub.damage_fraction - sub.confusion_selfhit_fraction).max(0.0)
+    } else {
+        sub.damage_fraction
+    };
+    if damage_fraction != 0.0 {
         grid.set_num(
             row,
             layout.num_col(columns.damage_fraction)?,
-            sub.damage_fraction.min(1.0),
+            damage_fraction.min(1.0),
         );
     }
     if sub.kind == Some(FoldKind::Move) {
-        grid.set_num(row, layout.num_col(columns.n_hits)?, (sub.n_hits as f64 / 5.0).min(1.0));
+        grid.set_num(
+            row,
+            layout.num_col(columns.n_hits)?,
+            (sub.n_hits as f64 / 5.0).min(1.0),
+        );
     }
     for (column, flag) in [
         (columns.called, sub.called),
@@ -2418,7 +2602,11 @@ fn write_sub_block_numerics(
     }
     if layout.tier2_residuals && sub.residual_valid {
         if let Some(residual) = sub.residual {
-            grid.set_num(row, layout.num_col(columns.residual)?, residual.clamp(-1.0, 1.0));
+            grid.set_num(
+                row,
+                layout.num_col(columns.residual)?,
+                residual.clamp(-1.0, 1.0),
+            );
             grid.set_num(row, layout.num_col(columns.residual_valid)?, 1.0);
         }
     }
@@ -2438,6 +2626,14 @@ fn write_sub_block_numerics(
             layout.num_col(columns.self_hp_cost)?,
             sub.self_hp_cost.min(1.0),
         );
+    }
+    if layout.is_v3() {
+        if sub.fail {
+            grid.set_num(row, layout.num_col(columns.fail)?, 1.0);
+        }
+        if sub.confusion_selfhit {
+            grid.set_num(row, layout.num_col("NUMERIC_TT_CONFUSION_SELFHIT")?, 1.0);
+        }
     }
     Ok(())
 }
@@ -2525,7 +2721,10 @@ fn write_opponent_mon_history(
                         "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
                         tendency.switched_out_before_attacking,
                     ),
-                    ("NUMERIC_MON_STAYED_AND_ATTACKED", tendency.stayed_and_attacked),
+                    (
+                        "NUMERIC_MON_STAYED_AND_ATTACKED",
+                        tendency.stayed_and_attacked,
+                    ),
                     ("NUMERIC_MON_TURNS_ACTIVE_TOTAL", tendency.turns_active),
                 ] {
                     if count != 0 {

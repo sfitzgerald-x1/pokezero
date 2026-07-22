@@ -9,8 +9,9 @@ same batch size. Reference points: the Python-side model-cost ladder
 and the export bench (docs/model_export_findings.md).
 
 The leaf observation is a template stub (per-leaf copy prices marshaling, not
-encoding) — the Rust v2.2 encoder is a separate in-flight stream. Forward
-cost is value-independent, so throughput is real; leaf CONTENT is not.
+encoding). The schema-bound Rust encoder exists, but this historical benchmark
+does not exercise it. Forward cost is value-independent, so throughput is real;
+leaf CONTENT is not.
 
 Usage:
     scripts/build_search_crate_model.sh <venv-python>   # build the crate first

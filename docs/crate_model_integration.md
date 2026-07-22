@@ -104,10 +104,10 @@ implementation (none exists — the batched core at batch=1 IS that path).
 
 Two scoping facts, stated plainly:
 
-- **Leaf observations are template stubs.** The per-leaf copy prices tensor
-  marshaling, not encoding; the Rust v2.2 encoder is the separate in-flight
-  fold-state stream and plugs in upstream of `BatchLeafEval` (it produces
-  the `ObsBatch`). Throughput is real (forward cost is value-independent);
+- **This benchmark uses template leaf observations.** The per-leaf copy prices
+  tensor marshaling, not encoding; the schema-bound Rust encoder now exists
+  upstream of `BatchLeafEval`, but this historical throughput measurement does
+  not exercise it. Throughput is real (forward cost is value-independent);
   leaf CONTENT — and therefore search strength — is not evaluated here.
 - **Model priors are not yet wired into selection** (uniform priors remain).
   Priors come out of the evaluator per the contract, but mapping action

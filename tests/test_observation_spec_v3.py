@@ -330,8 +330,8 @@ class SchemaTableTest(unittest.TestCase):
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3),
             V3_REPLAY_OBSERVATION_SPEC,
         )
-        # v2.2 keeps the fresh-selection default: v3 launches only after the Rust fold
-        # encoder mirrors it and the golden corpus regenerates (spec coordination section).
+        # v2.2 keeps the fresh-selection default: v3 launches only after the fresh
+        # golden corpus and EOC audit pass (spec coordination section).
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
         # v3 shares v2.2's turn-merged transition surface.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
@@ -864,9 +864,7 @@ class StallCounterEncodeTest(unittest.TestCase):
 
 
 class IncrementalFoldParityTest(unittest.TestCase):
-    """The incremental fold twin (transitions_fold) mirrors the fail marker, and its
-    serialized payload stays byte-stable for fail-free games (the committed golden
-    corpus predates the field)."""
+    """The incremental fold mirrors V3 history fields without changing clean payloads."""
 
     def test_incremental_fold_matches_batch_on_a_fail_log(self) -> None:
         from pokezero.transitions_fold import FoldState
@@ -889,6 +887,35 @@ class IncrementalFoldParityTest(unittest.TestCase):
         state, products = FoldState.initial(perspective_slot="p1").advance(_FAIL_LINES)
         canonical = json.dumps(state.to_payload(), sort_keys=True)
         self.assertIn('"fail": true', canonical)
+        resumed = FoldState.from_payload(json.loads(canonical))
+        self.assertEqual(json.dumps(resumed.to_payload(), sort_keys=True), canonical)
+        self.assertEqual(resumed.products().transition_tokens, products.transition_tokens)
+
+    def test_incremental_fold_matches_batch_on_confusion_self_hit(self) -> None:
+        from pokezero.transitions_fold import FoldState
+
+        replay = parse_showdown_replay(_CONFUSE_SELFHIT_LINES, battle_id="confusion-fold")
+        batch = extract_transition_tokens(replay, perspective_slot="p1")
+        _, products = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES
+        )
+        self.assertEqual(products.transition_tokens, batch)
+        self.assertTrue(any(token.confusion_selfhit for token in products.transition_tokens))
+
+    def test_payload_round_trip_carries_confusion_and_omits_it_when_clean(self) -> None:
+        from pokezero.transitions_fold import FoldState
+
+        clean, _ = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES[: len(_LEADS) + 2]
+        )
+        self.assertNotIn(
+            '"confusion_selfhit"', json.dumps(clean.to_payload(), sort_keys=True)
+        )
+        state, products = FoldState.initial(perspective_slot="p1").advance(
+            _CONFUSE_SELFHIT_LINES
+        )
+        canonical = json.dumps(state.to_payload(), sort_keys=True)
+        self.assertIn('"confusion_selfhit": true', canonical)
         resumed = FoldState.from_payload(json.loads(canonical))
         self.assertEqual(json.dumps(resumed.to_payload(), sort_keys=True), canonical)
         self.assertEqual(resumed.products().transition_tokens, products.transition_tokens)

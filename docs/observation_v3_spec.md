@@ -12,7 +12,7 @@ the fail marker wrong for most fails and would break counterfactual
 flag-flip probes. The model learns the correlation itself.
 
 **v3 is still PRE-FREEZE** (the freeze gate is the input-audit program; the Rust
-fold mirror + golden-corpus regeneration have not happened yet), so its layout
+fold mirror is implemented, while golden-corpus regeneration has not happened yet), so its layout
 was reorganized in place before any checkpoint trained on it. V2/v2.1/v2.2 keep
 their frozen positions and remain byte-identical. V3 removes the 14
 evidence-backed dead numeric columns listed in [dead observation
@@ -599,12 +599,12 @@ are implementation-private and must not be used as physical V3 positions.
 
 ## Coordination (v3-stream / Rust fold)
 
-The golden-corpus bit-exactness gate means this schema lands in BOTH
-encoders: after this (production) implementation merges, the Rust fold
-encoder (`rust/pokezero-search`) mirrors it and the golden corpus is
-regenerated at v3. Until then the corpus stays on v2.2 and the gate is
-unaffected (v2.2 output unchanged). The new generation run launches only
-after both sides agree.
+The schema now lands in BOTH encoders: `rust/pokezero-search` consumes the same
+schema-bound exported layout table as Python and passes a focused V3
+Python/Rust byte-exactness gate, including the incremental fold additions.
+The committed corpus remains on v2.2 until it is regenerated at V3; the legacy
+V2.2 Python/Rust gate remains all-exact. The new generation run launches only
+after the fresh V3 corpus and EOC audit agree.
 
 ## Review dispositions (2026-07-20, post-implementation Opus review: SHIP)
 
@@ -615,8 +615,8 @@ after both sides agree.
   reveals the opponent's ability class — informative signal, not noise.
 - **Known accepted loss (v3-only, rare):** a Baton Pass completion switch is
   collapsed into `baton_pass_species` during turn-merging, dropping a
-  `fail=True` from a BP-into-Clear-Body Intimidate block. To revisit at the
-  Rust-mirror/corpus-regeneration milestone with a scenario test; either
-  preserve fail onto the collapse or re-accept the loss explicitly.
+  `fail=True` from a BP-into-Clear-Body Intimidate block. Re-audited during the
+  Rust mirror: both encoders preserve the existing collapse, and this rare
+  omission remains an explicitly accepted V3 loss.
 - Golden-corpus tooling migrated to the schema-family membership tuple so a
   future default-schema bump cannot silently disable turn-merged capture.

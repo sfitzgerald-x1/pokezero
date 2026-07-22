@@ -4511,6 +4511,22 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "weather_permanent": state.weather_permanent,
         "self_wish_pending": state.self_wish_pending,
         "opponent_wish_pending": state.opponent_wish_pending,
+        # V3 public-state inputs. These remain metadata-only under V2.x and let the
+        # schema-bound Rust/golden encoders reproduce V3 without replaying private data.
+        "self_sleep_clause_blocks": state.self_sleep_clause_blocks,
+        "opponent_sleep_clause_blocks": state.opponent_sleep_clause_blocks,
+        "self_wish_turns": state.self_wish_turns,
+        "opponent_wish_turns": state.opponent_wish_turns,
+        "self_stall_counter": state.self_stall_counter,
+        "opponent_stall_counter": state.opponent_stall_counter,
+        "self_confusion_elapsed": state.self_confusion_elapsed,
+        "opponent_confusion_elapsed": state.opponent_confusion_elapsed,
+        "self_encore_elapsed": state.self_encore_elapsed,
+        "opponent_encore_elapsed": state.opponent_encore_elapsed,
+        "self_wrap_trap_elapsed": state.self_wrap_trap_elapsed,
+        "opponent_wrap_trap_elapsed": state.opponent_wrap_trap_elapsed,
+        "self_meanlook_trap": state.self_meanlook_trap,
+        "opponent_meanlook_trap": state.opponent_meanlook_trap,
     }
 
 
@@ -4575,6 +4591,7 @@ def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
         "ability": pokemon.ability,
         "item": pokemon.item,
         "stats": dict(pokemon.stats) if pokemon.stats is not None else None,
+        "live_type_source": pokemon.live_type_source,
     }
 
 

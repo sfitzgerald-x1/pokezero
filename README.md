@@ -32,8 +32,9 @@ play itself, here applied to an imperfect-information, simultaneous-move game.
 
 ![V3 observation token input](docs/observation_v3_tokens.svg)
 
-V3 is the next training schema; its Python layout is frozen while the Rust mirror and fresh audit
-artifacts are completed. One decision is **151 tokens**: a global field token (weather, hazards,
+V3 is the next training schema; its Python and Rust layouts are mirrored while fresh audit
+artifacts are completed before the default cutover. One decision is **151 tokens**: a global
+field token (weather, hazards,
 clauses, Wish, turn count, request kind), six self-team tokens (full knowledge: exact stats, PP,
 status, boosts, public volatile clocks), six opponent tokens (public reveals plus belief candidates,
 expected stats, and PP evidence), nine action-candidate tokens (the 4 moves and 5 switches the
