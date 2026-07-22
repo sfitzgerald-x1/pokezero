@@ -161,7 +161,7 @@ def _iter_cache_examples(cache_glob: str, samples: int):
         raise SystemExit(f"no cache shards match {cache_glob!r}")
     yielded = 0
     for path in paths:
-        for batch in iter_training_cache_batches(path):
+        for batch in iter_training_cache_batches(path, batch_size=64):
             categorical = torch.as_tensor(batch.categorical_ids)
             numeric = torch.as_tensor(batch.numeric_features)
             token_types = torch.as_tensor(batch.token_type_ids)
