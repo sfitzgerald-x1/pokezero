@@ -468,9 +468,9 @@ touching the folded `damage_fraction` field:
   exported as `V3_NUMERIC_LAYOUT_GROUPS`.
 - The map accounts for every private legacy writer column: 155 are carried, 14
   are explicitly dropped under the reachability evidence in
-  [dead observation fields](dead_observation_fields.md), and exactly one carried
-  semantic field (`NUMERIC_TT_DAMAGE_FRACTION`) is deliberately rewritten for the
-  confusion-self-hit repair.
+  [dead observation fields](dead_observation_fields.md), and two carried semantic
+  fields (`NUMERIC_TT_DAMAGE_FRACTION` and `NUMERIC_TM2_DAMAGE_FRACTION`) are
+  deliberately rewritten for the confusion-self-hit repair.
 - No categorical vocabulary rows change. In particular, `cant:confusion` is
   never emitted (a confusion self-hit produces no `|cant|` line), and extending
   the globally sorted categorical vocabulary would shift V2.2 rows. The
@@ -542,8 +542,8 @@ touching the folded `damage_fraction` field:
     (pristine v3 reads 0.27).
 11. The raw V3 output has exactly 155 numeric columns. A synthetic projection
     and a real V2.2/V3 encode assert every carried semantic field satisfies
-    `v3[v3_numeric_index(old)] == v2_2[old]`, except the documented
-    confusion-self-hit rewrite. Every dead legacy index raises from
+    `v3[v3_numeric_index(old)] == v2_2[old]`, except the documented first- and
+    second-sub-block confusion-self-hit rewrites. Every dead legacy index raises from
     `v3_numeric_index`; categorical rows, masks, and token types remain shared.
 12. Existing V2.2 test suites pass untouched.
 
@@ -562,6 +562,31 @@ human-facing summary.
 | 98–109 | `field` | hazards, sleep clause, weather, pending Wish, V3 sleep-clause blocks, Wish clocks |
 | 110–120 | `tendency` | global action tendencies and rain/sun/sand public weather-reveal pairs |
 | 121–154 | `history` | first/second turn-merged action summaries, V3 fail bits, confusion-self-hit flag |
+
+### Token-layout view
+
+```mermaid
+flowchart TB
+    OBS["One V3 observation: 151 token rows"]
+    OBS --> FIELD["1 field token"]
+    OBS --> SELF["6 self-Pokemon tokens"]
+    OBS --> OPP["6 opponent-Pokemon tokens"]
+    OBS --> ACTION["9 legal-action tokens"]
+    OBS --> STATS["1 tendency-stats token"]
+    OBS --> HISTORY["128 turn-merged history tokens"]
+
+    ROW["Every token row: 155 numeric columns + 51 unchanged categorical columns"]
+    FIELD -. owns field values .-> FIELDGROUP["98-109 field\nhazards, clauses, weather, Wish"]
+    SELF -. owns Pokemon state .-> POKEGROUP["6-38 pokemon_state\nstats, volatiles, clocks, gender, move traps"]
+    OPP -. owns belief values .-> BELIEFGROUP["39-91 belief\nset uncertainty, expected stats, revealed PP"]
+    ACTION -. owns action values .-> ACTIONGROUP["92-97 action\npower, priority, accuracy, PP, effects, HP cost"]
+    STATS -. owns aggregate tendency .-> TENDENCYGROUP["110-120 tendency\nswitch and weather-reveal evidence"]
+    HISTORY -. owns past turns .-> HISTORYGROUP["121-154 history\npaired action summaries, fail, confusion self-hit"]
+
+    PRIVATE["Private writer surface: 169 historical columns"] --> PROJECT["V3 projection map"]
+    PROJECT --> DROP["Drop 14 unreachable fields\nscreens, Future Sight, hail reveal"]
+    PROJECT --> PUBLIC["Public grouped layout: 155 columns"]
+```
 
 The dropped private legacy numeric indices are
 `{24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104}`: screen state and

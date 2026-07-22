@@ -468,8 +468,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Observation schema for a FRESH train: v2.1, v2.2 (default; turn-merged "
             "transition tokens; stamps the model config, sizes the widths, and flips the "
-            "schema-derived vocabulary), or v3 (turn-merged + the appended fail-bit and "
-            "public sleep-clause columns). With --initial-checkpoint the checkpoint's stamped "
+            "schema-derived vocabulary), or v3 (turn-merged grouped layout with the V3 public "
+            "signals). With --initial-checkpoint the checkpoint's stamped "
             "schema wins and an explicitly disagreeing flag hard-fails (mask-conflict "
             "semantics)."
         ),
@@ -1823,8 +1823,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Observation schema for a FRESH iterate run: v2.1, v2.2 (default; "
             "turn-merged transition tokens; sizes the model config, the env spec, and the "
-            "schema-derived vocabulary), or v3 (turn-merged + the appended fail-bit and "
-            "public sleep-clause columns). On --resume the run's stored model config wins; a "
+            "schema-derived vocabulary), or v3 (turn-merged grouped layout with the V3 public "
+            "signals). On --resume the run's stored model config wins; a "
             "disagreeing explicit flag fails the model-config equality validation."
         ),
     )

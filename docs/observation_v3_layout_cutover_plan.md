@@ -104,8 +104,8 @@ The cutover inserts ~2–4 agent-days before the freeze; the smoke arms'
   hail reveal pair.
 - **Compatibility oracle:** implemented as both a synthetic all-columns
   projection test and a real V2.2/V3 encode test. It checks every carried column
-  through the old-to-new map, with the confusion self-hit damage correction as
-  the single documented semantic exception.
+  through the old-to-new map, with the two confusion-self-hit damage corrections
+  (first and second sub-block) as the documented semantic exceptions.
 - **Still required before EOC:** an independent review, the V3 Rust mirror,
   fresh golden corpus/audit captures, and the final EOC run described in
   `v3_end_of_cycle_evaluation_plan.md`. No historical V3 artifact may be reused.

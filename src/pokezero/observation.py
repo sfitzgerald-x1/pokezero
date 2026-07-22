@@ -33,22 +33,11 @@ OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
 # v2.2; an unchanged K roughly doubles the temporal horizon.
 OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # v3 (checkpoint-driven, fourth entry in the same dual-schema table; docs/observation_v3_spec.md):
-# APPENDED numeric bits on top of v2.2 — (1) the ``-fail`` transition event on action transition
-# tokens (window-scoped corrective signal, mirroring the miss bit's emission convention on both
-# turn-merged sub-blocks), (2) the public sleep-clause block bits on the field token (per-side
-# "our sleep moves will fail" state), (3) the consecutive-stall counter (#810), (4) confusion
-# turns-so-far on the confused mon's token (public elapsed-duration counter, gen3 CAP 5,
-# min(1, elapsed/5)), (5) encore turns-so-far on the encored mon's token (public
-# elapsed-duration counter, gen3 CAP 6, min(1, elapsed/6)), (6) Wrap (partial-trap)
-# turns-so-far on the trapped mon's token (public elapsed-duration counter, gen3 CAP 5,
-# min(1, elapsed/5)), (7) per-mon gender as two 0/1 bits on every mon token (static public
-# attribute from the details string: male 10 / female 01 / genderless 00), and (8) a Mean Look /
-# Spider Web move-trap 0/1 bit on the trapped mon's token (public "switch-locked by Mean Look /
-# Spider Web" flag, distinct from the Wrap partial-trap and ability-trap signals). All derived ONLY
-# from public protocol lines — no engine-side hidden state. Every v2.2 block carries forward
-# unchanged and v2.2 output stays byte-identical; same checkpoint-driven resolution mechanism. NOT
-# the fresh default until the Rust fold encoder mirrors it and the golden corpus regenerates at v3
-# (spec's coordination section).
+# the v2.2 turn-merged semantic surface plus the documented V3 public signals, reorganized into a
+# grouped 155-column numeric layout after removing 14 evidence-backed unreachable fields. The
+# private writer surface remains an encoder implementation detail; all consumers use the public V3
+# layout. Every v2.2 artifact retains its frozen output and checkpoint-driven resolution. V3 is NOT
+# the fresh default until the Rust fold encoder mirrors it and the golden corpus regenerates at v3.
 OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
@@ -82,6 +71,8 @@ OPPONENT_POKEMON_TOKEN_COUNT = 6
 ACTION_CANDIDATE_TOKEN_COUNT = ACTION_COUNT
 # One opponent-tendency-stats token carries the global tendency (count, opportunity) pairs (design doc "Encoding").
 OPPONENT_TENDENCY_STATS_TOKEN_COUNT = 1
+# Historical name consumed by the committed V2.2 token-format generator.
+STATS_TOKEN_COUNT = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
 # Transition-token slot budget: 128 tokens ≈ 64 turns of ordered history, truncated oldest-first
 # (the truncated prefix is what the unbounded aggregates have already absorbed). The K ∈ {16-turn}
 # ablation arm masks the budget down via config (ObservationFeatureMasks) — not a spec change.

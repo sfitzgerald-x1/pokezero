@@ -558,7 +558,9 @@ V3_DROPPED_LEGACY_NUMERIC_INDICES = frozenset(
 
 # The confusion self-hit repair intentionally changes v3's move-damage semantics relative to
 # frozen v2.2. It is carried to a new position but excluded from byte-equality map assertions.
-V3_REWRITTEN_LEGACY_NUMERIC_INDICES = frozenset((NUMERIC_TT_DAMAGE_FRACTION,))
+V3_REWRITTEN_LEGACY_NUMERIC_INDICES = frozenset(
+    (NUMERIC_TT_DAMAGE_FRACTION, NUMERIC_TM2_DAMAGE_FRACTION)
+)
 
 # One table is the v3 numeric layout specification. Grouping follows the token encoder's
 # semantic surfaces rather than the chronology in which columns were introduced. Every legacy
@@ -825,6 +827,8 @@ SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
 OPPONENT_POKEMON_TOKEN_OFFSET = SELF_POKEMON_TOKEN_OFFSET + SELF_POKEMON_TOKEN_COUNT
 ACTION_CANDIDATE_TOKEN_OFFSET = OPPONENT_POKEMON_TOKEN_OFFSET + OPPONENT_POKEMON_TOKEN_COUNT
 OPPONENT_TENDENCY_STATS_TOKEN_OFFSET = ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_CANDIDATE_TOKEN_COUNT
+# Historical name consumed by the committed V2.2 token-format generator.
+STATS_TOKEN_OFFSET = OPPONENT_TENDENCY_STATS_TOKEN_OFFSET
 TRANSITION_TOKEN_OFFSET = OPPONENT_TENDENCY_STATS_TOKEN_OFFSET + OPPONENT_TENDENCY_STATS_TOKEN_COUNT
 
 # Transition-token kind ids. Literal copies of transitions.TOKEN_KIND_* — showdown cannot import
@@ -2040,6 +2044,13 @@ def observation_from_player_state(
             f"observation encode: unsupported spec schema {spec.schema_version!r}; supported "
             f"schemas are {supported}."
         )
+    schema_v3 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
+    if schema_v3 and spec.numeric_feature_count != _V3_NUMERIC_FEATURE_COUNT:
+        raise ValueError(
+            "observation encode: the grouped v3 layout requires exactly "
+            f"{_V3_NUMERIC_FEATURE_COUNT} numeric columns, got {spec.numeric_feature_count}. "
+            "Its projection map defines the complete public surface."
+        )
     # Census floor (#512 review MED-LOW): refuse a spec narrower than its schema's own
     # census rather than letting the bounds-checked writers silently drop the schema's
     # columns and emit an undeclared hybrid stamped with the wider version.
@@ -2065,7 +2076,6 @@ def observation_from_player_state(
             "bounds-drop the schema's own categorical surface (v2.2's whole second "
             "sub-block) and encode an undeclared hybrid stamped with the wider version."
         )
-    schema_v3 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
     # V3 keeps the v2.2 turn-merged semantic surface but projects the private legacy writer
     # rows into its grouped public layout after all token writers complete.
     schema_v2_2 = schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2

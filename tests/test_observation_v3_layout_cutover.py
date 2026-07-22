@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3
 from pokezero.showdown import (
+    NUMERIC_TM2_DAMAGE_FRACTION,
     NUMERIC_TM2_FAIL,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
@@ -23,6 +24,25 @@ from pokezero.showdown import (
     observation_from_player_state,
     parse_showdown_replay,
     v3_numeric_index,
+)
+
+# This literal is intentionally independent of the production grouping table. It is the
+# physical V3 schema manifest: changing the map's order must fail this test, not rewrite its
+# own expected output. Values are historical writer indices in V3 public-column order.
+_EXPECTED_V3_LEGACY_INDEX_BY_NEW_INDEX = (
+    0, 1, 2, 3, 15, 33, 16, 17, 18, 19, 20, 21,
+    26, 27, 28, 29, 30, 37, 38, 39, 40, 41, 42, 43,
+    58, 59, 60, 61, 62, 137, 138, 139, 159, 160, 161, 162,
+    163, 164, 165, 4, 5, 6, 7, 8, 9, 10, 11, 63,
+    64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75,
+    76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
+    88, 89, 90, 91, 121, 122, 123, 124, 125, 126, 127, 128,
+    129, 130, 131, 132, 133, 134, 135, 136, 12, 13, 14, 31,
+    32, 34, 22, 23, 44, 45, 46, 47, 56, 57, 157, 158,
+    166, 167, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101,
+    102, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+    116, 117, 118, 119, 120, 140, 141, 142, 143, 144, 145, 146,
+    147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 168,
 )
 
 
@@ -74,9 +94,9 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             include_turn_merged=True,
         )
 
-    def _encode(self, spec):
+    def _encode(self, spec, *, state=None):
         observation = observation_from_player_state(
-            self._state(), category_vocab=_TurnMergedVocabulary(), spec=spec
+            state or self._state(), category_vocab=_TurnMergedVocabulary(), spec=spec
         )
         observation.validate(spec)
         return observation
@@ -92,6 +112,9 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             for new_index, legacy_index in enumerate(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX):
                 self.assertEqual(row[new_index], legacy_rows[row_index][legacy_index])
 
+    def test_public_layout_matches_the_independent_physical_manifest(self) -> None:
+        self.assertEqual(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX, _EXPECTED_V3_LEGACY_INDEX_BY_NEW_INDEX)
+
     def test_legacy_v2_2_surface_is_fully_accounted_for(self) -> None:
         legacy_v2_2_indices = set(range(V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count))
         carried = set(V3_NUMERIC_INDEX_BY_LEGACY_INDEX)
@@ -102,7 +125,10 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             | V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
         )
         self.assertEqual(V3_DROPPED_LEGACY_NUMERIC_INDICES, {24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104})
-        self.assertEqual(V3_REWRITTEN_LEGACY_NUMERIC_INDICES, {NUMERIC_TT_DAMAGE_FRACTION})
+        self.assertEqual(
+            V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
+            {NUMERIC_TT_DAMAGE_FRACTION, NUMERIC_TM2_DAMAGE_FRACTION},
+        )
 
     def test_raw_v3_output_uses_the_grouped_layout(self) -> None:
         v2_2 = self._encode(V2_2_REPLAY_OBSERVATION_SPEC)
@@ -133,15 +159,51 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             1.0,
         )
 
-    def test_v3_refuses_a_narrower_public_census(self) -> None:
-        narrow = replace(
-            V3_REPLAY_OBSERVATION_SPEC,
-            numeric_feature_count=V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count - 1,
+    def test_second_sub_block_confusion_rewrite_is_declared_and_projected(self) -> None:
+        state = self._state()
+        token_index, token = next(
+            (index, token)
+            for index, token in enumerate(state.turn_merged_tokens)
+            if token.second.status == "action"
         )
-        with self.assertRaisesRegex(ValueError, "requires at least 155 numeric columns"):
-            observation_from_player_state(
-                self._state(), category_vocab=_TurnMergedVocabulary(), spec=narrow
-            )
+        rewritten_second = replace(
+            token.second,
+            damage_fraction=0.25,
+            confusion_selfhit=True,
+            confusion_selfhit_fraction=0.10,
+        )
+        rewritten_token = replace(token, second=rewritten_second)
+        rewritten_state = replace(
+            state,
+            turn_merged_tokens=(
+                *state.turn_merged_tokens[:token_index],
+                rewritten_token,
+                *state.turn_merged_tokens[token_index + 1 :],
+            ),
+        )
+        v2_2 = self._encode(V2_2_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
+        v3 = self._encode(V3_REPLAY_OBSERVATION_SPEC, state=rewritten_state)
+        row = TRANSITION_TOKEN_OFFSET + token_index
+        self.assertEqual(v2_2.numeric_features[row][NUMERIC_TM2_DAMAGE_FRACTION], 0.25)
+        self.assertEqual(
+            v3.numeric_features[row][v3_numeric_index(NUMERIC_TM2_DAMAGE_FRACTION)],
+            0.15,
+        )
+
+    def test_v3_refuses_a_noncanonical_public_census(self) -> None:
+        for numeric_feature_count in (
+            V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count - 1,
+            V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 1,
+        ):
+            with self.subTest(numeric_feature_count=numeric_feature_count):
+                invalid = replace(
+                    V3_REPLAY_OBSERVATION_SPEC,
+                    numeric_feature_count=numeric_feature_count,
+                )
+                with self.assertRaisesRegex(ValueError, "requires exactly 155 numeric columns"):
+                    observation_from_player_state(
+                        self._state(), category_vocab=_TurnMergedVocabulary(), spec=invalid
+                    )
 
 
 if __name__ == "__main__":
