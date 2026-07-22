@@ -59,17 +59,21 @@ from golden_encoder_backends import (  # noqa: E402
     row_inputs_from_decision_row,
 )
 
-# Token blocks of the v2.2 layout (docs/observation_v22_tokens.svg): the
-# coverage table reports each block separately so partial encoders report
-# honest per-block state.
-TOKEN_BLOCKS: tuple[tuple[str, int, int], ...] = (
+# The fixed prefix is shared by V2.2 and V3; the transition block ends at the
+# selected schema's token count (150 for V2.2, 86 for V3).
+FIXED_TOKEN_BLOCKS: tuple[tuple[str, int, int], ...] = (
     ("field[0]", 0, 1),
     ("self_team[1-6]", 1, 7),
     ("opponent_team[7-12]", 7, 13),
     ("action_candidates[13-21]", 13, 22),
     ("stats[22]", 22, 23),
-    ("transition[23-150]", 23, 151),
 )
+
+
+def token_blocks(token_count: int) -> tuple[tuple[str, int, int], ...]:
+    if token_count <= 23:
+        raise ValueError(f"token_count must include transition rows, got {token_count}")
+    return (*FIXED_TOKEN_BLOCKS, (f"transition[23-{token_count - 1}]", 23, token_count))
 
 
 def _bitwise_equal_mask(got: numpy.ndarray, want: numpy.ndarray) -> numpy.ndarray:
@@ -95,6 +99,7 @@ class ArrayReport:
     rows_exact: int = 0
     cells_total: int = 0
     cells_exact: int = 0
+    token_count: int = 0
     # (token, column) -> mismatching row count; token=-1 for 1-D arrays.
     mismatch_positions: Counter = field(default_factory=Counter)
     examples: list[dict[str, Any]] = field(default_factory=list)
@@ -105,13 +110,19 @@ class ArrayReport:
         if self.name == "legal_action_mask":
             return {}
         coverage: dict[str, dict[str, int]] = {}
-        for label, start, stop in TOKEN_BLOCKS:
+        if not self.token_count:
+            return {}
+        for label, start, stop in token_blocks(self.token_count):
             mismatched = sum(
                 count
                 for (token, _column), count in self.mismatch_positions.items()
                 if start <= token < stop
             )
-            width = self.cells_total // 151 // max(1, self.rows_total) if self.rows_total else 0
+            width = (
+                self.cells_total // self.token_count // max(1, self.rows_total)
+                if self.rows_total
+                else 0
+            )
             total = (stop - start) * width * self.rows_total
             coverage[label] = {
                 "cells_total": total,
@@ -137,6 +148,14 @@ def diff_row(
         got_array = numpy.ascontiguousarray(got[name])
         want_array = numpy.ascontiguousarray(want[name])
         equal = _bitwise_equal_mask(got_array, want_array)
+        if name != "legal_action_mask":
+            token_count = int(want_array.shape[0])
+            if report.token_count not in (0, token_count):
+                raise ValueError(
+                    f"{name} token count changed within one report: "
+                    f"{report.token_count} -> {token_count}"
+                )
+            report.token_count = token_count
         report.rows_total += 1
         report.cells_total += int(equal.size)
         exact_cells = int(equal.sum())

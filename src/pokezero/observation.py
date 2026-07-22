@@ -34,10 +34,11 @@ OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
 OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # v3 (checkpoint-driven, fourth entry in the same dual-schema table; docs/observation_v3_spec.md):
 # the v2.2 turn-merged semantic surface plus the documented V3 public signals, reorganized into a
-# grouped 155-column numeric layout after removing 14 evidence-backed unreachable fields. The
-# private writer surface remains an encoder implementation detail; all consumers use the public V3
-# layout. Every v2.2 artifact retains its frozen output and checkpoint-driven resolution. V3 is NOT
-# the fresh default until the Rust fold encoder mirrors it and the golden corpus regenerates at v3.
+# grouped 155-column numeric layout after removing 14 evidence-backed unreachable fields, with a
+# 64-row turn-history tail. The private writer surface remains an encoder implementation detail;
+# all consumers use the public V3 layout. Every v2.2 artifact retains its frozen output and
+# checkpoint-driven resolution. V3 is NOT the fresh default until the Rust fold encoder mirrors it
+# and the golden corpus regenerates at v3.
 OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
@@ -77,6 +78,9 @@ STATS_TOKEN_COUNT = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
 # (the truncated prefix is what the unbounded aggregates have already absorbed). The K ∈ {16-turn}
 # ablation arm masks the budget down via config (ObservationFeatureMasks) — not a spec change.
 TRANSITION_TOKEN_COUNT = 128
+# V3 shortens only the physical turn-merged history tail. The legacy constant above remains the
+# frozen V2/V2.1/V2.2 capacity and the maximum accepted feature-mask value for old checkpoints.
+V3_TRANSITION_TOKEN_COUNT = 64
 
 
 @dataclass(frozen=True)

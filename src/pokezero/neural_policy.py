@@ -332,9 +332,14 @@ class TransformerPolicyConfig:
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
-        if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
+        transition_token_capacity = observation_spec_for_schema(
+            self.observation_schema_version
+        ).transition_token_count
+        if not 0 < self.transition_token_budget <= transition_token_capacity:
             raise ValueError(
-                f"transition_token_budget must be in 1..{TRANSITION_TOKEN_COUNT}."
+                "transition_token_budget must be in "
+                f"1..{transition_token_capacity} for observation schema "
+                f"{self.observation_schema_version!r}."
             )
         if self.categorical_vocab_size <= 1:
             raise ValueError("categorical_vocab_size must be greater than 1.")
@@ -433,7 +438,11 @@ class TransformerPolicyConfig:
             temporal_aggregator=_str_field(payload, "temporal_aggregator", "mean"),
             stats_block_enabled=bool(payload.get("stats_block_enabled", True)),
             exact_state_enabled=bool(payload.get("exact_state_enabled", True)),
-            transition_token_budget=_int_field(payload, "transition_token_budget", TRANSITION_TOKEN_COUNT),
+            transition_token_budget=_int_field(
+                payload,
+                "transition_token_budget",
+                default_spec.transition_token_count,
+            ),
             # Provenance latch: checkpoints saved before the Tier-2 channel existed carry no
             # field and were trained on constant-zero slots -> resolve to mask-off, never the
             # dataclass default.

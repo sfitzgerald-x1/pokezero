@@ -80,12 +80,12 @@ class DiffLogicTest(unittest.TestCase):
     def setUp(self) -> None:
         self.harness = _load_script("validate_rust_encoder")
 
-    def _arrays(self):
+    def _arrays(self, token_count: int = 151):
         return {
-            "categorical_ids": numpy.zeros((151, 51), dtype="<i4"),
-            "numeric_features": numpy.zeros((151, 155), dtype="<f8"),
-            "token_type_ids": numpy.zeros(151, dtype="<i2"),
-            "attention_mask": numpy.zeros(151, dtype="|b1"),
+            "categorical_ids": numpy.zeros((token_count, 51), dtype="<i4"),
+            "numeric_features": numpy.zeros((token_count, 155), dtype="<f8"),
+            "token_type_ids": numpy.zeros(token_count, dtype="<i2"),
+            "attention_mask": numpy.zeros(token_count, dtype="|b1"),
             "legal_action_mask": numpy.zeros(9, dtype="|b1"),
         }
 
@@ -138,6 +138,18 @@ class DiffLogicTest(unittest.TestCase):
         transition = coverage["transition[23-150]"]
         self.assertEqual(transition["cells_total"] - transition["cells_exact"], 2)
         self.assertEqual(len(report.examples), 2)  # capped
+
+    def test_v3_block_attribution_uses_the_87_row_schema(self) -> None:
+        reports = {name: self.harness.ArrayReport(name=name) for name in self.harness.ARRAY_NAMES}
+        want = self._arrays(token_count=87)
+        got = {name: array.copy() for name, array in want.items()}
+        got["categorical_ids"][86, 0] = 7
+
+        self.harness.diff_row(0, got, want, reports, max_examples=1)
+
+        transition = reports["categorical_ids"].block_coverage()["transition[23-86]"]
+        self.assertEqual(transition["cells_total"], 64 * 51)
+        self.assertEqual(transition["cells_total"] - transition["cells_exact"], 1)
 
     def test_report_all_exact_flag(self) -> None:
         reports = {name: self.harness.ArrayReport(name=name) for name in self.harness.ARRAY_NAMES}

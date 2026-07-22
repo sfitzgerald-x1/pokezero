@@ -568,13 +568,13 @@ human-facing summary.
 
 ```mermaid
 flowchart TB
-    OBS["One V3 observation: 151 token rows"]
+    OBS["One V3 observation: 87 token rows"]
     OBS --> FIELD["1 field token"]
     OBS --> SELF["6 self-Pokemon tokens"]
     OBS --> OPP["6 opponent-Pokemon tokens"]
     OBS --> ACTION["9 legal-action tokens"]
     OBS --> STATS["1 tendency-stats token"]
-    OBS --> HISTORY["128 turn-merged history tokens"]
+    OBS --> HISTORY["64 turn-merged history tokens"]
 
     ROW["Every token row: 155 numeric columns + 51 unchanged categorical columns"]
     FIELD -. owns field values .-> FIELDGROUP["98-109 field\nhazards, clauses, weather, Wish"]
@@ -596,6 +596,13 @@ and pool-change maintenance condition are recorded in
 [dead observation fields](dead_observation_fields.md). The 155 carried
 positions include all ten V3 additions above; their historical appendix offsets
 are implementation-private and must not be used as physical V3 positions.
+
+The token-axis layout is independent of the numeric-column groups above. Its fixed
+prefix remains rows 0–22 (field, teams, legal actions, and tendency), while rows
+23–86 hold the 64 most recent turn-merged history records. Truncation drops the
+oldest rows first. V2.2 remains frozen at 151 total rows with a 128-row history tail.
+The shared feature-mask type still accepts the legacy 128-row ceiling, but V3 checkpoint,
+corpus, and encoder-table provenance records the effective schema capacity of 64.
 
 ## Coordination (v3-stream / Rust fold)
 

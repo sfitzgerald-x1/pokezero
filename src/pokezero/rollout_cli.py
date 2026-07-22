@@ -8,6 +8,10 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .observation import ObservationFeatureMasks
 
 from .collection import (
     BenchmarkReport,
@@ -371,10 +375,15 @@ def _collect_training_cache(args: argparse.Namespace) -> int:
     return 0
 
 
-def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationFeatureMasks | None":
+def _explicit_feature_masks_from_args(
+    args: argparse.Namespace,
+    *,
+    base_masks: ObservationFeatureMasks | None = None,
+    transition_token_capacity: int | None = None,
+) -> ObservationFeatureMasks | None:
     """Explicit encode-time masks when any mask flag was given, else None (use defaults
-    or checkpoint adoption). Flags equal to the defaults resolve to the default masks,
-    which checkpoint adoption may still override (same wrinkle as neural iterate)."""
+    or checkpoint adoption). Unspecified fields inherit from ``base_masks`` so one explicit
+    flag cannot silently reset a checkpoint-adopted mask on another axis."""
     budget = getattr(args, "transition_token_budget", None)
     tier2 = getattr(args, "tier2_residuals", None)
     investment = getattr(args, "tier2_investment", None)
@@ -388,16 +397,31 @@ def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationF
         and not no_exact
     ):
         return None
-    from .observation import TRANSITION_TOKEN_COUNT, ObservationFeatureMasks
+    from .observation import (
+        DEFAULT_OBSERVATION_FEATURE_MASKS,
+        TRANSITION_TOKEN_COUNT,
+        ObservationFeatureMasks,
+    )
+
+    base = base_masks or DEFAULT_OBSERVATION_FEATURE_MASKS
+    capacity = transition_token_capacity or TRANSITION_TOKEN_COUNT
+    resolved_budget = min(base.transition_token_budget, capacity) if budget is None else budget
+    if not 0 < resolved_budget <= capacity:
+        raise ValueError(
+            f"transition_token_budget must be in 1..{capacity} for the resolved "
+            f"observation schema, got {resolved_budget}."
+        )
 
     return ObservationFeatureMasks(
-        opponent_tendency_stats_block=not no_stats,
-        exact_state=not no_exact,
-        transition_token_budget=TRANSITION_TOKEN_COUNT if budget is None else budget,
-        tier2_residuals=True if tier2 is None else bool(tier2),
-        # Asymmetric default vs tier2_residuals: absent flag resolves OFF (matches the
-        # ObservationFeatureMasks dataclass default and the model-config builders).
-        tier2_investment=False if investment is None else bool(investment),
+        opponent_tendency_stats_block=(
+            False if no_stats else base.opponent_tendency_stats_block
+        ),
+        exact_state=False if no_exact else base.exact_state,
+        transition_token_budget=resolved_budget,
+        tier2_residuals=base.tier2_residuals if tier2 is None else bool(tier2),
+        tier2_investment=(
+            base.tier2_investment if investment is None else bool(investment)
+        ),
     )
 
 
@@ -443,17 +467,42 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
             for spec in (args.opponent_policy or (args.current_policy,))
         )
     )
-    explicit_masks = _explicit_feature_masks_from_args(args)
-    if explicit_masks is not None:
-        env_config = dataclasses.replace(env_config, feature_masks=explicit_masks)
     requested_schema = observation_schema_version_from_choice(args.observation_schema)
     if requested_schema is not None:
         env_config = dataclasses.replace(
             env_config, observation_spec=observation_spec_for_schema(requested_schema)
         )
+    # Adopt checkpoint provenance before resolving partial explicit masks. This lets an
+    # omitted mask field inherit the checkpoint value instead of resetting to a global
+    # default, while the second latch below still rejects any explicit disagreement.
     env_config = env_config_with_policy_spec_masks(
         env_config, (current_policy, *opponent_policies), context="self-play training cache"
     )
+    explicit_masks = _explicit_feature_masks_from_args(
+        args,
+        base_masks=env_config.feature_masks,
+        transition_token_capacity=env_config.observation_spec.transition_token_count,
+    )
+    if explicit_masks is not None:
+        env_config = dataclasses.replace(env_config, feature_masks=explicit_masks)
+        env_config = env_config_with_policy_spec_masks(
+            env_config,
+            (current_policy, *opponent_policies),
+            context="self-play training cache",
+        )
+    elif (
+        env_config.feature_masks.transition_token_budget
+        > env_config.observation_spec.transition_token_count
+    ):
+        # The schema-agnostic default mask retains the legacy 128-row ceiling. Persist the
+        # effective schema capacity so a fresh V3 cache agrees with its train-side config.
+        env_config = dataclasses.replace(
+            env_config,
+            feature_masks=dataclasses.replace(
+                env_config.feature_masks,
+                transition_token_budget=env_config.observation_spec.transition_token_count,
+            ),
+        )
     # Explicit flag vs checkpoint schema: hard-fail BOTH directions. (An explicit v2.2
     # against a v2.1 checkpoint already fails inside the latch; an explicit v2.1 equals
     # the default spec, which the latch would silently override with a v2.2 checkpoint's

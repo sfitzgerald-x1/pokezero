@@ -62,7 +62,6 @@ from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
-    TRANSITION_TOKEN_COUNT,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
 from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
@@ -1844,8 +1843,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument(
         "--transition-token-budget",
         type=int,
-        default=TRANSITION_TOKEN_COUNT,
-        help="Most-recent transition-token slots filled at encode time. UNIT IS SCHEMA-DEPENDENT: under v2/v2.1 a token is one declared ACTION (32 = the K=16-turn ablation arm); under --observation-schema v2.2 a token is a whole TURN, so budget 32 covers roughly what 64 action-tokens did.",
+        default=None,
+        help="Most-recent transition-token slots filled at encode time (defaults to the selected schema's physical capacity: 128 through v2.2, 64 in v3). UNIT IS SCHEMA-DEPENDENT: under v2/v2.1 a token is one declared ACTION (32 = the K=16-turn ablation arm); under v2.2/v3 a token is a whole TURN.",
     )
     iterate.add_argument(
         "--no-stats-block",
@@ -2828,6 +2827,11 @@ def _train(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     else:
+        schema_version = (
+            observation_schema_version_from_choice(args.observation_schema)
+            or OBSERVATION_SCHEMA_VERSION
+        )
+        schema_spec = observation_spec_for_schema(schema_version)
         model_config_kwargs = dict(
             policy_id=args.policy_id or "entity-transformer",
             window_size=args.window_size,
@@ -2840,7 +2844,7 @@ def _train(args: argparse.Namespace) -> int:
             stats_block_enabled=not args.no_stats_block,
             exact_state_enabled=not args.no_exact_state,
             transition_token_budget=(
-                TRANSITION_TOKEN_COUNT
+                schema_spec.transition_token_count
                 if args.transition_token_budget is None
                 else args.transition_token_budget
             ),
@@ -2855,11 +2859,6 @@ def _train(args: argparse.Namespace) -> int:
         # Fresh train: --observation-schema SETS the stamped schema + widths (default
         # v2.1, the current default spec); v2.2 also needs the turn-merged vocabulary
         # families (the schema-derived vocab latch).
-        schema_version = (
-            observation_schema_version_from_choice(args.observation_schema)
-            or OBSERVATION_SCHEMA_VERSION
-        )
-        schema_spec = observation_spec_for_schema(schema_version)
         model_config_kwargs.update(
             observation_schema_version=schema_version,
             categorical_feature_count=schema_spec.categorical_feature_count,
@@ -5423,7 +5422,11 @@ def _iterate(args: argparse.Namespace) -> int:
         temporal_aggregator=args.temporal_aggregator,
         stats_block_enabled=not args.no_stats_block,
         exact_state_enabled=not args.no_exact_state,
-        transition_token_budget=args.transition_token_budget,
+        transition_token_budget=(
+            iterate_schema_spec.transition_token_count
+            if args.transition_token_budget is None
+            else args.transition_token_budget
+        ),
         tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
         # Asymmetric default vs tier2_residuals: absent flag resolves OFF (see the train
         # builder). On --resume this config is equality-checked against the loaded model

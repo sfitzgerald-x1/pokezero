@@ -48,6 +48,7 @@ Every shard and every merged artifact must share this provenance tuple:
 | Public commit | Exact merged public-repository revision containing encoder, belief, parser, audit, and token-format code. |
 | Showdown source hash | Exact local Showdown/engine source used for the Gen 3 universe and simulator. |
 | Observation schema | `pokezero.observation.v3` and the final token-format revision. |
+| Observation shape | 87 token rows (23 fixed + 64 turn-merged history), 155 numeric columns, and 51 categorical columns. |
 | Signature schemas | Final canonical protocol-signature and emission-inventory schema identifiers. |
 | Image | Immutable image digest, not a mutable tag. |
 | Execution | Command, seed range, shard range, timestamps, and terminal marker for each lane. |

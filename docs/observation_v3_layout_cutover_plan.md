@@ -106,6 +106,8 @@ The cutover inserts ~2–4 agent-days before the freeze; the smoke arms'
   projection test and a real V2.2/V3 encode test. It checks every carried column
   through the old-to-new map, with the two confusion-self-hit damage corrections
   (first and second sub-block) as the documented semantic exceptions.
+- **Token axis:** V3 uses the shared 23-row fixed prefix plus 64 turn-merged
+  history rows, for 87 rows total. V2.2 remains frozen at 23 + 128 = 151.
 - **Still required before EOC:** fresh V3 golden corpus/audit captures and the
   final EOC run described in
   `v3_end_of_cycle_evaluation_plan.md`. No historical V3 artifact may be reused.

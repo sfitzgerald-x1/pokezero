@@ -22,7 +22,7 @@ Backends:
   mismatch it shows is a corpus input gap, not an encoder bug. Known gaps
   (quantified by the harness, headline finding of track B phase 1): the
   per-row surface carries no whole-game event stream, so the turn-merged
-  transition tokens (23..150), the tendency aggregates (stats token 22 +
+  transition tokens (23 through the schema-bound final row), the tendency aggregates (stats token 22 +
   the per-opponent-mon tendency triple), the pinned Tier-2 conclusions,
   and the transition extent of the attention mask are NOT reconstructable
   per-row. This module reconstructs them as EMPTY (zero history).
