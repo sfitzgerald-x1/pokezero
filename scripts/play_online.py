@@ -62,6 +62,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample", action="store_true", help="Sample moves (default: greedy).")
     parser.add_argument("--max-games", type=int, default=1, help="Disconnect after N games (0 = unlimited).")
     parser.add_argument(
+        "--history-mask-k",
+        type=int,
+        default=None,
+        help=(
+            "History-truncation probe (docs/history_truncation_probe_plan.md): mask the "
+            "checkpoint's transition-history region to the most-recent K tokens at decision "
+            "time. Eval-only; omit for full (128) history."
+        ),
+    )
+    parser.add_argument(
         "--no-login",
         action="store_true",
         help="Skip the login assertion (for a local server started with --no-security).",
@@ -94,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             deterministic=not args.sample,
             seed=args.seed,
             skip_login=args.no_login,
+            history_mask_k=args.history_mask_k,
         )
     )
     return 0
