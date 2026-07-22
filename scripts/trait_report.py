@@ -352,10 +352,12 @@ def _series(rows, fn):
     return by
 
 
-def phase2_trajectories(rows_self, charts=TRAJECTORY_CHARTS):
+def phase2_trajectories(rows, charts=TRAJECTORY_CHARTS,
+                        heading="Trait breakdowns by checkpoint — self-play trajectories", sub=""):
     """Per-checkpoint breakdowns: every trait as a line over the milestone axis (one line per
-    lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate."""
-    checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows_self if r.get("milestone") is not None}
+    lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate.
+    Pass foul-play rows (with a matching heading/sub) to render the same categories vs FoulPlay."""
+    checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows if r.get("milestone") is not None}
     lineages = sorted({l for l, _ in checkpoints}, key=lambda l: LINEAGE_ORDER.index(l) if l in LINEAGE_ORDER else 99)
     if not checkpoints:
         return ""
@@ -367,11 +369,12 @@ def phase2_trajectories(rows_self, charts=TRAJECTORY_CHARTS):
         note += (f'<p class="sub">Excluded for legibility: {esc(", ".join(excluded))} '
                  f'(distorted or out-of-scale points — turn-cap stalls, or sub-50k starting-skill '
                  f'datasets — same exclusion as the Phase-1 basics).</p>')
-    blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
+    sub_html = f'<p class="sub">{sub}</p>' if sub else ""
+    blocks = [f'<section><h2>{esc(heading)}</h2>{sub_html}'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
     for group_title, group_charts in charts:
-        cards = "".join(f'<div class="card">{svg_lines(_series(rows_self, fn), label)}</div>' for label, fn in group_charts)
+        cards = "".join(f'<div class="card">{svg_lines(_series(rows, fn), label)}</div>' for label, fn in group_charts)
         blocks.append(f'<h3>{esc(group_title)}</h3><div class="grid3">{cards}</div>')
     blocks.append("</section>")
     return "".join(blocks)
@@ -708,6 +711,17 @@ def build_html(rows, report_set="v2"):
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})) or "none yet")}</p>']
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self, charts))
+    if report_set == "v3":
+        # v3: the same chart categories measured in games AGAINST FoulPlay (500k checkpoints and
+        # each arm's frontier as foul-play evals land). Only the bot seat is measured there, so the
+        # rates read the same way as the self-play per-seat-game rates. Renders nothing until the
+        # first v3 foul-play metrics exist.
+        rows_foul = [r for r in rows if r.get("opponent") == "foulplay"]
+        body.append(phase2_trajectories(
+            rows_foul, charts,
+            heading="Trait breakdowns by checkpoint — vs FoulPlay",
+            sub="Same categories as the self-play trajectories above, measured in games against "
+                "FoulPlay. Only the bot seat is measured; self-play and foul-play are never merged."))
     body.append(per_game_corr_section(
         rows, "foulplay", "Per-game trait ↔ win correlation (vs FoulPlay)",
         "Within each checkpoint&#39;s foul-play games: did the bot use the trait more in games it "
