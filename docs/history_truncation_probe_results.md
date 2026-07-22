@@ -1,6 +1,7 @@
 # History-truncation probe — results
 
-Status: 2026-07-21, in progress. Companion to `history_truncation_probe_plan.md`
+Status: 2026-07-21, COMPLETE — verdict FLAT (deep history slots decorative;
+recommend k\*=64, sequence 151→87). Companion to `history_truncation_probe_plan.md`
 (the plan this executes) and `observation_v3_layout_cutover_plan.md` (the
 consumer of the verdict). This doc collects the probe's evidence: the harness,
 the `--transition-token-budget` semantics (plan caveat b), the trained-policy
@@ -144,22 +145,58 @@ on either checkpoint** — the only cell outside 2×SE is emeta k=16 vs random-l
 full-128. Deep slots beyond ~32 are decorative on the ladder. Conservative
 k\*=32 (both checkpoints fully flat at 32 and 64; k=16 also shows no degradation).
 
-### Foul-play — IN PROGRESS (n=1000; the pre-registered tiebreak read)
+### Foul-play — DONE (n=1000; the pre-registered tiebreak read)
 
 Foul-play is the strongest opponent and the read most likely to expose deep-history
-usage the ladder cannot. Running on the `-r2` image (adds `play_online.py
---history-mask-k`); results fold into the verdict via
-`analyze_history_truncation_probe.py --foulplay-root`.
+usage the ladder cannot. Checkpoint win rate vs foul-play at each k (Δ = k − 128):
 
-## 5. Verdict (pre-registered rules) — PENDING FOUL-PLAY
+| checkpoint | full(128) | k=64 Δ | k=32 Δ | k=16 Δ |
+|---|---|---|---|---|
+| m50 5M (iter-3125) | 0.346 | −0.004 | −0.019 | +0.034 |
+| emeta S 3M (iter-0625) | 0.332 | +0.007 | **+0.056** | +0.018 |
 
-Ladder is FLAT (k\*=32). The final verdict follows the pre-registered asymmetry
-once foul-play lands:
-- **Flat on ladder AND foul-play** → deep slots decorative; cutover adopts a
-  k\*-sized region (k\*=32 → next power of two = 32; sequence 151 → 55). Every
-  consumer (training, benchmarks, engine-search leaf) gets faster.
-- **Flat on ladder, degraded vs foul-play** → MIXED: keep 128; the pattern
-  localizes where deep history matters and feeds the sibling history-compression
-  study.
-- Ladder degradation did not occur, so the pure "usage proven on ladder" branch
-  is ruled out.
+Foul-play 2×SE (delta) ≈ 4.3%. **No cell degrades** (nothing below −2×SE). Every
+significant deviation is POSITIVE: emeta at k=32 is **+5.6% vs full-128** (0.388 vs
+0.332) — a real, outside-noise result that truncating deep history *helps* the S
+model against the strong opponent, not merely leaves it unused. m50 is within noise
+at every k (k=32 −1.9% and k=16 +3.4% both inside the band).
+
+## 5. Verdict (pre-registered rules) — FLAT
+
+Combined ladder + foul-play, both checkpoints (`analyze_history_truncation_probe.py
+--foulplay-root`, verdict JSON archived):
+
+**No degradation anywhere** — `degraded_ks=[]` for both checkpoints across every
+k∈{16,32,64} and every opponent (max-damage / simple-legal / random-legal /
+foul-play). This is the pre-registered **FLAT** case: the deep history slots are
+decorative — the trained models had them and do not depend on them.
+
+- Per-checkpoint k\* (smallest k that, with every larger truncation, stays within
+  2×SE of full on all opponents): **m50 k\*=16**, **emeta k\*=64** (emeta's k=32 is
+  pushed out only by its +5.6% *improvement* vs foul-play, not a loss).
+- **Recommended k\* = 64** (conservative max across checkpoints → already a power of
+  two). The cutover can adopt a 64-token history region: **sequence 151 → 87**
+  (23 non-history + 64), ~42% shorter, faster at every consumer (training,
+  benchmarks, engine-search leaf).
+- Aggressive reading: k\*=32 is also fully supported — zero degradation, and emeta
+  *improves* vs foul-play at 32 (151 → 55, ~64% shorter). The layout decision
+  (64 conservative vs 32 aggressive) is the cutover PR owner's; both are
+  evidence-backed with no downside observed.
+
+Note the surprising emeta k=32 foul-play improvement: it suggests deep history is
+not merely ignored but can mildly *distract* the smaller model against a strong
+opponent — a concrete input for the sibling history-compression study (which stalls
+this probe's k\* usage-map into a learned-summarization design).
+
+## Provenance
+
+- Probe image: `scott-experiment:history-truncation-probe-20260721` (ladder) /
+  `-r2` (foul-play, adds the play_online flag); reuse-runtime on the m50 training
+  base, built from branch `scott/history-truncation-probe-harness` (PR #843).
+- Cluster: olfusa / scott, GPU pinned to nodepool `856c0ba6…` (the designated
+  rack), parallelism capped at 12 GPUs.
+- Checkpoints: `metamon-m50-2m-lr10m-ep7/run/iteration-3125` (5M target, written
+  2026-07-21) and `emeta-v2-2-lr3m-3m-belief/run/iteration-0625`.
+- Reads: ladder n=1000/opponent (paired, seed band 50000000), foul-play n=1000
+  (search 100 ms/move). Results on the shared PVC under
+  `/shared/scott-experiment/history-truncation-probe-20260721/`.
