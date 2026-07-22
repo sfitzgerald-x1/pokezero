@@ -785,6 +785,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "archived historical diagnostics; current strength evals require v2+ current-family checkpoints."
         ),
     )
+    benchmark.add_argument(
+        "--history-mask-k",
+        type=int,
+        default=None,
+        help=(
+            "History-truncation probe (docs/history_truncation_probe_plan.md): at decision "
+            "time mask the checkpoint's transition-history region down to the most-recent K "
+            "tokens (attention-mask edit + token zeroing), deliberately mismatched from the "
+            "checkpoint's trained transition_token_budget. Benchmark-only; env/production "
+            "encoding is untouched. Omit for full (128) history."
+        ),
+    )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.add_argument(
         "--summary-out",
@@ -3454,6 +3466,19 @@ def _benchmark(args: argparse.Namespace) -> int:
             reference_specs=reference_specs,
             context="neural benchmark",
         )
+    history_mask_k = args.history_mask_k
+    if history_mask_k is not None:
+        if not 0 < history_mask_k <= TRANSITION_TOKEN_COUNT:
+            raise ValueError(
+                f"--history-mask-k must be in 1..{TRANSITION_TOKEN_COUNT}, got {history_mask_k}."
+            )
+        print(
+            f"HISTORY-TRUNCATION PROBE: masking the checkpoint's transition-history region to "
+            f"the most-recent {history_mask_k} of {TRANSITION_TOKEN_COUNT} tokens at decision "
+            f"time (deliberate eval-time override of the trained budget; env/production encoding "
+            f"untouched). See docs/history_truncation_probe_plan.md.",
+            file=sys.stderr,
+        )
     deterministic = not bool(args.sample)
     checkpoint_policy = _policy_from_checkpoint(
         args.checkpoint,
@@ -3461,6 +3486,7 @@ def _benchmark(args: argparse.Namespace) -> int:
         exploration_epsilon=args.epsilon,
         sampling_temperature=args.temperature,
         device=args.device,
+        history_mask_k=history_mask_k,
     )
     policy_id = _policy_id_alias(args.policy_id, label="--policy-id") if args.policy_id else str(checkpoint_policy.policy_id)
     if args.policy_id:
@@ -3528,6 +3554,11 @@ def _benchmark(args: argparse.Namespace) -> int:
         matchups=tuple(matchups),
     )
     payload = report.to_dict()
+    # Stamp the probe knob ONLY when truncation was applied, so a normal benchmark's payload is
+    # unchanged and downstream analysis/audit can tell a truncated read from a full-history one
+    # (docs/history_truncation_probe_plan.md).
+    if history_mask_k is not None:
+        payload["history_mask_k"] = history_mask_k
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
         print(f"benchmark_summary: {args.summary_out}", file=sys.stderr)
@@ -8310,6 +8341,7 @@ def _policy_from_checkpoint(
     exploration_epsilon: float,
     sampling_temperature: float,
     device: str | None,
+    history_mask_k: int | None = None,
 ):
     return load_transformer_policy(
         checkpoint,
@@ -8317,6 +8349,7 @@ def _policy_from_checkpoint(
         exploration_epsilon=exploration_epsilon,
         sampling_temperature=sampling_temperature,
         device=device,
+        history_mask_k=history_mask_k,
     )
 
 

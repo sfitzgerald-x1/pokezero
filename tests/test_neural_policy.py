@@ -3070,6 +3070,67 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
 
+    def test_neural_cli_benchmark_history_mask_k_wires_and_stamps(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        stdout = io.StringIO()
+
+        with (
+            patch(
+                "pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()
+            ) as load,
+            patch("pokezero.neural_cli.benchmark_rollouts", return_value=FakeReport()),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--games",
+                    "2",
+                    "--history-mask-k",
+                    "16",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        # The knob reaches the checkpoint policy loader...
+        self.assertEqual(load.call_args.kwargs.get("history_mask_k"), 16)
+        # ...and is stamped into the report payload for downstream audit.
+        self.assertEqual(json.loads(stdout.getvalue()), {"ok": True, "history_mask_k": 16})
+
+    def test_neural_cli_benchmark_history_mask_k_rejects_out_of_range(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint") as load,
+            patch("pokezero.neural_cli.benchmark_rollouts") as rollouts,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--history-mask-k",
+                    "0",
+                ]
+            )
+        # main() catches the ValueError and reports a non-zero exit; validation happens
+        # before any checkpoint load or rollout.
+        self.assertEqual(exit_code, 1)
+        self.assertIn("history-mask-k", stderr.getvalue())
+        load.assert_not_called()
+        rollouts.assert_not_called()
+
     def test_neural_cli_benchmark_can_alias_candidate_policy_id(self) -> None:
         class FakePolicy:
             policy_id = "checkpoint-policy"
@@ -8169,6 +8230,151 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(callback_epochs, [1, 2])
         self.assertEqual(result.final_metrics.epoch, 2)
+
+
+class TruncateHistoryTensorsTest(unittest.TestCase):
+    """History-truncation probe harness (docs/history_truncation_probe_plan.md)."""
+
+    def _tensors(self, filled: int):
+        torch = require_torch()
+        from pokezero.showdown import TRANSITION_TOKEN_OFFSET
+        from pokezero.observation import TRANSITION_TOKEN_COUNT
+
+        token_count = TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT
+        offset = TRANSITION_TOKEN_OFFSET
+        attention_mask = torch.zeros((1, 1, token_count), dtype=torch.bool)
+        numeric = torch.zeros((1, 1, token_count, 3), dtype=torch.float32)
+        categorical = torch.zeros((1, 1, token_count, 2), dtype=torch.long)
+        # Non-transition prefix (indices 0..offset-1) is always attended, always populated.
+        attention_mask[0, 0, :offset] = True
+        numeric[0, 0, :offset, :] = 7.0
+        categorical[0, 0, :offset, :] = 5
+        # Transition region fills oldest-first: region indices 0..filled-1 attended, the token
+        # payload marks its own chronological rank so the test can identify which survive.
+        for region_index in range(filled):
+            column = offset + region_index
+            attention_mask[0, 0, column] = True
+            numeric[0, 0, column, 0] = float(region_index + 1)
+            categorical[0, 0, column, 0] = region_index + 1
+        return {
+            "attention_mask": attention_mask,
+            "numeric_features": numeric,
+            "categorical_ids": categorical,
+            "token_type_ids": torch.zeros((1, 1, token_count), dtype=torch.long),
+            "history_mask": torch.ones((1, 1), dtype=torch.bool),
+            "legal_action_mask": torch.ones((1, ACTION_COUNT), dtype=torch.bool),
+        }, offset
+
+    def test_keeps_most_recent_k_and_masks_older(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        tensors, offset = self._tensors(filled=40)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=16)
+        region = out["attention_mask"][0, 0, offset:]
+        # Exactly the newest 16 (region indices 24..39) stay attended.
+        attended = torch.nonzero(region, as_tuple=False).flatten().tolist()
+        self.assertEqual(attended, list(range(24, 40)))
+        # Dropped slots are zeroed in BOTH payload planes (byte-identical to an unfilled slot).
+        self.assertTrue(torch.all(out["numeric_features"][0, 0, offset : offset + 24] == 0))
+        self.assertTrue(torch.all(out["categorical_ids"][0, 0, offset : offset + 24] == 0))
+        # Surviving slots keep their chronological-rank payload intact.
+        for region_index in range(24, 40):
+            self.assertEqual(
+                out["numeric_features"][0, 0, offset + region_index, 0].item(),
+                float(region_index + 1),
+            )
+
+    def test_non_transition_tokens_untouched(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        tensors, offset = self._tensors(filled=40)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=8)
+        self.assertTrue(torch.all(out["attention_mask"][0, 0, :offset]))
+        self.assertTrue(torch.all(out["numeric_features"][0, 0, :offset] == 7.0))
+        self.assertTrue(torch.all(out["categorical_ids"][0, 0, :offset] == 5))
+        # Untouched pass-through tensors keep the same object identity.
+        self.assertIs(out["token_type_ids"], tensors["token_type_ids"])
+        self.assertIs(out["legal_action_mask"], tensors["legal_action_mask"])
+
+    def test_noop_when_k_at_or_above_filled(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        tensors, offset = self._tensors(filled=12)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=16)
+        self.assertEqual(
+            int(out["attention_mask"][0, 0, offset:].sum()), 12
+        )
+        self.assertTrue(
+            torch.equal(out["attention_mask"], tensors["attention_mask"])
+        )
+
+    def test_does_not_mutate_input(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        tensors, offset = self._tensors(filled=40)
+        before = tensors["attention_mask"].clone()
+        neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=16)
+        self.assertTrue(torch.equal(tensors["attention_mask"], before))
+
+    def test_invalid_k_rejected(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        tensors, _ = self._tensors(filled=8)
+        with self.assertRaises(ValueError):
+            neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=0)
+        with self.assertRaises(ValueError):
+            neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=999)
+
+    def test_policy_forward_matches_manual_truncation(self) -> None:
+        """The policy's history_mask_k path applies the same mask the helper does, and a
+        truncated forward differs from the full-history forward on non-decorative history."""
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        from pokezero.showdown import TRANSITION_TOKEN_OFFSET
+
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="probe-forward",
+            category_vocab=tuple(f"token-{index}" for index in range(16)),
+            category_oov_buckets=1,
+            window_size=1,
+            categorical_feature_count=2,
+            numeric_feature_count=3,
+            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            embedding_dim=8,
+            transformer_layers=1,
+            attention_heads=2,
+            feedforward_dim=16,
+            dropout=0.0,
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        token_count = config.token_count
+        offset = TRANSITION_TOKEN_OFFSET
+        attention_mask = torch.zeros((1, 1, token_count), dtype=torch.bool)
+        attention_mask[0, 0, : offset + 40] = True  # 40 filled transition tokens
+        numeric = torch.zeros((1, 1, token_count, 3), dtype=torch.float32)
+        categorical = torch.zeros((1, 1, token_count, 2), dtype=torch.long)
+        for column in range(offset + 40):
+            numeric[0, 0, column, column % 3] = 1.0
+            categorical[0, 0, column, 0] = (column % 15) + 1
+        tensors = {
+            "attention_mask": attention_mask,
+            "numeric_features": numeric,
+            "categorical_ids": categorical,
+            "token_type_ids": torch.zeros((1, 1, token_count), dtype=torch.long),
+            "history_mask": torch.ones((1, 1), dtype=torch.bool),
+        }
+        masked = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=16)
+        with torch.no_grad():
+            full = model(**tensors)
+            trunc = model(**masked)
+        # Truncating 40→16 tokens changes what the encoder attends, so logits must move.
+        self.assertFalse(torch.allclose(full.policy_logits, trunc.policy_logits))
 
 
 if __name__ == "__main__":
