@@ -68,7 +68,9 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
     frozen. Those no-op cases no longer seed the boost; real Fire hits thaw.
 14. Defender abilities could intercept self/field moves. A target guard now
     prevents Water Absorb, Soundproof, Flash Fire, and similar hooks from
-    consuming Rain Dance, Heal Bell, and other non-opponent moves.
+    consuming Rain Dance, Heal Bell, and other non-opponent moves. Heal Bell's
+    team cure now also preserves Soundproof allies while allowing a Soundproof
+    user to cure itself, matching the Gen 3 party boundary.
 15. Speed-tie evaluation reused already-mutated `Choice` objects. The second
     ordering could therefore apply ability modifiers twice; each ordering now
     starts from a pristine clone.
@@ -141,7 +143,7 @@ All upstream Rust engine changes are carried by
 | Shed Skin | Exact, patched | Independent 33% end-turn cure before status damage, matching Showdown's Gen 3 implementation. |
 | Shell Armor | Bounded | Critical-hit branch mass is zero wherever the search enables damage branching; deep plies inherit the engine's deliberate crit elision. |
 | Shield Dust | Exact | Removes opponent-targeting secondary effects. |
-| Soundproof | Exact, patched seam | Blocks sound moves aimed at the holder but no longer consumes self/field sound moves. |
+| Soundproof | Exact, patched seam | Blocks opposing sound moves and Perish Song; Heal Bell skips Soundproof allies but still cures a Soundproof user, while Aromatherapy cures normally. |
 | Speed Boost | Exact | Adds one Speed stage at end of turn up to +6. |
 | Static | Exact, patched | 1/3 contact paralysis; blocked by Substitute. |
 | Sticky Hold | Exact | Prevents item removal. |
@@ -171,7 +173,7 @@ future source changes cannot silently restore modern immunity/boost semantics.
   then the Python extension builds with `poke-engine/gen3` and no default
   generation feature.
 - `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
-  `tests.test_engine_world.ForecastRootTypeTests`: **28/28 checks pass**.
+  `tests.test_engine_world.ForecastRootTypeTests`: **29/29 checks pass**.
 - Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
   turns clean**.
 - Additional high-risk Showdown differential (Wonder Guard neutral/super-

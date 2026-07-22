@@ -413,6 +413,25 @@ class AbilityMechanicsTests(unittest.TestCase):
         branches = poke_engine.generate_instructions(self._state(attacker, defender), "explosion", "splash")
         self.assertTrue(any("Damage SideTwo: 200" in self._text(branch) for branch in branches))
 
+    def test_heal_bell_respects_soundproof_party_boundary(self) -> None:
+        user = self._mon("exploud", "soundproof", "healbell", status="burn", speed=200)
+        blocked_ally = self._mon("mr-mime", "soundproof", "splash", status="poison")
+        cured_ally = self._mon("snorlax", "immunity", "splash", status="paralyze")
+        defender = self._mon("skarmory", "keeneye", "splash")
+        state = self._state(
+            user,
+            defender,
+            attacker_party=(blocked_ally, cured_ally),
+        )
+
+        branches = poke_engine.generate_instructions(state, "healbell", "splash")
+        self.assertTrue(branches)
+        for branch in branches:
+            applied = state.apply_instructions(branch)
+            self.assertEqual(str(applied.side_one.pokemon[0].status).upper(), "NONE")
+            self.assertEqual(str(applied.side_one.pokemon[1].status).upper(), "POISON")
+            self.assertEqual(str(applied.side_one.pokemon[2].status).upper(), "NONE")
+
 
 if __name__ == "__main__":
     unittest.main()

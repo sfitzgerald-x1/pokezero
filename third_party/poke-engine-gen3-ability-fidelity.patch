@@ -422,7 +422,7 @@ index 62ea3c6..dbf8267 100644
                  attacker_choice.volatile_status = Some(VolatileStatus {
                      target: MoveTarget::Opponent,
 diff --git a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
-index 65a0a51..07c2306 100644
+index 65a0a51..811c1d1 100644
 --- a/src/gen3/choice_effects.rs
 +++ b/src/gen3/choice_effects.rs
 @@ -1,4 +1,4 @@
@@ -460,7 +460,33 @@ index 65a0a51..07c2306 100644
                  attacker_choice.base_power /= 2.0;
              }
          }
-@@ -858,6 +859,7 @@ pub fn choice_special_effect(
+@@ -562,7 +563,24 @@ pub fn choice_special_effect(
+                 );
+             }
+         }
+-        Choices::HEALBELL | Choices::AROMATHERAPY => {
++        Choices::HEALBELL => {
++            for pkmn_index in pokemon_index_iter() {
++                let pkmn = &attacking_side.pokemon[pkmn_index];
++                // Soundproof blocks Heal Bell for allies, but not for the user.
++                if pkmn.status != PokemonStatus::NONE
++                    && (pkmn_index == attacking_side.active_index
++                        || pkmn.ability != Abilities::SOUNDPROOF)
++                {
++                    add_remove_status_instructions(
++                        instructions,
++                        pkmn_index,
++                        *attacking_side_ref,
++                        attacking_side,
++                    );
++                }
++            }
++        }
++        Choices::AROMATHERAPY => {
+             for pkmn_index in pokemon_index_iter() {
+                 if attacking_side.pokemon[pkmn_index].status != PokemonStatus::NONE {
+                     add_remove_status_instructions(
+@@ -858,6 +876,7 @@ pub fn choice_special_effect(
          }
          _ => {}
      }
