@@ -57,10 +57,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -92,6 +91,37 @@ BOOST_SLOTS = {
     "atk": S.NUMERIC_BOOST_ATK, "def": S.NUMERIC_BOOST_DEF, "spa": S.NUMERIC_BOOST_SPA,
     "spd": S.NUMERIC_BOOST_SPD, "spe": S.NUMERIC_BOOST_SPE,
 }
+
+
+class _SchemaNumericRow:
+    """Semantic ``NUMERIC_*`` access over one schema-specific physical row."""
+
+    def __init__(self, observation, token: int) -> None:
+        self._observation = observation
+        self._token = token
+
+    def __getitem__(self, legacy_index: int) -> float:
+        physical_index = S.numeric_index_for_schema(
+            self._observation.schema_version, legacy_index
+        )
+        return self._observation.numeric_features[self._token][physical_index]
+
+
+class _SchemaNumericRows:
+    """Two-dimensional semantic view over an observation's numeric tensor."""
+
+    def __init__(self, observation) -> None:
+        self._observation = observation
+
+    def __getitem__(self, token: int) -> _SchemaNumericRow:
+        return _SchemaNumericRow(self._observation, token)
+
+
+def _numeric_if_present(observation, token: int, legacy_index: int) -> float | None:
+    try:
+        return _SchemaNumericRow(observation, token)[legacy_index]
+    except ValueError:
+        return None
 
 
 class Acc:
@@ -171,7 +201,7 @@ class Oracle:
 
 def audit_side(acc: Acc, orc: Oracle, obs, team, offset: int, role: str, side: Mapping[str, Any]) -> None:
     mons = {orc.species_of_mon(m): m for m in side["pokemon"]}
-    nf = obs.numeric_features
+    nf = _SchemaNumericRows(obs)
     cats = obs.categorical_ids
     for i, member in enumerate(team[:6]):
         tok = offset + i
@@ -289,7 +319,7 @@ def audit_side(acc: Acc, orc: Oracle, obs, team, offset: int, role: str, side: M
 
 
 def run_invariants(acc, obs, tok, m, role, sp, fainted, active, st, ss, vols) -> None:
-    nf = obs.numeric_features[tok]
+    nf = _SchemaNumericRow(obs, tok)
     ctx = {"role": role, "sp": sp}
     hpf = nf[S.NUMERIC_HP_FRACTION]
     # bounds
@@ -324,7 +354,7 @@ def run_invariants(acc, obs, tok, m, role, sp, fainted, active, st, ss, vols) ->
 
 
 def audit_field(acc, orc, obs, battle, self_slot, opp_slot, turn) -> None:
-    nf = obs.numeric_features[S.FIELD_TOKEN_OFFSET]
+    nf = _SchemaNumericRow(obs, S.FIELD_TOKEN_OFFSET)
     side_by_id = {s["id"]: s for s in battle["sides"]}
     acc.check("field/turn", nf[S.NUMERIC_TURN_COUNT], min(1.0, turn / 1000.0), {"turn": turn})
 
@@ -339,11 +369,23 @@ def audit_field(acc, orc, obs, battle, self_slot, opp_slot, turn) -> None:
     if ss:
         sp, scr = counts(ss)
         acc.check("field/self_hazards", nf[S.NUMERIC_SELF_HAZARDS], min(1.0, sp / 3.0), {"spikes": sp})
-        acc.check("field/self_screens", nf[S.NUMERIC_SELF_SCREENS], min(1.0, scr / 2.0), {"scr": scr})
+        encoded_screens = _numeric_if_present(
+            obs, S.FIELD_TOKEN_OFFSET, S.NUMERIC_SELF_SCREENS
+        )
+        if encoded_screens is not None:
+            acc.check(
+                "field/self_screens", encoded_screens, min(1.0, scr / 2.0), {"scr": scr}
+            )
     if os_:
         sp, scr = counts(os_)
         acc.check("field/opp_hazards", nf[S.NUMERIC_OPP_HAZARDS], min(1.0, sp / 3.0), {"spikes": sp})
-        acc.check("field/opp_screens", nf[S.NUMERIC_OPP_SCREENS], min(1.0, scr / 2.0), {"scr": scr})
+        encoded_screens = _numeric_if_present(
+            obs, S.FIELD_TOKEN_OFFSET, S.NUMERIC_OPP_SCREENS
+        )
+        if encoded_screens is not None:
+            acc.check(
+                "field/opp_screens", encoded_screens, min(1.0, scr / 2.0), {"scr": scr}
+            )
     # WEATHER categorical (only asserted when weather is up)
     w = normalize_id((battle.get("field") or {}).get("weather") or "")
     if w:
@@ -399,7 +441,7 @@ def audit_belief_partc(acc, orc, obs, state, side: Mapping[str, Any]) -> None:
     caller can assert monotone non-increase across the game."""
     beliefs = state.belief_view.opponent_by_species()
     mons = {orc.species_of_mon(m): m for m in side["pokemon"]}
-    nf = obs.numeric_features
+    nf = _SchemaNumericRows(obs)
     for i, member in enumerate(state.opponent_team[:6]):
         tok = S.OPPONENT_POKEMON_TOKEN_OFFSET + i
         present = nf[tok][S.NUMERIC_PRESENT] > 0.5
@@ -487,13 +529,13 @@ def run(games: int, seed0: int, max_steps: int, belief_source: bool) -> tuple[Ac
                         # decisions and would otherwise inflate the count.
                         for i, member in enumerate(state.opponent_team[:6]):
                             tok = S.OPPONENT_POKEMON_TOKEN_OFFSET + i
-                            if obs.numeric_features[tok][S.NUMERIC_PRESENT] <= 0.5:
+                            if _SchemaNumericRow(obs, tok)[S.NUMERIC_PRESENT] <= 0.5:
                                 continue
                             spk = orc.canon(member.species)
                             if spk == "ditto":  # Transform legitimately reopens variants
                                 continue
                             key = (g, slot, spk)
-                            cset = obs.numeric_features[tok][S.NUMERIC_CANDIDATE_SET_COUNT]
+                            cset = _SchemaNumericRow(obs, tok)[S.NUMERIC_CANDIDATE_SET_COUNT]
                             floor = last_cset.get(key)
                             if floor is not None and cset > floor + TOL and key not in mono_seen:
                                 mono_seen.add(key)

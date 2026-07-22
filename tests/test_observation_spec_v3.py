@@ -50,7 +50,7 @@ from pokezero.showdown import (
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
     V3_DROPPED_LEGACY_NUMERIC_INDICES,
-    V3_LEGACY_NUMERIC_FEATURE_COUNT,
+    V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
     V3_NUMERIC_INDEX_BY_LEGACY_INDEX,
     V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REPLAY_OBSERVATION_SPEC,
@@ -85,7 +85,7 @@ def _legacy_v3_semantic_view(observation):
             0.0
             if legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
             else row[V3_NUMERIC_INDEX_BY_LEGACY_INDEX[legacy_index]]
-            for legacy_index in range(V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            for legacy_index in range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
         )
         for row in observation.numeric_features
     )
@@ -361,7 +361,7 @@ class SchemaTableTest(unittest.TestCase):
         self.assertEqual(len(set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)), 155)
         self.assertEqual(
             set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V3_DROPPED_LEGACY_NUMERIC_INDICES,
-            set(range(V3_LEGACY_NUMERIC_FEATURE_COUNT)),
+            set(range(V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)),
         )
         self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), 32)
         self.assertEqual(v3_numeric_index(NUMERIC_CONFUSION_TURNS), 33)
@@ -680,7 +680,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -850,7 +850,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1061,7 +1061,7 @@ class ConfusionEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1239,7 +1239,7 @@ class EncoreEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1420,7 +1420,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1560,7 +1560,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
+            self.assertEqual(len(v3_row), V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],

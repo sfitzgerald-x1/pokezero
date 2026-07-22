@@ -78,12 +78,16 @@ def _layout_payload() -> dict[str, Any]:
     categorical_columns = {
         name: int(getattr(showdown, name))
         for name in dir(showdown)
-        if name.startswith("CATEGORY_") and isinstance(getattr(showdown, name), int)
+        if name.startswith("CATEGORY_")
+        and isinstance(getattr(showdown, name), int)
+        and 0 <= int(getattr(showdown, name)) < spec.categorical_feature_count
     }
     numeric_columns = {
         name: int(getattr(showdown, name))
         for name in dir(showdown)
-        if name.startswith("NUMERIC_") and isinstance(getattr(showdown, name), int)
+        if name.startswith("NUMERIC_")
+        and isinstance(getattr(showdown, name), int)
+        and 0 <= int(getattr(showdown, name)) < spec.numeric_feature_count
     }
     return {
         "schema_version": spec.schema_version,
@@ -136,7 +140,7 @@ def _layout_payload() -> dict[str, Any]:
             ],
         },
         "default_feature_masks": {
-            "stats_block": masks.stats_block,
+            "stats_block": masks.opponent_tendency_stats_block,
             "exact_state": masks.exact_state,
             "transition_token_budget": masks.transition_token_budget,
             "tier2_residuals": masks.tier2_residuals,

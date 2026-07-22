@@ -111,7 +111,7 @@ def observation_contract_from_header(header: Mapping[str, Any]) -> tuple[Any, Ob
     if not isinstance(raw_masks, Mapping):
         raise ValueError("corpus header is missing its feature masks.")
     masks = ObservationFeatureMasks(
-        stats_block=bool(raw_masks["stats_block"]),
+        opponent_tendency_stats_block=bool(raw_masks["stats_block"]),
         exact_state=bool(raw_masks["exact_state"]),
         transition_token_budget=int(raw_masks["transition_token_budget"]),
         tier2_residuals=bool(raw_masks["tier2_residuals"]),

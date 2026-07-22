@@ -458,14 +458,15 @@ touching the folded `damage_fraction` field:
 - New id `pokezero.observation.v3`, CLI choice `v3`, and a fixed **155 numeric /
   51 categorical** census. V2/v2.1/v2.2 specs, count maps, checkpoint latching,
   and direct encoder writes remain unchanged.
-- V3 allocates a private 169-column legacy-writer row so existing named writers
+- V3 allocates a private 169-column writer row so existing named writers
   can remain shared with frozen V2.x code. `_project_v3_numeric_rows` performs the
   sole V3-only layout projection after every token writer completes.
 - `V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX` is the ordered physical V3 map;
-  `V3_NUMERIC_INDEX_BY_LEGACY_INDEX` is its inverse. `v3_numeric_index()` is the
-  only supported way for a consumer or test to translate a historical
-  `NUMERIC_*` writer constant into a V3 physical index. The layout table is
-  exported as `V3_NUMERIC_LAYOUT_GROUPS`.
+  `V3_NUMERIC_INDEX_BY_LEGACY_INDEX` is its inverse. `v3_numeric_index()` maps a
+  historical writer constant specifically for V3; cross-schema consumers use
+  `numeric_index_for_schema()`. A public-tensor consumer must never index with a
+  `NUMERIC_*` writer constant directly. The layout table is exported as
+  `V3_NUMERIC_LAYOUT_GROUPS`.
 - The map accounts for every private legacy writer column: 155 are carried, 14
   are explicitly dropped under the reachability evidence in
   [dead observation fields](dead_observation_fields.md), and two carried semantic
@@ -583,7 +584,7 @@ flowchart TB
     STATS -. owns aggregate tendency .-> TENDENCYGROUP["110-120 tendency\nswitch and weather-reveal evidence"]
     HISTORY -. owns past turns .-> HISTORYGROUP["121-154 history\npaired action summaries, fail, confusion self-hit"]
 
-    PRIVATE["Private writer surface: 169 historical columns"] --> PROJECT["V3 projection map"]
+    PRIVATE["Private writer surface: 169 columns (never model input)"] --> PROJECT["V3 projection map"]
     PROJECT --> DROP["Drop 14 unreachable fields\nscreens, Future Sight, hail reveal"]
     PROJECT --> PUBLIC["Public grouped layout: 155 columns"]
 ```
