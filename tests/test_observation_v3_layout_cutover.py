@@ -11,6 +11,7 @@ from pokezero.showdown import (
     FIELD_TOKEN_OFFSET,
     NUMERIC_TM2_DAMAGE_FRACTION,
     NUMERIC_TM2_FAIL,
+    NUMERIC_SELF_SCREENS,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_FAIL,
@@ -27,6 +28,7 @@ from pokezero.showdown import (
     V3_REWRITTEN_LEGACY_NUMERIC_INDICES,
     V3_REPLAY_OBSERVATION_SPEC,
     _project_v3_numeric_rows,
+    numeric_index_if_present_for_schema,
     numeric_index_for_schema,
     normalize_for_player,
     observation_from_player_state,
@@ -174,7 +176,19 @@ class ObservationV3LayoutCutoverTest(unittest.TestCase):
             17,
         )
         with self.assertRaisesRegex(ValueError, "dropped from v3"):
-            numeric_index_for_schema(V3_REPLAY_OBSERVATION_SPEC.schema_version, 24)
+            numeric_index_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
+            )
+        self.assertIsNone(
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version, NUMERIC_SELF_SCREENS
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "not part of v3"):
+            numeric_index_if_present_for_schema(
+                V3_REPLAY_OBSERVATION_SPEC.schema_version,
+                V3_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT,
+            )
 
     def test_legacy_v2_2_surface_is_fully_accounted_for(self) -> None:
         legacy_v2_2_indices = set(range(V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count))

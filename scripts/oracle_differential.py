@@ -118,10 +118,12 @@ class _SchemaNumericRows:
 
 
 def _numeric_if_present(observation, token: int, legacy_index: int) -> float | None:
-    try:
-        return _SchemaNumericRow(observation, token)[legacy_index]
-    except ValueError:
+    physical_index = S.numeric_index_if_present_for_schema(
+        observation.schema_version, legacy_index
+    )
+    if physical_index is None:
         return None
+    return observation.numeric_features[token][physical_index]
 
 
 class Acc:

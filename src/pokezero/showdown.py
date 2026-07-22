@@ -842,6 +842,23 @@ def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
     return legacy_index
 
 
+def numeric_index_if_present_for_schema(
+    schema_version: str, legacy_index: int
+) -> int | None:
+    """Physical numeric index, or ``None`` only for an explicitly omitted field.
+
+    Invalid and out-of-range semantic indices still raise. This keeps audit code fail-closed
+    while allowing one implementation to span schemas that intentionally omit a field.
+    """
+
+    if (
+        schema_version == OBSERVATION_SCHEMA_VERSION_V3
+        and legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
+    ):
+        return None
+    return numeric_index_for_schema(schema_version, legacy_index)
+
+
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
 OPPONENT_POKEMON_TOKEN_OFFSET = SELF_POKEMON_TOKEN_OFFSET + SELF_POKEMON_TOKEN_COUNT

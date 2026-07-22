@@ -81,6 +81,7 @@ from .showdown import (
     OPPONENT_POKEMON_TOKEN_OFFSET,
     SELF_POKEMON_TOKEN_OFFSET,
     _normalize_identifier,
+    numeric_index_if_present_for_schema,
     numeric_index_for_schema,
     normalize_for_player,
     observation_from_player_state,
@@ -1901,10 +1902,10 @@ def _numeric_if_present(
 ) -> float | None:
     """Read a semantic numeric field, returning ``None`` when its schema omits it."""
 
-    try:
-        return _numeric(observation, token, slot)
-    except ValueError:
+    physical_slot = numeric_index_if_present_for_schema(observation.schema_version, slot)
+    if physical_slot is None:
         return None
+    return float(observation.numeric_features[token][physical_slot])
 
 
 def _numeric_columns_for_observation(
@@ -1914,10 +1915,9 @@ def _numeric_columns_for_observation(
 
     physical: set[int] = set()
     for slot in slots:
-        try:
-            physical.add(numeric_index_for_schema(observation.schema_version, slot))
-        except ValueError:
-            continue
+        physical_slot = numeric_index_if_present_for_schema(observation.schema_version, slot)
+        if physical_slot is not None:
+            physical.add(physical_slot)
     return frozenset(physical)
 
 
