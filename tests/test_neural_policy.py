@@ -1082,6 +1082,69 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_remote_config_serves_model_config_for_agent_construction(self) -> None:
+        # build_agent_remote path: /config carries the full TransformerPolicyConfig, the remote
+        # policy reconstructs it with full fidelity, and spec/mask derivation works on it exactly
+        # as on a locally-loaded checkpoint — the seam that lets eval shards run CPU-only against
+        # one shared GPU server per checkpoint.
+        if not torch_available():
+            self.skipTest("requires torch")
+        import threading
+
+        from pokezero.inference_service import fetch_remote_config, remote_inference_policy, serve_inference
+        from pokezero.neural_policy import (
+            feature_masks_from_model_config,
+            load_transformer_model_config,
+            observation_spec_from_model_config,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            ckpt = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="remote-cfg",
+                window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
+                numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
+                attention_heads=4, feedforward_dim=32, dropout=0.0,
+            )
+            model, result = train_transformer_policy(
+                data_path, model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu"),
+            )
+            save_transformer_checkpoint(ckpt, model, result=result)
+
+            server = serve_inference(str(ckpt), host="127.0.0.1", port=0, device="cpu")
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{port}"
+                served = fetch_remote_config(url)
+                self.assertIn("model_config", served)
+                local_config = load_transformer_model_config(ckpt)
+                # compare via a JSON round-trip on both sides: the wire format turns tuples into
+                # lists, which from_dict re-coerces — the values must match, not the sequence types
+                normalize = lambda d: json.loads(json.dumps(d))  # noqa: E731
+                self.assertEqual(normalize(served["model_config"]), normalize(local_config.to_dict()))
+                remote = remote_inference_policy(url)
+                self.assertEqual(
+                    normalize(remote.result.model_config.to_dict()), normalize(local_config.to_dict())
+                )
+                # the derivations build_agent_remote depends on work off the served config
+                self.assertEqual(
+                    observation_spec_from_model_config(remote.result.model_config),
+                    observation_spec_from_model_config(local_config),
+                )
+                self.assertEqual(
+                    feature_masks_from_model_config(remote.result.model_config),
+                    feature_masks_from_model_config(local_config),
+                )
+            finally:
+                server.shutdown()
+
     def test_remote_config_retries_transient_bootstrap_failure(self) -> None:
         # A collector creates its remote policy by fetching /config. This is the startup path that
         # must absorb a transient socket-admission failure instead of failing the whole shard.

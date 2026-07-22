@@ -9,7 +9,9 @@ is structural and determinism (sampling stays client-side) is untouched.
 
 Requests are dynamically batched (see _BatchingForwarder) so N concurrent collector requests
 cost one GPU forward. Wire protocol (JSON over HTTP; a raw-bytes payload is a possible follow-up):
-  GET  /config  -> {"window_size": int, "policy_id": str, "action_count": int}
+  GET  /config  -> {"window_size": int, "policy_id": str, "action_count": int,
+                    "model_config": {...}}   # full TransformerPolicyConfig.to_dict(), so remote
+                                             # clients can derive spec/masks without the checkpoint
   POST /forward -> body is the observation-window tensors (nested lists, leading batch dim 1):
                    {categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask}
                 -> {"policy_logits": [[...]], "value": [...], "opponent_action_logits": [[...]] | null}
@@ -37,6 +39,7 @@ import numpy
 
 from .actions import ACTION_COUNT
 from .neural_policy import (
+    TransformerPolicyConfig,
     TransformerPolicyOutput,
     TransformerSoftmaxPolicy,
     load_transformer_policy,
@@ -321,14 +324,19 @@ def fetch_remote_config(base_url: str, *, timeout: float = 30.0) -> dict[str, An
 
 def remote_inference_policy(base_url: str, **policy_options: Any) -> TransformerSoftmaxPolicy:
     """Build a collector-side policy whose forward is served by the inference server at
-    ``base_url``. Fetches only window_size/policy_id from the server — no checkpoint weights."""
+    ``base_url`` — no checkpoint weights. When the server exposes ``model_config`` (full
+    ``TransformerPolicyConfig.to_dict()``), the policy carries the real config so callers can
+    derive the observation spec / feature masks exactly as from a local checkpoint
+    (``build_agent_remote``); older servers fall back to the window_size/policy_id stub."""
     config = fetch_remote_config(base_url)
-    result = SimpleNamespace(
-        model_config=SimpleNamespace(
+    if config.get("model_config") is not None:
+        model_config: Any = TransformerPolicyConfig.from_dict(config["model_config"])
+    else:
+        model_config = SimpleNamespace(
             window_size=int(config["window_size"]),
             policy_id=config.get("policy_id"),
         )
-    )
+    result = SimpleNamespace(model_config=model_config)
     return TransformerSoftmaxPolicy(
         model=_StubModel(),
         result=result,  # type: ignore[arg-type]
@@ -339,9 +347,16 @@ def remote_inference_policy(base_url: str, **policy_options: Any) -> Transformer
 
 def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_BatchingForwarder", *, device: Any = None):
     window_size = int(policy.result.model_config.window_size)
+
+    def _config_dict(p: TransformerSoftmaxPolicy) -> "dict[str, Any] | None":
+        # Full checkpoint config for remote agent construction (build_agent_remote derives
+        # spec/masks from it). Stub/test policies without to_dict simply omit the field.
+        to_dict = getattr(p.result.model_config, "to_dict", None)
+        return to_dict() if callable(to_dict) else None
+
     # Mutable so /config reflects the current checkpoint after a hot-swap. reload_lock serializes
     # concurrent /reload calls (the controller issues one per iteration boundary).
-    state = {"policy_id": str(policy.policy_id)}
+    state = {"policy_id": str(policy.policy_id), "model_config": _config_dict(policy)}
     reload_lock = threading.Lock()
 
     class _Handler(BaseHTTPRequestHandler):
@@ -364,7 +379,10 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.rstrip("/") == "/config":
-                self._send(200, {"window_size": window_size, "policy_id": state["policy_id"], "action_count": ACTION_COUNT})
+                payload = {"window_size": window_size, "policy_id": state["policy_id"], "action_count": ACTION_COUNT}
+                if state["model_config"] is not None:
+                    payload["model_config"] = state["model_config"]
+                self._send(200, payload)
             elif self.path.rstrip("/") in ("/health", "/healthz"):
                 self._send(200, {"status": "ok"})
             else:
@@ -404,6 +422,7 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
                             )
                         forwarder.set_policy(new_policy)
                         state["policy_id"] = str(new_policy.policy_id)
+                        state["model_config"] = _config_dict(new_policy)
                 except Exception as exc:  # noqa: BLE001
                     self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
                     return
