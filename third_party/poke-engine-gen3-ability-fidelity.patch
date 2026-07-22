@@ -17,10 +17,10 @@ index 15330a4..8130fdc 100644
          },
      );
 diff --git a/src/gen3/abilities.rs b/src/gen3/abilities.rs
-index 62ea3c6..dbf8267 100644
+index 62ea3c6..96c47ef 100644
 --- a/src/gen3/abilities.rs
 +++ b/src/gen3/abilities.rs
-@@ -3,19 +3,82 @@ use super::damage_calc::type_effectiveness_modifier;
+@@ -3,19 +3,85 @@ use super::damage_calc::type_effectiveness_modifier;
  use super::generate_instructions::{add_remove_status_instructions, apply_boost_instruction};
  use super::state::{PokemonVolatileStatus, Weather};
  use crate::choices::{
@@ -41,7 +41,7 @@ index 62ea3c6..dbf8267 100644
  
  pub const WEATHER_ABILITY_TURNS: i8 = -1;
  
-+fn effect_spore_status_is_valid(
++fn contact_status_is_valid(
 +    state: &State,
 +    target_side_ref: &SideReference,
 +    status: &PokemonStatus,
@@ -56,6 +56,9 @@ index 62ea3c6..dbf8267 100644
 +    }
 +
 +    match status {
++        PokemonStatus::BURN => {
++            !target.has_type(&PokemonType::FIRE) && target.ability != Abilities::WATERVEIL
++        }
 +        PokemonStatus::POISON => {
 +            !target.has_type(&PokemonType::POISON)
 +                && !target.has_type(&PokemonType::STEEL)
@@ -106,7 +109,7 @@ index 62ea3c6..dbf8267 100644
  define_enum_with_from_str! {
      #[repr(i16)]
      #[derive(PartialEq, Debug, Clone, Copy)]
-@@ -191,13 +254,12 @@ pub fn ability_end_of_turn_order5(
+@@ -191,13 +257,12 @@ pub fn ability_end_of_turn_order5(
      state: &mut State,
      side_ref: &SideReference,
      instructions: &mut StateInstructions,
@@ -122,7 +125,7 @@ index 62ea3c6..dbf8267 100644
              if active_pkmn.status != PokemonStatus::NONE {
                  let attacking_side = state.get_side(side_ref);
                  let active_index = attacking_side.active_index;
-@@ -290,9 +352,57 @@ pub fn ability_on_switch_in(
+@@ -290,9 +355,57 @@ pub fn ability_on_switch_in(
          active_pkmn.ability = defending_pkmn.ability;
      }
  
@@ -182,7 +185,7 @@ index 62ea3c6..dbf8267 100644
                  instructions
                      .instruction_list
                      .push(Instruction::ChangeWeather(ChangeWeather {
-@@ -306,7 +416,9 @@ pub fn ability_on_switch_in(
+@@ -306,7 +419,9 @@ pub fn ability_on_switch_in(
              }
          }
          Abilities::SANDSTREAM => {
@@ -193,7 +196,7 @@ index 62ea3c6..dbf8267 100644
                  instructions
                      .instruction_list
                      .push(Instruction::ChangeWeather(ChangeWeather {
-@@ -320,17 +432,26 @@ pub fn ability_on_switch_in(
+@@ -320,17 +435,26 @@ pub fn ability_on_switch_in(
              }
          }
          Abilities::INTIMIDATE => {
@@ -229,7 +232,7 @@ index 62ea3c6..dbf8267 100644
                  instructions
                      .instruction_list
                      .push(Instruction::ChangeWeather(ChangeWeather {
-@@ -345,6 +466,9 @@ pub fn ability_on_switch_in(
+@@ -345,6 +469,9 @@ pub fn ability_on_switch_in(
          }
          _ => {}
      }
@@ -239,7 +242,7 @@ index 62ea3c6..dbf8267 100644
  }
  
  pub fn ability_modify_attack_being_used(
-@@ -356,6 +480,13 @@ pub fn ability_modify_attack_being_used(
+@@ -356,6 +483,13 @@ pub fn ability_modify_attack_being_used(
      let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
      let attacking_pkmn = attacking_side.get_active_immutable();
      match attacking_pkmn.ability {
@@ -253,7 +256,7 @@ index 62ea3c6..dbf8267 100644
          Abilities::PUREPOWER => {
              if attacker_choice.category == MoveCategory::Physical {
                  attacker_choice.base_power *= 2.0;
-@@ -453,6 +584,13 @@ pub fn ability_modify_attack_against(
+@@ -453,6 +587,13 @@ pub fn ability_modify_attack_against(
      let attacking_pkmn = attacking_side.get_active_immutable();
      let target_pkmn = defending_side.get_active_immutable();
  
@@ -267,7 +270,7 @@ index 62ea3c6..dbf8267 100644
      match target_pkmn.ability {
          Abilities::SOUNDPROOF => {
              if attacker_choice.flags.sound {
-@@ -461,32 +599,22 @@ pub fn ability_modify_attack_against(
+@@ -461,32 +602,23 @@ pub fn ability_modify_attack_against(
              }
          }
          Abilities::POISONPOINT => {
@@ -276,6 +279,7 @@ index 62ea3c6..dbf8267 100644
 +                && !defending_side
 +                    .volatile_statuses
 +                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::POISON)
 +            {
                  attacker_choice.add_or_create_secondaries(Secondary {
 -                    chance: 33.0,
@@ -309,7 +313,7 @@ index 62ea3c6..dbf8267 100644
          }
          Abilities::MARVELSCALE => {
              if target_pkmn.status != PokemonStatus::NONE
-@@ -496,28 +624,41 @@ pub fn ability_modify_attack_against(
+@@ -496,28 +628,42 @@ pub fn ability_modify_attack_against(
              }
          }
          Abilities::EFFECTSPORE => {
@@ -345,7 +349,7 @@ index 62ea3c6..dbf8267 100644
 +                    PokemonStatus::PARALYZE,
 +                    PokemonStatus::SLEEP,
 +                ] {
-+                    if effect_spore_status_is_valid(state, attacking_side_ref, &status) {
++                    if contact_status_is_valid(state, attacking_side_ref, &status) {
 +                        attacker_choice.add_or_create_secondaries(Secondary {
 +                            chance: 100.0 / remaining,
 +                            target: MoveTarget::User,
@@ -362,6 +366,7 @@ index 62ea3c6..dbf8267 100644
 +                && !defending_side
 +                    .volatile_statuses
 +                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::BURN)
 +            {
                  attacker_choice.add_or_create_secondaries(Secondary {
 -                    chance: 30.0,
@@ -369,7 +374,7 @@ index 62ea3c6..dbf8267 100644
                      target: MoveTarget::User,
                      effect: Effect::Status(PokemonStatus::BURN),
                  });
-@@ -528,6 +669,7 @@ pub fn ability_modify_attack_against(
+@@ -528,6 +674,7 @@ pub fn ability_modify_attack_against(
          }
          Abilities::WONDERGUARD => {
              if attacker_choice.category != MoveCategory::Status
@@ -377,7 +382,7 @@ index 62ea3c6..dbf8267 100644
                  && type_effectiveness_modifier(&attacker_choice.move_type, &target_pkmn) <= 1.0
              {
                  attacker_choice.remove_all_effects();
-@@ -543,9 +685,13 @@ pub fn ability_modify_attack_against(
+@@ -543,9 +690,14 @@ pub fn ability_modify_attack_against(
              }
          }
          Abilities::STATIC => {
@@ -386,6 +391,7 @@ index 62ea3c6..dbf8267 100644
 +                && !defending_side
 +                    .volatile_statuses
 +                    .contains(&PokemonVolatileStatus::SUBSTITUTE)
++                && contact_status_is_valid(state, attacking_side_ref, &PokemonStatus::PARALYZE)
 +            {
                  attacker_choice.add_or_create_secondaries(Secondary {
 -                    chance: 30.0,
@@ -393,7 +399,7 @@ index 62ea3c6..dbf8267 100644
                      target: MoveTarget::User,
                      effect: Effect::Status(PokemonStatus::PARALYZE),
                  })
-@@ -558,8 +704,27 @@ pub fn ability_modify_attack_against(
+@@ -558,8 +710,27 @@ pub fn ability_modify_attack_against(
                  attacker_choice.base_power /= 2.0;
              }
          }
@@ -495,7 +501,7 @@ index 65a0a51..811c1d1 100644
  
  pub fn charge_choice_to_volatile(choice: &Choices) -> PokemonVolatileStatus {
 diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
-index 2354139..c3e49f9 100644
+index 2354139..360eeaf 100644
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
 @@ -1,7 +1,7 @@
@@ -797,18 +803,23 @@ index 2354139..c3e49f9 100644
      }
  
      // leechseed sap
-@@ -2428,7 +2556,9 @@ fn add_end_of_turn_instructions(
+@@ -2427,8 +2555,13 @@ fn add_end_of_turn_instructions(
+                     );
                      side.volatile_status_durations.yawn -= 1;
  
-                     let active = side.get_active();
+-                    let active = side.get_active();
 -                    if active.status == PokemonStatus::NONE {
-+                    if active.status == PokemonStatus::NONE
++                    let active = side.get_active_immutable();
++                    let can_fall_asleep = active.status == PokemonStatus::NONE
 +                        && ![Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&active.ability)
-+                    {
++                        && side.side_conditions.safeguard == 0
++                        && !side.has_alive_non_rested_sleeping_pkmn();
++                    if can_fall_asleep {
++                        let active = side.get_active();
                          active.status = PokemonStatus::SLEEP;
                          incoming_instructions
                              .instruction_list
-@@ -2668,6 +2798,51 @@ fn add_end_of_turn_instructions(
+@@ -2668,6 +2801,51 @@ fn add_end_of_turn_instructions(
      state.reverse_instructions(&incoming_instructions.instruction_list);
  }
  
@@ -860,7 +871,7 @@ index 2354139..c3e49f9 100644
  fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
      !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
          && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
-@@ -2949,9 +3124,11 @@ pub fn generate_instructions_from_move_pair(
+@@ -2949,9 +3127,11 @@ pub fn generate_instructions_from_move_pair(
                  branch_on_damage,
              );
              if end_of_turn_triggered(side_one_move, side_two_move) {
@@ -875,7 +886,7 @@ index 2354139..c3e49f9 100644
              }
          }
          SideMovesFirst::SideTwo => {
-@@ -2965,9 +3142,11 @@ pub fn generate_instructions_from_move_pair(
+@@ -2965,9 +3145,11 @@ pub fn generate_instructions_from_move_pair(
                  branch_on_damage,
              );
              if end_of_turn_triggered(side_one_move, side_two_move) {
@@ -890,7 +901,7 @@ index 2354139..c3e49f9 100644
              }
          }
          SideMovesFirst::SpeedTie => {
-@@ -2975,37 +3154,50 @@ pub fn generate_instructions_from_move_pair(
+@@ -2975,37 +3157,50 @@ pub fn generate_instructions_from_move_pair(
              incoming_instructions.update_percentage(0.5);
              side_one_moves_first_instruction.update_percentage(0.5);
  

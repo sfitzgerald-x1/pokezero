@@ -53,15 +53,18 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
    reject and clear Confusion/Attract respectively, including after Trace.
 9. Status-prevention abilities blocked new direct status but did not cover Yawn
    or cure an incompatible status after Trace. Water Veil, Magma Armor, Limber,
-   Immunity, Insomnia, and Vital Spirit now cover those seams.
+   Immunity, Insomnia, and Vital Spirit now cover those seams. Yawn resolution
+   also rechecks Safeguard and Sleep Clause instead of applying sleep from a
+   stale eligibility decision.
 10. Synchronize was absent. Burn/paralysis/poison now reflect after a successful
     application, including statuses caused by contact abilities and the
     pre-Lum-Berry event seam; Gen 3 Toxic reflection becomes regular poison.
 11. Poison Point, Flame Body, Static, and Effect Spore used inaccurate or
     independently composed probabilities and could trigger through Substitute.
     They now branch at 1/3, 1/3, 1/3, and 1/10 total (1/30 per status), only
-    after unprotected contact. Invalid Effect Spore outcomes remain no-ops, and
-    its sleep outcome respects Sleep Clause rather than transferring mass.
+    after unprotected contact. All four respect Safeguard; invalid Effect Spore
+    outcomes remain no-ops, and its sleep outcome respects Sleep Clause rather
+    than transferring mass.
 12. Intimidate lowered Attack through Substitute. The Gen 3 substitute immunity
     is now respected.
 13. Flash Fire could falsely activate from Will-O-Wisp against a Fire type,
@@ -174,7 +177,7 @@ future source changes cannot silently restore modern immunity/boost semantics.
   then the Python extension builds with `poke-engine/gen3` and no default
   generation feature.
 - `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
-  `tests.test_engine_world.ForecastRootTypeTests`: **31/31 checks pass**.
+  `tests.test_engine_world.ForecastRootTypeTests`: **36/36 checks pass**.
 - Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
   turns clean**.
 - Additional high-risk Showdown differential (Wonder Guard neutral/super-
