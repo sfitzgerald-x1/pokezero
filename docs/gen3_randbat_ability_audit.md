@@ -28,6 +28,43 @@ Python-to-Rust root-state seam were inspected separately.
 are represented by the engine. `Bounded` means the decision effect is modeled,
 but not at bit-identical cartridge rounding or full-horizon bookkeeping.
 
+## Training accuracy implications
+
+Here, training accuracy means fidelity of collected transitions, outcome returns,
+and policy/value targets, rather than the model's in-sample action accuracy.
+
+| Path | Effect of these findings |
+|---|---|
+| Current recipe-faithful PPO self-play | **No direct impact.** Collection and terminal outcomes come from Pokemon Showdown; the Rust engine is not in the training loop. These fixes therefore do not invalidate existing PPO checkpoints or require data re-encoding. |
+| Net-alone Showdown evaluation | **No direct impact.** The evaluated policy still acts in Pokemon Showdown. |
+| V3 observation training | **No schema or feature-distribution change.** V3 already encoded public gender from Showdown `details`; this work carries the same public fact, or a sampled hidden fact, into determinized Rust worlds. |
+| Test-time Rust MCTS | **Direct accuracy impact.** Before the fixes, affected search branches could contain impossible survival, damage, status, immunity, or weather outcomes and therefore mis-rank legal actions. |
+| Future MCTS-generated training targets or rollout collection | **Direct target-quality impact if enabled.** Search visits/actions produced by the old engine can encode biased policy targets or trajectories. Pre-fix search artifacts should not be mixed into a search-supervised training corpus without an explicit legacy label. No current PPO checkpoint is known to contain such targets because the documented recipe keeps search out of training. |
+
+The fixed defects with the largest potential to change search-derived labels are
+the outcome/immunity errors (Sturdy, Wonder Guard, Rock Head/Struggle, weather
+suppression/Forecast, Flash Fire, and status-prevention seams). Probability and
+ordering errors (contact abilities, Synchronize, Early Bird, Shed Skin, and Cute
+Charm) are generally more state-specific but can still change expected leaf value
+and action ranking when reached.
+
+Thirteen ledger entries remain intentionally `Bounded`. They are not defects in
+Showdown PPO collection, but they are residual accuracy risks if Rust MCTS is ever
+used to create training targets:
+
+- Blaze, Guts, Huge Power, Hustle, Marvel Scale, Overgrow, Pure Power, Swarm,
+  Thick Fat, and Torrent use power proxies instead of bit-identical cartridge
+  stat/damage rounding. The main risk is a near-threshold KO or survival flip.
+- Battle Armor and Shell Armor inherit the search engine's deep-ply critical-hit
+  elision. The main risk is mispricing high-variance lines beyond the explicitly
+  branched horizon.
+- Pressure inherits high-PP decrement elision. The main risk is long-horizon PP
+  stall valuation, not ordinary short tactical lines.
+
+Accordingly, the present audit supports test-time-search evaluation, but a future
+decision to train from Rust-search targets should retain differential monitoring
+for these bounded classes rather than treating the engine as a bit-exact oracle.
+
 ## Findings fixed
 
 The audit found and patched these concrete defects in poke-engine 0.0.47:
