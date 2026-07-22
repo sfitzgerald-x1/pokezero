@@ -649,6 +649,66 @@ class CounterMirrorCoat(unittest.TestCase):
         self.assertEqual(e["cm_success"], 0)
 
 
+class DoublePivot(unittest.TestCase):
+    def test_voluntary_in_then_out_next_turn(self):
+        gp = parse([
+            "|switch|p1a: Lead|Lead, M|300/300",     # game-start lead: opens no window
+            "|turn|1",
+            "|switch|p1a: A|A, M|250/250",           # chosen in at t1: window opens
+            "|turn|2",
+            "|switch|p1a: B|B, M|280/280",           # chosen out at t2 -> double pivot
+        ])
+        e = gp.ev["p1"]
+        self.assertEqual(e["double_pivot"], 1)
+        self.assertEqual(e["pivot_window"], 2)       # A's window (t1) + B's window (t2)
+
+    def test_faint_replacement_does_not_open_a_window(self):
+        gp = parse([
+            "|switch|p1a: Lead|Lead, M|300/300",
+            "|turn|1",
+            "|move|p2a: Foe|Earthquake|p1a: Lead",
+            "|faint|p1a: Lead",
+            "|switch|p1a: A|A, M|250/250",           # replacement after our faint: NO window
+            "|turn|2",
+            "|switch|p1a: B|B, M|280/280",           # A leaving next turn is NOT a double pivot
+        ])
+        self.assertEqual(gp.ev["p1"]["double_pivot"], 0)
+
+    def test_gap_turn_is_not_immediate(self):
+        gp = parse([
+            "|switch|p1a: Lead|Lead, M|300/300",
+            "|turn|1",
+            "|switch|p1a: A|A, M|250/250",
+            "|turn|2",
+            "|move|p1a: A|Tackle|p2a: Foe",          # A stays in a turn
+            "|turn|3",
+            "|switch|p1a: B|B, M|280/280",           # leaves at t3, window was t1: not immediate
+        ])
+        self.assertEqual(gp.ev["p1"]["double_pivot"], 0)
+
+    def test_baton_pass_counts_as_the_second_leg(self):
+        gp = parse([
+            "|switch|p1a: Lead|Lead, M|300/300",
+            "|turn|1",
+            "|switch|p1a: A|A, M|250/250",
+            "|turn|2",
+            "|move|p1a: A|Baton Pass|p1a: A",
+            "|switch|p1a: B|B, M|280/280",           # the BP switch on the very next turn -> counted
+        ])
+        self.assertEqual(gp.ev["p1"]["double_pivot"], 1)
+
+    def test_dragged_in_mon_opens_no_window(self):
+        gp = parse([
+            "|switch|p1a: Lead|Lead, M|300/300",
+            "|turn|1",
+            "|move|p2a: Foe|Roar|p1a: Lead",
+            "|drag|p1a: A|A, M|250/250",             # phazed in: no window
+            "|turn|2",
+            "|switch|p1a: B|B, M|280/280",           # escaping the drag is not a double pivot
+        ])
+        self.assertEqual(gp.ev["p1"]["double_pivot"], 0)
+
+
 class SwitchBehavior(unittest.TestCase):
     def test_immunity_switchin_same_turn_only(self):
         # p1 switches Gengar in; p2's Earthquake that turn is immune -> counts once.

@@ -215,6 +215,8 @@ class GameParse:
         self._move_in_flight = None            # seat whose move is resolving, for -fail attribution
         self._nc_switchin = set()              # seats that switched a Natural Cure mon in this turn
         self._cm_pending = None                # seat whose Counter/Mirror Coat awaits its damage/whiff
+        self.cur_turn = 0                      # current |turn| number (0 = pre-battle lead switches)
+        self.switched_in_turn = {"p1": None, "p2": None}  # turn the active mon was CHOSEN in (double pivot)
         # Protect chain: was this seat's immediately-preceding move a *successful* Protect/Detect?
         # (consecutive Protect has a diminishing success chance in gen3, so repeating after a success
         # is the risky play we break out.) Reset by any non-Protect move, a failed Protect, or a switch.
@@ -258,6 +260,17 @@ class GameParse:
                             self.ev[seat]["switch_out_frozen"] += 1
                     else:
                         self.ev[seat]["forced_switch"] += 1
+                    # Double pivot: leaving voluntarily (switch or Baton Pass) on the turn immediately
+                    # after this mon was itself CHOSEN in. Faint replacements, drags, and the game-start
+                    # lead never open a window, so escaping those is not a double pivot.
+                    if (voluntary and self.switched_in_turn[seat] is not None
+                            and self.cur_turn == self.switched_in_turn[seat] + 1):
+                        self.ev[seat]["double_pivot"] += 1
+                    if voluntary and self.cur_turn >= 1:
+                        self.switched_in_turn[seat] = self.cur_turn   # the incoming mon opens a new window
+                        self.ev[seat]["pivot_window"] += 1
+                    else:
+                        self.switched_in_turn[seat] = None            # forced in: no window
                     # the outgoing mon leaves: close any open Belly-Drum KO window it held
                     self._close_bd(seat)
                     self._end_tox(seat)   # the outgoing mon's toxic counter resets on switch (gen3)
@@ -467,6 +480,10 @@ class GameParse:
                     # the drummer itself fainting closes its own window
                     self._close_bd(seat)
             elif tag == "turn":
+                try:
+                    self.cur_turn = int(a[0])
+                except (ValueError, IndexError):
+                    self.cur_turn += 1
                 self._pending_switch_immunity = None  # immunity window is the switch-in turn only
                 self._resolve_speed()                 # score the just-finished turn's move order
                 self._pri_ko_seat = None
@@ -780,7 +797,8 @@ def extract(files, lineage=None, milestone=None):
                           "cat_sleep","sleep_clause_active","move_failed",
                           "cat_aromatherapy","aroma_cured","cat_struggle",
                           "cat_protect","cat_protect_consecutive",
-                          "cat_counter_mirrorcoat","cm_success"):
+                          "cat_counter_mirrorcoat","cm_success",
+                          "double_pivot","pivot_window"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -966,6 +984,13 @@ def extract(files, lineage=None, milestone=None):
         "counter_mirrorcoat_uses": cat_extra["cat_counter_mirrorcoat"],
         "counter_mirrorcoat_success_rate": (round(cat_extra["cm_success"] / cat_extra["cat_counter_mirrorcoat"], 4)
                                             if cat_extra["cat_counter_mirrorcoat"] else None),
+        # Double pivots: of the mons CHOSEN in (voluntary switch / Baton Pass; faint replacements,
+        # drags and game-start leads excluded), the fraction that voluntarily leave again on the very
+        # next turn — rapid in-out churn.
+        "double_pivots": cat_extra["double_pivot"],
+        "pivot_windows": cat_extra["pivot_window"],
+        "double_pivot_rate": (round(cat_extra["double_pivot"] / cat_extra["pivot_window"], 4)
+                              if cat_extra["pivot_window"] else None),
         # Boom blocks: of the enemy Explosion/Self-Destruct the bot faced, the fraction it neutralized
         # via Protect, an absorbing Substitute, or a Ghost/type immunity.
         "boom_faced": cat_extra["boom_faced"],
