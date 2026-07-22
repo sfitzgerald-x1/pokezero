@@ -1565,6 +1565,71 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(collect.call_args.kwargs["current_policy_spec"], "simple-legal")
         self.assertEqual(collect.call_args.kwargs["opponent_policy_specs"], ("simple-legal",))
 
+    def test_v3_training_cache_masks_match_train_config_with_or_without_explicit_flags(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.dataset import TrainingCacheBuilder
+        from pokezero.neural_cli import _require_cache_masks_match_model_config
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V3
+
+        fake_metrics = CollectionMetrics(
+            games=1,
+            elapsed_seconds=1.0,
+            total_decision_rounds=1,
+            total_simulator_turns=1,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        for extra, stats_enabled in (((), True), (("--no-stats-block",), False)):
+            with self.subTest(extra=extra):
+                with (
+                    patch(
+                        "pokezero.rollout_cli.collect_selfplay_rollouts",
+                        return_value=fake_metrics,
+                    ) as collect,
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    exit_code = rollout_cli_main(
+                        [
+                            "collect-selfplay-training-cache",
+                            "--games",
+                            "1",
+                            "--out",
+                            "runs/cache",
+                            "--observation-schema",
+                            "v3",
+                            *extra,
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                kwargs = collect.call_args.kwargs
+                masks = kwargs["training_cache_feature_masks"]
+                self.assertEqual(kwargs["training_cache_observation_schema"], OBSERVATION_SCHEMA_VERSION_V3)
+                self.assertEqual(masks.transition_token_budget, 64)
+                self.assertEqual(masks.opponent_tendency_stats_block, stats_enabled)
+
+                builder = TrainingCacheBuilder(
+                    config=TrajectoryDatasetConfig(), feature_masks=masks
+                )
+                model_config = SimpleNamespace(
+                    stats_block_enabled=stats_enabled,
+                    exact_state_enabled=True,
+                    transition_token_budget=64,
+                    tier2_residuals=True,
+                    tier2_investment=False,
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    cache = Path(tmp) / "cache"
+                    cache.mkdir()
+                    (cache / "metadata.json").write_text(
+                        json.dumps({"feature_masks": builder._feature_masks_payload}),
+                        encoding="utf-8",
+                    )
+                    _require_cache_masks_match_model_config([cache], model_config)
+
     def test_rollout_cli_collect_selfplay_training_cache_applies_collection_epsilon_to_learned_specs(self) -> None:
         fake_metrics = CollectionMetrics(
             games=1,
