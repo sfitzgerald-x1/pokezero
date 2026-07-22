@@ -416,24 +416,42 @@ class AbilityMechanicsTests(unittest.TestCase):
         early = self._mon(
             "xatu", "earlybird", "tackle", speed=200, status="sleep", sleep_turns=0
         )
-        branches = poke_engine.generate_instructions(self._state(early, defender), "tackle", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(early, defender), "tackle", "splash"
+        )
         self.assertAlmostEqual(self._mass(branches, "Damage SideTwo"), 25.0, places=4)
 
     def test_synchronize_reflects_toxic_as_regular_poison(self) -> None:
         attacker = self._mon("mew", "pressure", "toxic", speed=200)
         defender = self._mon("alakazam", "synchronize", "splash")
-        branches = poke_engine.generate_instructions(self._state(attacker, defender), "toxic", "splash")
-        reflected = [branch for branch in branches if "SideTwo-P0: NONE -> TOXIC" in self._text(branch)]
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "toxic", "splash"
+        )
+        reflected = [
+            branch
+            for branch in branches
+            if "SideTwo-P0: NONE -> TOXIC" in self._text(branch)
+        ]
         self.assertTrue(reflected)
-        self.assertTrue(all("SideOne-P0: NONE -> POISON" in self._text(branch) for branch in reflected))
+        self.assertTrue(
+            all("SideOne-P0: NONE -> POISON" in self._text(branch) for branch in reflected)
+        )
 
     def test_synchronize_reflects_contact_ability_status(self) -> None:
         attacker = self._mon("alakazam", "synchronize", "tackle", speed=200)
         defender = self._mon("breloom", "effectspore", "splash", types=("grass", "fighting"))
-        branches = poke_engine.generate_instructions(self._state(attacker, defender), "tackle", "splash")
-        poisoned = [branch for branch in branches if "SideOne-P0: NONE -> POISON" in self._text(branch)]
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "tackle", "splash"
+        )
+        poisoned = [
+            branch
+            for branch in branches
+            if "SideOne-P0: NONE -> POISON" in self._text(branch)
+        ]
         self.assertTrue(poisoned)
-        self.assertTrue(all("SideTwo-P0: NONE -> POISON" in self._text(branch) for branch in poisoned))
+        self.assertTrue(
+            all("SideTwo-P0: NONE -> POISON" in self._text(branch) for branch in poisoned)
+        )
 
     def test_synchronize_reflects_before_lum_berry_cures(self) -> None:
         attacker = self._mon("mew", "pressure", "willowisp", speed=200)
@@ -448,16 +466,39 @@ class AbilityMechanicsTests(unittest.TestCase):
             self.assertEqual(str(applied.side_two.pokemon[0].status).upper(), "NONE")
             self.assertEqual(str(applied.side_two.pokemon[0].item).upper(), "NONE")
 
+    def test_synchronize_reflection_triggers_source_lum_berry(self) -> None:
+        attacker = self._mon("mew", "pressure", "toxic", speed=200, item="lumberry")
+        defender = self._mon("alakazam", "synchronize", "splash")
+        state = self._state(attacker, defender)
+        branches = poke_engine.generate_instructions(state, "toxic", "splash")
+        hit_branches = [
+            branch
+            for branch in branches
+            if "SideTwo-P0: NONE -> TOXIC" in self._text(branch)
+        ]
+        self.assertTrue(hit_branches)
+        for branch in hit_branches:
+            applied = state.apply_instructions(branch)
+            self.assertEqual(str(applied.side_one.pokemon[0].status).upper(), "NONE")
+            self.assertEqual(str(applied.side_one.pokemon[0].item).upper(), "NONE")
+            self.assertEqual(str(applied.side_two.pokemon[0].status).upper(), "TOXIC")
+
     def test_pressure_consumes_two_pp_in_the_engine_relevant_range(self) -> None:
         attacker = self._mon("tauros", "intimidate", "tackle", speed=200, pp=9)
         defender = self._mon("lugia", "pressure", "splash")
-        branches = poke_engine.generate_instructions(self._state(attacker, defender), "tackle", "splash")
-        self.assertTrue(all("DecrementPP SideOne: M0 2" in self._text(branch) for branch in branches))
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "tackle", "splash"
+        )
+        self.assertTrue(
+            all("DecrementPP SideOne: M0 2" in self._text(branch) for branch in branches)
+        )
 
     def test_sturdy_is_not_modern_focus_sash(self) -> None:
         attacker = self._mon("metagross", "clearbody", "explosion", speed=200)
         defender = self._mon("donphan", "sturdy", "splash", hp=200, maxhp=200)
-        branches = poke_engine.generate_instructions(self._state(attacker, defender), "explosion", "splash")
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, defender), "explosion", "splash"
+        )
         self.assertTrue(any("Damage SideTwo: 200" in self._text(branch) for branch in branches))
 
     def test_heal_bell_respects_soundproof_party_boundary(self) -> None:
