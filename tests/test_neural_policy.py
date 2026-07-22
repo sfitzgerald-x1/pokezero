@@ -3131,6 +3131,34 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         load.assert_not_called()
         rollouts.assert_not_called()
 
+    def test_neural_cli_benchmark_history_mask_k_uses_v3_capacity(self) -> None:
+        class FakePolicy:
+            policy_id = "v3-neural-smoke"
+            result = SimpleNamespace(
+                model_config=SimpleNamespace(observation_schema_version="pokezero.observation.v3")
+            )
+
+        stderr = io.StringIO()
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+            patch("pokezero.neural_cli.benchmark_rollouts") as rollouts,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
+                    "--history-mask-k",
+                    "65",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("1..64", stderr.getvalue())
+        rollouts.assert_not_called()
+
     def test_neural_cli_benchmark_can_alias_candidate_policy_id(self) -> None:
         class FakePolicy:
             policy_id = "checkpoint-policy"
@@ -8235,12 +8263,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 class TruncateHistoryTensorsTest(unittest.TestCase):
     """History-truncation probe harness (docs/history_truncation_probe_plan.md)."""
 
-    def _tensors(self, filled: int):
+    def _tensors(self, filled: int, *, transition_token_count: int | None = None):
         torch = require_torch()
         from pokezero.showdown import TRANSITION_TOKEN_OFFSET
         from pokezero.observation import TRANSITION_TOKEN_COUNT
 
-        token_count = TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT
+        capacity = (
+            TRANSITION_TOKEN_COUNT
+            if transition_token_count is None
+            else transition_token_count
+        )
+        token_count = TRANSITION_TOKEN_OFFSET + capacity
         offset = TRANSITION_TOKEN_OFFSET
         attention_mask = torch.zeros((1, 1, token_count), dtype=torch.bool)
         numeric = torch.zeros((1, 1, token_count, 3), dtype=torch.float32)
@@ -8328,6 +8361,21 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
             neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=0)
         with self.assertRaises(ValueError):
             neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=999)
+
+    def test_v3_tensor_shape_uses_64_token_capacity(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        tensors, offset = self._tensors(filled=64, transition_token_count=64)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=16)
+        attended = (
+            require_torch()
+            .nonzero(out["attention_mask"][0, 0, offset:], as_tuple=False)
+            .flatten()
+            .tolist()
+        )
+        self.assertEqual(attended, list(range(48, 64)))
+        with self.assertRaisesRegex(ValueError, r"1\.\.64"):
+            neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=65)
 
     def test_policy_forward_matches_manual_truncation(self) -> None:
         """The policy's history_mask_k path applies the same mask the helper does, and a
