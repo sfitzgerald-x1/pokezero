@@ -33,6 +33,8 @@ REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq", "v22-flat2m"}
 # metrics are distorted by that (e.g. per-game counts inflated by ~1000-turn stalls), and its scale
 # compresses every other lineage's line. The point still exists in the underlying metrics — it is
 # excluded from the charts only, and the exclusion is stated in each section rather than hidden.
+# Sub-50k v3 points (the 1.6k "starting skill" datasets) are likewise collected but not charted —
+# see _traj_excluded below.
 TRAJECTORY_EXCLUDE = {("v22-lr3m", 100000)}
 
 # Lineages held out of the trait <-> foul-play correlation. m50-ep7 was held out while foul-play
@@ -122,7 +124,7 @@ def phase1_section(rows_self):
     for r in rows_self:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
+        if _traj_excluded(r.get("lineage"), r.get("milestone")):
             dropped.append(f'{r.get("lineage")}@{r.get("milestone") // 1000}k')
             continue
         by_lin[r.get("lineage")].append(r)
@@ -138,8 +140,8 @@ def phase1_section(rows_self):
         return '<section><h2>Phase 1 — basics over training</h2><div class="empty">no milestone metrics yet</div></section>'
     drop_note = ('' if not dropped else
                  f'<p class="sub">Excluded for legibility: {esc(", ".join(sorted(set(dropped))))} '
-                 f'(stalls ~50% of games to the turn cap; its scale compresses the other lineages). '
-                 f'The point is retained in the by-checkpoint trajectories below.</p>')
+                 f'(distorted or out-of-scale points — turn-cap stalls, or sub-50k starting-skill '
+                 f'datasets; their scale compresses the other lines). The underlying metrics are kept.</p>')
     return f"""<section>
       <h2>Phase 1 — self-play basics over training</h2>
       {drop_note}
@@ -329,13 +331,21 @@ def is_v3(lineage):
     return "v3" in (lineage or "")
 
 
+def _traj_excluded(lineage, milestone):
+    # Chart-level exclusions: the curated distorted points (TRAJECTORY_EXCLUDE) plus, as a rule, any
+    # sub-50k v3 point — the 1.6k "starting skill" datasets are near-random play whose scale
+    # compresses every trained checkpoint's line (owner call: chart 50k and up only). The underlying
+    # metrics files are still extracted and kept.
+    return (lineage, milestone) in TRAJECTORY_EXCLUDE or (is_v3(lineage) and (milestone or 0) < 50000)
+
+
 def _series(rows, fn):
     by = defaultdict(list)
     for r in rows:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
-            continue   # drop distorted stall checkpoints from the trajectories (see TRAJECTORY_EXCLUDE)
+        if _traj_excluded(r.get("lineage"), r.get("milestone")):
+            continue   # drop distorted / sub-50k points from the trajectories (see _traj_excluded)
         v = fn(r)
         if v is not None:
             by[r.get("lineage")].append((r["milestone"], v))
@@ -352,11 +362,11 @@ def phase2_trajectories(rows_self, charts=TRAJECTORY_CHARTS):
     multi = any(sum(1 for l2, m in checkpoints if l2 == l) > 1 for l in lineages)
     note = "" if multi else ('<p class="sub">Only 500k checkpoints present so far — each line is a single '
                              'point until the milestone sweep fills in the trajectory.</p>')
-    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if (l, m) in TRAJECTORY_EXCLUDE)
+    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if _traj_excluded(l, m))
     if excluded:
         note += (f'<p class="sub">Excluded for legibility: {esc(", ".join(excluded))} '
-                 f'(stalls ~50% of games to the turn cap, distorting per-game counts and compressing '
-                 f'the scale — same exclusion as the Phase-1 basics).</p>')
+                 f'(distorted or out-of-scale points — turn-cap stalls, or sub-50k starting-skill '
+                 f'datasets — same exclusion as the Phase-1 basics).</p>')
     blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
