@@ -12,11 +12,14 @@ the fail marker wrong for most fails and would break counterfactual
 flag-flip probes. The model learns the correlation itself.
 
 **v3 is still PRE-FREEZE** (the freeze gate is the input-audit program; the Rust
-fold mirror + golden-corpus regeneration have not happened yet), so appending a
-new numeric column here is legal: every v2/v2.1/v2.2 column keeps its position,
-the corpus stays v2.2, and no shipped checkpoint has been trained at v3. After
-Change 3 lands, **the v3 numeric feature count communicated to the Rust-mirror
-work is 160** (v2.2's 155 + the four Change 1/2 columns + this one).
+fold mirror + golden-corpus regeneration have not happened yet), so its layout
+was reorganized in place before any checkpoint trained on it. V2/v2.1/v2.2 keep
+their frozen positions and remain byte-identical. V3 removes the 14
+evidence-backed dead numeric columns listed in [dead observation
+fields](dead_observation_fields.md), groups the remaining semantic surface, and
+has **155 numeric / 51 categorical** features. The map exported by
+`showdown.py` is the physical-layout authority; historical `NUMERIC_*` writer
+offsets below are not physical V3 positions.
 
 ## Change 1 — `-fail` transition event (corrective signal)
 
@@ -109,16 +112,14 @@ consecutive successful stall-move uses by that side's currently-active mon:
 - **Encoding:** one new numeric feature on each side's ACTIVE pokemon token
   (like `NUMERIC_TOXIC_STAGE`), schema >= v3 only, value `min(1.0, count / 8.0)`.
   Derived only from public protocol lines, so both players compute both
-  counters. Column `V3_NUMERIC_BASE + 4`; `_V3_NUMERIC_FEATURE_COUNT` and the v3
-  numeric census floor go 159 → 160; v2.2 counts untouched. Under v2.2 the
-  column does not exist — **v2.2 output stays byte-identical.**
+  counters. Its public V3 position is 32 in the `pokemon_state` group; the
+  private writer uses the historical appendix offset before projection. Under
+  v2.2 the column does not exist — **v2.2 output stays byte-identical.**
 
 ## Change 4 — confusion turns-so-far (elapsed-duration signal)
 
 Owner directive: encode it because it is REACHABLE — do not gate on low
-incidence. (Offset `+4` in the v3 numeric block is the sibling **Change 3 —
-consecutive-stall counter** (`NUMERIC_STALL_COUNTER`, merged in #810); this
-change takes offset `+5`.)
+incidence. The public V3 position is 33 in `pokemon_state`.
 
 - One numeric feature on the CONFUSED (active) mon's token, schema >= v3 only:
   `confusion_turns` = `min(1, elapsed / 5)`, where `elapsed` is the number of
@@ -144,18 +145,15 @@ change takes offset `+5`.)
   volatile, so the reset is gated on the volatile being absent after the switch —
   a BP that carried confusion keeps the counter running on the inheritor.
 - Under v2.2 emission the column does not exist: **v2.2 output stays
-  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
-  shape change; it sits above the v2.2 census, so every legacy mode stays
-  byte-frozen.
+  byte-identical.** V3 carries it through the grouped layout while every legacy
+  mode stays byte-frozen.
 
 ## Change 5 — encore turns-so-far (elapsed-duration signal)
 
 Sibling of Change 4: the same per-slot elapsed-duration counter, applied to the
 `encore` volatile. Encore locks the target into repeating its last move for the
 duration, so a policy that cannot see how long the lock has run cannot price when
-it is about to break. (Offsets `+4` / `+5` in the v3 numeric block are the
-consecutive-stall counter (`NUMERIC_STALL_COUNTER`, #810) and confusion
-turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
+it is about to break. The public V3 position is 34 in `pokemon_state`.
 
 - One numeric feature on the ENCORED (active) mon's token, schema >= v3 only:
   `encore_turns` = `min(1, elapsed / 6)`, where `elapsed` is the number of turns
@@ -184,9 +182,8 @@ turns-so-far (`NUMERIC_CONFUSION_TURNS`, #811); this change takes offset `+6`.)
   unconditional there; the volatile-absence gate is kept parallel to Change 4 and
   is trivially satisfied.
 - Under v2.2 emission the column does not exist: **v2.2 output stays
-  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
-  shape change; it sits above the v2.2 census, so every legacy mode stays
-  byte-frozen.
+  byte-identical.** V3 carries it through the grouped layout while every legacy
+  mode stays byte-frozen.
 
 ## Change 6 — Wrap (partial-trap) turns-so-far (elapsed-duration signal)
 
@@ -195,11 +192,8 @@ the `partiallytrapped` volatile that Gen 3 binding moves inflict. Wrap is the
 gen3-randbats pool's ONLY partial-trap move and is central to Shuckle's
 pin-and-stall line — it pins the target (no switching) while chipping it 1/16 a
 turn, so a policy that cannot see how many turns the pin has already run cannot
-price how many chip turns remain before the target breaks free. (Offsets `+4` /
-`+5` / `+6` in the v3 numeric block are the consecutive-stall counter
-(`NUMERIC_STALL_COUNTER`, #810), confusion turns-so-far
-(`NUMERIC_CONFUSION_TURNS`, #811), and encore turns-so-far
-(`NUMERIC_ENCORE_TURNS`, #814); this change takes offset `+7`.)
+price how many chip turns remain before the target breaks free. Its public V3
+position is 35 in `pokemon_state`.
 
 - One numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
   `wrap_trap_turns` = `min(1, elapsed / 5)`, where `elapsed` is the number of
@@ -254,9 +248,8 @@ price how many chip turns remain before the target breaks free. (Offsets `+4` /
   follows the public `-end` either way, so it never needs to model the trapper's
   seat.)
 - Under v2.2 emission the column does not exist: **v2.2 output stays
-  byte-identical.** v3 is pre-freeze, so appending one numeric column is a legal
-  shape change; it sits above the v2.2 census, so every legacy mode stays
-  byte-frozen.
+  byte-identical.** V3 carries it through the grouped layout while every legacy
+  mode stays byte-frozen.
 
 ## Change 7 — per-mon gender (static public attribute)
 
@@ -264,12 +257,12 @@ Gender is a public fact that was never encoded, yet the search engine already
 conditions on it (Cute Charm infatuation; pool carriers Clefable / Wigglytuff /
 Delcatty). The Layer-3 collision audit flagged this as a policy/search asymmetry:
 the value function sees a coupling the policy is blind to. This change closes it.
-(This is a STATIC per-mon attribute — no `_ReplayParser` counter — so it takes
-the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
+(This is a STATIC per-mon attribute — no `_ReplayParser` counter — at physical
+V3 positions 36 and 37 in `pokemon_state`.)
 
 - Two 0/1 numeric features on EVERY mon token (self and opponent), schema >= v3
-  only: `gender_male` at `V3_NUMERIC_BASE + 8` and `gender_female` at
-  `V3_NUMERIC_BASE + 9`. male → `(1, 0)`, female → `(0, 1)`, genderless → `(0, 0)`
+  only: `gender_male` at V3 position 36 and `gender_female` at V3 position 37.
+  Male → `(1, 0)`, female → `(0, 1)`, genderless → `(0, 0)`
   (a two-bit one-hot with an all-zero "genderless/unknown" class — no third
   column needed).
 - **Source (public only):** SELF gender comes from the request/known set
@@ -285,8 +278,8 @@ the next two contiguous offsets `+8` / `+9` in the v3 numeric block.)
   change gender, so a transformed Ditto keeps its own sex (the bits read
   `candidate.details`, not the copied identity).
 - Under v2.2 emission the columns do not exist: **v2.2 output stays
-  byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
-  so every legacy mode stays byte-frozen.
+  byte-identical.** V3 carries them in `pokemon_state` while every legacy mode
+  stays byte-frozen.
 
 ## Change 8 — Mean Look / Spider Web move-trap
 
@@ -296,11 +289,12 @@ it had no encoding. It is a DISTINCT mechanic from the Wrap partial-trap (Change
 6): Wrap pins *and* chips 1/16 a turn via the `partiallytrapped` volatile, while
 Mean Look pins with no residual via the `trapped` volatile — and distinct again
 from the trap-ability signal (`NUMERIC_TRAPPER_ALIVE`, Shadow Tag / Arena Trap /
-Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
+Magnet Pull), whose encoder shape this bit mirrors. Its physical V3 position is
+38 in `pokemon_state`.
 
 - One 0/1 numeric feature on the TRAPPED (active) mon's token, schema >= v3 only:
-  `meanlook_trap` at `V3_NUMERIC_BASE + 10` = "this mon is switch-locked by an
-  opposing Mean Look / Spider Web."
+  `meanlook_trap` at V3 position 38 = "this mon is switch-locked by an opposing
+  Mean Look / Spider Web."
 - **Gen3 mechanic (verified against the vendored data + poke-engine):** both
   moves run `target.addVolatile('trapped', source, move, 'trapper')`
   (`data/moves.ts`; the gen3 mod does not override them). The base
@@ -326,8 +320,7 @@ Magnet Pull), whose encoder shape this bit mirrors. It takes offset `+10`.
 - **Reachability:** Mean Look (Misdreavus, "Staller" set) and Spider Web (Ariados,
   "Bulky Support" / "Bulky Setup" sets) in `data/random-battles/gen3/sets.json`.
 - Under v2.2 emission the column does not exist: **v2.2 output stays
-  byte-identical**; it sits above the v2.2 census, so every legacy mode stays
-  byte-frozen.
+  byte-identical**; V3 carries it in `pokemon_state`.
 
 ## Change 9 — Wish turns-to-land (per-side pending-heal clock)
 
@@ -340,13 +333,13 @@ arrives THIS end-of-turn" licences a sacrificial pivot or an all-out attack that
 clock** as the sibling of the confusion/encore/Wrap elapsed counters (Changes
 4/5/6), but expressed as turns REMAINING rather than elapsed, and on the field
 token per side (like the sleep-clause pair, Change 2) rather than on a mon token
-— because a Wish is a **per-SIDE slot condition**, not a per-mon volatile. It
-takes the next two contiguous offsets `+11` / `+12` in the v3 numeric block.
+— because a Wish is a **per-SIDE slot condition**, not a per-mon volatile. The
+public V3 positions are 108 and 109 in `field`.
 
 - Two numeric features on the FIELD token, schema >= v3 only, on the SAME token as
   the v2.2 pending bits:
-  - `self_wish_turns` at `V3_NUMERIC_BASE + 11` = `min(1, remaining / 2)`.
-  - `opp_wish_turns` at `V3_NUMERIC_BASE + 12` = the symmetric per-side value.
+  - `self_wish_turns` at V3 position 108 = `min(1, remaining / 2)`.
+  - `opp_wish_turns` at V3 position 109 = the symmetric per-side value.
 
   where `remaining = 2 - (turn - set_turn)` is the number of turns until the Wish
   resolves: **2** on the turn it is declared (`set_turn`), **1** on the turn it
@@ -386,8 +379,8 @@ takes the next two contiguous offsets `+11` / `+12` in the v3 numeric block.
   the belief-fed exact-state layer where the v2.2 pending BIT lives). The v2.2
   pending bits (56/57) are left byte-identical.
 - Under v2.2 emission the columns do not exist: **v2.2 output stays
-  byte-identical.** v3 is pre-freeze; the two columns sit above the v2.2 census,
-  so every legacy mode stays byte-frozen.
+  byte-identical.** V3 carries them in `field` while every legacy mode stays
+  byte-frozen.
 
 ### Belief residual-tag fix (Wish landing heal; #769 pinch-berry class)
 
@@ -439,84 +432,51 @@ touching the folded `damage_fraction` field:
 - **v3 encode (schema >= v3 only).** For the move sub-block whose damage absorbed
   the self-hit, the encode writes the damage-fraction column as
   `damage_fraction - confusion_selfhit_fraction` (the move's OWN damage, self-hit
-  removed) and sets `NUMERIC_TT_CONFUSION_SELFHIT` (`V3_NUMERIC_BASE + 13`) = 1.0.
+  removed) and sets `NUMERIC_TT_CONFUSION_SELFHIT` at V3 position 154 = 1.0.
   Semantics: "the defender self-hit from confusion after this move." It is a SINGLE
-  appended column (not a first/second pair like the `-fail` bit) because the
-  correction always rides the FIRST sub-block in practice — the confused mon must be
-  SLOWER, so the opponent moved first; the write is mirrored onto the second
-  sub-block defensively. **No new token is synthesized** (that would change the
-  turn-merged stream length/order and break v2.2 byte-identity).
-- **v2.2 stays FROZEN (explicit).** Unlike Changes 1–9, which only APPEND columns
-  above the v2.2 census (so v2.2 is a byte-prefix of v3), Change 10 is a v3-only
-  REWRITE of a v2.2-positioned column (`NUMERIC_TT_DAMAGE_FRACTION`, 105). **The
+  history column (not a first/second pair like the `-fail` bit) because the correction
+  always rides the FIRST sub-block in practice — the confused mon must be SLOWER, so
+  the opponent moved first; the write is mirrored onto the second sub-block defensively.
+  **No new token is synthesized** (that would change the turn-merged stream length/order
+  and break v2.2 byte-identity).
+- **v2.2 stays FROZEN (explicit).** Change 10 is a V3-only rewrite of the carried
+  `NUMERIC_TT_DAMAGE_FRACTION` semantic field. **The
   v2.2 encode deliberately RETAINS the folded value (0.27 in the example) — the
   live m50/l200 runs keep exactly the value they were trained on.** The v2.2 path
   never reads `confusion_selfhit_fraction`/`confusion_selfhit` and computes the
   damage column from the unchanged `damage_fraction`, so v2.2 output is byte-
   identical to the pre-change encoder by construction (verified: a v2.2-vs-pristine
   SHA over a confusion-self-hit-both-seats + normal-game battery is identical). The
-  v2.2-vs-v3 encodes therefore agree on the entire shared 0..154 surface EXCEPT
-  exactly the corrected damage column on the flagged row.
+  V3 map carries every applicable v2.2 semantic field except this intentionally
+  corrected value and the documented dead-column drops.
 - **Reachability:** confusion is a reachable volatile (Signal Beam 10% in the pool;
   the confusion self-hit is a 50% roll). Encoded per the owner directive (encode
   reachable, do NOT gate on incidence).
 
 ## Schema plumbing
 
-- New id `pokezero.observation.v3`, CLI choice `v3`
-  (`observation_schema_version_from_choice`), feature-count constants
-  `_V3_*` = v2.2 counts + the additions, entries in the per-schema count
-  maps, checkpoint latching identical in structure to the v2.1→v2.2
-  introduction (v2.2 checkpoints keep loading and encoding exactly as
-  today — dual-schema support is the existing pattern).
-- Vocab: no new categorical vocabulary rows required (all three changes are
-  numeric bits) unless the miss-emission convention turns out to be
-  categorical — in that case mirror it and extend the vocab by the one
-  value, documented here.
-- Change 3 adds one appended numeric column at `V3_NUMERIC_BASE + 4`
-  (`NUMERIC_STALL_COUNTER`), bumping `V3_NUMERIC_EXTRA` 4 → 5 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 160. The
-  categorical census is unchanged.
-- Change 4 adds one more appended numeric column at `V3_NUMERIC_BASE + 5`
-  (`NUMERIC_CONFUSION_TURNS`), bumping `V3_NUMERIC_EXTRA` 5 → 6 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 161. The
-  categorical census is unchanged.
-- Change 5 adds one more appended numeric column at `V3_NUMERIC_BASE + 6`
-  (`NUMERIC_ENCORE_TURNS`), bumping `V3_NUMERIC_EXTRA` 6 → 7 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 162. The
-  categorical census is unchanged.
-- Change 6 adds one more appended numeric column at `V3_NUMERIC_BASE + 7`
-  (`NUMERIC_WRAP_TRAP_TURNS`), bumping `V3_NUMERIC_EXTRA` 7 → 8 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 163. The
-  categorical census is unchanged.
-- Change 7 adds TWO appended numeric columns at `V3_NUMERIC_BASE + 8`
-  (`NUMERIC_GENDER_MALE`) and `V3_NUMERIC_BASE + 9` (`NUMERIC_GENDER_FEMALE`),
-  bumping `V3_NUMERIC_EXTRA` 8 → 10 so `_V3_NUMERIC_FEATURE_COUNT` and the v3
-  numeric census floor become 165. The categorical census is unchanged.
-- Change 8 adds one more appended numeric column at `V3_NUMERIC_BASE + 10`
-  (`NUMERIC_MEANLOOK_TRAP`), bumping `V3_NUMERIC_EXTRA` 10 → 11 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 166. The
-  categorical census is unchanged.
-- Change 9 adds TWO appended numeric columns at `V3_NUMERIC_BASE + 11`
-  (`NUMERIC_SELF_WISH_TURNS`) and `V3_NUMERIC_BASE + 12`
-  (`NUMERIC_OPP_WISH_TURNS`), bumping `V3_NUMERIC_EXTRA` 11 → 13 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 168. The
-  categorical census is unchanged. It also lands a belief-layer fix (append
-  `[from] move: Wish` to `belief._RESIDUAL_HP_TAGS`) that does NOT touch the
-  observation schema.
-- Change 10 adds ONE appended numeric column at `V3_NUMERIC_BASE + 13`
-  (`NUMERIC_TT_CONFUSION_SELFHIT`), bumping `V3_NUMERIC_EXTRA` 13 → 14 so
-  `_V3_NUMERIC_FEATURE_COUNT` and the v3 numeric census floor become 169. The
-  categorical census is unchanged. Unlike Changes 1–9 it ALSO rewrites the v3
-  value of the v2.2-positioned `NUMERIC_TT_DAMAGE_FRACTION` (105) on the flagged
-  move (subtracting the folded confusion self-hit) — the v2.2 encode is
-  unaffected. The `GEN3_CANT_REASONS` vocabulary is deliberately NOT extended:
-  `cant:confusion` is never emitted (a confusion self-hit produces no `|cant|`
-  line), and because the runtime category vocabulary is a globally-SORTED
-  positional row map, inserting `cant:confusion` / `tt2_cant:confusion` would
-  shift the rows of every later-sorting label and BREAK v2.2 categorical
-  byte-identity (empirically verified: 13+ v2.2-emitted labels shift). The
-  observation schema therefore adds no categorical rows.
+- New id `pokezero.observation.v3`, CLI choice `v3`, and a fixed **155 numeric /
+  51 categorical** census. V2/v2.1/v2.2 specs, count maps, checkpoint latching,
+  and direct encoder writes remain unchanged.
+- V3 allocates a private 169-column legacy-writer row so existing named writers
+  can remain shared with frozen V2.x code. `_project_v3_numeric_rows` performs the
+  sole V3-only layout projection after every token writer completes.
+- `V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX` is the ordered physical V3 map;
+  `V3_NUMERIC_INDEX_BY_LEGACY_INDEX` is its inverse. `v3_numeric_index()` is the
+  only supported way for a consumer or test to translate a historical
+  `NUMERIC_*` writer constant into a V3 physical index. The layout table is
+  exported as `V3_NUMERIC_LAYOUT_GROUPS`.
+- The map accounts for every private legacy writer column: 155 are carried, 14
+  are explicitly dropped under the reachability evidence in
+  [dead observation fields](dead_observation_fields.md), and exactly one carried
+  semantic field (`NUMERIC_TT_DAMAGE_FRACTION`) is deliberately rewritten for the
+  confusion-self-hit repair.
+- No categorical vocabulary rows change. In particular, `cant:confusion` is
+  never emitted (a confusion self-hit produces no `|cant|` line), and extending
+  the globally sorted categorical vocabulary would shift V2.2 rows. The
+  categorical surface remains checkpoint-compatible by design.
+- The Wish residual-tag change (`[from] move: Wish` in
+  `belief._RESIDUAL_HP_TAGS`) remains a belief-layer repair, not a schema column.
 
 ## Acceptance (tests required)
 
@@ -580,24 +540,36 @@ touching the folded `damage_fraction` field:
     v2.2 encoding is byte-identical to before the change (cmp-against-pristine SHA
     over a both-seats + normal-game battery), and the change fails without the fix
     (pristine v3 reads 0.27).
-11. Existing v2.2 test suites pass untouched.
+11. The raw V3 output has exactly 155 numeric columns. A synthetic projection
+    and a real V2.2/V3 encode assert every carried semantic field satisfies
+    `v3[v3_numeric_index(old)] == v2_2[old]`, except the documented
+    confusion-self-hit rewrite. Every dead legacy index raises from
+    `v3_numeric_index`; categorical rows, masks, and token types remain shared.
+12. Existing V2.2 test suites pass untouched.
 
 ## Numeric-column accounting
 
-The v3 numeric block appends columns above the v2.2 census (155):
-`-fail` pair at `+0/+1`, sleep-clause pair at `+2/+3` (change 1/2, #779),
-the consecutive-stall counter at `+4` (change 3, #810), confusion
-turns-so-far at `+5` (change 4, #811), encore turns-so-far at `+6`
-(change 5, #814), Wrap partial-trap turns-so-far at `+7` (change 6,
-this PR), the two gender bits at `+8` / `+9` (change 7, this PR), the
-Mean Look / Spider Web move-trap bit at `+10` (change 8, this PR), the two
-Wish turns-to-land bits at `+11` / `+12` (change 9, this PR), and the confusion
-self-hit flag at `+13` (change 10, this PR).
-With change 10 landed, the v3 numeric feature count is
-**169** (`V3_NUMERIC_BASE + 14`), and every appended column `+0..+13` (155-168)
-is written exactly once. Change 10 additionally rewrites the v3 value of the
-v2.2-positioned damage column (105) on the flagged move; v2.2 keeps the folded
-value, so it stays byte-frozen.
+V3's public numeric order is semantic, not historical. Exact per-column source
+positions live in `V3_NUMERIC_LAYOUT_GROUPS`; the table below is the stable
+human-facing summary.
+
+| V3 positions | Group | Contents |
+| --- | --- | --- |
+| 0–5 | `core` | HP fraction, active/legal/present, level, turn count |
+| 6–38 | `pokemon_state` | base/boosted/actual stats, toxic/sleep/substitute/trapper state, Tier-2 pins, stall/confusion/Encore/Wrap clocks, gender, Mean Look |
+| 39–91 | `belief` | candidate and reveal counts, opponent tendencies, expected stat ranges, revealed opponent PP and validity buckets |
+| 92–97 | `action` | base power, priority, accuracy, PP, effect chance, self-HP cost |
+| 98–109 | `field` | hazards, sleep clause, weather, pending Wish, V3 sleep-clause blocks, Wish clocks |
+| 110–120 | `tendency` | global action tendencies and rain/sun/sand public weather-reveal pairs |
+| 121–154 | `history` | first/second turn-merged action summaries, V3 fail bits, confusion-self-hit flag |
+
+The dropped private legacy numeric indices are
+`{24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104}`: screen state and
+timers, Future Sight, and the unreachable Gen3 hail reveal pair. Their evidence
+and pool-change maintenance condition are recorded in
+[dead observation fields](dead_observation_fields.md). The 155 carried
+positions include all ten V3 additions above; their historical appendix offsets
+are implementation-private and must not be used as physical V3 positions.
 
 ## Coordination (v3-stream / Rust fold)
 

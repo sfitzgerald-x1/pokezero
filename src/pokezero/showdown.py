@@ -408,19 +408,22 @@ NUMERIC_TM2_SELF_HP_COST = TURN_MERGED_NUMERIC_BASE + 14
 TURN_MERGED_NUMERIC_EXTRA = 15
 _V2_2_NUMERIC_FEATURE_COUNT = TURN_MERGED_NUMERIC_BASE + TURN_MERGED_NUMERIC_EXTRA
 
-# ---- observation spec v3 additions (docs/observation_v3_spec.md; appended numerics only,
-# no new categorical columns — both changes are numeric bits, so the categorical census is
-# v2.2's unchanged). Every v2/v2.1/v2.2 column keeps its position and its write gates; the
-# v3 columns sit ABOVE the v2.2 census, so all three legacy modes stay byte-frozen. ----
-V3_NUMERIC_BASE = _V2_2_NUMERIC_FEATURE_COUNT
+# ---- pre-cutover v3 writer surface ----------------------------------------------------------
+#
+# V3 was originally an append-only extension of v2.2. The in-place layout cutover keeps this
+# surface private to the encoder: legacy schemas still write and emit these positions exactly,
+# while v3 writes this complete internal surface and projects it through the declarative layout
+# table below. Keeping one legacy writer surface avoids threading schema-specific offsets through
+# every parser and token encoder, while the projection gives v3 a single grouped public layout.
+V3_LEGACY_NUMERIC_BASE = _V2_2_NUMERIC_FEATURE_COUNT
 # Change 1 — the ``-fail`` transition event, mirroring the miss bit's emission convention
 # exactly (numeric 0/1 on the action transition row, one column per turn-merged sub-block,
 # laid out as an adjacent first/second pair like the v2.2 SELF_HP_COST twins). Window-scoped
 # (no side condition — the engine's ``-fail`` argument slot is effect-dependent); with the
 # miss bit a silent no-op disambiguates: miss = accuracy miss, fail = move failed, neither =
 # genuinely event-less resolution.
-NUMERIC_TT_FAIL = V3_NUMERIC_BASE + 0
-NUMERIC_TM2_FAIL = V3_NUMERIC_BASE + 1
+NUMERIC_TT_FAIL = V3_LEGACY_NUMERIC_BASE + 0
+NUMERIC_TM2_FAIL = V3_LEGACY_NUMERIC_BASE + 1
 # Change 2 — public sleep-clause block bits on the FIELD token (predictive current-state,
 # SEPARATE from the change-1 history marker by owner decision — conflating them would make
 # the fail marker wrong for most fails). BLOCKS_SELF: an opposing mon is currently asleep
@@ -431,8 +434,8 @@ NUMERIC_TM2_FAIL = V3_NUMERIC_BASE + 1
 # faint, NOT on switch-out), unlike the belief-engine-fed v2 bits at columns 44/45 which
 # ride the checkpoint-latched exact_state mask. Gen3 Standard has no Freeze Clause Mod, so
 # there is deliberately no freeze twin (it would be a dead column).
-NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF = V3_NUMERIC_BASE + 2
-NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_NUMERIC_BASE + 3
+NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF = V3_LEGACY_NUMERIC_BASE + 2
+NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_LEGACY_NUMERIC_BASE + 3
 # Change 3 — the consecutive-stall counter on each side's ACTIVE pokemon token (predictive
 # current-state, written like NUMERIC_TOXIC_STAGE — a per-slot public scalar on the active mon,
 # NOT the field token). One per-side counter = consecutive SUCCESSFUL stall-move uses
@@ -442,14 +445,14 @@ NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP = V3_NUMERIC_BASE + 3
 # switch-out / faint (the five public mirrors of the engine's volatile deletion). Value is
 # ``min(1.0, count / 8.0)``; derived ONLY from public protocol lines, so both players compute
 # both sides' counters. Schema >= v3 only; sits above the v2.2 census so legacy modes stay frozen.
-NUMERIC_STALL_COUNTER = V3_NUMERIC_BASE + 4
+NUMERIC_STALL_COUNTER = V3_LEGACY_NUMERIC_BASE + 4
 # Change 4 — Confusion turns-so-far on the CONFUSED (active) mon's token, schema >= v3 only.
 # Gen3 confusion runs ``this.random(2,6)`` = {2,3,4,5} turns (no gen3 override), so the encoded
 # value is ``min(1, elapsed/5)`` with CAP = 5. The confusion PRESENCE is already the
 # ``volatile:confusion`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter only.
 # Public trace: |-start (apply) / |-activate (each confused turn) / |-end (snap-out) confusion;
 # elapsed is public, remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
-NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
+NUMERIC_CONFUSION_TURNS = V3_LEGACY_NUMERIC_BASE + 5
 # Change 5 — Encore turns-so-far on the ENCORED (active) mon's token, schema >= v3 only, the
 # sibling of change 4. Gen3 Encore runs the gen3 mod override (data/mods/gen3/moves.ts
 # encore.condition.durationCallback → ``this.random(3, 7)`` = {3,4,5,6} turns), so the encoded
@@ -457,7 +460,7 @@ NUMERIC_CONFUSION_TURNS = V3_NUMERIC_BASE + 5
 # ``volatile:encore`` categorical (TRACKED_VOLATILES); this is the turns-so-far counter only.
 # Public trace: |-start|SLOT|Encore (apply) / |-end|SLOT|Encore (expiry); elapsed is public,
 # remaining hidden. Sits above the v2.2 census — legacy modes stay byte-frozen.
-NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
+NUMERIC_ENCORE_TURNS = V3_LEGACY_NUMERIC_BASE + 6
 # Change 6 — Wrap (partial-trap) turns-so-far on the TRAPPED (active) mon's token, schema >= v3
 # only, the sibling of changes 4/5. Gen3 partial-trap (Wrap) lasts 2..5 turns (max 5): the base
 # ``data/conditions.ts`` partiallytrapped ``duration``/``random(5,7)`` is the MODERN value and is
@@ -470,7 +473,7 @@ NUMERIC_ENCORE_TURNS = V3_NUMERIC_BASE + 6
 # |[partiallytrapped] (expiry); elapsed is public, remaining hidden. Wrap is the pool's SOLE
 # partial-trap move (Shuckle, sole carrier). Sits above the v2.2 census — legacy modes stay
 # byte-frozen.
-NUMERIC_WRAP_TRAP_TURNS = V3_NUMERIC_BASE + 7
+NUMERIC_WRAP_TRAP_TURNS = V3_LEGACY_NUMERIC_BASE + 7
 # Change 7 — per-mon GENDER, two 0/1 bits on EVERY mon token (self and opponent), schema >= v3
 # only. A STATIC public attribute (no parser counter): male -> (MALE=1, FEMALE=0), female ->
 # (0, 1), genderless -> (0, 0). SELF gender comes from the request/known set (candidate.details);
@@ -481,8 +484,8 @@ NUMERIC_WRAP_TRAP_TURNS = V3_NUMERIC_BASE + 7
 # the search engine already conditions on it (Cute Charm infatuation; pool carriers
 # Clefable/Wigglytuff/Delcatty) — a policy/search asymmetry the Layer-3 collision audit found. Sits
 # above the v2.2 census — legacy modes stay byte-frozen.
-NUMERIC_GENDER_MALE = V3_NUMERIC_BASE + 8
-NUMERIC_GENDER_FEMALE = V3_NUMERIC_BASE + 9
+NUMERIC_GENDER_MALE = V3_LEGACY_NUMERIC_BASE + 8
+NUMERIC_GENDER_FEMALE = V3_LEGACY_NUMERIC_BASE + 9
 # Change 8 — Mean Look / Spider Web move-trap: one 0/1 bit on the TRAPPED (active) mon's token,
 # schema >= v3 only, = "switch-locked by Mean Look / Spider Web". DISTINCT from the Wrap
 # partial-trap column (+7 — chip + can't switch, a DIFFERENT volatile) and from NUMERIC_TRAPPER_ALIVE
@@ -494,7 +497,7 @@ NUMERIC_GENDER_FEMALE = V3_NUMERIC_BASE + 9
 # LockedMove / partiallytrapped / trap abilities), so this is a protocol-only signal. The trap ends
 # when the trapper leaves the field, the trapped mon leaves, or either faints — see the parser.
 # Sits above the v2.2 census — legacy modes stay byte-frozen.
-NUMERIC_MEANLOOK_TRAP = V3_NUMERIC_BASE + 10
+NUMERIC_MEANLOOK_TRAP = V3_LEGACY_NUMERIC_BASE + 10
 # Change 9 — Wish turns-to-land, two per-SIDE numeric columns on the FIELD token (like the
 # sleep-clause pair, change 2), schema >= v3 only. A Wish is a per-side ``slotCondition`` (NOT a
 # per-mon volatile), so the clock lives on the field token beside the v2.2 pending bits (56/57).
@@ -509,8 +512,8 @@ NUMERIC_MEANLOOK_TRAP = V3_NUMERIC_BASE + 10
 # columns). Public-protocol-derived (declaration + landing heal lines), so gated on the schema alone
 # (NOT masks.exact_state, which darkens the belief-fed layer where the v2.2 pending BIT lives). Sits
 # above the v2.2 census — legacy modes stay byte-frozen; the v2.2 pending bits 56/57 are unchanged.
-NUMERIC_SELF_WISH_TURNS = V3_NUMERIC_BASE + 11
-NUMERIC_OPP_WISH_TURNS = V3_NUMERIC_BASE + 12
+NUMERIC_SELF_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 11
+NUMERIC_OPP_WISH_TURNS = V3_LEGACY_NUMERIC_BASE + 12
 # Change 10 — confusion self-hit damage-attribution correction, one 0/1 bit on the OPPONENT's
 # turn-merged move sub-block (the token whose damage was polluted), schema >= v3 only. When a
 # SLOWER confused mon self-hits, the sim emits ``|-activate|SLOT|confusion`` then an UNTAGGED
@@ -523,14 +526,210 @@ NUMERIC_OPP_WISH_TURNS = V3_NUMERIC_BASE + 12
 # practice — the confused mon must be SLOWER, so the opponent moved first; the write is mirrored
 # onto the second sub-block defensively. Additive/schema-agnostic at extraction (the token fields
 # are always populated); only a v3 encode reads them, so v2/v2.1/v2.2 output stays byte-identical.
-NUMERIC_TT_CONFUSION_SELFHIT = V3_NUMERIC_BASE + 13
+NUMERIC_TT_CONFUSION_SELFHIT = V3_LEGACY_NUMERIC_BASE + 13
 # EXTRA counts the stall-counter column (+4, change 3), the confusion column (+5, change 4), the
 # encore column (+6, change 5), the Wrap partial-trap column (+7, change 6), the two gender bits
 # (+8 / +9, change 7), the Mean Look move-trap bit (+10, change 8), the two Wish turns-to-land
-# bits (+11 / +12, change 9), and the confusion self-hit flag (+13, change 10), so the v3 numeric
-# width is 169.
-V3_NUMERIC_EXTRA = 14
-_V3_NUMERIC_FEATURE_COUNT = V3_NUMERIC_BASE + V3_NUMERIC_EXTRA
+# bits (+11 / +12, change 9), and the confusion self-hit flag (+13, change 10). This is the
+# private, pre-cutover writer surface; the public v3 width is derived from the layout map below.
+V3_LEGACY_NUMERIC_EXTRA = 14
+V3_LEGACY_NUMERIC_FEATURE_COUNT = V3_LEGACY_NUMERIC_BASE + V3_LEGACY_NUMERIC_EXTRA
+
+# Evidence-backed unreachable mechanics from docs/dead_observation_fields.md. These columns
+# remain part of every legacy schema's frozen layout but are intentionally absent from v3.
+V3_DROPPED_LEGACY_NUMERIC_INDICES = frozenset(
+    (
+        NUMERIC_SELF_SCREENS,
+        NUMERIC_OPP_SCREENS,
+        NUMERIC_SELF_FUTURE_SIGHT,
+        NUMERIC_OPP_FUTURE_SIGHT,
+        NUMERIC_SELF_REFLECT_TURNS,
+        NUMERIC_SELF_LIGHT_SCREEN_TURNS,
+        NUMERIC_SELF_SAFEGUARD_TURNS,
+        NUMERIC_SELF_MIST_TURNS,
+        NUMERIC_OPP_REFLECT_TURNS,
+        NUMERIC_OPP_LIGHT_SCREEN_TURNS,
+        NUMERIC_OPP_SAFEGUARD_TURNS,
+        NUMERIC_OPP_MIST_TURNS,
+        NUMERIC_STAT_WEATHER_REVEAL_OFFSET + 6,
+        NUMERIC_STAT_WEATHER_REVEAL_OFFSET + 7,
+    )
+)
+
+# The confusion self-hit repair intentionally changes v3's move-damage semantics relative to
+# frozen v2.2. It is carried to a new position but excluded from byte-equality map assertions.
+V3_REWRITTEN_LEGACY_NUMERIC_INDICES = frozenset((NUMERIC_TT_DAMAGE_FRACTION,))
+
+# One table is the v3 numeric layout specification. Grouping follows the token encoder's
+# semantic surfaces rather than the chronology in which columns were introduced. Every legacy
+# v2.2 position is either carried, explicitly dropped above, or explicitly rewritten above;
+# the former v3 appendix entries are v3-only additions.
+_V3_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = (
+    (
+        "core",
+        (
+            NUMERIC_HP_FRACTION,
+            NUMERIC_ACTIVE,
+            NUMERIC_LEGAL,
+            NUMERIC_PRESENT,
+            NUMERIC_LEVEL,
+            NUMERIC_TURN_COUNT,
+        ),
+    ),
+    (
+        "pokemon_state",
+        (
+            NUMERIC_BASE_HP,
+            NUMERIC_BASE_ATK,
+            NUMERIC_BASE_DEF,
+            NUMERIC_BASE_SPA,
+            NUMERIC_BASE_SPD,
+            NUMERIC_BASE_SPE,
+            NUMERIC_BOOST_ATK,
+            NUMERIC_BOOST_DEF,
+            NUMERIC_BOOST_SPA,
+            NUMERIC_BOOST_SPD,
+            NUMERIC_BOOST_SPE,
+            NUMERIC_TOXIC_STAGE,
+            NUMERIC_ACTUAL_HP,
+            NUMERIC_ACTUAL_ATK,
+            NUMERIC_ACTUAL_DEF,
+            NUMERIC_ACTUAL_SPA,
+            NUMERIC_ACTUAL_SPD,
+            NUMERIC_ACTUAL_SPE,
+            NUMERIC_SLEEP_TURNS,
+            NUMERIC_REST_SLEEP,
+            NUMERIC_WAKE_KNOWN,
+            NUMERIC_TURNS_ACTIVE,
+            NUMERIC_TRAPPER_ALIVE,
+            NUMERIC_SUB_HP_FRACTION,
+            NUMERIC_TIER2_CB_PINNED,
+            NUMERIC_TIER2_INVESTMENT_PINNED,
+            NUMERIC_STALL_COUNTER,
+            NUMERIC_CONFUSION_TURNS,
+            NUMERIC_ENCORE_TURNS,
+            NUMERIC_WRAP_TRAP_TURNS,
+            NUMERIC_GENDER_MALE,
+            NUMERIC_GENDER_FEMALE,
+            NUMERIC_MEANLOOK_TRAP,
+        ),
+    ),
+    (
+        "belief",
+        (
+            NUMERIC_REVEALED_MOVE_COUNT,
+            NUMERIC_CANDIDATE_SET_COUNT,
+            NUMERIC_UNCERTAINTY,
+            NUMERIC_POSSIBLE_ABILITY_COUNT,
+            NUMERIC_POSSIBLE_ITEM_COUNT,
+            NUMERIC_POSSIBLE_MOVE_COUNT,
+            NUMERIC_REVEALED_ABILITY,
+            NUMERIC_REVEALED_ITEM,
+            NUMERIC_MON_SWITCHED_BEFORE_ATTACK,
+            NUMERIC_MON_STAYED_AND_ATTACKED,
+            NUMERIC_MON_TURNS_ACTIVE_TOTAL,
+            NUMERIC_EXPECTED_HP,
+            NUMERIC_EXPECTED_HP_LOW,
+            NUMERIC_EXPECTED_HP_HIGH,
+            NUMERIC_EXPECTED_ATK,
+            NUMERIC_EXPECTED_ATK_LOW,
+            NUMERIC_EXPECTED_ATK_HIGH,
+            NUMERIC_EXPECTED_DEF,
+            NUMERIC_EXPECTED_SPA,
+            NUMERIC_EXPECTED_SPD,
+            NUMERIC_EXPECTED_SPE,
+            *tuple(range(NUMERIC_OPP_MOVE_PP_OFFSET, NUMERIC_OPP_MOVE_PP_OFFSET + BELIEF_MOVE_BUCKET_COUNT)),
+            *tuple(
+                range(
+                    NUMERIC_OPP_MOVE_PP_VALID_OFFSET,
+                    NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_COUNT,
+                )
+            ),
+        ),
+    ),
+    (
+        "action",
+        (
+            NUMERIC_BASE_POWER,
+            NUMERIC_PRIORITY,
+            NUMERIC_ACCURACY,
+            NUMERIC_MOVE_PP_FRACTION,
+            NUMERIC_EFFECT_CHANCE,
+            NUMERIC_SELF_HP_COST,
+        ),
+    ),
+    (
+        "field",
+        (
+            NUMERIC_SELF_HAZARDS,
+            NUMERIC_OPP_HAZARDS,
+            NUMERIC_SELF_SLEEP_CLAUSE,
+            NUMERIC_OPP_SLEEP_CLAUSE,
+            NUMERIC_WEATHER_TURNS,
+            NUMERIC_WEATHER_PERMANENT,
+            NUMERIC_SELF_WISH_PENDING,
+            NUMERIC_OPP_WISH_PENDING,
+            NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF,
+            NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP,
+            NUMERIC_SELF_WISH_TURNS,
+            NUMERIC_OPP_WISH_TURNS,
+        ),
+    ),
+    (
+        "tendency",
+        (
+            NUMERIC_STAT_OPP_SWITCH_COUNT,
+            NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES,
+            NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK,
+            NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT,
+            NUMERIC_STAT_MY_SWITCH_TURNS,
+            *tuple(range(NUMERIC_STAT_WEATHER_REVEAL_OFFSET, NUMERIC_STAT_WEATHER_REVEAL_OFFSET + 6)),
+        ),
+    ),
+    (
+        "history",
+        (
+            *tuple(range(NUMERIC_TT_DAMAGE_FRACTION, NUMERIC_TT_INVESTMENT_BIT + 1)),
+            *tuple(range(TURN_MERGED_NUMERIC_BASE, _V2_2_NUMERIC_FEATURE_COUNT)),
+            NUMERIC_TT_FAIL,
+            NUMERIC_TM2_FAIL,
+            NUMERIC_TT_CONFUSION_SELFHIT,
+        ),
+    ),
+)
+V3_NUMERIC_LAYOUT_GROUPS: tuple[tuple[str, tuple[int, ...]], ...] = _V3_NUMERIC_LAYOUT_GROUPS
+V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX = tuple(
+    legacy_index for _, indices in V3_NUMERIC_LAYOUT_GROUPS for legacy_index in indices
+)
+V3_NUMERIC_INDEX_BY_LEGACY_INDEX = {
+    legacy_index: new_index
+    for new_index, legacy_index in enumerate(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
+}
+
+if len(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) != len(set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)):
+    raise AssertionError("v3 numeric layout maps a legacy column more than once")
+if set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V3_DROPPED_LEGACY_NUMERIC_INDICES != set(
+    range(V3_LEGACY_NUMERIC_FEATURE_COUNT)
+):
+    raise AssertionError("v3 numeric layout must account for every legacy v3 writer column")
+
+_V3_NUMERIC_FEATURE_COUNT = len(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)
+
+
+def v3_numeric_index(legacy_index: int) -> int:
+    """Physical v3 index for a named legacy writer column.
+
+    The existing ``NUMERIC_*`` constants remain the frozen writer positions shared by v2,
+    v2.1, and v2.2. Consumers that inspect the reorganized v3 tensor must use this mapping
+    instead of assuming those legacy offsets are physical v3 positions.
+    """
+
+    try:
+        return V3_NUMERIC_INDEX_BY_LEGACY_INDEX[legacy_index]
+    except KeyError as exc:
+        if legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES:
+            raise ValueError(f"legacy numeric column {legacy_index} was dropped from v3") from exc
+        raise ValueError(f"legacy numeric column {legacy_index} is not part of v3") from exc
 _V3_CATEGORICAL_FEATURE_COUNT = _V2_2_CATEGORICAL_FEATURE_COUNT
 
 V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
@@ -1830,11 +2029,10 @@ def observation_from_player_state(
     revealed-move PP-validity bits, the substitute HP fraction, and the per-mon pinned
     Tier-2 conclusions. A v2.2 spec keeps every v2.1 block and swaps the transition
     surface to TURN-MERGED tokens (state.turn_merged_tokens; one row per phase, two
-    ordered sub-blocks — budget counts THESE rows, i.e. whole turns). A v3 spec keeps
-    every v2.2 block (same turn-merged surface) and additionally writes the appended
-    fail-bit columns on transition rows plus the public sleep-clause block bits on the
-    field token (docs/observation_v3_spec.md). Anything else refuses loudly here rather
-    than encoding an undeclared hybrid.
+    ordered sub-blocks — budget counts THESE rows, i.e. whole turns). A v3 spec keeps the v2.2
+    semantic surface, adds v3 signals, removes evidence-backed dead fields, and projects private
+    legacy writer rows into a grouped public layout (docs/observation_v3_spec.md). Anything else
+    refuses loudly here rather than encoding an undeclared hybrid.
     """
     if spec.schema_version not in REPLAY_OBSERVATION_SPECS_BY_SCHEMA:
         supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
@@ -1868,8 +2066,8 @@ def observation_from_player_state(
             "sub-block) and encode an undeclared hybrid stamped with the wider version."
         )
     schema_v3 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
-    # v3 carries every v2.2 block forward unchanged (same turn-merged transition surface);
-    # it only APPENDS the fail-bit and public-sleep-clause numeric columns.
+    # V3 keeps the v2.2 turn-merged semantic surface but projects the private legacy writer
+    # rows into its grouped public layout after all token writers complete.
     schema_v2_2 = schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
     schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
@@ -1924,7 +2122,15 @@ def observation_from_player_state(
                     -1.0, min(1.0, token.investment)
                 )
     categorical_ids = _blank_categorical_rows(spec)
-    numeric_features = _blank_numeric_rows(spec)
+    numeric_features = _blank_numeric_rows(
+        spec,
+        # The writer constants are the frozen v2.2-plus-v3-appendix positions. V3 projects
+        # this internal row after encoding so its public 155-column layout can freely reorder
+        # and drop evidence-backed dead fields without perturbing a legacy writer.
+        internal_numeric_feature_count=(
+            V3_LEGACY_NUMERIC_FEATURE_COUNT if schema_v3 else spec.numeric_feature_count
+        ),
+    )
     _encode_field_token(
         categorical_ids, numeric_features, state, masks=feature_masks, schema_v3=schema_v3
     )
@@ -2003,6 +2209,8 @@ def observation_from_player_state(
         _encode_transition_tokens(
             categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v2_1=schema_v2_1
         )
+    if schema_v3:
+        numeric_features = _project_v3_numeric_rows(numeric_features)
     # Convert the raw category strings to compact embedding rows in one pass.
     categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
     token_type_ids = _token_type_ids(spec)
@@ -2890,8 +3098,25 @@ def _blank_categorical_rows(spec: ObservationSpec) -> list[list[str]]:
     return [[""] * spec.categorical_feature_count for _ in range(spec.token_count)]
 
 
-def _blank_numeric_rows(spec: ObservationSpec) -> list[list[float]]:
-    return [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+def _blank_numeric_rows(
+    spec: ObservationSpec, *, internal_numeric_feature_count: int | None = None
+) -> list[list[float]]:
+    width = internal_numeric_feature_count or spec.numeric_feature_count
+    return [[0.0] * width for _ in range(spec.token_count)]
+
+
+def _project_v3_numeric_rows(legacy_rows: Sequence[Sequence[float]]) -> list[list[float]]:
+    """Project private legacy writer rows into the public grouped v3 layout."""
+
+    projected: list[list[float]] = []
+    for row_index, row in enumerate(legacy_rows):
+        if len(row) != V3_LEGACY_NUMERIC_FEATURE_COUNT:
+            raise ValueError(
+                "v3 numeric projection requires the complete legacy writer surface "
+                f"({V3_LEGACY_NUMERIC_FEATURE_COUNT} columns), got {len(row)} on row {row_index}."
+            )
+        projected.append([row[legacy_index] for legacy_index in V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX])
+    return projected
 
 
 def _encode_field_token(
@@ -4037,9 +4262,8 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, first.investment)))
         if first.self_hp_cost:
             _set_numeric(num_row, NUMERIC_TT_SELF_HP_COST, min(1.0, first.self_hp_cost))
-        # Spec v3 change 1: the fail bit, mirroring the miss bit's write above (numeric 0/1,
-        # written when set) on a v3-only appended column. Schema-gated so v2.2 output stays
-        # byte-identical (the column does not even exist below the v3 census).
+        # Spec v3 change 1: the fail bit mirrors the miss bit. Its legacy writer position is
+        # projected into v3's grouped history region after encoding.
         if schema_v3 and first.fail:
             _set_numeric(num_row, NUMERIC_TT_FAIL, 1.0)
         # Spec v3 change 10: the confusion self-hit flag on the (opponent's) move sub-block

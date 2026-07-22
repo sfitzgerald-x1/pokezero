@@ -1,18 +1,19 @@
 """Observation spec v3 tests (docs/observation_v3_spec.md).
 
 Covers the schema-table wiring (fourth checkpoint-driven entry; v2.2 keeps the fresh
-default), the appended v3 column layout, change 1 (the window-scoped ``-fail`` transition
+default), the grouped v3 column layout, change 1 (the window-scoped ``-fail`` transition
 bit, mirrored onto both turn-merged sub-blocks exactly like the miss bit), change 2 (the
 public sleep-clause block bits on the field token, with the full lifecycle from the spec's
-acceptance section), the v2.2 byte-identity invariant (a v2.2 encode of a fail-drawing log
-is unchanged in shape and is a byte-prefix of the v3 encode), and the incremental-fold
-twin's parity (handler + serialization round-trip, with the pre-v3 payload bytes
-unchanged for fail-free games).
+acceptance section), v2.2 byte identity, and the v3 legacy-semantic compatibility view used
+by the lifecycle fixtures. ``test_observation_v3_layout_cutover.py`` owns physical v3
+permutation-map coverage. The incremental-fold twin retains handler + serialization
+round-trip coverage, with pre-v3 payload bytes unchanged for fail-free games.
 """
 
 import json
 import os
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from pokezero.observation import (
@@ -48,13 +49,17 @@ from pokezero.showdown import (
     SELF_POKEMON_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
     V2_2_REPLAY_OBSERVATION_SPEC,
-    V3_NUMERIC_BASE,
+    V3_DROPPED_LEGACY_NUMERIC_INDICES,
+    V3_LEGACY_NUMERIC_FEATURE_COUNT,
+    V3_NUMERIC_INDEX_BY_LEGACY_INDEX,
+    V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX,
     V3_REPLAY_OBSERVATION_SPEC,
     normalize_for_player,
     observation_from_player_state,
     observation_schema_version_from_choice,
     observation_spec_for_schema,
     parse_showdown_replay,
+    v3_numeric_index,
 )
 from pokezero.showdown import _ReplayParser, _wish_pending, _wish_turns_remaining
 from pokezero.transitions import TOKEN_KIND_MOVE, extract_transition_tokens
@@ -63,6 +68,28 @@ from pokezero.turn_merged import extract_turn_merged_tokens
 SHOWDOWN_ROOT = Path(
     os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
 )
+
+
+def _legacy_v3_semantic_view(observation):
+    """Expose named v3 features through their frozen writer positions for lifecycle tests.
+
+    Product v3 rows are deliberately grouped into a new physical order. The cutover-map suite
+    pins that physical order; this helper keeps the existing lifecycle fixtures focused on the
+    semantic field they exercise rather than on an obsolete absolute position.
+    """
+
+    if observation.schema_version != OBSERVATION_SCHEMA_VERSION_V3:
+        return observation
+    rows = tuple(
+        tuple(
+            0.0
+            if legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
+            else row[V3_NUMERIC_INDEX_BY_LEGACY_INDEX[legacy_index]]
+            for legacy_index in range(V3_LEGACY_NUMERIC_FEATURE_COUNT)
+        )
+        for row in observation.numeric_features
+    )
+    return replace(observation, numeric_features=rows)
 
 _LEADS = [
     "|player|p1|Alice|",
@@ -310,18 +337,14 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
-    def test_v3_widths_append_numerics_to_the_v2_2_census(self) -> None:
-        # v3 appends FOURTEEN numeric columns above the v2.2 census: change 1/2 (fail pair + sleep
-        # pair, offsets +0..+3), change 3 (the consecutive-stall counter, offset +4, #810),
-        # change 4 (confusion turns-so-far, +5, #811), change 5 (encore turns-so-far, +6, #814),
-        # change 6 (Wrap partial-trap turns-so-far, +7), change 7 (the two gender bits, +8/+9),
-        # change 8 (Mean Look / Spider Web move-trap, +10), change 9 (the two Wish
-        # turns-to-land bits, +11/+12), and change 10 (the confusion self-hit flag, +13).
+    def test_v3_widths_are_cutover_specific(self) -> None:
+        # V3 removes fourteen source-unreachable numeric columns and reuses the resulting width
+        # for its grouped layout. Matching v2.2's width is coincidental, not compatibility.
+        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 155)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 14,
+            V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
         )
-        self.assertEqual(V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 169)
         self.assertEqual(
             V3_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -331,56 +354,35 @@ class SchemaTableTest(unittest.TestCase):
         )
 
     def test_v3_column_layout(self) -> None:
-        # The fourteen appended columns start exactly at the v2.2 census end (155) and are pinned in
-        # order: fail(155,156), sleep-clause(157,158), stall-counter(159, #810),
-        # confusion-turns(160, #811), encore-turns(161, #814), wrap-trap-turns(162),
-        # gender-male(163), gender-female(164), meanlook-trap(165), self-wish-turns(166),
-        # opp-wish-turns(167), confusion-selfhit-flag(168, change 10). Every offset +0..+13
-        # (155-168) is written exactly once.
-        self.assertEqual(V3_NUMERIC_BASE, V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
-        self.assertEqual(V3_NUMERIC_BASE, 155)
-        self.assertEqual(NUMERIC_TT_FAIL, V3_NUMERIC_BASE + 0)
-        self.assertEqual(NUMERIC_TT_FAIL, 155)
-        self.assertEqual(NUMERIC_TM2_FAIL, V3_NUMERIC_BASE + 1)
-        self.assertEqual(NUMERIC_TM2_FAIL, 156)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, V3_NUMERIC_BASE + 2)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF, 157)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, V3_NUMERIC_BASE + 3)
-        self.assertEqual(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP, 158)
-        # Change 3 (consecutive-stall counter, #810) at +4; change 4 (confusion turns-so-far,
-        # #811) at +5; change 5 (encore turns-so-far, #814) at +6; change 6 (Wrap partial-trap
-        # turns-so-far, this PR) at +7.
-        self.assertEqual(NUMERIC_STALL_COUNTER, V3_NUMERIC_BASE + 4)
-        self.assertEqual(NUMERIC_STALL_COUNTER, 159)
-        self.assertEqual(NUMERIC_CONFUSION_TURNS, V3_NUMERIC_BASE + 5)
-        self.assertEqual(NUMERIC_CONFUSION_TURNS, 160)
-        self.assertEqual(NUMERIC_ENCORE_TURNS, V3_NUMERIC_BASE + 6)
-        self.assertEqual(NUMERIC_ENCORE_TURNS, 161)
-        self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, V3_NUMERIC_BASE + 7)
-        self.assertEqual(NUMERIC_WRAP_TRAP_TURNS, 162)
-        # Change 7 (per-mon gender) at +8/+9; change 8 (Mean Look / Spider Web move-trap) at +10.
-        self.assertEqual(NUMERIC_GENDER_MALE, V3_NUMERIC_BASE + 8)
-        self.assertEqual(NUMERIC_GENDER_MALE, 163)
-        self.assertEqual(NUMERIC_GENDER_FEMALE, V3_NUMERIC_BASE + 9)
-        self.assertEqual(NUMERIC_GENDER_FEMALE, 164)
-        self.assertEqual(NUMERIC_MEANLOOK_TRAP, V3_NUMERIC_BASE + 10)
-        self.assertEqual(NUMERIC_MEANLOOK_TRAP, 165)
-        # Change 9 (Wish turns-to-land) at +11/+12, on the field token beside the v2.2 pending bits.
-        self.assertEqual(NUMERIC_SELF_WISH_TURNS, V3_NUMERIC_BASE + 11)
-        self.assertEqual(NUMERIC_SELF_WISH_TURNS, 166)
-        self.assertEqual(NUMERIC_OPP_WISH_TURNS, V3_NUMERIC_BASE + 12)
-        self.assertEqual(NUMERIC_OPP_WISH_TURNS, 167)
-        # Change 10 (confusion self-hit flag) at +13, on the corrected move sub-block.
-        self.assertEqual(NUMERIC_TT_CONFUSION_SELFHIT, V3_NUMERIC_BASE + 13)
-        self.assertEqual(NUMERIC_TT_CONFUSION_SELFHIT, 168)
-        # The v3 turns columns sit ABOVE the v2.2 pending bits (56/57), which keep their positions.
-        self.assertEqual(NUMERIC_SELF_WISH_PENDING, 56)
-        self.assertEqual(NUMERIC_OPP_WISH_PENDING, 57)
-        # Width covers through +13; total 169.
+        # The public map is the V3 spec artifact: every physical output index has exactly one
+        # legacy writer source, and every legacy writer position is either mapped or explicitly
+        # removed for reachability evidence.
+        self.assertEqual(len(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX), 155)
+        self.assertEqual(len(set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX)), 155)
         self.assertEqual(
-            V3_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            NUMERIC_TT_CONFUSION_SELFHIT + 1,
+            set(V3_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX) | V3_DROPPED_LEGACY_NUMERIC_INDICES,
+            set(range(V3_LEGACY_NUMERIC_FEATURE_COUNT)),
         )
+        self.assertEqual(v3_numeric_index(NUMERIC_STALL_COUNTER), 32)
+        self.assertEqual(v3_numeric_index(NUMERIC_CONFUSION_TURNS), 33)
+        self.assertEqual(v3_numeric_index(NUMERIC_ENCORE_TURNS), 34)
+        self.assertEqual(v3_numeric_index(NUMERIC_WRAP_TRAP_TURNS), 35)
+        self.assertEqual(v3_numeric_index(NUMERIC_GENDER_MALE), 36)
+        self.assertEqual(v3_numeric_index(NUMERIC_GENDER_FEMALE), 37)
+        self.assertEqual(v3_numeric_index(NUMERIC_MEANLOOK_TRAP), 38)
+        self.assertEqual(v3_numeric_index(NUMERIC_SELF_WISH_PENDING), 104)
+        self.assertEqual(v3_numeric_index(NUMERIC_OPP_WISH_PENDING), 105)
+        self.assertEqual(v3_numeric_index(NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF), 106)
+        self.assertEqual(v3_numeric_index(NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP), 107)
+        self.assertEqual(v3_numeric_index(NUMERIC_SELF_WISH_TURNS), 108)
+        self.assertEqual(v3_numeric_index(NUMERIC_OPP_WISH_TURNS), 109)
+        self.assertEqual(v3_numeric_index(NUMERIC_TT_DAMAGE_FRACTION), 121)
+        self.assertEqual(v3_numeric_index(NUMERIC_TT_FAIL), 152)
+        self.assertEqual(v3_numeric_index(NUMERIC_TM2_FAIL), 153)
+        self.assertEqual(v3_numeric_index(NUMERIC_TT_CONFUSION_SELFHIT), 154)
+        for legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES:
+            with self.assertRaisesRegex(ValueError, "dropped from v3"):
+                v3_numeric_index(legacy_index)
 
     def test_cli_choice_maps_to_v3(self) -> None:
         self.assertEqual(
@@ -644,7 +646,7 @@ class V3EncodeTest(unittest.TestCase):
             state, category_vocab=self._vocab(), spec=spec
         )
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def test_fail_columns_fill_for_both_sub_blocks_under_v3_only(self) -> None:
         state = self._state(_FAIL_LINES)
@@ -664,11 +666,10 @@ class V3EncodeTest(unittest.TestCase):
         self.assertEqual(rows[turn_rows[2]][NUMERIC_TT_MISS], 0.0)
         self.assertEqual(rows[turn_rows[3]][NUMERIC_TM2_MISS], 0.0)
 
-    def test_v2_2_encode_of_the_fail_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
-        # The absolute invariant: the fail-drawing log's v2.2 encoding keeps its exact
-        # shape (155 columns — the fail columns do not exist) and every shared surface is
-        # byte-identical between the two encodes, so the v2.2 output cannot have moved.
-        # (Cross-checked once against the pre-change encoder on main: byte-identical.)
+    def test_v2_2_fail_surface_matches_v3_legacy_semantics(self) -> None:
+        # The raw v3 layout is a permutation. This test intentionally uses the legacy-semantic
+        # view so lifecycle coverage stays focused on the fail bits; the cutover suite pins the
+        # raw physical map and the v2.2 pristine suite pins legacy byte identity.
         state = self._state(_FAIL_LINES)
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
@@ -679,7 +680,7 @@ class V3EncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         # No categorical additions: the rows agree everywhere.
         self.assertEqual(
@@ -748,7 +749,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             state, category_vocab=self._vocab(), spec=spec
         )
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     @staticmethod
     def _active_token(team, offset):
@@ -836,10 +837,10 @@ class StallCounterEncodeTest(unittest.TestCase):
         tok = self._active_token(state.self_team, SELF_POKEMON_TOKEN_OFFSET)
         self.assertAlmostEqual(obs.numeric_features[tok][NUMERIC_STALL_COUNTER], 0.25)
 
-    def test_v2_2_encode_of_a_protect_heavy_log_is_byte_identical_prefix_of_v3(self) -> None:
-        # cmp-against-pristine, in-suite form: the Protect-heavy log's v2.2 encoding keeps its
-        # exact 155-column shape and is a byte-prefix of the v3 encode on every shared surface,
-        # so the stall column cannot have perturbed any v2.2 output.
+    def test_v2_2_protect_surface_matches_v3_legacy_semantics(self) -> None:
+        # The raw v3 layout is a permutation, not a prefix. _encode deliberately returns the
+        # legacy-semantic view for v3 so this lifecycle suite stays independent of physical
+        # layout; the cutover suite verifies the actual v2.2-to-v3 permutation.
         lines = self._opp_protect_lines("p1")
         state = self._state(lines, player="p2")
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
@@ -849,7 +850,7 @@ class StallCounterEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -970,7 +971,7 @@ class ConfusionEncodeTest(unittest.TestCase):
     """Change 4 at the encode layer: the column-pinned rise/reset on the confused mon's token,
     the reserved +4 sibling column staying zero, and the v2.2 byte-identity guard."""
 
-    _RESERVED_STALL_COL = V3_NUMERIC_BASE + 4
+    _RESERVED_STALL_COL = NUMERIC_STALL_COUNTER
 
     @staticmethod
     def _vocab():
@@ -991,7 +992,7 @@ class ConfusionEncodeTest(unittest.TestCase):
     def _encode(self, state, spec):
         observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def _confusion_cells(self, observation):
         return [
@@ -1046,21 +1047,21 @@ class ConfusionEncodeTest(unittest.TestCase):
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
             self.assertEqual(self._confusion_cells(observation), [])
 
-    def test_v2_2_encode_of_a_confusion_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+    def test_v2_2_confusion_surface_matches_v3_legacy_semantics(self) -> None:
         # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the confusion column (0.4), so the
-        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        # legacy-semantic compatibility assertion is meaningful.
         state = self._state(_through_turn(_CONFUSE_RIDE, 3))
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
         width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
         # The v3 encode is non-vacuous: the confusion column is actually populated.
         self.assertTrue(any(row[NUMERIC_CONFUSION_TURNS] for row in v3.numeric_features))
-        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        # Under v2.2 the column does not exist, while its own output remains byte-identical.
         for row_index, (v22_row, v3_row) in enumerate(
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1144,8 +1145,8 @@ class EncoreEncodeTest(unittest.TestCase):
     """Change 5 at the encode layer: the column-pinned rise/reset on the encored mon's token,
     the sibling stall/confusion columns staying zero, and the v2.2 byte-identity guard."""
 
-    _STALL_COL = V3_NUMERIC_BASE + 4
-    _CONFUSION_COL = V3_NUMERIC_BASE + 5
+    _STALL_COL = NUMERIC_STALL_COUNTER
+    _CONFUSION_COL = NUMERIC_CONFUSION_TURNS
 
     @staticmethod
     def _vocab():
@@ -1166,7 +1167,7 @@ class EncoreEncodeTest(unittest.TestCase):
     def _encode(self, state, spec):
         observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def _encore_cells(self, observation):
         return [
@@ -1224,21 +1225,21 @@ class EncoreEncodeTest(unittest.TestCase):
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
             self.assertEqual(self._encore_cells(observation), [])
 
-    def test_v2_2_encode_of_an_encore_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+    def test_v2_2_encore_surface_matches_v3_legacy_semantics(self) -> None:
         # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the encore column (2/6), so the
-        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        # legacy-semantic compatibility assertion is meaningful.
         state = self._state(_through_turn(_ENCORE_RIDE, 3))
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
         width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
         # The v3 encode is non-vacuous: the encore column is actually populated.
         self.assertTrue(any(row[NUMERIC_ENCORE_TURNS] for row in v3.numeric_features))
-        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        # Under v2.2 the column does not exist, while its own output remains byte-identical.
         for row_index, (v22_row, v3_row) in enumerate(
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1321,9 +1322,9 @@ class WrapTrapEncodeTest(unittest.TestCase):
     """Change 6 at the encode layer: the column-pinned rise/reset on the trapped mon's token,
     the sibling stall/confusion/encore columns staying zero, and the v2.2 byte-identity guard."""
 
-    _STALL_COL = V3_NUMERIC_BASE + 4
-    _CONFUSION_COL = V3_NUMERIC_BASE + 5
-    _ENCORE_COL = V3_NUMERIC_BASE + 6
+    _STALL_COL = NUMERIC_STALL_COUNTER
+    _CONFUSION_COL = NUMERIC_CONFUSION_TURNS
+    _ENCORE_COL = NUMERIC_ENCORE_TURNS
 
     @staticmethod
     def _vocab():
@@ -1344,7 +1345,7 @@ class WrapTrapEncodeTest(unittest.TestCase):
     def _encode(self, state, spec):
         observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def _wrap_cells(self, observation):
         return [
@@ -1405,21 +1406,21 @@ class WrapTrapEncodeTest(unittest.TestCase):
             observation = self._encode(self._state(lines), V3_REPLAY_OBSERVATION_SPEC)
             self.assertEqual(self._wrap_cells(observation), [])
 
-    def test_v2_2_encode_of_a_wrap_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+    def test_v2_2_wrap_surface_matches_v3_legacy_semantics(self) -> None:
         # NON-VACUOUS guard: at turn 3 the v3 encode DOES set the wrap column (2/5), so the
-        # invariant (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful.
+        # legacy-semantic compatibility assertion is meaningful.
         state = self._state(_through_turn(_WRAP_RIDE, 3))
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
         v3 = self._encode(state, V3_REPLAY_OBSERVATION_SPEC)
         width = V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count
         # The v3 encode is non-vacuous: the wrap-trap column is actually populated.
         self.assertTrue(any(row[NUMERIC_WRAP_TRAP_TURNS] for row in v3.numeric_features))
-        # Under v2.2 the column does not exist (width) and every shared surface is byte-identical.
+        # Under v2.2 the column does not exist, while its own output remains byte-identical.
         for row_index, (v22_row, v3_row) in enumerate(
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1501,7 +1502,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
     def _encode(self, state, spec):
         observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def _field(self, observation):
         return observation.numeric_features[FIELD_TOKEN_OFFSET]
@@ -1545,9 +1546,9 @@ class WishTurnsEncodeTest(unittest.TestCase):
         )
         self.assertAlmostEqual(self._field(turn2)[NUMERIC_SELF_WISH_TURNS], 0.5)
 
-    def test_v2_2_encode_of_a_wish_log_is_unchanged_and_a_byte_prefix_of_v3(self) -> None:
+    def test_v2_2_wish_surface_matches_v3_legacy_semantics(self) -> None:
         # NON-VACUOUS guard: at turn 2 the v3 encode DOES set the wish column (1/2), so the invariant
-        # (v2.2 output unchanged; v2.2 numerics are the byte-prefix of v3) is meaningful. The v2.2
+        # (v2.2 output unchanged; v3 carries the field through the legacy semantic view) is meaningful. The v2.2
         # pending bit (56) is present in BOTH encodes and stays byte-identical.
         state = self._state(_through_turn(_WISH_RIDE, 2))
         v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)
@@ -1559,7 +1560,7 @@ class WishTurnsEncodeTest(unittest.TestCase):
             zip(v2_2.numeric_features, v3.numeric_features)
         ):
             self.assertEqual(len(v22_row), width)
-            self.assertEqual(len(v3_row), width + 14)
+            self.assertEqual(len(v3_row), V3_LEGACY_NUMERIC_FEATURE_COUNT)
             self.assertEqual(tuple(v22_row), tuple(v3_row[:width]), f"numeric row {row_index}")
         self.assertEqual(
             [tuple(row) for row in v2_2.categorical_ids],
@@ -1611,7 +1612,7 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
     def _encode(self, state, spec):
         observation = observation_from_player_state(state, category_vocab=self._vocab(), spec=spec)
         observation.validate(spec)
-        return observation
+        return _legacy_v3_semantic_view(observation)
 
     def test_v3_corrects_the_damage_and_sets_the_flag_v2_2_keeps_the_folded_value(self) -> None:
         state = self._state(_CONFUSE_SELFHIT_LINES)
@@ -1631,13 +1632,9 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
         )
 
     def test_v2_2_is_frozen_and_v3_diverges_only_at_the_corrected_damage_column(self) -> None:
-        # Change 10 is the FIRST v3 change that rewrites a v2.2-POSITIONED column (the damage
-        # fraction, 105) under v3 — so v2.2 is NOT a byte-prefix of v3 here (unlike changes
-        # 1-9). The right invariant: v2.2 keeps the FROZEN folded value everywhere, and the ONLY
-        # place v2.2 and v3 disagree on the shared 0..154 surface is exactly NUMERIC_TT_DAMAGE_
-        # FRACTION on the flagged row, where v3 = v2.2 - confusion_selfhit_fraction. That, plus
-        # the structural argument (the v2.2 encode never reads the new fields), is the v2.2
-        # byte-identity proof; the cmp-against-pristine SHA over a battery is the gate's job.
+        # The semantic view makes the single intentional v3 rewrite explicit: v2.2 retains the
+        # folded value, while v3 subtracts the confusion self-hit. The raw permutation-map test
+        # owns physical positions; the v2.2 cmp-against-pristine battery owns byte identity.
         for player in ("p1", "p2"):
             state = self._state(_CONFUSE_SELFHIT_LINES, player=player)
             v2_2 = self._encode(state, V2_2_REPLAY_OBSERVATION_SPEC)

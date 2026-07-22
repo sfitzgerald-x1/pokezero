@@ -1,6 +1,7 @@
 # Observation v3 layout cutover — plan
 
-Status: 2026-07-22, owner-approved direction. Companion to
+Status: 2026-07-22, implemented in the V3 layout-cutover PR; pending independent
+review, Rust mirroring, and fresh audit/corpus artifacts. Companion to
 `observation_v3_spec.md` (content) and `silent_noop_sweep_plan.md` (the
 input-audit program). This doc governs the one-time DESTRUCTIVE
 reorganization of the v3 observation layout before the schema freeze.
@@ -25,8 +26,9 @@ protects v2.2. Do not start the generation run before the cutover.
   features constant across the entire training distribution because the
   gen3 randbats pool cannot produce them); logical regrouping of the
   remaining columns (state / belief / actions / history) in place of four
-  generations of additive appendices; optional prune of dead categorical
-  vocab rows (fresh training re-initializes embeddings anyway); the
+  generations of additive appendices; preserve the categorical vocabulary
+  unchanged because its globally sorted row identities are shared with V2.2;
+  the
   approved input-audit ADDs (protect counter, wish counter, and the batch
   verdicts) landing INTO the new layout so content and layout freeze
   together as one owner decision.
@@ -91,3 +93,19 @@ cutover PR + review → merge → FREEZE → Rust mirror + corpus regen →
 generation launch (settings per the v3 run plan in the deploy repo).
 The cutover inserts ~2–4 agent-days before the freeze; the smoke arms'
 50k reads run on a similar clock, so the critical path moves little.
+
+## Implementation disposition
+
+- **Numeric layout:** implemented as a private legacy writer surface plus one
+  declared V3 projection map. This preserves every frozen V2.x writer and makes
+  the public V3 order inspectable in one place.
+- **Dead-field removal:** implemented for the 14 mechanics listed in
+  `dead_observation_fields.md`: screens, Future Sight, and the Gen3-unreachable
+  hail reveal pair.
+- **Compatibility oracle:** implemented as both a synthetic all-columns
+  projection test and a real V2.2/V3 encode test. It checks every carried column
+  through the old-to-new map, with the confusion self-hit damage correction as
+  the single documented semantic exception.
+- **Still required before EOC:** an independent review, the V3 Rust mirror,
+  fresh golden corpus/audit captures, and the final EOC run described in
+  `v3_end_of_cycle_evaluation_plan.md`. No historical V3 artifact may be reused.
