@@ -1217,8 +1217,8 @@ def truncate_history_tensors(
 ) -> dict[str, Any]:
     """Eval-only history-truncation probe (docs/history_truncation_probe_plan.md).
 
-    Mask the transition-history region (tokens ``TRANSITION_TOKEN_OFFSET`` ..
-    ``+TRANSITION_TOKEN_COUNT``) down to the most-recent ``keep_recent_k`` filled tokens:
+    Mask the transition-history region (tokens ``TRANSITION_TOKEN_OFFSET`` through the
+    schema-specific end of the tensor) down to the most-recent ``keep_recent_k`` filled tokens:
     clear their attention-mask bit (True = attend) AND zero the matching categorical/numeric
     rows, so a truncated slot becomes byte-identical to an unfilled one — exactly the
     "attention-mask edit + matching token zeroing" the probe plan calls for.
@@ -1236,15 +1236,21 @@ def truncate_history_tensors(
     training encode are untouched.
     """
     torch_module = require_torch()
-    if keep_recent_k < 1 or keep_recent_k > TRANSITION_TOKEN_COUNT:
-        raise ValueError(
-            f"history_mask_k must be in 1..{TRANSITION_TOKEN_COUNT}, got {keep_recent_k}."
-        )
     attention_mask = tensors["attention_mask"].clone()
+    start = TRANSITION_TOKEN_OFFSET
+    transition_token_capacity = int(attention_mask.shape[-1]) - start
+    if transition_token_capacity <= 0:
+        raise ValueError(
+            "attention_mask does not contain a transition-history region after "
+            f"offset {start}."
+        )
+    if keep_recent_k < 1 or keep_recent_k > transition_token_capacity:
+        raise ValueError(
+            f"history_mask_k must be in 1..{transition_token_capacity}, got {keep_recent_k}."
+        )
     numeric = tensors["numeric_features"].clone()
     categorical = tensors["categorical_ids"].clone()
-    start = TRANSITION_TOKEN_OFFSET
-    stop = TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT
+    stop = start + transition_token_capacity
     region = attention_mask[..., start:stop]
     batch_count, window_count = region.shape[0], region.shape[1]
     for batch_index in range(batch_count):
@@ -1547,12 +1553,19 @@ class TransformerSoftmaxPolicy:
             raise ValueError("sampling_temperature must be positive.")
         if self.family_gated_selection and not self.deterministic:
             raise ValueError("family_gated_selection currently requires deterministic selection.")
-        if self.history_mask_k is not None and not (
-            0 < self.history_mask_k <= TRANSITION_TOKEN_COUNT
-        ):
-            raise ValueError(
-                f"history_mask_k must be in 1..{TRANSITION_TOKEN_COUNT}, got {self.history_mask_k}."
+        if self.history_mask_k is not None:
+            model_config = self.result.model_config
+            schema_version = getattr(model_config, "observation_schema_version", None)
+            transition_token_capacity = (
+                observation_spec_for_schema(schema_version).transition_token_count
+                if schema_version is not None
+                else TRANSITION_TOKEN_COUNT
             )
+            if not 0 < self.history_mask_k <= transition_token_capacity:
+                raise ValueError(
+                    f"history_mask_k must be in 1..{transition_token_capacity}, "
+                    f"got {self.history_mask_k}."
+                )
         if self.policy_id is None:
             self.policy_id = self.result.model_config.policy_id
         if self._history_by_player is None:

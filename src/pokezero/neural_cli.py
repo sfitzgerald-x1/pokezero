@@ -3467,18 +3467,8 @@ def _benchmark(args: argparse.Namespace) -> int:
             context="neural benchmark",
         )
     history_mask_k = args.history_mask_k
-    if history_mask_k is not None:
-        if not 0 < history_mask_k <= TRANSITION_TOKEN_COUNT:
-            raise ValueError(
-                f"--history-mask-k must be in 1..{TRANSITION_TOKEN_COUNT}, got {history_mask_k}."
-            )
-        print(
-            f"HISTORY-TRUNCATION PROBE: masking the checkpoint's transition-history region to "
-            f"the most-recent {history_mask_k} of {TRANSITION_TOKEN_COUNT} tokens at decision "
-            f"time (deliberate eval-time override of the trained budget; env/production encoding "
-            f"untouched). See docs/history_truncation_probe_plan.md.",
-            file=sys.stderr,
-        )
+    if history_mask_k is not None and history_mask_k <= 0:
+        raise ValueError(f"--history-mask-k must be positive, got {history_mask_k}.")
     deterministic = not bool(args.sample)
     checkpoint_policy = _policy_from_checkpoint(
         args.checkpoint,
@@ -3488,6 +3478,26 @@ def _benchmark(args: argparse.Namespace) -> int:
         device=args.device,
         history_mask_k=history_mask_k,
     )
+    if history_mask_k is not None:
+        model_config = getattr(getattr(checkpoint_policy, "result", None), "model_config", None)
+        transition_token_capacity = (
+            observation_spec_for_schema(
+                model_config.observation_schema_version
+            ).transition_token_count
+            if model_config is not None
+            else env_config.observation_spec.transition_token_count
+        )
+        if history_mask_k > transition_token_capacity:
+            raise ValueError(
+                f"--history-mask-k must be in 1..{transition_token_capacity}, got {history_mask_k}."
+            )
+        print(
+            f"HISTORY-TRUNCATION PROBE: masking the checkpoint's transition-history region to "
+            f"the most-recent {history_mask_k} of {transition_token_capacity} tokens at decision "
+            f"time (deliberate eval-time override of the trained budget; env/production encoding "
+            f"untouched). See docs/history_truncation_probe_plan.md.",
+            file=sys.stderr,
+        )
     policy_id = _policy_id_alias(args.policy_id, label="--policy-id") if args.policy_id else str(checkpoint_policy.policy_id)
     if args.policy_id:
         checkpoint_policy = _PolicyIdAlias(checkpoint_policy, policy_id=policy_id)

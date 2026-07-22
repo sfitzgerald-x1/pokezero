@@ -13,7 +13,8 @@ worlds. Two leaf-eval modes, selected by ``EngineMctsConfig.leaf_eval``:
 - ``"model"`` (the full in-crate pipeline): per world, the crate's
   ``search_batched_multi_encoded`` — the LIVE root fold state (maintained
   incrementally here, see ``_advance_live_fold``) plus per-branch
-  synthesized events, per-outcome fold advance, native v2.2 leaf encode,
+  synthesized events, per-outcome fold advance, checkpoint-latched native
+  leaf encode,
   batched TorchScript leaf evaluation, and the acting seat's decision arms
   weighted by the model's masked policy priors (opponent arms stay uniform
   — see docs/crate_search_design.md "Model priors"). NO strength claim is
@@ -96,6 +97,58 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+def _checkpoint_feature_masks_payload(model_config: Any) -> dict[str, Any]:
+    """Encoder-table mask payload derived from checkpoint provenance."""
+
+    return {
+        "stats_block": bool(model_config.stats_block_enabled),
+        "exact_state": bool(model_config.exact_state_enabled),
+        "transition_token_budget": int(model_config.transition_token_budget),
+        "tier2_residuals": bool(model_config.tier2_residuals),
+        "tier2_investment": bool(model_config.tier2_investment),
+    }
+
+
+def _latch_encoder_tables_to_model_config(tables_json: str, model_config: Any) -> str:
+    """Bind native leaf encoding to the checkpoint's exact observation contract.
+
+    Encoder-table exports describe a schema's full capacity and carry library-default masks.
+    A checkpoint may have trained on a narrower history or another mask combination. Search
+    leaves must use that trained contract rather than the exporter defaults, or the root and
+    leaves can disagree inside one tree.
+    """
+
+    try:
+        payload = json.loads(tables_json)
+        layout = payload["layout"]
+        masks = layout["default_feature_masks"]
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid encoder tables contract: {error}") from error
+    if not isinstance(layout, dict) or not isinstance(masks, dict):
+        raise ValueError("encoder tables layout/default_feature_masks must be objects.")
+
+    expected = {
+        "schema_version": str(model_config.observation_schema_version),
+        "token_count": int(model_config.token_count),
+        "categorical_feature_count": int(model_config.categorical_feature_count),
+        "numeric_feature_count": int(model_config.numeric_feature_count),
+    }
+    mismatches = {
+        key: {"checkpoint": value, "tables": layout.get(key)}
+        for key, value in expected.items()
+        if layout.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(
+            "encoder tables do not match the checkpoint observation contract: "
+            + json.dumps(mismatches, sort_keys=True)
+        )
+
+    latched_masks = _checkpoint_feature_masks_payload(model_config)
+    layout["default_feature_masks"] = latched_masks
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 class EnvTier2AnnotationSource:
     """Env→policy surface for the live fold's Tier-2 annotation overlay.
 
@@ -165,8 +218,10 @@ class EngineMctsConfig:
     leaf_eval: str = "hp_fraction"
     # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
     # artifact must run on cpu) and the encoder tables JSON
-    # (scripts/export_encoder_tables.py). Both required in model mode.
+    # (scripts/export_encoder_tables.py), plus the source checkpoint whose
+    # observation contract must govern both root and leaf encodes.
     model_path: str | None = None
+    checkpoint_path: str | None = None
     model_device: str = "cpu"
     tables_path: str | None = None
     # Per-world search budget (model mode). Keep search_batch << search_sims
@@ -192,8 +247,10 @@ class EngineMctsConfig:
                 f"leaf_eval must be 'hp_fraction' or 'model', got {self.leaf_eval!r}."
             )
         if self.leaf_eval == "model":
-            if not self.model_path or not self.tables_path:
-                raise ValueError("leaf_eval='model' requires model_path and tables_path.")
+            if not self.model_path or not self.checkpoint_path or not self.tables_path:
+                raise ValueError(
+                    "leaf_eval='model' requires model_path, checkpoint_path, and tables_path."
+                )
             if self.search_sims <= 0 or self.search_batch <= 0 or self.search_depth <= 0:
                 raise ValueError(
                     "search_sims, search_batch, and search_depth must be positive."
@@ -322,15 +379,25 @@ class EngineMctsPolicy:
         self._fold_consumed: dict[tuple[str, str], int] = {}
         self._fold_broken: set[tuple[str, str]] = set()
         self._tables_json: str | None = None
+        self._model_config: Any | None = None
         self._native_model: Any | None = None
         if self._config.leaf_eval == "model":
             from pathlib import Path  # noqa: PLC0415 — model-mode-only dependency
 
+            from .neural_policy import load_transformer_model_config  # noqa: PLC0415
+
             model_path = Path(str(self._config.model_path))
             if not model_path.exists():
                 raise ValueError(f"model artifact not found: {model_path}")
-            self._tables_json = Path(str(self._config.tables_path)).read_text(
-                encoding="utf-8"
+            checkpoint_path = Path(str(self._config.checkpoint_path))
+            if not checkpoint_path.exists():
+                raise ValueError(f"source checkpoint not found: {checkpoint_path}")
+            tables_path = Path(str(self._config.tables_path))
+            if not tables_path.exists():
+                raise ValueError(f"encoder tables not found: {tables_path}")
+            self._model_config = load_transformer_model_config(checkpoint_path)
+            self._tables_json = _latch_encoder_tables_to_model_config(
+                tables_path.read_text(encoding="utf-8"), self._model_config
             )
 
     # Policy protocol (context-free path): uniform legal. Only reached if the
@@ -751,6 +818,43 @@ class EngineMctsPolicy:
             )
         return self._native_model
 
+    def _validate_model_root_observation(self, observation: Any) -> None:
+        """Fail closed if the live root is outside the checkpoint's trained contract."""
+
+        from .showdown import TRANSITION_TOKEN_OFFSET  # noqa: PLC0415
+
+        config = self._model_config
+        if config is None:
+            raise EngineSearchFallbackError("model observation contract is not loaded.")
+        schema = observation.schema_version
+        if schema != config.observation_schema_version:
+            raise EngineSearchFallbackError(
+                f"leaf_eval='model' checkpoint requires {config.observation_schema_version!r} "
+                f"observations; this env produced {schema!r}."
+            )
+        token_count = len(observation.attention_mask)
+        categorical_width = len(observation.categorical_ids[0]) if token_count else 0
+        numeric_width = len(observation.numeric_features[0]) if token_count else 0
+        actual_shape = (token_count, categorical_width, numeric_width)
+        expected_shape = (
+            int(config.token_count),
+            int(config.categorical_feature_count),
+            int(config.numeric_feature_count),
+        )
+        if actual_shape != expected_shape:
+            raise EngineSearchFallbackError(
+                f"model root observation shape {actual_shape!r} does not match checkpoint "
+                f"shape {expected_shape!r}."
+            )
+        attended_history = sum(
+            bool(value) for value in observation.attention_mask[TRANSITION_TOKEN_OFFSET:]
+        )
+        if attended_history > config.transition_token_budget:
+            raise EngineSearchFallbackError(
+                f"model root observation attends {attended_history} history tokens, exceeding "
+                f"checkpoint budget {config.transition_token_budget}."
+            )
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -771,17 +875,7 @@ class EngineMctsPolicy:
         """
         import pokezero_search  # noqa: PLC0415 — optional native dependency
 
-        from .observation import OBSERVATION_SCHEMA_VERSION_V2_2  # noqa: PLC0415
-
-        schema = context.observation.schema_version
-        if schema != OBSERVATION_SCHEMA_VERSION_V2_2:
-            # Misconfiguration, not a per-decision condition: the model was
-            # trained on v2.2 observations — never quietly search on another
-            # schema's surface.
-            raise EngineSearchFallbackError(
-                f"leaf_eval='model' requires {OBSERVATION_SCHEMA_VERSION_V2_2} observations; "
-                f"this env produced {schema!r}."
-            )
+        self._validate_model_root_observation(context.observation)
         try:
             root_inputs = self._root_inputs_json(context)
             rust_fold = pokezero_search.FoldState.from_payload(live_fold.to_payload())
@@ -1251,6 +1345,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--leaf-eval", choices=("hp-fraction", "model"), default="hp-fraction")
     parser.add_argument("--model-path", default=None,
                         help="TorchScript artifact (scripts/export_model.py)")
+    parser.add_argument("--checkpoint", default=None,
+                        help="source transformer checkpoint whose observation contract is latched")
     parser.add_argument("--tables", default=None,
                         help="encoder tables JSON (scripts/export_encoder_tables.py)")
     parser.add_argument("--model-device", default="cpu")
@@ -1288,6 +1384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         **base_config,
         leaf_eval="model" if model_mode else "hp_fraction",
         model_path=args.model_path,
+        checkpoint_path=args.checkpoint,
         tables_path=args.tables,
         model_device=args.model_device,
         search_sims=args.sims,
@@ -1296,16 +1393,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_priors=not args.no_model_priors,
         fold_cross_check=args.fold_cross_check,
     )
-    # Model mode needs the belief candidate-set source: the v2.2 observation's
+    # Model mode needs the belief candidate-set source: the checkpoint observation's
     # belief columns (candidate variants, possible sets) are part of the
     # surface the model was trained on. With the source attached and the
-    # default tier2_residuals mask, the env's Tier-2 trackers are ACTIVE —
-    # the policy therefore needs the annotation source (below) or its live
-    # fold would present unannotated Tier-2 surfaces at search leaves.
+    # checkpoint's feature masks, the env's Tier-2 trackers may be active —
+    # the policy therefore needs the annotation source (below) or a Tier-2-on
+    # checkpoint's live fold would present unannotated surfaces at search leaves.
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         set_belief_source=True if model_mode else None,
     )
+    if model_mode:
+        from .local_showdown import env_config_with_checkpoint_masks  # noqa: PLC0415
+        from .neural_policy import (  # noqa: PLC0415
+            feature_masks_from_model_config,
+            load_transformer_model_config,
+            observation_spec_from_model_config,
+        )
+
+        model_config = load_transformer_model_config(str(args.checkpoint))
+        env_config = env_config_with_checkpoint_masks(
+            env_config,
+            feature_masks_from_model_config(model_config),
+            required_specs=observation_spec_from_model_config(model_config),
+            context="engine MCTS model benchmark",
+        )
     env = LocalShowdownEnv(env_config)
     annotation_source = EnvTier2AnnotationSource(env)
     policy = EngineMctsPolicy(
