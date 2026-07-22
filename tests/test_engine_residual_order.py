@@ -103,8 +103,8 @@ class ResidualOrderTests(unittest.TestCase):
             key = (applied.side_two.pokemon[0].hp, str(applied.side_two.pokemon[0].status).upper())
             outcomes[key] = outcomes.get(key, 0.0) + float(branch.percentage)
 
-        self.assertAlmostEqual(outcomes[(100, "NONE")], 33.0, places=4)
-        self.assertAlmostEqual(outcomes[(80, "POISON")], 67.0, places=4)
+        self.assertAlmostEqual(outcomes[(100, "NONE")], 100.0 / 3.0, places=4)
+        self.assertAlmostEqual(outcomes[(80, "POISON")], 200.0 / 3.0, places=4)
 
 
 @unittest.skipIf(poke_engine is None, "poke-engine wheel not installed")

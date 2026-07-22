@@ -483,6 +483,30 @@ class AbilityMechanicsTests(unittest.TestCase):
             self.assertEqual(str(applied.side_one.pokemon[0].item).upper(), "NONE")
             self.assertEqual(str(applied.side_two.pokemon[0].status).upper(), "TOXIC")
 
+    def test_synchronize_bypasses_substitute_but_respects_safeguard(self) -> None:
+        attacker = self._mon("mew", "pressure", "toxic", speed=200)
+        defender = self._mon("alakazam", "synchronize", "splash")
+        behind_substitute = poke_engine.generate_instructions(
+            self._state(attacker, defender, attacker_volatiles={"SUBSTITUTE"}),
+            "toxic",
+            "splash",
+        )
+        reflected = [
+            branch
+            for branch in behind_substitute
+            if "SideOne-P0: NONE -> POISON" in self._text(branch)
+        ]
+        self.assertTrue(reflected)
+
+        safeguarded = poke_engine.generate_instructions(
+            self._state(attacker, defender, attacker_safeguard=2),
+            "toxic",
+            "splash",
+        )
+        self.assertFalse(
+            any("SideOne-P0: NONE -> POISON" in self._text(branch) for branch in safeguarded)
+        )
+
     def test_pressure_consumes_two_pp_in_the_engine_relevant_range(self) -> None:
         attacker = self._mon("tauros", "intimidate", "tackle", speed=200, pp=9)
         defender = self._mon("lugia", "pressure", "splash")
@@ -517,7 +541,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertTrue(branches)
         for branch in branches:
             applied = state.apply_instructions(branch)
-            self.assertEqual(str(applied.side_one.pokemon[0].status).upper(), "NONE")
+            self.assertEqual(str(applied.side_one.pokemon[0].status).upper(), "BURN")
             self.assertEqual(str(applied.side_one.pokemon[1].status).upper(), "POISON")
             self.assertEqual(str(applied.side_one.pokemon[2].status).upper(), "NONE")
 

@@ -48,7 +48,7 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
    sand-damage immunity, with both effects disabled by weather suppressors.
 7. Early Bird and Shed Skin were not represented correctly. Early Bird now
    uses the Gen 3 conditional wake curve/Rest decrement, and Shed Skin branches
-   at Showdown's 33% rate before status residual damage.
+   at Showdown's exact 1/3 rate before status residual damage.
 8. Own Tempo and Oblivious did not prevent their volatile conditions. They now
    reject and clear Confusion/Attract respectively, including after Trace.
 9. Status-prevention abilities blocked new direct status but did not cover Yawn
@@ -59,7 +59,8 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
 10. Synchronize was absent. Burn/paralysis/poison now reflect after a successful
     application, including statuses caused by contact abilities and the
     Lum-Berry event seams on either side; Gen 3 Toxic reflection becomes regular
-    poison.
+    poison. Reflections respect Safeguard while bypassing Substitute, matching
+    Showdown's direct `trySetStatus` path.
 11. Poison Point, Flame Body, Static, and Effect Spore used inaccurate or
     independently composed probabilities and could trigger through Substitute.
     They now branch at 1/3, 1/3, 1/3, and 1/10 total (1/30 per status), only
@@ -74,8 +75,8 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
 14. Defender abilities could intercept self/field moves. A target guard now
     prevents Water Absorb, Soundproof, Flash Fire, and similar hooks from
     consuming Rain Dance, Heal Bell, and other non-opponent moves. Heal Bell's
-    team cure now also preserves Soundproof allies while allowing a Soundproof
-    user to cure itself, matching the Gen 3 party boundary.
+    team cure now preserves every Soundproof holder, including its user,
+    matching the Gen 3 party boundary.
 15. Speed-tie evaluation reused already-mutated `Choice` objects. The second
     ordering could therefore apply ability modifiers twice; each ordering now
     starts from a pristine clone.
@@ -145,10 +146,10 @@ All upstream Rust engine changes are carried by
 | Sand Veil | Exact, patched | 0.8x opposing accuracy plus sand residual immunity; disabled by suppression. |
 | Serene Grace | Exact | Doubles eligible secondary-effect probabilities, capped by branch evaluation. |
 | Shadow Tag | Exact | Traps the opposing active in Gen 3, including the Gen 3 mirror behavior. |
-| Shed Skin | Exact, patched | Independent 33% end-turn cure before status damage, matching Showdown's Gen 3 implementation. |
+| Shed Skin | Exact, patched | Independent 1/3 end-turn cure before status damage, matching Showdown's Gen 3 implementation. |
 | Shell Armor | Bounded | Critical-hit branch mass is zero wherever the search enables damage branching; deep plies inherit the engine's deliberate crit elision. |
 | Shield Dust | Exact | Removes opponent-targeting secondary effects. |
-| Soundproof | Exact, patched seam | Blocks opposing sound moves and Perish Song; Heal Bell skips Soundproof allies but still cures a Soundproof user, while Aromatherapy cures normally. |
+| Soundproof | Exact, patched seam | Blocks opposing sound moves and Perish Song; Heal Bell skips every Soundproof holder, including the user, while Aromatherapy cures normally. |
 | Speed Boost | Exact | Adds one Speed stage at end of turn up to +6. |
 | Static | Exact, patched | 1/3 contact paralysis; blocked by Substitute. |
 | Sticky Hold | Exact | Prevents item removal. |
@@ -156,7 +157,7 @@ All upstream Rust engine changes are carried by
 | Suction Cups | Exact | Prevents forced switching/drag effects. |
 | Swarm | Bounded | Correct low-HP Bug multiplier via power scaling. |
 | Swift Swim | Exact, patched seam | Doubles effective speed only in unsuppressed rain. |
-| Synchronize | Exact, patched | Reflects move- or contact-ability-inflicted burn/paralysis/poison before Lum Berry cures on either side; reflected Toxic becomes regular poison and rechecks immunity. |
+| Synchronize | Exact, patched | Reflects move- or contact-ability-inflicted burn/paralysis/poison before Lum Berry cures on either side; reflected Toxic becomes regular poison, bypasses Substitute, and rechecks immunity/Safeguard. |
 | Thick Fat | Bounded | Correct Fire/Ice halving via inverse power proxy. |
 | Torrent | Bounded | Correct low-HP Water multiplier via power scaling. |
 | Trace | Exact, patched seam | Copies the opposing ability in singles, activates entry effects, and applies newly gained immunity cures. |
@@ -178,7 +179,7 @@ future source changes cannot silently restore modern immunity/boost semantics.
   then the Python extension builds with `poke-engine/gen3` and no default
   generation feature.
 - `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
-  `tests.test_engine_world.ForecastRootTypeTests`: **37/37 checks pass**.
+  `tests.test_engine_world.ForecastRootTypeTests`: **38/38 checks pass**.
 - Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
   turns clean**.
 - Additional high-risk Showdown differential (Wonder Guard neutral/super-
