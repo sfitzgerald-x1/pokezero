@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 600" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <title id="title">PokeZero V3 observation token input</title>
+  <desc id="desc">A PokeZero decision is represented by 151 token rows. The rows comprise one field token, six self Pokemon, six opponent Pokemon, nine legal actions, one tendency token, and 128 turn-history tokens. Every row has 155 numeric and 51 categorical columns.</desc>
+
+  <rect width="1120" height="600" rx="16" fill="#0b1117"/>
+  <rect x="1" y="1" width="1118" height="598" rx="15" fill="none" stroke="#25303b"/>
+
+  <text x="40" y="43" fill="#edf3f8" font-size="23" font-weight="700">V3 observation input</text>
+  <text x="40" y="69" fill="#9aa8b5" font-size="13">One decision is a fixed 151-row entity sequence; each row uses the same 155 numeric + 51 categorical input layout.</text>
+
+  <g font-size="11" font-weight="600">
+    <rect x="817" y="26" width="82" height="30" rx="15" fill="#18232e" stroke="#31404d"/>
+    <text x="858" y="45" text-anchor="middle" fill="#f0c66a">151 rows</text>
+    <rect x="908" y="26" width="82" height="30" rx="15" fill="#18232e" stroke="#31404d"/>
+    <text x="949" y="45" text-anchor="middle" fill="#7dd3bc">155 num</text>
+    <rect x="999" y="26" width="81" height="30" rx="15" fill="#18232e" stroke="#31404d"/>
+    <text x="1039.5" y="45" text-anchor="middle" fill="#9fc5ff">51 cat</text>
+  </g>
+
+  <text x="40" y="108" fill="#dce5ed" font-size="14" font-weight="600">Token rows (151 total, drawn to scale)</text>
+
+  <rect x="40" y="122" width="6.9" height="42" fill="#c6943d"/>
+  <rect x="46.9" y="122" width="41.3" height="42" fill="#23725e"/>
+  <rect x="88.2" y="122" width="41.3" height="42" fill="#8d3654"/>
+  <rect x="129.5" y="122" width="62" height="42" fill="#315f93"/>
+  <rect x="191.5" y="122" width="6.9" height="42" fill="#a65e43"/>
+  <rect x="198.4" y="122" width="881.6" height="42" fill="#343d49"/>
+  <g stroke="#475260" stroke-width="1">
+    <line x1="253.5" y1="122" x2="253.5" y2="164"/>
+    <line x1="308.6" y1="122" x2="308.6" y2="164"/>
+    <line x1="363.7" y1="122" x2="363.7" y2="164"/>
+    <line x1="418.8" y1="122" x2="418.8" y2="164"/>
+    <line x1="473.9" y1="122" x2="473.9" y2="164"/>
+    <line x1="529" y1="122" x2="529" y2="164"/>
+    <line x1="584.1" y1="122" x2="584.1" y2="164"/>
+    <line x1="639.2" y1="122" x2="639.2" y2="164"/>
+    <line x1="694.3" y1="122" x2="694.3" y2="164"/>
+    <line x1="749.4" y1="122" x2="749.4" y2="164"/>
+    <line x1="804.5" y1="122" x2="804.5" y2="164"/>
+    <line x1="859.6" y1="122" x2="859.6" y2="164"/>
+    <line x1="914.7" y1="122" x2="914.7" y2="164"/>
+    <line x1="969.8" y1="122" x2="969.8" y2="164"/>
+    <line x1="1024.9" y1="122" x2="1024.9" y2="164"/>
+  </g>
+  <text x="67.5" y="147" fill="#d7f2e9" font-size="10" font-weight="600" text-anchor="middle">self x6</text>
+  <text x="108.9" y="147" fill="#fad5df" font-size="10" font-weight="600" text-anchor="middle">opp x6</text>
+  <text x="160.5" y="147" fill="#d8e7ff" font-size="10" font-weight="600" text-anchor="middle">actions x9</text>
+  <text x="639" y="140" fill="#dce4ec" font-size="11" font-weight="600" text-anchor="middle">turn-merged history x128</text>
+  <text x="639" y="155" fill="#9ca8b5" font-size="9.5" text-anchor="middle">most recent public battle history, truncated oldest-first</text>
+
+  <g fill="#768493" font-size="9">
+    <text x="40" y="177">0</text>
+    <text x="85" y="177">7</text>
+    <text x="126" y="177">13</text>
+    <text x="194" y="177">23</text>
+    <text x="1065" y="177">150</text>
+  </g>
+  <line x1="43.5" y1="122" x2="43.5" y2="99" stroke="#c6943d"/>
+  <text x="43.5" y="94" fill="#f0c66a" font-size="9.5" font-weight="600">field</text>
+  <line x1="195" y1="164" x2="195" y2="185" stroke="#a65e43"/>
+  <text x="195" y="197" fill="#eba78e" font-size="9.5" font-weight="600" text-anchor="middle">tendency</text>
+
+  <text x="40" y="224" fill="#dce5ed" font-size="14" font-weight="600">What each token family carries</text>
+
+  <g font-size="11.5">
+    <g transform="translate(40 239)">
+      <rect width="333" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#c6943d"/>
+      <text x="25" y="27" fill="#0b1117" font-size="10" font-weight="700" text-anchor="middle">1</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Field</text>
+      <text x="18" y="48" fill="#9aa8b5">weather, hazards, clauses, Wish, request state</text>
+    </g>
+    <g transform="translate(393 239)">
+      <rect width="333" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#23725e"/>
+      <text x="25" y="27" fill="#edf3f8" font-size="10" font-weight="700" text-anchor="middle">6</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Self team</text>
+      <text x="18" y="48" fill="#9aa8b5">identity, exact stats, PP, status, boosts, clocks</text>
+    </g>
+    <g transform="translate(746 239)">
+      <rect width="334" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#8d3654"/>
+      <text x="25" y="27" fill="#edf3f8" font-size="10" font-weight="700" text-anchor="middle">6</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Opponent team</text>
+      <text x="18" y="48" fill="#9aa8b5">public reveals, candidate sets, expected stats, PP</text>
+    </g>
+    <g transform="translate(40 318)">
+      <rect width="333" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#315f93"/>
+      <text x="25" y="27" fill="#edf3f8" font-size="10" font-weight="700" text-anchor="middle">9</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Legal actions</text>
+      <text x="18" y="48" fill="#9aa8b5">4 moves + 5 switches; power, priority, PP, effects</text>
+    </g>
+    <g transform="translate(393 318)">
+      <rect width="333" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#a65e43"/>
+      <text x="25" y="27" fill="#edf3f8" font-size="10" font-weight="700" text-anchor="middle">1</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Opponent tendencies</text>
+      <text x="18" y="48" fill="#9aa8b5">switch, attack, block, pursuit, weather evidence</text>
+    </g>
+    <g transform="translate(746 318)">
+      <rect width="334" height="67" rx="9" fill="#151d25" stroke="#293541"/>
+      <circle cx="25" cy="23" r="11" fill="#4e5967"/>
+      <text x="25" y="27" fill="#edf3f8" font-size="9" font-weight="700" text-anchor="middle">128</text>
+      <text x="46" y="26" fill="#edf3f8" font-weight="600">Turn history</text>
+      <text x="18" y="48" fill="#9aa8b5">actions, damage, miss/crit/KO/fail, residuals, self-hit</text>
+    </g>
+  </g>
+
+  <text x="40" y="420" fill="#dce5ed" font-size="14" font-weight="600">Every token row: fixed-width feature columns</text>
+  <text x="1080" y="420" fill="#788694" font-size="10" text-anchor="end">numeric groups shown to scale</text>
+
+  <g>
+    <rect x="40" y="435" width="40.3" height="39" fill="#3e5d78"/>
+    <rect x="80.3" y="435" width="221.4" height="39" fill="#23725e"/>
+    <rect x="301.7" y="435" width="355.6" height="39" fill="#70405a"/>
+    <rect x="657.3" y="435" width="40.3" height="39" fill="#315f93"/>
+    <rect x="697.6" y="435" width="80.5" height="39" fill="#9b7434"/>
+    <rect x="778.1" y="435" width="73.8" height="39" fill="#98563e"/>
+    <rect x="851.9" y="435" width="228.1" height="39" fill="#424d5b"/>
+    <g fill="#f2f5f8" font-size="9.5" font-weight="600" text-anchor="middle">
+      <text x="60.1" y="458">6</text>
+      <text x="191" y="458">Pokemon 33</text>
+      <text x="479.5" y="458">Belief 53</text>
+      <text x="677.4" y="458">6</text>
+      <text x="737.8" y="458">Field 12</text>
+      <text x="815" y="458">Tendency 11</text>
+      <text x="966" y="458">History 34</text>
+    </g>
+  </g>
+  <g fill="#91a0ae" font-size="9.5">
+    <text x="40" y="489">core 0-5</text>
+    <text x="657" y="489">action 92-97</text>
+    <text x="1080" y="489" text-anchor="end">155 numeric columns total</text>
+  </g>
+
+  <rect x="40" y="509" width="1040" height="37" rx="7" fill="#18283a" stroke="#29415a"/>
+  <rect x="40" y="509" width="235" height="37" rx="7" fill="#264f78"/>
+  <text x="57" y="532" fill="#e4eef9" font-size="11" font-weight="600">51 categorical ids</text>
+  <text x="294" y="532" fill="#9fb1c2" font-size="11">token identity, species, moves, types, status, belief atoms, volatiles, turn outcomes</text>
+
+  <text x="40" y="574" fill="#7f8d9a" font-size="10.5">Rows are intentionally sparse by token type. A token-type id and attention mask tell the transformer which entity each row represents.</text>
+</svg>
