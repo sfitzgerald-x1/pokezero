@@ -241,6 +241,7 @@ TRAJECTORY_CHARTS = [
         ("destiny bond success %", lambda r: _pct(r.get("destinybond_success_rate"))),
         ("protect after successful protect %", lambda r: _pct(r.get("protect_after_success_rate"))),
         ("counter/mirror coat success %", lambda r: _pct(r.get("counter_mirrorcoat_success_rate"))),
+        ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
         ("enemy boom blocked %", lambda r: _pct(r.get("boom_block_rate"))),
     ]),
     ("switch behavior / seat-game", [

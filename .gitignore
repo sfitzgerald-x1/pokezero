@@ -19,3 +19,4 @@ exports/
 third_party/poke-engine-src/
 rust/pokezero-search/target/
 corpus/
+.DS_Store
