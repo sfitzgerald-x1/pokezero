@@ -243,13 +243,22 @@ TRAJECTORY_CHARTS = [
         ("destiny bond success %", lambda r: _pct(r.get("destinybond_success_rate"))),
         ("protect after successful protect %", lambda r: _pct(r.get("protect_after_success_rate"))),
         ("counter/mirror coat success %", lambda r: _pct(r.get("counter_mirrorcoat_success_rate"))),
-        ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
         ("enemy boom blocked %", lambda r: _pct(r.get("boom_block_rate"))),
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
         ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
         ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
+        ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
+        # status-immunity switch-in reads: bringing in the ability mon ON the incoming status move,
+        # per game over games where the team carries that ability (exact ability gating, like NC).
+        ("Immunity in on toxic / game (carried)", lambda r: r.get("imm_switchin_on_toxic_per_game")),
+        ("Insomnia/Vital Spirit in on sleep / game (carried)", lambda r: r.get("insomnia_switchin_on_sleep_per_game")),
+        ("Limber in on para / game (carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
+        # type-based switch-in reads (no ability gate) — per seat-game
+        ("Grass in on leech seed", lambda r: r.get("grass_switchin_on_leechseed_per_game")),
+        ("Fire in on will-o-wisp", lambda r: r.get("fire_switchin_on_wow_per_game")),
+        ("Ghost in on rapid spin (spikes down)", lambda r: r.get("ghost_switchin_on_spin_per_game")),
     ]),
     # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
     # opp-mons-on-loss ≈ mons-on-win (the winner's margin) — the paired plots are essentially
