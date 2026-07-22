@@ -261,6 +261,8 @@ def _synthetic_batch(config, batch_size: int):
 def cmd_bench(args: argparse.Namespace) -> None:
     import torch
 
+    device = torch.device(args.device)
+    is_cuda = device.type == "cuda"
     results = {}
     models = {
         "original": _load_model(Path(args.original)),
@@ -268,23 +270,35 @@ def cmd_bench(args: argparse.Namespace) -> None:
     }
     torch.set_num_threads(args.threads)
     for label, (model, config) in models.items():
+        model.to(device)
         results[label] = {"token_count": config.token_count, "batches": {}}
         for batch_size in args.batch_sizes:
-            batch = _synthetic_batch(config, batch_size)
+            batch = {k: v.to(device) for k, v in _synthetic_batch(config, batch_size).items()}
             with torch.inference_mode():
                 for _ in range(args.warmup):
                     model(**batch)
+                if is_cuda:
+                    torch.cuda.synchronize(device)
                 timings = []
                 for _ in range(args.passes):
                     start = time.perf_counter()
                     model(**batch)
+                    if is_cuda:
+                        # Kernel launches are async; timing without a sync measures the
+                        # queue, not the work.
+                        torch.cuda.synchronize(device)
                     timings.append(time.perf_counter() - start)
             per_pass = statistics.median(timings)
             results[label]["batches"][batch_size] = {
                 "median_ms_per_pass": round(per_pass * 1e3, 3),
                 "evals_per_second": round(batch_size / per_pass, 1),
             }
-    summary = {"threads": args.threads, "passes": args.passes, "results": results, "speedup": {}}
+        model.to("cpu")
+    summary = {
+        "device": str(device),
+        "device_name": torch.cuda.get_device_name(device) if is_cuda else "cpu",
+        "threads": args.threads, "passes": args.passes, "results": results, "speedup": {},
+    }
     for batch_size in args.batch_sizes:
         orig = results["original"]["batches"][batch_size]["evals_per_second"]
         trim = results["converted"]["batches"][batch_size]["evals_per_second"]
@@ -317,6 +331,7 @@ def main() -> None:
     bench.add_argument("--warmup", type=int, default=20)
     bench.add_argument("--threads", type=int, default=1)
     bench.add_argument("--batch-sizes", type=lambda s: [int(x) for x in s.split(",")], default=[1, 32, 256])
+    bench.add_argument("--device", default="cpu", help="cpu (default) or cuda[:N]")
     bench.set_defaults(func=cmd_bench)
 
     args = parser.parse_args()
