@@ -150,6 +150,7 @@ def build_agent(
     *,
     deterministic: bool = True,
     seed: int | None = None,
+    history_mask_k: int | None = None,
 ) -> OnlineBattleAgent:
     """Load the checkpoint and pair it with the observation spec/vocab/dex it expects."""
     from .dex import load_showdown_dex_cached
@@ -158,7 +159,11 @@ def build_agent(
 
     from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
 
-    policy = load_transformer_policy(checkpoint, deterministic=deterministic)
+    # history_mask_k (eval-only history-truncation probe) is a deliberate decision-time
+    # override; production callers leave it None. See docs/history_truncation_probe_plan.md.
+    policy = load_transformer_policy(
+        checkpoint, deterministic=deterministic, history_mask_k=history_mask_k
+    )
     config = policy.result.model_config
     # Feed the model the observation schema + shape it was trained on (dual-schema resolution;
     # widths may predate later feature slots within the checkpoint's own schema).
@@ -361,8 +366,16 @@ async def run_online(
     deterministic: bool = True,
     seed: int | None = None,
     skip_login: bool = False,
+    history_mask_k: int | None = None,
 ) -> None:
-    agent = build_agent(checkpoint, showdown_root, username, deterministic=deterministic, seed=seed)
+    agent = build_agent(
+        checkpoint,
+        showdown_root,
+        username,
+        deterministic=deterministic,
+        seed=seed,
+        history_mask_k=history_mask_k,
+    )
     client = ShowdownClient(
         agent,
         username=username,

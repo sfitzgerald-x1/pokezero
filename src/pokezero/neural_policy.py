@@ -47,6 +47,7 @@ from .showdown import (
     ACTION_CANDIDATE_TOKEN_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
+    TRANSITION_TOKEN_OFFSET,
     observation_spec_for_schema,
 )
 
@@ -1202,6 +1203,61 @@ def model_forward_from_training_tensors(model: Any, tensors: Mapping[str, Any]) 
     )
 
 
+def truncate_history_tensors(
+    tensors: "Mapping[str, Any]", keep_recent_k: int
+) -> dict[str, Any]:
+    """Eval-only history-truncation probe (docs/history_truncation_probe_plan.md).
+
+    Mask the transition-history region (tokens ``TRANSITION_TOKEN_OFFSET`` ..
+    ``+TRANSITION_TOKEN_COUNT``) down to the most-recent ``keep_recent_k`` filled tokens:
+    clear their attention-mask bit (True = attend) AND zero the matching categorical/numeric
+    rows, so a truncated slot becomes byte-identical to an unfilled one — exactly the
+    "attention-mask edit + matching token zeroing" the probe plan calls for.
+
+    Transition tokens fill oldest-first (lowest region index = oldest turn, highest filled
+    index = most recent), so the most-recent ``k`` are the highest-indexed attended slots;
+    the older ones are dropped. The transformer carries no per-index positional embedding
+    within a frame and the transition tokens share one token type, so blanking the oldest
+    filled slots in place is equivalent to an encode-time ``transition_token_budget=k`` — the
+    model is permutation-invariant across these tokens.
+
+    A NEW dict is returned with cloned ``attention_mask``/``numeric_features``/
+    ``categorical_ids``; the caller's tensors (and any encoder cache) are never mutated. This
+    runs ONLY on the benchmark decision path, gated behind ``--history-mask-k``; env and
+    training encode are untouched.
+    """
+    torch_module = require_torch()
+    if keep_recent_k < 1 or keep_recent_k > TRANSITION_TOKEN_COUNT:
+        raise ValueError(
+            f"history_mask_k must be in 1..{TRANSITION_TOKEN_COUNT}, got {keep_recent_k}."
+        )
+    attention_mask = tensors["attention_mask"].clone()
+    numeric = tensors["numeric_features"].clone()
+    categorical = tensors["categorical_ids"].clone()
+    start = TRANSITION_TOKEN_OFFSET
+    stop = TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT
+    region = attention_mask[..., start:stop]
+    batch_count, window_count = region.shape[0], region.shape[1]
+    for batch_index in range(batch_count):
+        for window_index in range(window_count):
+            attended = torch_module.nonzero(
+                region[batch_index, window_index], as_tuple=False
+            ).flatten()
+            if int(attended.numel()) <= keep_recent_k:
+                continue
+            # attended is ascending (oldest→newest); drop all but the newest k.
+            drop_columns = attended[: int(attended.numel()) - keep_recent_k] + start
+            attention_mask[batch_index, window_index, drop_columns] = False
+            numeric[batch_index, window_index, drop_columns, :] = 0.0
+            categorical[batch_index, window_index, drop_columns, :] = 0
+    return {
+        **tensors,
+        "attention_mask": attention_mask,
+        "numeric_features": numeric,
+        "categorical_ids": categorical,
+    }
+
+
 def observation_window_to_torch(
     observations: Sequence[PokeZeroObservationV0],
     *,
@@ -1467,6 +1523,11 @@ class TransformerSoftmaxPolicy:
     # Optional shared sink for a Root-PUCT fallback or leaf rollout. It records
     # the same encode/forward boundary as the evaluator closures.
     inference_timing: TransformerInferenceTimingAccumulator | None = None
+    # Eval-only history-truncation probe (docs/history_truncation_probe_plan.md). When set,
+    # the decision path masks the transition-history region down to the most-recent k tokens
+    # before the forward — deliberately mismatched from the checkpoint's trained
+    # transition_token_budget. None → no truncation (production behaviour). Benchmark-only.
+    history_mask_k: int | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
 
     def __post_init__(self) -> None:
@@ -1477,6 +1538,12 @@ class TransformerSoftmaxPolicy:
             raise ValueError("sampling_temperature must be positive.")
         if self.family_gated_selection and not self.deterministic:
             raise ValueError("family_gated_selection currently requires deterministic selection.")
+        if self.history_mask_k is not None and not (
+            0 < self.history_mask_k <= TRANSITION_TOKEN_COUNT
+        ):
+            raise ValueError(
+                f"history_mask_k must be in 1..{TRANSITION_TOKEN_COUNT}, got {self.history_mask_k}."
+            )
         if self.policy_id is None:
             self.policy_id = self.result.model_config.policy_id
         if self._history_by_player is None:
@@ -1518,6 +1585,8 @@ class TransformerSoftmaxPolicy:
             window_size=self.result.model_config.window_size,
             device=self.device,
         )
+        if self.history_mask_k is not None:
+            tensors = truncate_history_tensors(tensors, self.history_mask_k)
         if self.inference_timing is not None:
             self.inference_timing.add_observation_encoding(perf_counter() - encoding_started_at)
         forward_fn = self.forward_fn if self.forward_fn is not None else self._default_forward
@@ -1587,6 +1656,7 @@ def load_transformer_policy(
     sampling_temperature: float = 1.0,
     family_gated_selection: bool = False,
     device: str | Any | None = None,
+    history_mask_k: int | None = None,
 ) -> TransformerSoftmaxPolicy:
     resolved_device = resolve_torch_device(device)
     checkpoint_path = Path(path)
@@ -1599,6 +1669,7 @@ def load_transformer_policy(
         sampling_temperature=sampling_temperature,
         family_gated_selection=family_gated_selection,
         device=resolved_device,
+        history_mask_k=history_mask_k,
         checkpoint_path=str(checkpoint_path.resolve(strict=False)),
         weights_sha256=_file_sha256(checkpoint_path),
     )
