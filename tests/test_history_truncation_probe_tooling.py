@@ -119,6 +119,23 @@ class AnalyzeHistoryTruncationProbeTest(unittest.TestCase):
         report = self._verdict(cells)
         self.assertEqual(report["verdict"], "mixed")
 
+    def test_merges_shards_of_same_cell(self) -> None:
+        opps_a = {"max-damage": 0.72, "simple-legal": 0.96, "random-legal": 0.99}
+        opps_b = {"max-damage": 0.76, "simple-legal": 0.96, "random-legal": 0.99}
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, opps in enumerate((opps_a, opps_b)):
+                path = Path(directory) / f"m50-k128-shard{index}.json"
+                path.write_text(json.dumps(self._cell("m50", 128, opps)))
+                paths.append(path)
+            cells = self.analyze._load_cells(paths)
+        # Two shard files collapse to a single cell with summed games.
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0]["shards"], 2)
+        md = cells[0]["opponents"]["max-damage"]
+        self.assertEqual(md["games"], 2000)
+        self.assertAlmostEqual(md["win_rate"], 0.74, places=3)
+
     def test_infers_checkpoint_from_common_policy(self) -> None:
         base = {"max-damage": 0.72, "simple-legal": 0.96, "random-legal": 0.99}
         cells = self.analyze._load_cells(

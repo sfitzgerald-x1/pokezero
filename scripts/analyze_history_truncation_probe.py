@@ -53,24 +53,94 @@ def _load_cells(paths: list[Path]) -> list[dict[str, Any]]:
                 f"{path}: could not infer a single checkpoint policy id (candidates {common})"
             )
         checkpoint_id = next(iter(common))
-        opponents: dict[str, dict[str, float]] = {}
+        opponents: dict[str, dict[str, int]] = {}
         for h2h in head_to_heads:
             if h2h["first_policy_id"] == checkpoint_id:
                 opponent = h2h["second_policy_id"]
-                win_rate = float(h2h["first_policy_win_rate"])
+                wins = int(h2h["first_policy_wins"])
             else:
                 opponent = h2h["first_policy_id"]
-                win_rate = float(h2h["second_policy_win_rate"])
-            opponents[opponent] = {"win_rate": win_rate, "games": int(h2h["games"])}
+                wins = int(h2h["second_policy_wins"])
+            # Sum wins/games so multiple shard files for one cell aggregate cleanly.
+            slot = opponents.setdefault(opponent, {"wins": 0, "games": 0})
+            slot["wins"] += wins
+            slot["games"] += int(h2h["games"])
+        provenance = (payload.get("policy_provenance") or {}).get(checkpoint_id) or {}
         cells.append(
             {
                 "path": str(path),
                 "checkpoint_id": checkpoint_id,
+                "checkpoint_path": provenance.get("checkpoint_path"),
                 "k": int(payload.get("history_mask_k") or FULL_K),
                 "opponents": opponents,
             }
         )
-    return cells
+    return _merge_shards(cells)
+
+
+def _merge_shards(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate multiple files that share a (checkpoint, k) — i.e. shards of one cell."""
+    merged: dict[tuple[str, int], dict[str, Any]] = {}
+    for cell in cells:
+        key = (cell["checkpoint_id"], cell["k"])
+        if key not in merged:
+            merged[key] = {
+                "checkpoint_id": cell["checkpoint_id"],
+                "checkpoint_path": cell.get("checkpoint_path"),
+                "k": cell["k"],
+                "opponents": {},
+                "shards": 0,
+            }
+        target = merged[key]
+        target["shards"] += 1
+        if not target.get("checkpoint_path"):
+            target["checkpoint_path"] = cell.get("checkpoint_path")
+        for opponent, stat in cell["opponents"].items():
+            slot = target["opponents"].setdefault(opponent, {"wins": 0, "games": 0})
+            slot["wins"] += stat["wins"]
+            slot["games"] += stat["games"]
+    # Finalize win rates.
+    out = []
+    for cell in merged.values():
+        for opponent, stat in cell["opponents"].items():
+            stat["win_rate"] = stat["wins"] / stat["games"] if stat["games"] else 0.0
+        out.append(cell)
+    return out
+
+
+def fold_foulplay(cells: list[dict[str, Any]], foulplay_root: Path) -> None:
+    """Attach a synthetic ``foul-play`` opponent to each cell from foul-play probe results.
+
+    ``foulplay_root`` contains ``<name>-k<K>/result.json`` (or partial-result.json) written by
+    foundation/foulplay-k8s-probe.sh (schema pokezero.foulplay_progress.* with wins /
+    completed_games / checkpoint_path). Cells are matched by (checkpoint_path, k) — the same
+    checkpoint the ladder cell benchmarked.
+    """
+    by_key = {(c.get("checkpoint_path"), c["k"]): c for c in cells}
+    matched = 0
+    for result_path in sorted(foulplay_root.rglob("result.json")) + sorted(
+        foulplay_root.rglob("partial-result.json")
+    ):
+        payload = json.loads(result_path.read_text())
+        games = int(payload.get("completed_games") or 0)
+        wins = int(payload.get("wins") or 0)
+        checkpoint_path = payload.get("checkpoint_path")
+        # k from the enclosing dir name (…-k<K>), falling back to 128.
+        k = FULL_K
+        for part in reversed(result_path.parts):
+            if "-k" in part and part.rsplit("-k", 1)[-1].isdigit():
+                k = int(part.rsplit("-k", 1)[-1])
+                break
+        cell = by_key.get((checkpoint_path, k))
+        if cell is None or games <= 0:
+            continue
+        slot = cell["opponents"].setdefault("foul-play", {"wins": 0, "games": 0})
+        slot["wins"] += wins
+        slot["games"] += games
+        slot["win_rate"] = slot["wins"] / slot["games"]
+        matched += 1
+    if matched:
+        print(f"folded foul-play results into {matched} cells", flush=True)
 
 
 def _se(win_rate: float, games: int) -> float:
@@ -195,7 +265,9 @@ def _print(report: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("summaries", nargs="+", help="Per-cell benchmark summary JSON paths (globs ok).")
+    parser.add_argument("summaries", nargs="+", help="Per-cell ladder benchmark summary JSON paths (globs ok).")
+    parser.add_argument("--foulplay-root", type=Path, default=None,
+                        help="Optional dir of foul-play probe results (<name>-k<K>/result.json) to fold in as a 'foul-play' opponent.")
     parser.add_argument("--out", type=Path, default=None, help="Optional verdict JSON output path.")
     args = parser.parse_args(argv)
 
@@ -204,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
         matched = [Path(p) for p in glob.glob(pattern)]
         paths.extend(matched or [Path(pattern)])
     cells = _load_cells(paths)
+    if args.foulplay_root is not None:
+        fold_foulplay(cells, args.foulplay_root)
     report = analyze(cells)
     _print(report)
     if args.out is not None:
