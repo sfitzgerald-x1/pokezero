@@ -238,6 +238,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
     _add_dataset_config_arguments(collect_selfplay_cache)
     collect_selfplay_cache.set_defaults(func=_collect_selfplay_training_cache)
 
+    selfplay_worker = subparsers.add_parser(
+        "collect-selfplay-worker",
+        help=(
+            "Persistent collector-fleet worker: claim task manifests from the filesystem "
+            "work queue and run each through collect-selfplay-training-cache IN-PROCESS "
+            "(interpreter/torch startup paid once per worker, not once per task)."
+        ),
+        epilog=(
+            "Everything after `--` is passed through VERBATIM to collect-selfplay-training-cache "
+            "for every task; the per-task --games/--seed-start/--out/--current-policy come from "
+            "the claimed manifest and are appended last (last-wins). The pod command should wrap "
+            "this in a respawn loop: the worker exits 0 to self-recycle on the RSS/task bounds."
+        ),
+    )
+    selfplay_worker.add_argument(
+        "--task-queue", type=Path, required=True,
+        help="Queue root containing pending/ claimed/ done/ failed/.",
+    )
+    selfplay_worker.add_argument(
+        "--worker-id", default=None,
+        help="Claim-suffix identity (default: hostname, matching the shell fleet worker).",
+    )
+    selfplay_worker.add_argument(
+        "--max-rss-mb", type=float, default=12000.0,
+        help="Self-recycle (clean exit 0, at a task boundary) once resident memory exceeds this. 0 disables.",
+    )
+    selfplay_worker.add_argument(
+        "--max-tasks", type=int, default=None,
+        help="Optional self-recycle after this many tasks (belt to the RSS bound).",
+    )
+    selfplay_worker.add_argument(
+        "--idle-exit-seconds", type=float, default=None,
+        help="Exit 0 after this long with an empty queue (default: poll forever).",
+    )
+    selfplay_worker.add_argument(
+        "static", nargs=argparse.REMAINDER,
+        help="`-- <flags...>` forwarded to collect-selfplay-training-cache for every task.",
+    )
+    selfplay_worker.set_defaults(func=_collect_selfplay_worker)
+
     benchmark = subparsers.add_parser("benchmark", help="Run rollout benchmarks without writing trajectories.")
     benchmark.add_argument(
         "--games",
@@ -553,6 +593,30 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     if cache_paths:
         print(f"training_cache_bytes: {training_cache_paths_byte_size(cache_paths)}")
     return 0
+
+
+def _collect_selfplay_worker(args: argparse.Namespace) -> int:
+    """Persistent fleet worker: the queue loop lives in pokezero.fleet_worker; each
+    claimed task re-enters this module's own parser + collect path, so validation
+    and behavior are byte-identical to a per-task CLI invocation."""
+    from .fleet_worker import run_worker
+
+    static = list(args.static)
+    if static and static[0] == "--":
+        static = static[1:]
+
+    def collect_fn(task_argv: list[str]) -> int:
+        return main(["collect-selfplay-training-cache", *task_argv])
+
+    return run_worker(
+        args.task_queue,
+        worker_id=args.worker_id,
+        static_argv=static,
+        collect_fn=collect_fn,
+        max_rss_mb=(args.max_rss_mb if args.max_rss_mb and args.max_rss_mb > 0 else None),
+        max_tasks=args.max_tasks,
+        idle_exit_seconds=args.idle_exit_seconds,
+    )
 
 
 def _load_opponent_pool_manifest(path: Path, *, showdown_root: Path) -> tuple[OpponentPoolEntry, ...]:
