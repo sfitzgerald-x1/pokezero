@@ -86,30 +86,80 @@ has passed. A faithful trained-policy census therefore requires re-generating
 games with the checkpoint and counting history fill on the encoded observations.
 
 Tool: `scripts/history_slot_census.py` computes the per-decision transition-slot
-fill distribution from either (a) a training-cache `attention_mask.npy` or (b) a
-freshly generated benchmark trajectory capture. Run + numbers: PENDING (requires
-the eval image; see §4).
+fill distribution from a training-cache `attention_mask.npy` (or any encoded
+observation source).
 
-## 4. k-grid reads (plan steps 2–3) — PENDING
+Status (2026-07-21): the only persisted caches on the shared PVC are the
+`diversity-d0-smoke` self-play caches, and they are **`observation.v2`** (per-
+ACTION tokens, budget capped at 64) — a census over them reads mean 34.4, median
+33, p90/p99/max 64/64/64, 51.4% >32 (n=54,681), but the max=64 is the v2 budget
+cap and the token unit is per-action, so this is **not comparable** to the plan's
+v2.2 128-slot per-turn corpus census and cannot serve as the trained-policy
+re-census. A faithful v2.2 trained-policy census therefore needs a fresh
+collection with a current checkpoint (e.g. one `neural_cli iterate` collection
+pass on m50/emeta), then `history_slot_census.py` on the resulting v2.2 cache.
+This closes the *investigation* of caveat (a): the production v2.2 caches were
+already cleaned (exactly the window the plan warned about), so the FILL re-census
+is a fresh-collection follow-on. Per the plan's own logic the USAGE grid (§4)
+supersedes the FILL question, so this does not block the verdict.
+
+## 4. k-grid reads (plan steps 2–3)
 
 Grid: `k ∈ {16, 32, 64, 128}` × { m50 5M (`metamon-m50-2m-lr10m-ep7`
 iteration-3125), emeta S 3M (`emeta-v2-2-lr3m-3m-belief` iteration-0625) }.
-Reads per cell: ladder (max-damage / simple-legal / random-legal) n=1000 +
-foul-play n=1000 (SE ≈ 1.6%), fixed shared seed bands (paired within
-checkpoint). Both checkpoints confirmed present on the shared PVC (m50
-iteration-3125 = the 5M target, written 2026-07-21).
+Both checkpoints confirmed present on the shared PVC (m50 iteration-3125 = the 5M
+target, written 2026-07-21). Run on GPU (pinned to the designated Crusoe nodepool
+`856c0ba6…`), sharded 4×/cell, paired seed band `--seed-start 50000000` shared
+across all cells. Launcher:
+`pokezero-deploy/foundation/history-truncation-probe.sh`.
 
-Launcher: `pokezero-deploy/foundation/history-truncation-probe.sh` (private
-deploy repo). Results collected to
-`/shared/scott-experiment/history-truncation-probe-<date>/`.
+### Ladder — DONE (n=1000 per opponent, paired; SE ≈ 1.6%)
 
-## 5. Verdict (pre-registered rules from the plan) — PENDING
+Checkpoint win rate at each k vs the full-128 baseline (Δ = k − 128):
 
-Applied by `scripts/analyze_history_truncation_probe.py`:
-- **Flat down to k\*** (all deltas within 2×SE of full, all opponents, both
-  checkpoints) → deep slots decorative; cutover adopts a k\*-sized region
-  (k\* → next power of two).
-- **Degradation at small k** → usage proven; keep 128 (or one S-scale trained
-  variant at the candidate length as tiebreaker).
-- **Mixed / class-dependent** → usage-proven for the cutover (keep 128); record
-  the pattern as input to the sibling history-compression study.
+**m50 5M (iteration-3125):**
+
+| opponent | full(128) | k=64 Δ | k=32 Δ | k=16 Δ |
+|---|---|---|---|---|
+| max-damage | 0.909 | +0.000 | +0.000 | −0.001 |
+| simple-legal | 0.978 | +0.000 | +0.000 | −0.008 |
+| random-legal | 0.976 | +0.000 | +0.000 | +0.002 |
+
+**emeta S 3M (iteration-0625):**
+
+| opponent | full(128) | k=64 Δ | k=32 Δ | k=16 Δ |
+|---|---|---|---|---|
+| max-damage | 0.915 | +0.000 | +0.000 | +0.002 |
+| simple-legal | 0.994 | +0.000 | +0.000 | +0.001 |
+| random-legal | 0.996 | +0.000 | +0.000 | +0.004 |
+
+Two headline facts: (1) **k=32 and k=64 are byte-identical to full-128** (Δ=0.0000
+everywhere, both checkpoints) — ladder games are short enough that the history
+region rarely fills past ~32 turns, so truncating there is a literal no-op,
+consistent with the census (median fill 28, p90 57). (2) **No degradation at any k
+on either checkpoint** — the only cell outside 2×SE is emeta k=16 vs random-legal
+(0.996→1.000, a positive ceiling wobble, not a loss).
+
+**Ladder verdict: FLAT.** No opponent, checkpoint, or k∈{16,32,64} degrades vs
+full-128. Deep slots beyond ~32 are decorative on the ladder. Conservative
+k\*=32 (both checkpoints fully flat at 32 and 64; k=16 also shows no degradation).
+
+### Foul-play — IN PROGRESS (n=1000; the pre-registered tiebreak read)
+
+Foul-play is the strongest opponent and the read most likely to expose deep-history
+usage the ladder cannot. Running on the `-r2` image (adds `play_online.py
+--history-mask-k`); results fold into the verdict via
+`analyze_history_truncation_probe.py --foulplay-root`.
+
+## 5. Verdict (pre-registered rules) — PENDING FOUL-PLAY
+
+Ladder is FLAT (k\*=32). The final verdict follows the pre-registered asymmetry
+once foul-play lands:
+- **Flat on ladder AND foul-play** → deep slots decorative; cutover adopts a
+  k\*-sized region (k\*=32 → next power of two = 32; sequence 151 → 55). Every
+  consumer (training, benchmarks, engine-search leaf) gets faster.
+- **Flat on ladder, degraded vs foul-play** → MIXED: keep 128; the pattern
+  localizes where deep history matters and feeds the sibling history-compression
+  study.
+- Ladder degradation did not occur, so the pure "usage proven on ladder" branch
+  is ruled out.
