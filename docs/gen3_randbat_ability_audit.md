@@ -55,7 +55,8 @@ The audit found and patched these concrete defects in poke-engine 0.0.47:
    or cure an incompatible status after Trace. Water Veil, Magma Armor, Limber,
    Immunity, Insomnia, and Vital Spirit now cover those seams.
 10. Synchronize was absent. Burn/paralysis/poison now reflect after a successful
-    application; Gen 3 Toxic reflection becomes regular poison.
+    application, including statuses caused by contact abilities and the
+    pre-Lum-Berry event seam; Gen 3 Toxic reflection becomes regular poison.
 11. Poison Point, Flame Body, Static, and Effect Spore used inaccurate or
     independently composed probabilities and could trigger through Substitute.
     They now branch at 1/3, 1/3, 1/3, and 1/10 total (1/30 per status), only
@@ -151,7 +152,7 @@ All upstream Rust engine changes are carried by
 | Suction Cups | Exact | Prevents forced switching/drag effects. |
 | Swarm | Bounded | Correct low-HP Bug multiplier via power scaling. |
 | Swift Swim | Exact, patched seam | Doubles effective speed only in unsuppressed rain. |
-| Synchronize | Exact, patched | Reflects burn/paralysis/poison; Toxic reflects as regular poison and respects source immunity. |
+| Synchronize | Exact, patched | Reflects move- or contact-ability-inflicted burn/paralysis/poison before Lum Berry cures; reflected Toxic becomes regular poison and rechecks immunity. |
 | Thick Fat | Bounded | Correct Fire/Ice halving via inverse power proxy. |
 | Torrent | Bounded | Correct low-HP Water multiplier via power scaling. |
 | Trace | Exact, patched seam | Copies the opposing ability in singles, activates entry effects, and applies newly gained immunity cures. |
@@ -173,7 +174,7 @@ future source changes cannot silently restore modern immunity/boost semantics.
   then the Python extension builds with `poke-engine/gen3` and no default
   generation feature.
 - `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
-  `tests.test_engine_world.ForecastRootTypeTests`: **29/29 checks pass**.
+  `tests.test_engine_world.ForecastRootTypeTests`: **31/31 checks pass**.
 - Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
   turns clean**.
 - Additional high-risk Showdown differential (Wonder Guard neutral/super-

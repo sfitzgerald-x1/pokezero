@@ -495,7 +495,7 @@ index 65a0a51..811c1d1 100644
  
  pub fn charge_choice_to_volatile(choice: &Choices) -> PokemonVolatileStatus {
 diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
-index 2354139..9058106 100644
+index 2354139..c3e49f9 100644
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
 @@ -1,7 +1,7 @@
@@ -537,12 +537,11 @@ index 2354139..9058106 100644
      if turns_asleep == 0 {
          0.0
      } else {
-@@ -493,6 +502,16 @@ fn get_instructions_from_status_effects(
+@@ -493,9 +502,20 @@ fn get_instructions_from_status_effects(
      let target_side = state.get_side(&target_side_ref);
      let target_side_active = target_side.active_index;
      let target_pkmn = target_side.get_active();
 +    let synchronize = target_pkmn.ability == Abilities::SYNCHRONIZE
-+        && status.target == MoveTarget::Opponent
 +        && [
 +            PokemonStatus::BURN,
 +            PokemonStatus::PARALYZE,
@@ -554,7 +553,12 @@ index 2354139..9058106 100644
  
      let instruction = if target_pkmn.item == Items::LUMBERRY {
          target_pkmn.item = Items::NONE;
-@@ -511,6 +530,7 @@ fn get_instructions_from_status_effects(
++        // Showdown runs Synchronize before Lum Berry's lower-priority cure.
++        status_was_applied = synchronize;
+         Instruction::ChangeItem(ChangeItemInstruction {
+             side_ref: target_side_ref,
+             current_item: Items::LUMBERRY,
+@@ -511,6 +531,7 @@ fn get_instructions_from_status_effects(
      } else {
          let old_status = target_pkmn.status;
          target_pkmn.status = status.status;
@@ -562,7 +566,7 @@ index 2354139..9058106 100644
          Instruction::ChangeStatus(ChangeStatusInstruction {
              side_ref: target_side_ref,
              pokemon_index: target_side_active,
-@@ -519,6 +539,36 @@ fn get_instructions_from_status_effects(
+@@ -519,6 +540,37 @@ fn get_instructions_from_status_effects(
          })
      };
      incoming_instructions.instruction_list.push(instruction);
@@ -575,13 +579,14 @@ index 2354139..9058106 100644
 +        } else {
 +            status.status
 +        };
++        let source_side_ref = target_side_ref.get_other_side();
 +        if !immune_to_status(
 +            state,
 +            &MoveTarget::Opponent,
-+            attacking_side_reference,
++            &source_side_ref,
 +            &reflected_status,
 +        ) {
-+            let source_side = state.get_side(attacking_side_reference);
++            let source_side = state.get_side(&source_side_ref);
 +            let source_index = source_side.active_index;
 +            let source = source_side.get_active();
 +            let old_status = source.status;
@@ -589,7 +594,7 @@ index 2354139..9058106 100644
 +            incoming_instructions
 +                .instruction_list
 +                .push(Instruction::ChangeStatus(ChangeStatusInstruction {
-+                    side_ref: *attacking_side_reference,
++                    side_ref: source_side_ref,
 +                    pokemon_index: source_index,
 +                    old_status,
 +                    new_status: reflected_status,
@@ -599,7 +604,7 @@ index 2354139..9058106 100644
  }
  
  pub fn get_boost_amount(side: &Side, boost: &PokemonBoostableStat, amount: i8) -> i8 {
-@@ -1029,8 +1079,7 @@ fn generate_instructions_from_damage(
+@@ -1029,8 +1081,7 @@ fn generate_instructions_from_damage(
              damage_dealt = cmp::min(calculated_damage, defending_pokemon.hp);
              if damage_dealt != 0 {
                  if has_endure
@@ -609,7 +614,7 @@ index 2354139..9058106 100644
                          && defending_pokemon.maxhp == defending_pokemon.hp)
                  {
                      damage_dealt -= 1;
-@@ -1082,14 +1131,40 @@ fn generate_instructions_from_damage(
+@@ -1082,14 +1133,40 @@ fn generate_instructions_from_damage(
                      damage_dealt,
                      &mut incoming_instructions,
                  );
@@ -652,7 +657,7 @@ index 2354139..9058106 100644
              if heal_amount != 0 {
                  let drain_instruction = Instruction::Heal(HealInstruction {
                      side_ref: *attacking_side_ref,
-@@ -1250,6 +1325,7 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1250,6 +1327,7 @@ fn generate_instructions_from_existing_status_conditions(
  ) {
      let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
      let current_active_index = attacking_side.active_index;
@@ -660,7 +665,7 @@ index 2354139..9058106 100644
      let attacker_active = attacking_side.get_active();
      match attacker_active.status {
          PokemonStatus::PARALYZE => {
-@@ -1282,7 +1358,10 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1282,7 +1360,10 @@ fn generate_instructions_from_existing_status_conditions(
                  // Pokemon is not asleep because of Rest.
                  0 => {
                      let current_sleep_turns = attacker_active.sleep_turns;
@@ -672,7 +677,7 @@ index 2354139..9058106 100644
                      if chance_to_wake == 1.0 {
                          attacker_active.status = PokemonStatus::NONE;
                          attacker_active.sleep_turns = 0;
-@@ -1397,6 +1476,27 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1397,6 +1478,27 @@ fn generate_instructions_from_existing_status_conditions(
                          final_instructions.push(do_nothing_instructions);
                      }
                  }
@@ -700,7 +705,7 @@ index 2354139..9058106 100644
                  // Pokemon is asleep because of Rest, and will wake up this turn
                  1 => {
                      attacker_active.status = PokemonStatus::NONE;
-@@ -1417,6 +1517,16 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1417,6 +1519,16 @@ fn generate_instructions_from_existing_status_conditions(
                              },
                          ));
                  }
@@ -717,7 +722,7 @@ index 2354139..9058106 100644
                  // Pokemon is asleep because of Rest, and will stay asleep this turn
                  2 | 3 => {
                      attacker_active.rest_turns -= 1;
-@@ -1437,6 +1547,7 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1437,6 +1549,7 @@ fn generate_instructions_from_existing_status_conditions(
      if attacking_side
          .volatile_statuses
          .contains(&PokemonVolatileStatus::CONFUSION)
@@ -725,7 +730,7 @@ index 2354139..9058106 100644
      {
          let mut hit_yourself_instruction = incoming_instructions.clone();
          hit_yourself_instruction.update_percentage(HIT_SELF_IN_CONFUSION_CHANCE);
-@@ -1500,6 +1611,7 @@ fn generate_instructions_from_existing_status_conditions(
+@@ -1500,6 +1613,7 @@ fn generate_instructions_from_existing_status_conditions(
      if attacking_side
          .volatile_statuses
          .contains(&PokemonVolatileStatus::ATTRACT)
@@ -733,7 +738,7 @@ index 2354139..9058106 100644
      {
          let mut immobilized_instruction = incoming_instructions.clone();
          immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
-@@ -1921,10 +2033,12 @@ fn get_effective_speed(state: &State, side_reference: &SideReference) -> i16 {
+@@ -1921,10 +2035,12 @@ fn get_effective_speed(state: &State, side_reference: &SideReference) -> i16 {
  
      let mut boosted_speed = side.calculate_boosted_stat(PokemonBoostableStat::Speed) as f32;
  
@@ -750,7 +755,7 @@ index 2354139..9058106 100644
      }
  
      if side
-@@ -1995,6 +2109,7 @@ fn add_end_of_turn_instructions(
+@@ -1995,6 +2111,7 @@ fn add_end_of_turn_instructions(
      state: &mut State,
      mut incoming_instructions: &mut StateInstructions,
      first_move_side: &SideReference,
@@ -758,7 +763,7 @@ index 2354139..9058106 100644
  ) {
      state.apply_instructions(&incoming_instructions.instruction_list);
      if state.side_one.force_switch || state.side_two.force_switch {
-@@ -2022,6 +2137,7 @@ fn add_end_of_turn_instructions(
+@@ -2022,6 +2139,7 @@ fn add_end_of_turn_instructions(
                  .instruction_list
                  .push(weather_end_instruction);
              state.weather.weather_type = Weather::NONE;
@@ -766,7 +771,7 @@ index 2354139..9058106 100644
          }
      }
  
-@@ -2079,6 +2195,7 @@ fn add_end_of_turn_instructions(
+@@ -2079,6 +2197,7 @@ fn add_end_of_turn_instructions(
                  || active_pkmn.has_type(&PokemonType::GROUND)
                  || active_pkmn.has_type(&PokemonType::STEEL)
                  || active_pkmn.has_type(&PokemonType::ROCK)
@@ -774,7 +779,7 @@ index 2354139..9058106 100644
              {
                  continue;
              }
-@@ -2168,7 +2285,16 @@ fn add_end_of_turn_instructions(
+@@ -2168,7 +2287,16 @@ fn add_end_of_turn_instructions(
              continue;
          }
          item_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
@@ -792,7 +797,7 @@ index 2354139..9058106 100644
      }
  
      // leechseed sap
-@@ -2428,7 +2554,9 @@ fn add_end_of_turn_instructions(
+@@ -2428,7 +2556,9 @@ fn add_end_of_turn_instructions(
                      side.volatile_status_durations.yawn -= 1;
  
                      let active = side.get_active();
@@ -803,7 +808,7 @@ index 2354139..9058106 100644
                          active.status = PokemonStatus::SLEEP;
                          incoming_instructions
                              .instruction_list
-@@ -2668,6 +2796,51 @@ fn add_end_of_turn_instructions(
+@@ -2668,6 +2798,51 @@ fn add_end_of_turn_instructions(
      state.reverse_instructions(&incoming_instructions.instruction_list);
  }
  
@@ -855,7 +860,7 @@ index 2354139..9058106 100644
  fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
      !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
          && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
-@@ -2949,9 +3122,11 @@ pub fn generate_instructions_from_move_pair(
+@@ -2949,9 +3124,11 @@ pub fn generate_instructions_from_move_pair(
                  branch_on_damage,
              );
              if end_of_turn_triggered(side_one_move, side_two_move) {
@@ -870,7 +875,7 @@ index 2354139..9058106 100644
              }
          }
          SideMovesFirst::SideTwo => {
-@@ -2965,9 +3140,11 @@ pub fn generate_instructions_from_move_pair(
+@@ -2965,9 +3142,11 @@ pub fn generate_instructions_from_move_pair(
                  branch_on_damage,
              );
              if end_of_turn_triggered(side_one_move, side_two_move) {
@@ -885,7 +890,7 @@ index 2354139..9058106 100644
              }
          }
          SideMovesFirst::SpeedTie => {
-@@ -2975,37 +3152,50 @@ pub fn generate_instructions_from_move_pair(
+@@ -2975,37 +3154,50 @@ pub fn generate_instructions_from_move_pair(
              incoming_instructions.update_percentage(0.5);
              side_one_moves_first_instruction.update_percentage(0.5);
  

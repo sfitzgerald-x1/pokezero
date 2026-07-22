@@ -77,6 +77,7 @@ class AbilityMechanicsTests(unittest.TestCase):
         status: str = "none",
         sleep_turns: int = 0,
         pp: int = 16,
+        item: str = "none",
     ):
         return poke_engine.Pokemon(
             id=species,
@@ -86,7 +87,7 @@ class AbilityMechanicsTests(unittest.TestCase):
             hp=hp,
             maxhp=maxhp,
             ability=ability,
-            item="none",
+            item=item,
             attack=180,
             defense=180,
             special_attack=180,
@@ -400,6 +401,27 @@ class AbilityMechanicsTests(unittest.TestCase):
         reflected = [branch for branch in branches if "SideTwo-P0: NONE -> TOXIC" in self._text(branch)]
         self.assertTrue(reflected)
         self.assertTrue(all("SideOne-P0: NONE -> POISON" in self._text(branch) for branch in reflected))
+
+    def test_synchronize_reflects_contact_ability_status(self) -> None:
+        attacker = self._mon("alakazam", "synchronize", "tackle", speed=200)
+        defender = self._mon("breloom", "effectspore", "splash", types=("grass", "fighting"))
+        branches = poke_engine.generate_instructions(self._state(attacker, defender), "tackle", "splash")
+        poisoned = [branch for branch in branches if "SideOne-P0: NONE -> POISON" in self._text(branch)]
+        self.assertTrue(poisoned)
+        self.assertTrue(all("SideTwo-P0: NONE -> POISON" in self._text(branch) for branch in poisoned))
+
+    def test_synchronize_reflects_before_lum_berry_cures(self) -> None:
+        attacker = self._mon("mew", "pressure", "willowisp", speed=200)
+        defender = self._mon("alakazam", "synchronize", "splash", item="lumberry")
+        state = self._state(attacker, defender)
+        branches = poke_engine.generate_instructions(state, "willowisp", "splash")
+        hit_branches = [branch for branch in branches if "LUMBERRY -> NONE" in self._text(branch)]
+        self.assertTrue(hit_branches)
+        for branch in hit_branches:
+            applied = state.apply_instructions(branch)
+            self.assertEqual(str(applied.side_one.pokemon[0].status).upper(), "BURN")
+            self.assertEqual(str(applied.side_two.pokemon[0].status).upper(), "NONE")
+            self.assertEqual(str(applied.side_two.pokemon[0].item).upper(), "NONE")
 
     def test_pressure_consumes_two_pp_in_the_engine_relevant_range(self) -> None:
         attacker = self._mon("tauros", "intimidate", "tackle", speed=200, pp=9)
