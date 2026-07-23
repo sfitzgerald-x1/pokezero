@@ -86,7 +86,9 @@ COUNTER_MOVES = {mid("Counter"), mid("Mirror Coat")}
 IMMUNITY_AB = mid("Immunity")                          # poison-proof -> the read is on Toxic/Poison Powder
 INSOMNIA_ABS = {mid("Insomnia"), mid("Vital Spirit")}  # sleep-immunity twins -> read on sleep moves
 LIMBER_AB = mid("Limber")                              # paralysis-proof -> read on T-Wave/Stun Spore/Glare
+LIQUID_OOZE_AB = mid("Liquid Ooze")                    # drains hurt the drainer -> read on drain moves/Leech Seed
 POISON_STATUS_MOVES = {TOXIC, POISON_POWDER}
+DRAIN_MOVES = {mid("Absorb"), mid("Mega Drain"), mid("Giga Drain"), mid("Leech Life"), mid("Dream Eater")}
 # Type membership for type-based switch-in reads. Frozen like the move-id lists; generated from the
 # gen3 randbats pool (data/random-battles/gen3/sets.json, 220 species) x data/pokedex.ts types —
 # regenerate if the pool ever changes. Grass is immune to Leech Seed, Fire to Will-O-Wisp's burn,
@@ -312,6 +314,8 @@ class GameParse:
                         self._swtags[seat].add("insomnia")
                     if ab == LIMBER_AB:
                         self._swtags[seat].add("limber")
+                    if ab == LIQUID_OOZE_AB:
+                        self._swtags[seat].add("liquidooze")
                     sid = mid(sp)
                     if sid in GRASS_SPECIES:
                         self._swtags[seat].add("grass")
@@ -647,6 +651,11 @@ class GameParse:
                 self.ev[opp]["limber_switchin_on_para"] += 1
             if move == LEECH_SEED and "grass" in tags:
                 self.ev[opp]["grass_switchin_on_leechseed"] += 1
+            # Liquid Ooze punish reads: the drain/seed now HURTS the user instead of healing them
+            if move in DRAIN_MOVES and "liquidooze" in tags:
+                self.ev[opp]["ooze_switchin_on_drain"] += 1
+            if move == LEECH_SEED and "liquidooze" in tags:
+                self.ev[opp]["ooze_switchin_on_leechseed"] += 1
             if move == WILL_O_WISP and "fire" in tags:
                 self.ev[opp]["fire_switchin_on_wow"] += 1
             if move == RAPID_SPIN and "ghost" in tags and self.spikes[seat] >= 1:
@@ -780,6 +789,7 @@ def extract(files, lineage=None, milestone=None):
     imm_present = 0; imm_reads = 0           # Immunity mon in on Toxic / Poison Powder
     insom_present = 0; insom_reads = 0       # Insomnia / Vital Spirit mon in on a sleep move
     limber_present = 0; limber_reads = 0     # Limber mon in on a paralysis move
+    ooze_present = 0; ooze_drain_reads = 0; ooze_seed_reads = 0  # Liquid Ooze in on drain / Leech Seed
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -884,6 +894,10 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, {LIMBER_AB}, None, require_exact=True):
                     limber_present += 1
                     limber_reads += gp.ev[seat]["limber_switchin_on_para"]
+                if ability_present(g, gp, seat, {LIQUID_OOZE_AB}, None, require_exact=True):
+                    ooze_present += 1
+                    ooze_drain_reads += gp.ev[seat]["ooze_switchin_on_drain"]
+                    ooze_seed_reads += gp.ev[seat]["ooze_switchin_on_leechseed"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -1044,6 +1058,9 @@ def extract(files, lineage=None, milestone=None):
         "insomnia_switchin_on_sleep_per_game": (round(insom_reads / insom_present, 4) if insom_present else None),
         "limber_present_seat_games": limber_present,
         "limber_switchin_on_para_per_game": (round(limber_reads / limber_present, 4) if limber_present else None),
+        "ooze_present_seat_games": ooze_present,
+        "ooze_switchin_on_drain_per_game": (round(ooze_drain_reads / ooze_present, 4) if ooze_present else None),
+        "ooze_switchin_on_leechseed_per_game": (round(ooze_seed_reads / ooze_present, 4) if ooze_present else None),
         # Type-based switch-in reads (no ability gate — most teams have the type): per seat-game.
         "grass_switchin_on_leechseed_per_game": round(cat_extra["grass_switchin_on_leechseed"] / (seat_games or 1), 4),
         "fire_switchin_on_wow_per_game": round(cat_extra["fire_switchin_on_wow"] / (seat_games or 1), 4),

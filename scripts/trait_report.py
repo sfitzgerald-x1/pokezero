@@ -257,6 +257,8 @@ TRAJECTORY_CHARTS = [
         ("Immunity in on toxic / game (carried)", lambda r: r.get("imm_switchin_on_toxic_per_game")),
         ("Insomnia/Vital Spirit in on sleep / game (carried)", lambda r: r.get("insomnia_switchin_on_sleep_per_game")),
         ("Limber in on para / game (carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
+        ("Liquid Ooze in on drain move / game (carried)", lambda r: r.get("ooze_switchin_on_drain_per_game")),
+        ("Liquid Ooze in on leech seed / game (carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
         # type-based switch-in reads (no ability gate) — per seat-game
         ("Grass in on leech seed", lambda r: r.get("grass_switchin_on_leechseed_per_game")),
         ("Fire in on will-o-wisp", lambda r: r.get("fire_switchin_on_wow_per_game")),

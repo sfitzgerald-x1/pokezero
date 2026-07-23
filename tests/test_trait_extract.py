@@ -754,6 +754,26 @@ class SwitchInReads(unittest.TestCase):
         ], movesets=ms2)
         self.assertEqual(gp2.ev["p1"]["limber_switchin_on_para"], 0)
 
+    def test_liquid_ooze_in_on_drain_and_leech_seed(self):
+        ms = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Liquid Ooze"}], "p2": []}
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Tentacruel|Tentacruel, M|360/360",
+            "|move|p2a: Celebi|Giga Drain|p1a: Tentacruel",      # drain now damages the drainer
+            "|turn|2",
+            "|switch|p1a: Tentacruel|Tentacruel, M|300/360",
+            "|move|p2a: Celebi|Leech Seed|p1a: Tentacruel",      # seeding an Ooze mon backfires too
+        ], movesets=ms)
+        self.assertEqual(gp.ev["p1"]["ooze_switchin_on_drain"], 1)
+        self.assertEqual(gp.ev["p1"]["ooze_switchin_on_leechseed"], 1)
+        # a drain move into a non-Ooze switch-in is not a read
+        ms2 = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Clear Body"}], "p2": []}
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Tentacruel|Tentacruel, M|360/360",
+            "|move|p2a: Celebi|Giga Drain|p1a: Tentacruel",
+        ], movesets=ms2)
+        self.assertEqual(gp2.ev["p1"]["ooze_switchin_on_drain"], 0)
+
     def test_grass_in_on_leech_seed(self):
         gp = parse([
             "|turn|1",
