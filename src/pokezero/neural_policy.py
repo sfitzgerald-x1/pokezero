@@ -546,6 +546,15 @@ class TransformerTrainingConfig:
     # checkpoint payload round-trips through TransformerTrainingConfig(**payload) unchanged.
     # The shaping gamma is `discount`.
     shaping_weights: str | None = None
+    # Stream+collate the training caches once (epoch 1) and replay the retained batch list for
+    # the remaining epochs instead of re-reading and re-collating per epoch. Batch iteration is
+    # deterministic file-order streaming (no shuffle), so every epoch already sees the identical
+    # batch sequence — replay feeds the model the same tensors in the same order and changes no
+    # training numerics. It also freezes the epoch-1 dataset view: a cache shard that appears
+    # mid-train can no longer leak into later epochs. Costs one collated copy of the window in
+    # trainer RAM. Not yet composed with auxiliary refutation caches (capped-interleave
+    # per-epoch determinism is unproven), so that combination fails closed.
+    batch_replay: bool = False
 
     def __post_init__(self) -> None:
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
@@ -1855,6 +1864,19 @@ def train_transformer_policy(
         potential_shaping=resolved_training_config.resolved_shaping_config(),
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
+    # batch_replay: stream+collate once (epoch 1), replay the retained list afterwards. The
+    # stream is deterministic file-order iteration, so replay is the identical batch sequence.
+    # Epoch 1 records the consumed-cache paths via the iterator's own callback slot; the real
+    # callback fires once after the final epoch (strictly later than the streaming path would,
+    # so a cache is never released while any epoch still needs it).
+    replay_enabled = resolved_training_config.batch_replay and resolved_training_config.epochs > 1
+    if replay_enabled and auxiliary_paths is not None:
+        raise ValueError(
+            "batch_replay is not supported with auxiliary refutation caches yet "
+            "(capped-interleave per-epoch determinism is unproven)."
+        )
+    replay_batches: list[TrainingBatch] = []
+    replay_consumed_paths: list[Path] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
         epoch_started = perf_counter()
         epoch_learning_rate = _learning_rate_for_epoch(resolved_training_config, epoch)
@@ -1873,7 +1895,17 @@ def train_transformer_policy(
             if consumed_cache_callback is not None and epoch == resolved_training_config.epochs
             else None
         )
-        if auxiliary_paths is None:
+        if replay_enabled and epoch > 1:
+            training_batches = iter(replay_batches)
+        elif replay_enabled:
+            training_batches = iter_training_batches(
+                paths,
+                batch_size=resolved_training_config.batch_size,
+                config=dataset_config,
+                consumed_cache_callback=replay_consumed_paths.append,
+                defer_cache_window_expansion=True,
+            )
+        elif auxiliary_paths is None:
             training_batches = iter_training_batches(
                 paths,
                 batch_size=resolved_training_config.batch_size,
@@ -1895,6 +1927,8 @@ def train_transformer_policy(
             batch_count = batch_index
             batch_ready = perf_counter()
             batch_load_elapsed_seconds += batch_ready - previous_batch_finished
+            if replay_enabled and epoch == 1:
+                replay_batches.append(batch)
             local_examples = batch.batch_size
             local_batch = batch
             if context.enabled:
@@ -1971,6 +2005,12 @@ def train_transformer_policy(
                     ),
                 )
             _distributed_barrier(context)
+    if replay_enabled and consumed_cache_callback is not None:
+        # Deferred consumed-cache release: every epoch trained from the retained batches, so
+        # the caches recorded during the epoch-1 stream are only released once all epochs are
+        # done (the streaming path releases them mid-final-epoch; this is strictly later).
+        for consumed_path in replay_consumed_paths:
+            consumed_cache_callback(consumed_path)
     _distributed_barrier(context)
     return base_model, TransformerTrainingResult(
         model_config=resolved_model_config,
