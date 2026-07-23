@@ -2115,7 +2115,19 @@ def _owned_array(value: Any) -> Any:
 
 
 def _directory_byte_size(path: Path) -> int:
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    # Walked roots are LIVE under the collector fleet: sibling workers rename and
+    # rmtree their tmp/version dirs concurrently, so any entry can vanish between
+    # listing and stat. A vanished entry contributes 0 — never fail the walk (a
+    # fleet worker's whole task used to die on this race, ~30 times per micro-task
+    # window). os.walk ignores scandir errors by default, unlike Path.rglob.
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for filename in filenames:
+            try:
+                total += os.stat(os.path.join(dirpath, filename)).st_size
+            except OSError:
+                continue
+    return total
 
 
 def _estimated_training_cache_byte_size(arrays: Mapping[str, Any]) -> int:
