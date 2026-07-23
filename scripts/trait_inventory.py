@@ -38,12 +38,17 @@ LINEAGES = {
     "m50-seq":       (r"^metamon-m-50m-.*-seq-20260710$", []),
     "l200-seq":      (r"^metamon-l-200m-.*-seq-20260710$", []),
     # v3 models are tracked in a SEPARATE report (trait_report_v3.html; gen3 with the v3 observation
-    # schema, PR #779). One lineage per history-length arm. The patterns are anchored on the
-    # `v3hist-` run prefix so the many `v3audit-*`/`v3signature-*`/`v3-*-smoke` diagnostic dirs in
-    # the experiment root can never be swept in as legs.
-    "v3-k16": (r"^v3hist-k16-.*$", []),
-    "v3-k32": (r"^v3hist-k32-.*$", []),
-    "v3-k64": (r"^v3hist-k64-.*$", []),
+    # schema, PR #779). One lineage per history-length arm. The patterns require `-5m-` right after
+    # the arm token so (a) the many `v3audit-*`/`v3signature-*`/`v3-*-smoke` diagnostic dirs can
+    # never be swept in as legs, and (b) sibling EXPERIMENT variants that share the arm prefix but
+    # are their own entity from game 0 — e.g. `v3hist-k64-enthalf-5m-*` (halved entropy coeff, a
+    # fresh run, NOT a continuation of the history-length k64 run) — are not absorbed as legs. Such
+    # a variant gets its own lineage key below; it must never collide with the base arm's [0, N)
+    # range (offset-0 ties would nondeterministically repin the base arm's low milestones).
+    "v3-k16": (r"^v3hist-k16-5m-.*$", []),
+    "v3-k32": (r"^v3hist-k32-5m-.*$", []),
+    "v3-k64": (r"^v3hist-k64-5m-.*$", []),
+    "v3-k64-enthalf": (r"^v3hist-k64-enthalf-5m-.*$", []),  # entropy-coeff variant; own entity from game 0
 }
 
 
