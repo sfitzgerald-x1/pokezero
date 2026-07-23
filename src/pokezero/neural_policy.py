@@ -9,7 +9,7 @@ is available.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields as dataclass_fields, replace
 import hashlib
 import json
 import math
@@ -262,6 +262,14 @@ class TransformerPolicyConfig:
     stats_block_enabled: bool = True
     exact_state_enabled: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
+    # Physical transition-token REGION of the model's token sequence — the rows the
+    # checkpoint is built for — as opposed to ``transition_token_budget`` (how many of
+    # those rows the encoder fills). 0 is a sentinel meaning "the stamped schema's full
+    # region" (resolved in __post_init__; schema-aware so v3's 64-row region resolves
+    # correctly), which keeps every existing artifact and direct construction unchanged.
+    # The region-trim converter (scripts/convert_region_trim.py) is the only writer of
+    # smaller values; shrink-to-budget is the only safe direction.
+    transition_token_count: int = 0
     # Tier-2 residual channel (#505). Dataclass default True: a NEW checkpoint under the
     # mask-on decision self-describes as trained with the channel live. from_dict defaults
     # the field FALSE for payloads that lack it: a pre-#505 checkpoint trained on
@@ -332,14 +340,33 @@ class TransformerPolicyConfig:
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
-        transition_token_capacity = observation_spec_for_schema(
-            self.observation_schema_version
-        ).transition_token_count
-        if not 0 < self.transition_token_budget <= transition_token_capacity:
+        schema_spec = observation_spec_for_schema(self.observation_schema_version)
+        transition_token_capacity = schema_spec.transition_token_count
+        if self.transition_token_count == 0:
+            # Sentinel: default to the stamped schema's full region.
+            object.__setattr__(self, "transition_token_count", transition_token_capacity)
+        if not 0 < self.transition_token_count <= transition_token_capacity:
             raise ValueError(
-                "transition_token_budget must be in "
+                "transition_token_count must be in "
                 f"1..{transition_token_capacity} for observation schema "
                 f"{self.observation_schema_version!r}."
+            )
+        if not 0 < self.transition_token_budget <= self.transition_token_count:
+            raise ValueError(
+                "transition_token_budget must be in "
+                f"1..{self.transition_token_count} (the model's transition region) — "
+                "a budget above the physical region cannot have been trained."
+            )
+        # Region/token-count coherence: the transition region is the FINAL layout segment,
+        # so the total token count is always the schema's fixed prefix plus the region. A
+        # hand-edited payload that trims one without the other must fail loudly here.
+        fixed_tokens = schema_spec.token_count - schema_spec.transition_token_count
+        expected_token_count = fixed_tokens + self.transition_token_count
+        if self.token_count != expected_token_count:
+            raise ValueError(
+                f"token_count {self.token_count} does not equal the fixed prefix "
+                f"({fixed_tokens}) + transition_token_count "
+                f"({self.transition_token_count}); expected {expected_token_count}."
             )
         if self.categorical_vocab_size <= 1:
             raise ValueError("categorical_vocab_size must be greater than 1.")
@@ -443,6 +470,14 @@ class TransformerPolicyConfig:
                 "transition_token_budget",
                 default_spec.transition_token_count,
             ),
+            # Same schema-aware default as the budget: payloads that predate the region
+            # field (every artifact before the region-trim converter) resolve to their
+            # schema's full region and parse unchanged.
+            transition_token_count=_int_field(
+                payload,
+                "transition_token_count",
+                default_spec.transition_token_count,
+            ),
             # Provenance latch: checkpoints saved before the Tier-2 channel existed carry no
             # field and were trained on constant-zero slots -> resolve to mask-off, never the
             # dataclass default.
@@ -511,6 +546,15 @@ class TransformerTrainingConfig:
     # checkpoint payload round-trips through TransformerTrainingConfig(**payload) unchanged.
     # The shaping gamma is `discount`.
     shaping_weights: str | None = None
+    # Stream+collate the training caches once (epoch 1) and replay the retained batch list for
+    # the remaining epochs instead of re-reading and re-collating per epoch. Batch iteration is
+    # deterministic file-order streaming (no shuffle), so every epoch already sees the identical
+    # batch sequence — replay feeds the model the same tensors in the same order and changes no
+    # training numerics. It also freezes the epoch-1 dataset view: a cache shard that appears
+    # mid-train can no longer leak into later epochs. Costs one collated copy of the window in
+    # trainer RAM. Not yet composed with auxiliary refutation caches (capped-interleave
+    # per-epoch determinism is unproven), so that combination fails closed.
+    batch_replay: bool = False
 
     def __post_init__(self) -> None:
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
@@ -1820,6 +1864,19 @@ def train_transformer_policy(
         potential_shaping=resolved_training_config.resolved_shaping_config(),
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
+    # batch_replay: stream+collate once (epoch 1), replay the retained list afterwards. The
+    # stream is deterministic file-order iteration, so replay is the identical batch sequence.
+    # Epoch 1 records the consumed-cache paths via the iterator's own callback slot; the real
+    # callback fires once after the final epoch (strictly later than the streaming path would,
+    # so a cache is never released while any epoch still needs it).
+    replay_enabled = resolved_training_config.batch_replay and resolved_training_config.epochs > 1
+    if replay_enabled and auxiliary_paths is not None:
+        raise ValueError(
+            "batch_replay is not supported with auxiliary refutation caches yet "
+            "(capped-interleave per-epoch determinism is unproven)."
+        )
+    replay_batches: list[TrainingBatch] = []
+    replay_consumed_paths: list[Path] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
         epoch_started = perf_counter()
         epoch_learning_rate = _learning_rate_for_epoch(resolved_training_config, epoch)
@@ -1838,7 +1895,17 @@ def train_transformer_policy(
             if consumed_cache_callback is not None and epoch == resolved_training_config.epochs
             else None
         )
-        if auxiliary_paths is None:
+        if replay_enabled and epoch > 1:
+            training_batches = iter(replay_batches)
+        elif replay_enabled:
+            training_batches = iter_training_batches(
+                paths,
+                batch_size=resolved_training_config.batch_size,
+                config=dataset_config,
+                consumed_cache_callback=replay_consumed_paths.append,
+                defer_cache_window_expansion=True,
+            )
+        elif auxiliary_paths is None:
             training_batches = iter_training_batches(
                 paths,
                 batch_size=resolved_training_config.batch_size,
@@ -1860,6 +1927,8 @@ def train_transformer_policy(
             batch_count = batch_index
             batch_ready = perf_counter()
             batch_load_elapsed_seconds += batch_ready - previous_batch_finished
+            if replay_enabled and epoch == 1:
+                replay_batches.append(batch)
             local_examples = batch.batch_size
             local_batch = batch
             if context.enabled:
@@ -1936,6 +2005,12 @@ def train_transformer_policy(
                     ),
                 )
             _distributed_barrier(context)
+    if replay_enabled and consumed_cache_callback is not None:
+        # Deferred consumed-cache release: every epoch trained from the retained batches, so
+        # the caches recorded during the epoch-1 stream are only released once all epochs are
+        # done (the streaming path releases them mid-final-epoch; this is strictly later).
+        for consumed_path in replay_consumed_paths:
+            consumed_cache_callback(consumed_path)
     _distributed_barrier(context)
     return base_model, TransformerTrainingResult(
         model_config=resolved_model_config,
@@ -2420,6 +2495,12 @@ def observation_spec_from_model_config(config: TransformerPolicyConfig) -> Obser
         base,
         categorical_feature_count=config.categorical_feature_count,
         numeric_feature_count=config.numeric_feature_count,
+        # Region-trim threading: a converted checkpoint stamps a smaller physical
+        # transition region, and every consumer that resolves its spec from the
+        # checkpoint (collectors, trainer, evals, online client) then produces and
+        # expects trimmed arrays automatically. Inert for existing artifacts (the
+        # parsed default is the schema's full region).
+        transition_token_count=config.transition_token_count,
     )
 
 
@@ -2453,7 +2534,15 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
     model_config = TransformerPolicyConfig.from_dict(payload["model_config"])
-    training_config = TransformerTrainingConfig(**dict(payload["training_config"]))
+    # Forward-compat: a checkpoint written by a newer trainer may carry training
+    # config fields this build does not know (e.g. batch_replay). They describe
+    # HOW the checkpoint was trained, never how to serve it, so drop them
+    # instead of failing the load — a batch_replay checkpoint crashed every
+    # older loader in the serving/eval path (infsvc /reload, foul-play probes).
+    training_payload = dict(payload["training_config"])
+    known_fields = {field.name for field in dataclass_fields(TransformerTrainingConfig)}
+    training_payload = {key: value for key, value in training_payload.items() if key in known_fields}
+    training_config = TransformerTrainingConfig(**training_payload)
     model = EntityTokenTransformerPolicy(model_config)
     model.load_state_dict(payload["state_dict"])
     if map_location is not None:

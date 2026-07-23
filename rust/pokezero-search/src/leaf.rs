@@ -38,7 +38,7 @@ use pyo3::types::PyDict;
 use serde_json::{json, Map, Value};
 
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
-use poke_engine::state::{PokemonStatus, Side, State};
+use poke_engine::state::{PokemonStatus, PokemonType, Side, State};
 
 use crate::encoder::{encode_row_value, encoded_to_dict, EncodedArrays, Tables};
 use crate::fold::{FoldStateInner, PyFoldState};
@@ -198,13 +198,40 @@ fn active_index_usize(side: &Side) -> usize {
 // Root engine snapshot (delta families)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct MonSnapshot {
     /// PP per move slot, keyed by showdown move id (delta base for
     /// `move_uses` / PP fractions).
     pp: Vec<(String, i8)>,
     hp: i16,
     status: Option<&'static str>,
+    types: (PokemonType, PokemonType),
+}
+
+impl Default for MonSnapshot {
+    fn default() -> Self {
+        Self {
+            pp: Vec::new(),
+            hp: 0,
+            status: None,
+            types: (PokemonType::TYPELESS, PokemonType::TYPELESS),
+        }
+    }
+}
+
+fn changed_live_type_source(
+    root: Option<(PokemonType, PokemonType)>,
+    current: (PokemonType, PokemonType),
+) -> Option<String> {
+    if root == Some(current) {
+        return None;
+    }
+    let mut payload = current.0.to_string();
+    if current.1 != PokemonType::TYPELESS {
+        payload.push('/');
+        payload.push_str(&current.1.to_string());
+    }
+    Some(format!("type:{payload}"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -239,6 +266,7 @@ fn snapshot_side(side: &Side) -> SideSnapshot {
             pp,
             hp: p.hp,
             status: status_code(p.status),
+            types: p.types,
         });
     }
     SideSnapshot {
@@ -987,6 +1015,11 @@ impl LeafContext {
                                 stats.remove("hp");
                             }
                         }
+                    }
+                    if let Some(source) =
+                        changed_live_type_source(snapshot.map(|value| value.types), p.types)
+                    {
+                        obj.insert("live_type_source".into(), json!(source));
                     }
                     obj.insert("active".into(), json!(party == active_party));
                 }
@@ -1827,6 +1860,22 @@ mod tests {
 
     fn lines(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn live_type_source_tracks_in_tree_retypes_only_after_change() {
+        let normal = (PokemonType::NORMAL, PokemonType::TYPELESS);
+        let fire = (PokemonType::FIRE, PokemonType::TYPELESS);
+        let water_flying = (PokemonType::WATER, PokemonType::FLYING);
+        assert_eq!(changed_live_type_source(Some(normal), normal), None);
+        assert_eq!(
+            changed_live_type_source(Some(normal), fire).as_deref(),
+            Some("type:FIRE")
+        );
+        assert_eq!(
+            changed_live_type_source(Some(fire), water_flying).as_deref(),
+            Some("type:WATER/FLYING")
+        );
     }
 
     /// Review F1 repro shapes, replayed with the parser's own line rules.

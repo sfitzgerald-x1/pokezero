@@ -10,6 +10,7 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.determinization import (
     _gen3_randbat_fixture_spread,
+    _sample_gender,
     _self_team_from_metadata,
     belief_world_sampling_profile,
     gen3_randbat_belief_start_override,
@@ -53,16 +54,16 @@ MOVE_METADATA = {
     "wish": {"type": "Normal", "category": "Status", "basePower": 0},
 }
 SPECIES_METADATA = {
-    "arcanine": {"baseStats": {"hp": 90, "atk": 110, "def": 80, "spa": 100, "spd": 80, "spe": 95}},
+    "arcanine": {"baseStats": {"hp": 90, "atk": 110, "def": 80, "spa": 100, "spd": 80, "spe": 95}, "genderRatio": {"M": 0.75, "F": 0.25}},
     "blissey": {"baseStats": {"hp": 255, "atk": 10, "def": 10, "spa": 75, "spd": 135, "spe": 55}},
     "charizard": {"baseStats": {"hp": 78, "atk": 84, "def": 78, "spa": 109, "spd": 85, "spe": 100}},
     "registeel": {"baseStats": {"hp": 80, "atk": 75, "def": 150, "spa": 75, "spd": 150, "spe": 50}},
     "shedinja": {"baseStats": {"hp": 1, "atk": 90, "def": 45, "spa": 30, "spd": 30, "spe": 40}},
     "snorlax": {"baseStats": {"hp": 160, "atk": 110, "def": 65, "spa": 65, "spd": 110, "spe": 30}},
-    "tauros": {"baseStats": {"hp": 75, "atk": 100, "def": 95, "spa": 40, "spd": 70, "spe": 110}},
-    "unown": {"baseStats": {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}},
+    "tauros": {"baseStats": {"hp": 75, "atk": 100, "def": 95, "spa": 40, "spd": 70, "spe": 110}, "gender": "M"},
+    "unown": {"baseStats": {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}, "gender": "N"},
     "umbreon": {"baseStats": {"hp": 95, "atk": 65, "def": 110, "spa": 60, "spd": 130, "spe": 65}},
-    "xatu": {"baseStats": {"hp": 65, "atk": 75, "def": 70, "spa": 95, "spd": 70, "spe": 95}},
+    "xatu": {"baseStats": {"hp": 65, "atk": 75, "def": 70, "spa": 95, "spd": 70, "spe": 95}, "genderRatio": {"M": 0.5, "F": 0.5}},
 }
 
 
@@ -208,6 +209,18 @@ def _metadata() -> dict[str, object]:
 
 
 class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
+    def test_hidden_gender_matches_showdowns_uniform_randbat_roll(self) -> None:
+        source = _source()
+        # Arcanine's species ratio is 75/25, but Gen 3 randbats leaves the set
+        # gender unset and the battle constructor samples uniformly.
+        rng = random.Random(112)
+        samples = [_sample_gender("Arcanine", set_source=source, rng=rng) for _ in range(2000)]
+        male_fraction = samples.count("M") / len(samples)
+        self.assertGreater(male_fraction, 0.45)
+        self.assertLess(male_fraction, 0.55)
+        self.assertEqual(_sample_gender("Tauros", set_source=source, rng=rng), "M")
+        self.assertEqual(_sample_gender("Unown", set_source=source, rng=rng), "N")
+
     def test_parses_player_belief_view_payload(self) -> None:
         view = player_belief_view_from_payload(_metadata()["belief_view"])
 
@@ -217,6 +230,23 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(view.opponent_slot, "p1")
         self.assertEqual(view.opponent_pokemon[0].species, "Xatu")
         self.assertEqual(view.opponent_pokemon[0].revealed_moves, ("Psychic",))
+
+    def test_public_and_sampled_gender_reach_determinized_teams(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]  # type: ignore[index]
+        opponent["gender"] = "F"  # type: ignore[index]
+        override = gen3_randbat_belief_start_override(
+            context=_context(metadata),
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        opponent_rows = [row.split("|") for row in override.player_teams["p1"].split("]")]
+        self.assertEqual(opponent_rows[0][7], "F")
+        self.assertTrue(all(row[7] in {"M", "F", "N"} for row in opponent_rows))
 
     def test_parses_public_item_mutation_and_rule_out_evidence(self) -> None:
         metadata = _metadata()

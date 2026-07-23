@@ -207,19 +207,27 @@ def build_agent_remote(
     ``model_config`` on ``/config`` (fails loudly against an older server, since spec/mask
     derivation would be impossible)."""
     from .dex import load_showdown_dex_cached
-    from .inference_service import remote_inference_policy
-    from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
+    from .inference_service import fetch_remote_config, remote_inference_policy
+    from .neural_policy import (
+        TransformerPolicyConfig,
+        feature_masks_from_model_config,
+        observation_spec_from_model_config,
+    )
 
     from .randbat_vocab import gen3_category_vocabulary
 
-    policy = remote_inference_policy(base_url, deterministic=deterministic)
-    config = policy.result.model_config
-    if not hasattr(config, "observation_schema_version"):
+    # Adopt the SERVED checkpoint's config exactly as the collector path does (the
+    # self-describing /config from resolve_encode_time_settings) — the policy object itself
+    # stays the thin remote stub; spec/masks come from the fetched config.
+    payload = fetch_remote_config(base_url).get("model_config")
+    if payload is None:
         raise RuntimeError(
             f"inference server at {base_url} does not expose model_config on /config; "
             "remote agent construction needs it to derive the observation spec/masks — "
             "redeploy the server from a source tree that serves it."
         )
+    config = TransformerPolicyConfig.from_dict(payload)
+    policy = remote_inference_policy(base_url, deterministic=deterministic)
     spec = observation_spec_from_model_config(config)
     return OnlineBattleAgent(
         policy=policy,

@@ -665,6 +665,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Train only value-head parameters; intended for value-only calibration fine-tunes from --initial-checkpoint.",
     )
     train.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
+    train.add_argument(
+        "--train-batch-replay",
+        action="store_true",
+        help=(
+            "Stream+collate the training caches once and replay the retained batch list for "
+            "epochs 2+. Batch iteration is deterministic, so this is the identical batch "
+            "sequence with per-epoch re-read/re-collate cost removed. Costs one collated "
+            "copy of the window in trainer RAM. Fails closed with refutation caches."
+        ),
+    )
     train.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     train.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
     train.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count. Use 0 for the CPU-fast pooled encoder.")
@@ -2810,6 +2820,7 @@ def _train(args: argparse.Namespace) -> int:
         random_seed=args.training_seed,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
         shaping_weights=shaping_weights_json,
+        batch_replay=args.train_batch_replay,
     )
     if initial_training_result is not None:
         model_config = replace(

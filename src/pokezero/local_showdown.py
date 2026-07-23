@@ -127,7 +127,19 @@ def env_config_with_checkpoint_masks(
     if distinct_specs:
         required_spec = distinct_specs[0]
         if resolved.observation_spec != required_spec:
-            if resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC:
+            # Within-schema transition-region refinement: an explicit env spec that differs
+            # from the checkpoint's trained spec ONLY in transition_token_count (same schema
+            # version, all other fields equal) adopts the checkpoint's width. The region is a
+            # capacity parameter of the schema and the checkpoint is authoritative for it
+            # (region-trimmed models); encoding a different width than the model was trained
+            # on has no valid use — the forward rejects the shape anyway.
+            env_spec = resolved.observation_spec
+            region_refinement = (
+                env_spec.schema_version == required_spec.schema_version
+                and replace(env_spec, transition_token_count=required_spec.transition_token_count)
+                == required_spec
+            )
+            if resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC and not region_refinement:
                 raise ValueError(
                     f"{context}: env observation spec {resolved.observation_spec!r} conflicts "
                     f"with the loaded checkpoint's trained spec {required_spec!r} "
@@ -1816,6 +1828,7 @@ def _active_leech_seed_source_sides(replay: ShowdownReplayState) -> dict[str, st
 def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
     return {
         "species": pokemon.species,
+        "details": pokemon.details,
         "condition": pokemon.condition,
         "active": pokemon.active,
     }
@@ -1888,6 +1901,7 @@ def _request_materialization_rows(
         rows.append(
             {
                 "species": species,
+                "details": details,
                 "condition": condition,
                 "active": bool(raw_row.get("active")),
                 "moves": [dict(move) for move in self_move_states.get(_request_pokemon_identity(raw_row), ())],

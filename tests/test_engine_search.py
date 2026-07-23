@@ -457,6 +457,7 @@ class ModelObservationContractTests(unittest.TestCase):
             stats_block_enabled=True,
             exact_state_enabled=True,
             transition_token_budget=budget,
+            transition_token_count=64,
             tier2_residuals=True,
             tier2_investment=False,
         )

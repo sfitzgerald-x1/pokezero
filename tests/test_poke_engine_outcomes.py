@@ -186,6 +186,7 @@ class RequestToBattleSpecTest(unittest.TestCase):
         self.assertEqual(spec.special_defense, 136)
         self.assertEqual(spec.speed, 166)
         self.assertEqual(spec.ability, "blaze")
+        self.assertEqual(spec.gender, "M")
         # Empty item string normalizes to "no item" (None).
         self.assertIsNone(spec.item)
         self.assertEqual([m.id for m in spec.moves], ["ember", "tackle"])
@@ -199,6 +200,7 @@ class RequestToBattleSpecTest(unittest.TestCase):
         self.assertEqual(side.active_index, 0)
         self.assertEqual([p.id for p in side.pokemon], ["squirtle"])
         self.assertEqual(side.pokemon[0].special_attack, 136)
+        self.assertEqual(side.pokemon[0].gender, "F")
 
     def test_build_battle_spec_from_result_builds_both_sides(self) -> None:
         spec = build_battle_spec_from_result(charmander_squirtle_result(), minimal_dex())
