@@ -9,7 +9,7 @@ REPORT=/shared/traits/report
 mkdir -p "$REPORT"
 export SCR REPORT
 export PYTHONPATH=/shared/traits/pokezero-src
-ACTIVE="m50-ep7 l200-ep7-wu75 v22-lr3m v3-k16 v3-k32 v3-k64"   # v22-flat2m fork collapsed — dropped
+ACTIVE="m50-ep7 l200-ep7-wu75 v22-lr3m v3-k16 v3-k32 v3-k64 v3-k64-enthalf v3-k64-eps-entq"   # v22-flat2m fork collapsed — dropped
 
 emit_tasks() {
   # Phase-2 500k: self + foul-play per lineage (v22-flat2m forks at 2M, so it has no 500k point)
