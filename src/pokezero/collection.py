@@ -1167,32 +1167,58 @@ def policy_from_name(name: str) -> Policy:
 
 
 def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *, context: str):
-    """Adopt encode-time feature masks + observation spec from ``neural:`` checkpoint specs.
+    """Adopt encode-time feature masks + observation spec from ``neural:``/``remote:`` specs.
 
     The HIGH-1 train/eval latch for spec-driven CLI harnesses: every checkpoint that will
     observe through the env contributes its stamped masks AND its stamped observation
     schema/width (the dual-schema resolution: a v2 checkpoint keeps the v2 encode, a v2.1
     checkpoint the v2.1 encode); conflicts (between checkpoints, or with an explicit env
-    override) hard-fail in ``env_config_with_checkpoint_masks``. Torch-free when no neural
-    specs are present.
+    override) hard-fail in ``env_config_with_checkpoint_masks``. Remote specs adopt the
+    SERVED checkpoint's model config from the inference server's /config (self-describing:
+    a region-trimmed 39-token server drives a 39-token encode; without this, collectors
+    encoded the default layout and every forward 400'd). Servers predating the
+    ``model_config`` field keep the legacy no-adoption behavior. Torch-free when no
+    neural/remote specs are present.
     """
     paths = neural_checkpoint_paths_from_policy_specs(specs)
-    if not paths:
+    remote_urls = remote_base_urls_from_policy_specs(specs)
+    if not paths and not remote_urls:
         return env_config
     from .local_showdown import env_config_with_checkpoint_masks
     from .neural_policy import (
+        TransformerPolicyConfig,
         feature_masks_from_model_config,
         load_transformer_model_config,
         observation_spec_from_model_config,
     )
 
     configs = [load_transformer_model_config(path) for path in paths]
+    if remote_urls:
+        from .inference_service import fetch_remote_config
+
+        for url in remote_urls:
+            payload = fetch_remote_config(url).get("model_config")
+            if payload is not None:
+                configs.append(TransformerPolicyConfig.from_dict(payload))
+    if not configs:
+        return env_config
     return env_config_with_checkpoint_masks(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
     )
+
+
+def remote_base_urls_from_policy_specs(specs: Iterable[str | None]) -> tuple[str, ...]:
+    """Base URLs of every ``remote:`` policy spec (string parsing only, torch-free)."""
+    urls: list[str] = []
+    for spec in specs:
+        if spec and spec.startswith(REMOTE_POLICY_SPEC_PREFIX):
+            url = spec[len(REMOTE_POLICY_SPEC_PREFIX):]
+            if url not in urls:
+                urls.append(url)
+    return tuple(urls)
 
 
 def neural_checkpoint_paths_from_policy_specs(specs: Iterable[str | None]) -> tuple[Path, ...]:

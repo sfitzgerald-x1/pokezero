@@ -341,7 +341,13 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
     window_size = int(policy.result.model_config.window_size)
     # Mutable so /config reflects the current checkpoint after a hot-swap. reload_lock serializes
     # concurrent /reload calls (the controller issues one per iteration boundary).
-    state = {"policy_id": str(policy.policy_id)}
+    # model_config makes the served checkpoint SELF-DESCRIBING to remote collectors:
+    # they adopt its observation spec + feature masks exactly as local neural: specs
+    # do (a region-trimmed 39-token server otherwise 400s every 87-token encode).
+    state = {
+        "policy_id": str(policy.policy_id),
+        "model_config": policy.result.model_config.to_dict(),
+    }
     reload_lock = threading.Lock()
 
     class _Handler(BaseHTTPRequestHandler):
@@ -364,7 +370,12 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.rstrip("/") == "/config":
-                self._send(200, {"window_size": window_size, "policy_id": state["policy_id"], "action_count": ACTION_COUNT})
+                self._send(200, {
+                    "window_size": window_size,
+                    "policy_id": state["policy_id"],
+                    "action_count": ACTION_COUNT,
+                    "model_config": state["model_config"],
+                })
             elif self.path.rstrip("/") in ("/health", "/healthz"):
                 self._send(200, {"status": "ok"})
             else:
@@ -402,8 +413,26 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
                                 f"reload window_size {new_window} != served {window_size}; "
                                 "collectors tensorize at the served window — refusing arch-mismatched swap."
                             )
+                        new_config = new_policy.result.model_config
+                        new_contract = (
+                            int(new_config.token_count),
+                            int(new_config.categorical_feature_count),
+                            int(new_config.numeric_feature_count),
+                        )
+                        served_contract = (
+                            int(state["model_config"]["token_count"]),
+                            int(state["model_config"]["categorical_feature_count"]),
+                            int(state["model_config"]["numeric_feature_count"]),
+                        )
+                        if new_contract != served_contract:
+                            raise ValueError(
+                                f"reload observation contract {new_contract} != served {served_contract} "
+                                "(token_count, categorical_feature_count, numeric_feature_count); "
+                                "collectors encode at the served layout — refusing arch-mismatched swap."
+                            )
                         forwarder.set_policy(new_policy)
                         state["policy_id"] = str(new_policy.policy_id)
+                        state["model_config"] = new_policy.result.model_config.to_dict()
                 except Exception as exc:  # noqa: BLE001
                     self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
                     return
