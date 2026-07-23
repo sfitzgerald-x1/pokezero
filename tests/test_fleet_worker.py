@@ -181,6 +181,132 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(len(list((self.queue / "done").iterdir())), 3)
 
 
+class FanInTests(unittest.TestCase):
+    """Shard fan-in: one worker-owned versioned shard per window."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        from tests.test_cache_concat import NUMPY
+
+        if not NUMPY:
+            self.skipTest("requires numpy")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.queue = _make_queue(self.root)
+        self.cache_dir = self.root / "cache" / "iteration-0001"
+        self.cache_dir.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _real_collect(self, argv: list[str]) -> int:
+        """Write a REAL single-record training cache at --out, seeded by --seed-start."""
+        from pokezero.dataset import TrajectoryDatasetConfig
+        from tests.test_cache_concat import rollout_record, write_cache
+
+        out = Path(argv[argv.index("--out") + 1])
+        seed = int(argv[argv.index("--seed-start") + 1])
+        staging = out.parent / f".collect-staging-{out.name}"
+        staging.mkdir(parents=True, exist_ok=True)
+        cache = write_cache(staging, "c", [rollout_record(seed)], config=TrajectoryDatasetConfig(window_size=1))
+        import shutil
+
+        shutil.move(str(cache), str(out))
+        shutil.rmtree(staging, ignore_errors=True)
+        return 0
+
+    def _manifests(self, count: int) -> None:
+        for index in range(count):
+            _manifest(
+                self.queue, f"i1-s{index}.env",
+                out=self.cache_dir / f"slice-{index}", count=1, seed=100 + index,
+            )
+
+    def _read_meta(self, cache: Path) -> dict:
+        import json
+
+        return json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
+
+    def test_tasks_fan_into_one_versioned_shard(self) -> None:
+        self._manifests(3)
+        rc = run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertEqual(rc, 0)
+        shards = sorted(p.name for p in self.cache_dir.glob("shard-w*"))
+        self.assertEqual(shards, ["shard-ww1-v3"])
+        self.assertEqual(self._read_meta(self.cache_dir / "shard-ww1-v3")["record_count"], 3)
+        self.assertEqual(len(list((self.queue / "done").iterdir())), 3)
+        self.assertFalse(list(self.cache_dir.glob("slice-*")))  # no per-task shards
+
+    def test_select_fanin_shards_picks_highest_version(self) -> None:
+        from pokezero.fleet_worker import select_fanin_shards
+
+        self._manifests(2)
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        # Simulate a stale lower version surviving a crash.
+        stale = self.cache_dir / "shard-ww1-v1"
+        stale.mkdir()
+        selected = select_fanin_shards(self.cache_dir)
+        self.assertEqual([p.name for p in selected], ["shard-ww1-v2"])
+
+    def test_adopts_existing_version_and_sweeps_stale(self) -> None:
+        from pokezero.dataset import TrajectoryDatasetConfig
+        from tests.test_cache_concat import rollout_record, write_cache
+
+        staging = self.root / "staging"
+        staging.mkdir()
+        v1 = write_cache(staging, "v1", [rollout_record(1)], config=TrajectoryDatasetConfig(window_size=1))
+        v2 = write_cache(staging, "v2", [rollout_record(2), rollout_record(3)], config=TrajectoryDatasetConfig(window_size=1))
+        import shutil
+
+        shutil.move(str(v1), str(self.cache_dir / "shard-ww1-v1"))
+        shutil.move(str(v2), str(self.cache_dir / "shard-ww1-v2"))
+        self._manifests(1)
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        shards = sorted(p.name for p in self.cache_dir.glob("shard-w*"))
+        self.assertEqual(shards, ["shard-ww1-v3"])  # v1 swept, v2 adopted + extended
+        self.assertEqual(self._read_meta(self.cache_dir / "shard-ww1-v3")["record_count"], 3)
+
+    def test_revocation_creates_no_shard_version(self) -> None:
+        queue = self.queue
+
+        def revoking_collect(argv: list[str]) -> int:
+            rc = self._real_collect(argv)
+            for claim in (queue / "claimed").iterdir():
+                claim.unlink()
+            return rc
+
+        self._manifests(1)
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=revoking_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+        )
+        self.assertFalse(list(self.cache_dir.glob("shard-w*")))
+        self.assertFalse(list((self.queue / "done").iterdir()))
+
+    def test_log_dir_persists_commit_lines(self) -> None:
+        log_dir = self.root / "worker-logs"
+        self._manifests(2)
+        run_worker(
+            self.queue, worker_id="w1", static_argv=[], collect_fn=self._real_collect,
+            max_rss_mb=None, idle_exit_seconds=0.0, sleep_seconds=0.0, shard_fanin=True,
+            log_dir=log_dir,
+        )
+        content = (log_dir / "w1.log").read_text(encoding="utf-8")
+        self.assertEqual(content.count("commit-fanin"), 2)
+        self.assertIn("concat=", content)
+        self.assertIn("games=1", content)
+
+
 class CliWiringTests(unittest.TestCase):
     def test_subcommand_dispatches_with_static_remainder(self) -> None:
         import tempfile

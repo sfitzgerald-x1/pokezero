@@ -719,6 +719,150 @@ class TrainingCacheBuilder:
         }
 
 
+# The four big per-token arrays carry the prepended zero padding row (metadata
+# "padding_row": 0); every other array is per-example with no reserved row.
+_ZERO_ROW_ARRAYS = ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask")
+# Metadata fields that must match exactly for two caches to be concatenable.
+_CONCAT_COMPAT_FIELDS = ("schema_version", "dataset_config", "observation_schema", "feature_masks")
+
+
+def concat_training_caches(
+    paths: Sequence[PathInput],
+    output_path: PathInput,
+    *,
+    overwrite: bool = False,
+) -> TrainingCacheSummary:
+    """Concatenate training cache directories into one cache directory.
+
+    Output is byte-identical to a single cache written over the same records in
+    the same order (the shard fan-in invariant): subsequent caches' zero padding
+    rows are dropped, their nonzero ``window_indices`` are offset by the running
+    example count (0 entries stay 0 — window padding), and categorical arrays
+    are zero-padded to the widest compaction width (documented as semantically
+    identity: "summed category embeddings are identical to dense zero-padded
+    rows"). Optional arrays (e.g. ``shaping_rewards``) must be present in all
+    parts or none. Fails closed on any config/schema/mask mismatch. The output
+    is assembled in a temp dir and atomically renamed into place.
+    """
+    numpy = _require_numpy()
+    if len(paths) == 0:
+        raise ValueError("concat_training_caches requires at least one input cache.")
+    normalized = [Path(path) for path in paths]
+    output_path = Path(output_path)
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"training cache already exists: {output_path}")
+
+    metadatas = []
+    for path in normalized:
+        if not is_training_cache_path(path):
+            raise ValueError(f"not a training cache directory: {path}")
+        metadatas.append(json.loads((path / "metadata.json").read_text(encoding="utf-8")))
+    base = metadatas[0]
+    for path, meta in zip(normalized[1:], metadatas[1:], strict=True):
+        for field in _CONCAT_COMPAT_FIELDS:
+            if meta.get(field) != base.get(field):
+                raise ValueError(
+                    f"cache {path} is not concatenable: {field} mismatch "
+                    f"({meta.get(field)!r} != {base.get(field)!r})."
+                )
+        if meta.get("categorical_storage", {}).get("mode") != base.get("categorical_storage", {}).get("mode"):
+            raise ValueError(f"cache {path} is not concatenable: categorical_storage mode mismatch.")
+        if meta.get("categorical_storage", {}).get("original_feature_count") != base.get(
+            "categorical_storage", {}
+        ).get("original_feature_count"):
+            raise ValueError(f"cache {path} is not concatenable: categorical original_feature_count mismatch.")
+
+    array_names = sorted(p.stem for p in (normalized[0]).glob("*.npy"))
+    for path in normalized[1:]:
+        if sorted(p.stem for p in path.glob("*.npy")) != array_names:
+            raise ValueError(f"cache {path} is not concatenable: array set differs from {normalized[0]}.")
+
+    loaded: dict[str, list[Any]] = {name: [] for name in array_names}
+    for path in normalized:
+        for name in array_names:
+            loaded[name].append(numpy.load(path / f"{name}.npy", allow_pickle=False))
+
+    # Categorical compaction width: pad every part to the widest with zeros.
+    cat_parts = loaded["categorical_ids"]
+    max_width = max(part.shape[2] for part in cat_parts)
+    for index, part in enumerate(cat_parts):
+        if part.shape[2] < max_width:
+            padded = numpy.zeros((part.shape[0], part.shape[1], max_width), dtype=part.dtype)
+            padded[:, :, : part.shape[2]] = part
+            cat_parts[index] = padded
+
+    example_counts = [int(meta["example_count"]) for meta in metadatas]
+    merged: dict[str, Any] = {}
+    for name in array_names:
+        parts = loaded[name]
+        if name in _ZERO_ROW_ARRAYS:
+            # Keep the first cache's zero row; drop the others'.
+            merged[name] = numpy.concatenate([parts[0], *[part[1:] for part in parts[1:]]], axis=0)
+        elif name == "window_indices":
+            offset = 0
+            shifted = []
+            for part, count in zip(parts, example_counts, strict=True):
+                adjusted = part.astype(numpy.uint32, copy=True)
+                adjusted[adjusted != 0] += offset
+                shifted.append(adjusted)
+                offset += count
+            merged[name] = numpy.concatenate(shifted, axis=0)
+        else:
+            merged[name] = numpy.concatenate(parts, axis=0)
+
+    # Belief-source merge mirrors the builder: single common hash survives,
+    # anything else (or an already-mixed part) reports mixed.
+    hashes: set[Any] = set()
+    mixed = False
+    for meta in metadatas:
+        if meta.get("belief_set_source_mixed"):
+            mixed = True
+        hashes.add(meta.get("belief_set_source_hash"))
+    mixed = mixed or len(hashes) > 1
+    provenance: list[Any] = []
+    for meta in metadatas:
+        provenance.extend(meta.get("opponent_pool_provenance") or ())
+    record_count = sum(int(meta["record_count"]) for meta in metadatas)
+
+    metadata = dict(base)
+    metadata["record_count"] = record_count
+    metadata["example_count"] = sum(example_counts)
+    metadata["array_dtypes"] = {name: str(value.dtype) for name, value in merged.items()}
+    metadata["observation_shapes"] = dict(base["observation_shapes"])
+    metadata["observation_shapes"]["categorical_ids"] = list(merged["categorical_ids"].shape[1:])
+    metadata["belief_set_source_hash"] = next(iter(hashes)) if not mixed and len(hashes) == 1 else None
+    metadata["belief_set_source_mixed"] = mixed
+    metadata["opponent_pool_provenance"] = provenance
+    metadata["opponent_pool_provenance_count"] = len(provenance)
+    metadata["opponent_pool_provenance_mixed"] = 0 < len(provenance) < record_count
+    metadata["categorical_storage"] = dict(base["categorical_storage"])
+    metadata["categorical_storage"]["stored_feature_count"] = int(merged["categorical_ids"].shape[2])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
+    try:
+        for name, value in merged.items():
+            numpy.save(temp_path / f"{name}.npy", value, allow_pickle=False)
+        (temp_path / "metadata.json").write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if output_path.exists():
+            if output_path.is_dir():
+                shutil.rmtree(output_path)
+            else:
+                output_path.unlink()
+        temp_path.rename(output_path)
+    except Exception:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        raise
+    return TrainingCacheSummary(
+        path=output_path,
+        record_count=record_count,
+        example_count=int(metadata["example_count"]),
+        byte_size=_directory_byte_size(output_path),
+    )
+
+
 def iter_training_examples(
     paths: PathInput | Iterable[PathInput],
     *,

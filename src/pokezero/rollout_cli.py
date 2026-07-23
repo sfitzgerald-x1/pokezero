@@ -274,6 +274,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Exit 0 after this long with an empty queue (default: poll forever).",
     )
     selfplay_worker.add_argument(
+        "--log-dir", type=Path, default=None,
+        help=(
+            "Also append every timestamped worker log line to <log-dir>/<worker>.log "
+            "(e.g. on /shared) so per-task wall attribution survives pod teardown."
+        ),
+    )
+    selfplay_worker.add_argument(
+        "--shard-fanin", action="store_true",
+        help=(
+            "Fan each committed task into one worker-owned shard per window "
+            "(shard-w<worker>-v<k> beside the task's out dir) instead of one shard "
+            "per task — keeps train shard count at fleet size with micro tasks."
+        ),
+    )
+    selfplay_worker.add_argument(
         "static", nargs=argparse.REMAINDER,
         help="`-- <flags...>` forwarded to collect-selfplay-training-cache for every task.",
     )
@@ -617,6 +632,8 @@ def _collect_selfplay_worker(args: argparse.Namespace) -> int:
         max_rss_mb=(args.max_rss_mb if args.max_rss_mb and args.max_rss_mb > 0 else None),
         max_tasks=args.max_tasks,
         idle_exit_seconds=args.idle_exit_seconds,
+        shard_fanin=args.shard_fanin,
+        log_dir=args.log_dir,
     )
 
 
