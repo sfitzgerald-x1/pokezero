@@ -19,7 +19,8 @@ from collections import defaultdict
 # v22-flat2m is a FORK of v22-lr3m at 2M (flat-LR twin) — a separate entity, ordered next to its
 # parent so the post-fork divergence is easy to read off the trajectories.
 LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
-                 "v3-k16", "v3-k32", "v3-k64", "v3-k64-enthalf",   # v3 arms (v3 report); enthalf = entropy variant
+                 "v3-k16", "v3-k32", "v3-k64",   # v3 history-length arms (v3 report)
+                 "v3-k64-enthalf", "v3-k64-eps-entq",   # k64 experiment variants (own entities from game 0)
                  "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
