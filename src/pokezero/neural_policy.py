@@ -9,7 +9,7 @@ is available.
 from __future__ import annotations
 
 import contextlib
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields as dataclass_fields, replace
 import hashlib
 import json
 import math
@@ -2534,7 +2534,15 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
     model_config = TransformerPolicyConfig.from_dict(payload["model_config"])
-    training_config = TransformerTrainingConfig(**dict(payload["training_config"]))
+    # Forward-compat: a checkpoint written by a newer trainer may carry training
+    # config fields this build does not know (e.g. batch_replay). They describe
+    # HOW the checkpoint was trained, never how to serve it, so drop them
+    # instead of failing the load — a batch_replay checkpoint crashed every
+    # older loader in the serving/eval path (infsvc /reload, foul-play probes).
+    training_payload = dict(payload["training_config"])
+    known_fields = {field.name for field in dataclass_fields(TransformerTrainingConfig)}
+    training_payload = {key: value for key, value in training_payload.items() if key in known_fields}
+    training_config = TransformerTrainingConfig(**training_payload)
     model = EntityTokenTransformerPolicy(model_config)
     model.load_state_dict(payload["state_dict"])
     if map_location is not None:
