@@ -191,6 +191,65 @@ def build_agent(
     )
 
 
+def build_agent_remote(
+    base_url: str,
+    showdown_root: str | Path,
+    our_name: str,
+    *,
+    deterministic: bool = True,
+    seed: int | None = None,
+) -> OnlineBattleAgent:
+    """``build_agent`` against a WS-L1 inference server instead of a local checkpoint.
+
+    The policy's forward is served remotely (batched, one GPU per checkpoint) while the entire
+    decision path — history, tensorize, masking, sampling — stays client-side, so agents built
+    this way are decision-identical to local ones. Requires a server that exposes the full
+    ``model_config`` on ``/config`` (fails loudly against an older server, since spec/mask
+    derivation would be impossible)."""
+    from .dex import load_showdown_dex_cached
+    from .inference_service import fetch_remote_config, remote_inference_policy
+    from .neural_policy import (
+        TransformerPolicyConfig,
+        feature_masks_from_model_config,
+        observation_spec_from_model_config,
+    )
+
+    from .randbat_vocab import gen3_category_vocabulary
+
+    # Adopt the SERVED checkpoint's config exactly as the collector path does (the
+    # self-describing /config from resolve_encode_time_settings) — the policy object itself
+    # stays the thin remote stub; spec/masks come from the fetched config.
+    payload = fetch_remote_config(base_url).get("model_config")
+    if payload is None:
+        raise RuntimeError(
+            f"inference server at {base_url} does not expose model_config on /config; "
+            "remote agent construction needs it to derive the observation spec/masks — "
+            "redeploy the server from a source tree that serves it."
+        )
+    config = TransformerPolicyConfig.from_dict(payload)
+    policy = remote_inference_policy(base_url, deterministic=deterministic)
+    spec = observation_spec_from_model_config(config)
+    return OnlineBattleAgent(
+        policy=policy,
+        vocab=gen3_category_vocabulary(
+            showdown_root,
+            include_turn_merged=(
+                spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+            ),
+        ),
+        dex=load_showdown_dex_cached(showdown_root),
+        feature_masks=feature_masks_from_model_config(config),
+        set_source=(
+            load_gen3_randbat_source_cached(showdown_root)
+            if belief_set_source_env_enabled()
+            else None
+        ),
+        our_name=our_name,
+        spec=spec,
+        rng=random.Random(seed),
+    )
+
+
 def split_server_message(raw: str) -> tuple[str, list[str]]:
     """Split a websocket frame into (room_id, protocol lines). Global frames have room_id ''."""
     lines = raw.split("\n")

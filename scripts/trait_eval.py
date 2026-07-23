@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
-from pokezero.online_client import build_agent
+from pokezero.online_client import build_agent, build_agent_remote
 from pokezero.showdown import observation_from_player_state
 
 MAX_STEPS = 1000
@@ -149,6 +149,10 @@ def main():
     ap.add_argument("--search-ms", type=int, default=100)
     ap.add_argument("--showdown-root", required=True)
     ap.add_argument("--belief-set-source", action="store_true")
+    ap.add_argument("--infsvc-url", default=None,
+                    help="WS-L1 inference server base URL. When set, the policy forward is served "
+                         "remotely (one shared GPU per checkpoint) and this shard runs CPU-only; "
+                         "--checkpoint is then provenance-only (recorded in the manifest, not loaded).")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
@@ -156,7 +160,10 @@ def main():
         print("foulplay opponent not yet wired in trait_eval; use --opponent self", file=sys.stderr)
         return 2
 
-    agent = build_agent(str(args.checkpoint), args.showdown_root, our_name="trait", deterministic=True)
+    if args.infsvc_url:
+        agent = build_agent_remote(args.infsvc_url, args.showdown_root, our_name="trait", deterministic=True)
+    else:
+        agent = build_agent(str(args.checkpoint), args.showdown_root, our_name="trait", deterministic=True)
     env_kwargs = {"showdown_root": args.showdown_root, "set_belief_source": args.belief_set_source or None,
                   "observation_spec": agent.spec, "category_vocab": agent.vocab}
     if agent.feature_masks is not None:

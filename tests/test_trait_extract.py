@@ -709,6 +709,111 @@ class DoublePivot(unittest.TestCase):
         self.assertEqual(gp.ev["p1"]["double_pivot"], 0)
 
 
+class SwitchInReads(unittest.TestCase):
+    """Status-immunity and type-based switch-in reads: the mon comes in THIS turn and the opponent's
+    move that turn is exactly what the ability/typing blanks."""
+
+    def test_immunity_in_on_toxic(self):
+        ms = {"p1": [{"species": "Snorlax", "moves": ["Body Slam"], "ability": "Immunity"}], "p2": []}
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Snorlax|Snorlax, M|400/400",
+            "|move|p2a: Gengar|Toxic|p1a: Snorlax",
+        ], movesets=ms)
+        self.assertEqual(gp.ev["p1"]["imm_switchin_on_toxic"], 1)
+        # next turn the tag is gone — staying in on another Toxic is not a switch-in read
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+            "|turn|2", "|move|p2a: Gengar|Toxic|p1a: Snorlax",
+        ], movesets=ms)
+        self.assertEqual(gp2.ev["p1"]["imm_switchin_on_toxic"], 0)
+
+    def test_insomnia_and_vital_spirit_in_on_sleep(self):
+        for ab in ("Insomnia", "Vital Spirit"):
+            ms = {"p1": [{"species": "Hypno", "moves": ["Psychic"], "ability": ab}], "p2": []}
+            gp = parse([
+                "|turn|1",
+                "|switch|p1a: Hypno|Hypno, M|340/340",
+                "|move|p2a: Breloom|Spore|p1a: Hypno",
+            ], movesets=ms)
+            self.assertEqual(gp.ev["p1"]["insomnia_switchin_on_sleep"], 1, ab)
+
+    def test_limber_in_on_para(self):
+        ms = {"p1": [{"species": "Persian", "moves": ["Slash"], "ability": "Limber"}], "p2": []}
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Persian|Persian, M|300/300",
+            "|move|p2a: Jolteon|Thunder Wave|p1a: Persian",
+        ], movesets=ms)
+        self.assertEqual(gp.ev["p1"]["limber_switchin_on_para"], 1)
+        # a paralysis move at a non-Limber switch-in does not count
+        ms2 = {"p1": [{"species": "Snorlax", "moves": ["Body Slam"], "ability": "Thick Fat"}], "p2": []}
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+            "|move|p2a: Jolteon|Thunder Wave|p1a: Snorlax",
+        ], movesets=ms2)
+        self.assertEqual(gp2.ev["p1"]["limber_switchin_on_para"], 0)
+
+    def test_liquid_ooze_in_on_drain_and_leech_seed(self):
+        ms = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Liquid Ooze"}], "p2": []}
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Tentacruel|Tentacruel, M|360/360",
+            "|move|p2a: Celebi|Giga Drain|p1a: Tentacruel",      # drain now damages the drainer
+            "|turn|2",
+            "|switch|p1a: Tentacruel|Tentacruel, M|300/360",
+            "|move|p2a: Celebi|Leech Seed|p1a: Tentacruel",      # seeding an Ooze mon backfires too
+        ], movesets=ms)
+        self.assertEqual(gp.ev["p1"]["ooze_switchin_on_drain"], 1)
+        self.assertEqual(gp.ev["p1"]["ooze_switchin_on_leechseed"], 1)
+        # a drain move into a non-Ooze switch-in is not a read
+        ms2 = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Clear Body"}], "p2": []}
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Tentacruel|Tentacruel, M|360/360",
+            "|move|p2a: Celebi|Giga Drain|p1a: Tentacruel",
+        ], movesets=ms2)
+        self.assertEqual(gp2.ev["p1"]["ooze_switchin_on_drain"], 0)
+
+    def test_grass_in_on_leech_seed(self):
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Venusaur|Venusaur, M|360/360",
+            "|move|p2a: Ludicolo|Leech Seed|p1a: Venusaur",
+        ])
+        self.assertEqual(gp.ev["p1"]["grass_switchin_on_leechseed"], 1)
+
+    def test_fire_in_on_will_o_wisp(self):
+        gp = parse([
+            "|turn|1",
+            "|switch|p1a: Charizard|Charizard, M|330/330",
+            "|move|p2a: Dusclops|Will-O-Wisp|p1a: Charizard",
+        ])
+        self.assertEqual(gp.ev["p1"]["fire_switchin_on_wow"], 1)
+        # non-Fire switch-in: no read
+        gp2 = parse([
+            "|turn|1", "|switch|p1a: Swampert|Swampert, M|400/400",
+            "|move|p2a: Dusclops|Will-O-Wisp|p1a: Swampert",
+        ])
+        self.assertEqual(gp2.ev["p1"]["fire_switchin_on_wow"], 0)
+
+    def test_ghost_in_on_rapid_spin_requires_spikes(self):
+        # spikes are down on the SPINNER's side -> Gengar coming in blocks a meaningful spin
+        gp = parse([
+            "|turn|1", "|-sidestart|p2: Foe|Spikes",
+            "|turn|2",
+            "|switch|p1a: Gengar|Gengar|260/260",
+            "|move|p2a: Donphan|Rapid Spin|p1a: Gengar",
+        ])
+        self.assertEqual(gp.ev["p1"]["ghost_switchin_on_spin"], 1)
+        # no spikes on the spinner's side -> the spin clears nothing, so no read is scored
+        gp2 = parse([
+            "|turn|1",
+            "|switch|p1a: Gengar|Gengar|260/260",
+            "|move|p2a: Donphan|Rapid Spin|p1a: Gengar",
+        ])
+        self.assertEqual(gp2.ev["p1"]["ghost_switchin_on_spin"], 0)
+
+
 class SwitchBehavior(unittest.TestCase):
     def test_immunity_switchin_same_turn_only(self):
         # p1 switches Gengar in; p2's Earthquake that turn is immune -> counts once.

@@ -82,6 +82,23 @@ STRUGGLE = mid("Struggle")
 # gen3 randbats). They fail SILENTLY (no -fail) when there's no matching damage to bounce; a success
 # is the direct -damage they deal to the target (no [from] tag, unlike upkeep residuals).
 COUNTER_MOVES = {mid("Counter"), mid("Mirror Coat")}
+# Status-immunity abilities for switch-in reads (exact ability gating, like Natural Cure):
+IMMUNITY_AB = mid("Immunity")                          # poison-proof -> the read is on Toxic/Poison Powder
+INSOMNIA_ABS = {mid("Insomnia"), mid("Vital Spirit")}  # sleep-immunity twins -> read on sleep moves
+LIMBER_AB = mid("Limber")                              # paralysis-proof -> read on T-Wave/Stun Spore/Glare
+LIQUID_OOZE_AB = mid("Liquid Ooze")                    # drains hurt the drainer -> read on drain moves/Leech Seed
+POISON_STATUS_MOVES = {TOXIC, POISON_POWDER}
+DRAIN_MOVES = {mid("Absorb"), mid("Mega Drain"), mid("Giga Drain"), mid("Leech Life"), mid("Dream Eater")}
+# Type membership for type-based switch-in reads. Frozen like the move-id lists; generated from the
+# gen3 randbats pool (data/random-battles/gen3/sets.json, 220 species) x data/pokedex.ts types —
+# regenerate if the pool ever changes. Grass is immune to Leech Seed, Fire to Will-O-Wisp's burn,
+# and a Ghost blocks Rapid Spin.
+GRASS_SPECIES = {"bellossom","breloom","cacturne","celebi","cradily","exeggutor","jumpluff","ludicolo",
+                 "meganium","parasect","roselia","sceptile","shiftry","sunflora","tangela","tropius",
+                 "venusaur","victreebel","vileplume"}
+FIRE_SPECIES = {"arcanine","blaziken","camerupt","charizard","entei","flareon","hooh","houndoom",
+                "magcargo","magmar","moltres","ninetales","rapidash","torkoal","typhlosion"}
+GHOST_SPECIES = {"banette","dusclops","gengar","misdreavus","sableye","shedinja"}
 
 
 def reversal_bp(cur, mx):
@@ -214,6 +231,7 @@ class GameParse:
         self.slept_by = {"p1": set(), "p2": set()}  # opp species this seat move-slept (Sleep Clause set)
         self._move_in_flight = None            # seat whose move is resolving, for -fail attribution
         self._nc_switchin = set()              # seats that switched a Natural Cure mon in this turn
+        self._swtags = {"p1": set(), "p2": set()}  # this-turn switch-in read tags (immunity/type-based)
         self._cm_pending = None                # seat whose Counter/Mirror Coat awaits its damage/whiff
         self.cur_turn = 0                      # current |turn| number (0 = pre-battle lead switches)
         self.switched_in_turn = {"p1": None, "p2": None}  # turn the active mon was CHOSEN in (double pivot)
@@ -285,8 +303,26 @@ class GameParse:
                     # a badly-poisoned mon coming (back) in restarts its toxic counter at 0 (gen3)
                     self.tox[seat] = 0 if status_token(a[2] if len(a) > 2 else None) == "tox" else None
                     self._switchin_seats.add(seat)  # absorb-ability reads credited on the switch-in turn
-                    if self.ability_of(seat, sp) == NATURAL_CURE:
+                    ab = self.ability_of(seat, sp)
+                    if ab == NATURAL_CURE:
                         self._nc_switchin.add(seat)  # a Natural Cure mon came in — a status it eats cures free
+                    # switch-in read tags for THIS turn: ability- and type-based immunities the seat
+                    # may be deliberately switching into an incoming move (scored in _classify_move).
+                    if ab == IMMUNITY_AB:
+                        self._swtags[seat].add("immunity")
+                    if ab in INSOMNIA_ABS:
+                        self._swtags[seat].add("insomnia")
+                    if ab == LIMBER_AB:
+                        self._swtags[seat].add("limber")
+                    if ab == LIQUID_OOZE_AB:
+                        self._swtags[seat].add("liquidooze")
+                    sid = mid(sp)
+                    if sid in GRASS_SPECIES:
+                        self._swtags[seat].add("grass")
+                    if sid in FIRE_SPECIES:
+                        self._swtags[seat].add("fire")
+                    if sid in GHOST_SPECIES:
+                        self._swtags[seat].add("ghost")
                     self._move_in_flight = None      # a switch ends any prior move's -fail window
                     # a switch-in may materialize immunity to the opponent's move this turn
                     self._pending_switch_immunity = (seat, sp)
@@ -491,6 +527,7 @@ class GameParse:
                 self._switchin_seats = set()
                 self._boom_target = None
                 self._nc_switchin = set()
+                self._swtags = {"p1": set(), "p2": set()}
                 self._move_in_flight = None
                 self._protect_pending = None
                 self._cm_pending = None
@@ -602,6 +639,28 @@ class GameParse:
             # opponent threw a status move at a Natural Cure mon we brought in this turn — it eats the
             # status "for free" (cured on its eventual switch-out).
             self.ev[opp]["nc_switchin_on_status"] += 1
+        # Switch-in reads: the opponent (`opp`) brought a mon in THIS turn whose ability or typing
+        # blanks the move `seat` just used. Credited to opp (the seat that made the read).
+        tags = self._swtags[opp]
+        if tags:
+            if move in POISON_STATUS_MOVES and "immunity" in tags:
+                self.ev[opp]["imm_switchin_on_toxic"] += 1
+            if move in SLEEP_MOVES and "insomnia" in tags:
+                self.ev[opp]["insomnia_switchin_on_sleep"] += 1
+            if move in PARA_MOVES and "limber" in tags:
+                self.ev[opp]["limber_switchin_on_para"] += 1
+            if move == LEECH_SEED and "grass" in tags:
+                self.ev[opp]["grass_switchin_on_leechseed"] += 1
+            # Liquid Ooze punish reads: the drain/seed now HURTS the user instead of healing them
+            if move in DRAIN_MOVES and "liquidooze" in tags:
+                self.ev[opp]["ooze_switchin_on_drain"] += 1
+            if move == LEECH_SEED and "liquidooze" in tags:
+                self.ev[opp]["ooze_switchin_on_leechseed"] += 1
+            if move == WILL_O_WISP and "fire" in tags:
+                self.ev[opp]["fire_switchin_on_wow"] += 1
+            if move == RAPID_SPIN and "ghost" in tags and self.spikes[seat] >= 1:
+                # only a *meaningful* spin-block: the spinner actually had spikes to clear
+                self.ev[opp]["ghost_switchin_on_spin"] += 1
         if move in AROMATHERAPY:
             E["cat_aromatherapy"] += 1
             # mons this cure clears = the statused party mons right now. Aromatherapy emits a single
@@ -726,6 +785,11 @@ def extract(files, lineage=None, milestone=None):
     absorb_present = 0; absorb_switchins = 0
     spikes_present = 0; spikes_max_sum = 0   # avg peak Spikes layers, over games the seat carries Spikes
     nc_present = 0; nc_switchins = 0         # (v3) Natural-Cure-mon switch-ins onto a status move / game
+    # status-immunity switch-in reads: same shape as NC (exact ability gating, decided games)
+    imm_present = 0; imm_reads = 0           # Immunity mon in on Toxic / Poison Powder
+    insom_present = 0; insom_reads = 0       # Insomnia / Vital Spirit mon in on a sleep move
+    limber_present = 0; limber_reads = 0     # Limber mon in on a paralysis move
+    ooze_present = 0; ooze_drain_reads = 0; ooze_seed_reads = 0  # Liquid Ooze in on drain / Leech Seed
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -798,7 +862,9 @@ def extract(files, lineage=None, milestone=None):
                           "cat_aromatherapy","aroma_cured","cat_struggle",
                           "cat_protect","cat_protect_consecutive",
                           "cat_counter_mirrorcoat","cm_success",
-                          "double_pivot","pivot_window"):
+                          "double_pivot","pivot_window",
+                          # type-based switch-in reads (any team can make these — no ability gate)
+                          "grass_switchin_on_leechseed","fire_switchin_on_wow","ghost_switchin_on_spin"):
                 cat_extra[extra] += gp.ev[seat][extra]
             # ability-gated per-game rates (Intimidate activations, absorb switch-in reads). These are
             # per-GAME counts, so a timeout stall — where a weak checkpoint pivots an intimidator in
@@ -818,6 +884,20 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, {NATURAL_CURE}, None, require_exact=True):
                     nc_present += 1
                     nc_switchins += gp.ev[seat]["nc_switchin_on_status"]
+                # status-immunity switch-in reads (exact ability gating, like Natural Cure)
+                if ability_present(g, gp, seat, {IMMUNITY_AB}, None, require_exact=True):
+                    imm_present += 1
+                    imm_reads += gp.ev[seat]["imm_switchin_on_toxic"]
+                if ability_present(g, gp, seat, INSOMNIA_ABS, None, require_exact=True):
+                    insom_present += 1
+                    insom_reads += gp.ev[seat]["insomnia_switchin_on_sleep"]
+                if ability_present(g, gp, seat, {LIMBER_AB}, None, require_exact=True):
+                    limber_present += 1
+                    limber_reads += gp.ev[seat]["limber_switchin_on_para"]
+                if ability_present(g, gp, seat, {LIQUID_OOZE_AB}, None, require_exact=True):
+                    ooze_present += 1
+                    ooze_drain_reads += gp.ev[seat]["ooze_switchin_on_drain"]
+                    ooze_seed_reads += gp.ev[seat]["ooze_switchin_on_leechseed"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -970,6 +1050,21 @@ def extract(files, lineage=None, milestone=None):
         # games where a Natural Cure mon is on the team (exact ability gating — v3 captures abilities).
         "nc_present_seat_games": nc_present,
         "nc_switchin_on_status_per_game": (round(nc_switchins / nc_present, 4) if nc_present else None),
+        # Status-immunity switch-in reads: bringing in a mon whose ability blanks the incoming status
+        # move, per game over games where the team carries that ability (exact gating, like NC).
+        "imm_present_seat_games": imm_present,
+        "imm_switchin_on_toxic_per_game": (round(imm_reads / imm_present, 4) if imm_present else None),
+        "insomnia_present_seat_games": insom_present,
+        "insomnia_switchin_on_sleep_per_game": (round(insom_reads / insom_present, 4) if insom_present else None),
+        "limber_present_seat_games": limber_present,
+        "limber_switchin_on_para_per_game": (round(limber_reads / limber_present, 4) if limber_present else None),
+        "ooze_present_seat_games": ooze_present,
+        "ooze_switchin_on_drain_per_game": (round(ooze_drain_reads / ooze_present, 4) if ooze_present else None),
+        "ooze_switchin_on_leechseed_per_game": (round(ooze_seed_reads / ooze_present, 4) if ooze_present else None),
+        # Type-based switch-in reads (no ability gate — most teams have the type): per seat-game.
+        "grass_switchin_on_leechseed_per_game": round(cat_extra["grass_switchin_on_leechseed"] / (seat_games or 1), 4),
+        "fire_switchin_on_wow_per_game": round(cat_extra["fire_switchin_on_wow"] / (seat_games or 1), 4),
+        "ghost_switchin_on_spin_per_game": round(cat_extra["ghost_switchin_on_spin"] / (seat_games or 1), 4),
         # Struggle: total occurrences (should be very rare — everything out of PP).
         "struggle_uses": cat_extra["cat_struggle"],
         "struggle_per_game": round(cat_extra["cat_struggle"] / (n or 1), 5),

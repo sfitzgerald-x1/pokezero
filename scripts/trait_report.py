@@ -33,6 +33,8 @@ REPORT_EXCLUDE_LINEAGES = {"m50-seq", "l200-seq", "v22-flat2m"}
 # metrics are distorted by that (e.g. per-game counts inflated by ~1000-turn stalls), and its scale
 # compresses every other lineage's line. The point still exists in the underlying metrics — it is
 # excluded from the charts only, and the exclusion is stated in each section rather than hidden.
+# Sub-50k v3 points (the 1.6k "starting skill" datasets) are likewise collected but not charted —
+# see _traj_excluded below.
 TRAJECTORY_EXCLUDE = {("v22-lr3m", 100000)}
 
 # Lineages held out of the trait <-> foul-play correlation. m50-ep7 was held out while foul-play
@@ -122,7 +124,7 @@ def phase1_section(rows_self):
     for r in rows_self:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
+        if _traj_excluded(r.get("lineage"), r.get("milestone")):
             dropped.append(f'{r.get("lineage")}@{r.get("milestone") // 1000}k')
             continue
         by_lin[r.get("lineage")].append(r)
@@ -138,8 +140,8 @@ def phase1_section(rows_self):
         return '<section><h2>Phase 1 — basics over training</h2><div class="empty">no milestone metrics yet</div></section>'
     drop_note = ('' if not dropped else
                  f'<p class="sub">Excluded for legibility: {esc(", ".join(sorted(set(dropped))))} '
-                 f'(stalls ~50% of games to the turn cap; its scale compresses the other lineages). '
-                 f'The point is retained in the by-checkpoint trajectories below.</p>')
+                 f'(distorted or out-of-scale points — turn-cap stalls, or sub-50k starting-skill '
+                 f'datasets; their scale compresses the other lines). The underlying metrics are kept.</p>')
     return f"""<section>
       <h2>Phase 1 — self-play basics over training</h2>
       {drop_note}
@@ -243,13 +245,24 @@ TRAJECTORY_CHARTS = [
         ("destiny bond success %", lambda r: _pct(r.get("destinybond_success_rate"))),
         ("protect after successful protect %", lambda r: _pct(r.get("protect_after_success_rate"))),
         ("counter/mirror coat success %", lambda r: _pct(r.get("counter_mirrorcoat_success_rate"))),
-        ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
         ("enemy boom blocked %", lambda r: _pct(r.get("boom_block_rate"))),
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
         ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
         ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
+        ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
+        # status-immunity switch-in reads: bringing in the ability mon ON the incoming status move,
+        # per game over games where the team carries that ability (exact ability gating, like NC).
+        ("Immunity in on toxic / game (carried)", lambda r: r.get("imm_switchin_on_toxic_per_game")),
+        ("Insomnia/Vital Spirit in on sleep / game (carried)", lambda r: r.get("insomnia_switchin_on_sleep_per_game")),
+        ("Limber in on para / game (carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
+        ("Liquid Ooze in on drain move / game (carried)", lambda r: r.get("ooze_switchin_on_drain_per_game")),
+        ("Liquid Ooze in on leech seed / game (carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
+        # type-based switch-in reads (no ability gate) — per seat-game
+        ("Grass in on leech seed", lambda r: r.get("grass_switchin_on_leechseed_per_game")),
+        ("Fire in on will-o-wisp", lambda r: r.get("fire_switchin_on_wow_per_game")),
+        ("Ghost in on rapid spin (spikes down)", lambda r: r.get("ghost_switchin_on_spin_per_game")),
     ]),
     # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
     # opp-mons-on-loss ≈ mons-on-win (the winner's margin) — the paired plots are essentially
@@ -320,39 +333,50 @@ def is_v3(lineage):
     return "v3" in (lineage or "")
 
 
+def _traj_excluded(lineage, milestone):
+    # Chart-level exclusions: the curated distorted points (TRAJECTORY_EXCLUDE) plus, as a rule, any
+    # sub-50k v3 point — the 1.6k "starting skill" datasets are near-random play whose scale
+    # compresses every trained checkpoint's line (owner call: chart 50k and up only). The underlying
+    # metrics files are still extracted and kept.
+    return (lineage, milestone) in TRAJECTORY_EXCLUDE or (is_v3(lineage) and (milestone or 0) < 50000)
+
+
 def _series(rows, fn):
     by = defaultdict(list)
     for r in rows:
         if r.get("milestone") is None:
             continue
-        if (r.get("lineage"), r.get("milestone")) in TRAJECTORY_EXCLUDE:
-            continue   # drop distorted stall checkpoints from the trajectories (see TRAJECTORY_EXCLUDE)
+        if _traj_excluded(r.get("lineage"), r.get("milestone")):
+            continue   # drop distorted / sub-50k points from the trajectories (see _traj_excluded)
         v = fn(r)
         if v is not None:
             by[r.get("lineage")].append((r["milestone"], v))
     return by
 
 
-def phase2_trajectories(rows_self, charts=TRAJECTORY_CHARTS):
+def phase2_trajectories(rows, charts=TRAJECTORY_CHARTS,
+                        heading="Trait breakdowns by checkpoint — self-play trajectories", sub=""):
     """Per-checkpoint breakdowns: every trait as a line over the milestone axis (one line per
-    lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate."""
-    checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows_self if r.get("milestone") is not None}
+    lineage, one point per checkpoint) — the by-checkpoint view, not a single 500k aggregate.
+    Pass foul-play rows (with a matching heading/sub) to render the same categories vs FoulPlay."""
+    checkpoints = {(r.get("lineage"), r.get("milestone")) for r in rows if r.get("milestone") is not None}
     lineages = sorted({l for l, _ in checkpoints}, key=lambda l: LINEAGE_ORDER.index(l) if l in LINEAGE_ORDER else 99)
     if not checkpoints:
         return ""
     multi = any(sum(1 for l2, m in checkpoints if l2 == l) > 1 for l in lineages)
     note = "" if multi else ('<p class="sub">Only 500k checkpoints present so far — each line is a single '
                              'point until the milestone sweep fills in the trajectory.</p>')
-    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if (l, m) in TRAJECTORY_EXCLUDE)
+    excluded = sorted(f'{l}@{m // 1000}k' for l, m in checkpoints if _traj_excluded(l, m))
     if excluded:
         note += (f'<p class="sub">Excluded for legibility: {esc(", ".join(excluded))} '
-                 f'(stalls ~50% of games to the turn cap, distorting per-game counts and compressing '
-                 f'the scale — same exclusion as the Phase-1 basics).</p>')
-    blocks = [f'<section><h2>Trait breakdowns by checkpoint — self-play trajectories</h2>'
+                 f'(distorted or out-of-scale points — turn-cap stalls, or sub-50k starting-skill '
+                 f'datasets — same exclusion as the Phase-1 basics).</p>')
+    sub_html = f'<p class="sub">{sub}</p>' if sub else ""
+    blocks = [f'<section><h2>{esc(heading)}</h2>{sub_html}'
               f'<p class="sub">{len(checkpoints)} checkpoints across {len(lineages)} lineages · '
               f'x-axis = cumulative games · each point is one checkpoint (no aggregation)</p>{note}{legend(lineages)}']
     for group_title, group_charts in charts:
-        cards = "".join(f'<div class="card">{svg_lines(_series(rows_self, fn), label)}</div>' for label, fn in group_charts)
+        cards = "".join(f'<div class="card">{svg_lines(_series(rows, fn), label)}</div>' for label, fn in group_charts)
         blocks.append(f'<h3>{esc(group_title)}</h3><div class="grid3">{cards}</div>')
     blocks.append("</section>")
     return "".join(blocks)
@@ -689,6 +713,29 @@ def build_html(rows, report_set="v2"):
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})) or "none yet")}</p>']
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self, charts))
+    if report_set == "v3":
+        # v3: the same chart categories measured in games AGAINST FoulPlay (500k checkpoints and
+        # each arm's frontier as foul-play evals land). Only the bot seat is measured there, so the
+        # rates read the same way as the self-play per-seat-game rates. Renders nothing until the
+        # first v3 foul-play metrics exist.
+        rows_foul = [r for r in rows if r.get("opponent") == "foulplay"]
+        # The resource/endgame group is written for the self-play mirror (opp ≈ bot, so each pair
+        # is shown once). Against FoulPlay the opponent is genuinely different — swap in a
+        # correctly-labeled group with the bot/opponent sides shown separately.
+        foul_charts = [
+            ("resource / endgame (vs FoulPlay — bot and opponent shown separately)", [
+                ("PP exhausted / game (bot)", lambda r: r.get("pp_exhaustion_bot_per_game")),
+                ("PP exhausted / game (FoulPlay)", lambda r: r.get("pp_exhaustion_opp_per_game")),
+                ("bot mons alive on win", lambda r: r.get("avg_bot_mons_alive_on_win")),
+                ("FoulPlay mons alive on bot loss", lambda r: r.get("avg_opp_mons_alive_on_loss")),
+            ]) if title.startswith("resource / endgame") else (title, group)
+            for title, group in charts
+        ]
+        body.append(phase2_trajectories(
+            rows_foul, foul_charts,
+            heading="Trait breakdowns by checkpoint — vs FoulPlay",
+            sub="Same categories as the self-play trajectories above, measured in games against "
+                "FoulPlay. Only the bot seat is measured; self-play and foul-play are never merged."))
     body.append(per_game_corr_section(
         rows, "foulplay", "Per-game trait ↔ win correlation (vs FoulPlay)",
         "Within each checkpoint&#39;s foul-play games: did the bot use the trait more in games it "
