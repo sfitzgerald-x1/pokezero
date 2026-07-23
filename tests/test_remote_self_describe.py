@@ -90,6 +90,39 @@ class RemoteSelfDescribeTests(unittest.TestCase):
             self.assertEqual(via_neural.observation_spec, via_remote.observation_spec)
             self.assertEqual(via_neural.feature_masks, via_remote.feature_masks)
 
+    def test_explicit_schema_spec_refines_to_trimmed_region(self) -> None:
+        # The trimmed-continuation launch shape: env carries an EXPLICIT schema spec at the
+        # schema-default region while the checkpoint trained on a trimmed region. Same
+        # schema, differs only in transition_token_count -> adopt the trained width.
+        import dataclasses
+
+        from pokezero.local_showdown import env_config_with_checkpoint_masks
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ckpt = _train_checkpoint(Path(temp_dir), "served")
+            url = self._serve(ckpt)
+            required = fetch_remote_config(url)["model_config"]
+            required_spec = env_config_with_policy_spec_masks(
+                LocalShowdownConfig(), [f"remote:{url}"], context="probe"
+            ).observation_spec
+            wider = dataclasses.replace(
+                required_spec, transition_token_count=required_spec.transition_token_count + 48
+            )
+            refined = env_config_with_checkpoint_masks(
+                LocalShowdownConfig(observation_spec=wider), (), context="refine",
+                required_specs=required_spec,
+            )
+            self.assertEqual(refined.observation_spec, required_spec)
+            # a REAL conflict (different feature width) still hard-fails
+            conflicted = dataclasses.replace(
+                required_spec, numeric_feature_count=required_spec.numeric_feature_count + 1
+            )
+            with self.assertRaisesRegex(ValueError, "conflicts"):
+                env_config_with_checkpoint_masks(
+                    LocalShowdownConfig(observation_spec=conflicted), (), context="refine",
+                    required_specs=required_spec,
+                )
+
     def test_reload_refuses_token_shape_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             ckpt = _train_checkpoint(Path(temp_dir), "served")
