@@ -10,6 +10,7 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.determinization import (
     _gen3_randbat_fixture_spread,
+    _sample_gender,
     _self_team_from_metadata,
     belief_world_sampling_profile,
     gen3_randbat_belief_start_override,
@@ -208,6 +209,18 @@ def _metadata() -> dict[str, object]:
 
 
 class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
+    def test_hidden_gender_matches_showdowns_uniform_randbat_roll(self) -> None:
+        source = _source()
+        # Arcanine's species ratio is 75/25, but Gen 3 randbats leaves the set
+        # gender unset and the battle constructor samples uniformly.
+        rng = random.Random(112)
+        samples = [_sample_gender("Arcanine", set_source=source, rng=rng) for _ in range(2000)]
+        male_fraction = samples.count("M") / len(samples)
+        self.assertGreater(male_fraction, 0.45)
+        self.assertLess(male_fraction, 0.55)
+        self.assertEqual(_sample_gender("Tauros", set_source=source, rng=rng), "M")
+        self.assertEqual(_sample_gender("Unown", set_source=source, rng=rng), "N")
+
     def test_parses_player_belief_view_payload(self) -> None:
         view = player_belief_view_from_payload(_metadata()["belief_view"])
 

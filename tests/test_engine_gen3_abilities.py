@@ -116,6 +116,8 @@ class AbilityMechanicsTests(unittest.TestCase):
         substitute_health: int = 0,
         weather_turns_remaining: int = 0,
         attacker_safeguard: int = 0,
+        defender_safeguard: int = 0,
+        attacker_spikes: int = 0,
         attacker_yawn_duration: int = 0,
     ):
         dummy = poke_engine.Pokemon(id="pikachu", level=1, hp=0)
@@ -131,13 +133,17 @@ class AbilityMechanicsTests(unittest.TestCase):
                 volatile_status_durations=poke_engine.VolatileStatusDurations(
                     yawn=attacker_yawn_duration
                 ),
-                side_conditions=poke_engine.SideConditions(safeguard=attacker_safeguard),
+                side_conditions=poke_engine.SideConditions(
+                    safeguard=attacker_safeguard,
+                    spikes=attacker_spikes,
+                ),
             ),
             side_two=poke_engine.Side(
                 active_index="0",
                 pokemon=p2,
                 volatile_statuses=set(defender_volatiles),
                 substitute_health=substitute_health,
+                side_conditions=poke_engine.SideConditions(safeguard=defender_safeguard),
             ),
             weather=weather,
             weather_turns_remaining=weather_turns_remaining,
@@ -468,6 +474,27 @@ class AbilityMechanicsTests(unittest.TestCase):
             self.assertEqual(applied.side_one.pokemon[0].hp, 0)
             self.assertIn("Heal SideOne: -10", self._text(branch))
 
+    def test_liquid_ooze_reverses_leech_seed_recovery(self) -> None:
+        seeder = self._mon("venusaur", "overgrow", "splash", hp=10, maxhp=300, speed=200)
+        seeded = self._mon("swalot", "liquidooze", "splash", hp=160, maxhp=160)
+        state = self._state(seeder, seeded, defender_volatiles={"LEECHSEED"})
+        branches = poke_engine.generate_instructions(state, "splash", "splash")
+        self.assertTrue(branches)
+        for branch in branches:
+            applied = state.apply_instructions(branch)
+            self.assertEqual(applied.side_one.pokemon[0].hp, 0)
+            self.assertEqual(applied.side_two.pokemon[0].hp, 140)
+            self.assertIn("Heal SideOne: -10", self._text(branch))
+
+    def test_python_pokemon_positional_types_remain_backward_compatible(self) -> None:
+        mon = poke_engine.Pokemon("pikachu", 50, ("electric", "typeless"))
+        self.assertEqual(tuple(str(value).upper() for value in mon.types), ("ELECTRIC", "TYPELESS"))
+        self.assertEqual(str(mon.gender).upper(), "NONE")
+        female = poke_engine.Pokemon(
+            "pikachu", 50, ("electric", "typeless"), gender="female"
+        )
+        self.assertEqual(str(female.gender).upper(), "FEMALE")
+
     def test_early_bird_first_attempt_wake_probability(self) -> None:
         defender = self._mon("snorlax", "thickfat", "splash")
         early = self._mon(
@@ -628,6 +655,67 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertTrue(
             any("SideOne-P0: NONE -> SLEEP" in self._text(branch) for branch in control_branches)
         )
+
+    def test_yawn_initial_and_resolution_checks_match_showdown_phases(self) -> None:
+        user = self._mon("swalot", "liquidooze", "yawn", speed=200)
+        target = self._mon("tauros", "intimidate", "splash")
+        sleeping_ally = self._mon("snorlax", "immunity", "splash", status="sleep")
+
+        # Sleep Clause does not stop the Yawn volatile from landing.
+        clause_state = self._state(user, target, defender_party=(sleeping_ally,))
+        clause_branches = poke_engine.generate_instructions(clause_state, "yawn", "splash")
+        self.assertTrue(
+            any("ApplyVolatileStatus SideTwo: YAWN" in self._text(branch) for branch in clause_branches)
+        )
+
+        # Safeguard does stop the initial volatile.
+        safeguarded = poke_engine.generate_instructions(
+            self._state(user, target, defender_safeguard=2), "yawn", "splash"
+        )
+        self.assertFalse(
+            any("ApplyVolatileStatus SideTwo: YAWN" in self._text(branch) for branch in safeguarded)
+        )
+
+        # Once Yawn is present, a later Safeguard does not block resolution.
+        resolving = self._state(
+            target,
+            user,
+            attacker_volatiles={"YAWN"},
+            attacker_yawn_duration=1,
+            attacker_safeguard=2,
+        )
+        resolution_branches = poke_engine.generate_instructions(resolving, "splash", "yawn")
+        self.assertTrue(
+            any("SideOne-P0: NONE -> SLEEP" in self._text(branch) for branch in resolution_branches)
+        )
+
+    def test_spikes_ko_prevents_switch_in_abilities(self) -> None:
+        lead = self._mon("tauros", "intimidate", "splash")
+        defender = self._mon("snorlax", "immunity", "splash")
+        entrants = (
+            self._mon(
+                "tyranitar",
+                "sandstream",
+                "splash",
+                types=("rock", "dark"),
+                hp=1,
+                maxhp=8,
+            ),
+            self._mon("gyarados", "intimidate", "splash", hp=1, maxhp=8),
+        )
+        for entrant in entrants:
+            with self.subTest(ability=str(entrant.ability)):
+                branches = poke_engine.generate_instructions(
+                    self._state(lead, defender, attacker_party=(entrant,), attacker_spikes=1),
+                    str(entrant.id).lower(),
+                    "splash",
+                )
+                self.assertTrue(branches)
+                for branch in branches:
+                    text = self._text(branch)
+                    self.assertIn("Damage SideOne: 1", text)
+                    self.assertNotIn("ChangeWeather", text)
+                    self.assertNotIn("Boost SideTwo Attack: -1", text)
 
     def test_speed_tie_does_not_compound_ability_modifiers(self) -> None:
         attacker = self._mon("butterfree", "compoundeyes", "thunder", speed=100)

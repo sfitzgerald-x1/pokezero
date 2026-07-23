@@ -191,6 +191,87 @@ class LeafRootParityCommittedSampleTest(unittest.TestCase):
             driven += 1
         self.assertGreater(driven, 0, "no committed-sample row could be driven")
 
+    def test_in_tree_type_change_reaches_leaf_inputs_and_tokens(self) -> None:
+        tables_json = _tables_json()
+        if tables_json is None:
+            self.skipTest("no encoder tables artifact and no Showdown checkout")
+        try:
+            from pokezero.dex import load_showdown_dex_cached
+            from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+
+            if not Path(DEFAULT_SHOWDOWN_ROOT).exists():
+                self.skipTest("no Showdown checkout (dex required)")
+            dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
+        except Exception as error:  # pragma: no cover
+            self.skipTest(f"dex unavailable: {error}")
+        from pokezero.env import BattleStartOverride
+        from pokezero.engine_world import battle_spec_from_payload
+        from pokezero.poke_engine_adapter import build_poke_engine_state
+
+        corpus, fold_states = _sample_rows_with_folds()
+        games = {game.record.battle_id: game for game in corpus.games}
+        for index, row in enumerate(corpus.decision_rows):
+            if row.player_id != "p1":
+                continue
+            game = games[row.battle_id]
+            packed = {
+                slot: (game.record.true_teams.get(slot) or {}).get("packed")
+                for slot in ("p1", "p2")
+            }
+            if not packed["p1"] or not packed["p2"]:
+                continue
+            world = battle_spec_from_payload(
+                row.public_materialization,
+                BattleStartOverride(player_teams=packed),
+                dex=dex,
+                approximate_sleep_turns=True,
+                approximate_substitute_health=True,
+            )
+            state = build_poke_engine_state(world.spec)
+            context = json.dumps(
+                {
+                    "p1": list(world.party_species["p1"]),
+                    "p2": list(world.party_species["p2"]),
+                    "turn": int(row.public_materialization.get("turn") or 0),
+                }
+            )
+            root_state = state.to_string()
+            active = state.side_one.pokemon[int(state.side_one.active_index)]
+            old_prefix = ",".join(
+                (
+                    str(active.id).upper(),
+                    str(active.level),
+                    str(active.types[0]).upper(),
+                    str(active.types[1]).upper(),
+                )
+            )
+            replacement = ",".join(
+                (str(active.id).upper(), str(active.level), "FIRE", "TYPELESS")
+            )
+            leaf_state = root_state.replace(old_prefix, replacement, 1)
+            self.assertNotEqual(leaf_state, root_state)
+
+            encoder = pokezero_search.LeafEncoder(
+                tables_json, _row_inputs(row), context, root_state
+            )
+            turn = int(row.observation_metadata.get("turn_number") or 0)
+            fold = pokezero_search.FoldState.from_payload(fold_states[index])
+            leaf_inputs = json.loads(encoder.leaf_inputs_json(leaf_state, turn))
+            active_entry = next(
+                entry
+                for entry in leaf_inputs["observation_metadata"]["self_team"]
+                if entry.get("active")
+            )
+            self.assertEqual(active_entry.get("live_type_source"), "type:FIRE")
+
+            root_buffers = encoder.encode_leaf(root_state, fold, turn)
+            leaf_buffers = encoder.encode_leaf(leaf_state, fold, turn)
+            self.assertNotEqual(
+                root_buffers["categorical_ids"], leaf_buffers["categorical_ids"]
+            )
+            return
+        self.fail("no committed-sample p1 row could be driven")
+
 
 @unittest.skipUnless(_wheel_has("FoldState"), "wheel lacks FoldState")
 class HpPercentGridTest(unittest.TestCase):

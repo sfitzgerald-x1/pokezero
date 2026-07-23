@@ -1489,15 +1489,10 @@ def _sample_gender(
     fixed = str(metadata.get("gender") or "").upper()
     if fixed in {"M", "F", "N"}:
         return fixed
-    ratio = metadata.get("genderRatio")
-    if not isinstance(ratio, Mapping):
-        return "N"
-    male = float(ratio.get("M") or 0.0)
-    female = float(ratio.get("F") or 0.0)
-    total = male + female
-    if total <= 0.0:
-        return "N"
-    return "M" if rng.random() < male / total else "F"
+    # Gen 3 random battles pass only a species-fixed gender into the set.
+    # Showdown's Pokemon constructor uniformly samples M/F when that field is
+    # absent; species gender ratios are not consulted on this path.
+    return "M" if rng.randrange(2) == 0 else "F"
 
 
 def _stats_from_payload(payload: Any) -> dict[str, int] | None:

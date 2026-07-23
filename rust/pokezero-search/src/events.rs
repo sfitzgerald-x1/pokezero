@@ -1754,7 +1754,15 @@ fn render_move_phase(
                 sim.apply(ins);
                 let target_ident = ctx.active_ident(sim.state, heal.side_ref);
                 let condition = sim.hp_condition(heal.side_ref);
-                if heal.side_ref == side {
+                if heal.heal_amount < 0 {
+                    // Liquid Ooze reverses drain into damage. The engine uses
+                    // a reversible negative Heal instruction, but Showdown's
+                    // public event is damage and can be lethal.
+                    out.lines.push(format!(
+                        "|-damage|{target_ident}|{condition}|[from] ability: Liquid Ooze|[of] {defender_ident}"
+                    ));
+                    note_faint!(heal.side_ref);
+                } else if heal.side_ref == side {
                     if choice.drain.is_some() && deals_damage_to_defender {
                         out.lines.push(format!(
                             "|-heal|{target_ident}|{condition}|[from] drain|[of] {defender_ident}"
@@ -1764,16 +1772,9 @@ fn render_move_phase(
                         // fold must NOT read it as a Heal side effect.
                         out.lines
                             .push(format!("|-heal|{target_ident}|{condition} slp|[silent]"));
-                    } else if heal.heal_amount >= 0 {
+                    } else {
                         out.lines
                             .push(format!("|-heal|{target_ident}|{condition}"));
-                    } else {
-                        // Negative heal (Struggle-class HP loss modeled as
-                        // heal): render as recoil-style damage.
-                        out.lines.push(format!(
-                            "|-damage|{target_ident}|{condition}|[from] Recoil|[of] {defender_ident}"
-                        ));
-                        note_faint!(side);
                     }
                 } else {
                     // Heal on the DEFENDER inside our move phase: absorb
@@ -2089,12 +2090,20 @@ fn render_residual_instruction(
         }
         Instruction::Heal(heal) => {
             let side = heal.side_ref;
-            let cause = residual_heal_cause(sim.state, side);
             sim.apply(ins);
             let ident = ctx.active_ident(sim.state, side);
             let condition = sim.hp_condition(side);
-            out.lines
-                .push(format!("|-heal|{ident}|{condition}|[from] {cause}"));
+            if heal.heal_amount < 0 {
+                let source = ctx.active_ident(sim.state, other_side(side));
+                out.lines.push(format!(
+                    "|-damage|{ident}|{condition}|[from] ability: Liquid Ooze|[of] {source}"
+                ));
+                emit_faint_if_dead(sim, side, ctx, out);
+            } else {
+                let cause = residual_heal_cause(sim.state, side);
+                out.lines
+                    .push(format!("|-heal|{ident}|{condition}|[from] {cause}"));
+            }
         }
         Instruction::ChangeWeather(change) => {
             sim.apply(ins);
@@ -2405,6 +2414,29 @@ mod tests {
         );
         sim.finish();
         assert_eq!(state.serialize(), serialized);
+    }
+
+    #[test]
+    fn liquid_ooze_negative_heal_renders_as_lethal_damage() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().hp = 10;
+        let before = state.serialize();
+        let instruction = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: -10,
+        });
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        render_residual_instruction(&mut sim, &instruction, &ctx(), &mut rendered, false);
+        assert_eq!(
+            rendered.lines,
+            [
+                "|-damage|p1a: Charmander|0 fnt|[from] ability: Liquid Ooze|[of] p2a: Squirtle",
+                "|faint|p1a: Charmander",
+            ]
+        );
+        sim.finish();
+        assert_eq!(state.serialize(), before);
     }
 
     #[test]
