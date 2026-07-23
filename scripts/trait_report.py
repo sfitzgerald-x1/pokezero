@@ -719,8 +719,20 @@ def build_html(rows, report_set="v2"):
         # rates read the same way as the self-play per-seat-game rates. Renders nothing until the
         # first v3 foul-play metrics exist.
         rows_foul = [r for r in rows if r.get("opponent") == "foulplay"]
+        # The resource/endgame group is written for the self-play mirror (opp ≈ bot, so each pair
+        # is shown once). Against FoulPlay the opponent is genuinely different — swap in a
+        # correctly-labeled group with the bot/opponent sides shown separately.
+        foul_charts = [
+            ("resource / endgame (vs FoulPlay — bot and opponent shown separately)", [
+                ("PP exhausted / game (bot)", lambda r: r.get("pp_exhaustion_bot_per_game")),
+                ("PP exhausted / game (FoulPlay)", lambda r: r.get("pp_exhaustion_opp_per_game")),
+                ("bot mons alive on win", lambda r: r.get("avg_bot_mons_alive_on_win")),
+                ("FoulPlay mons alive on bot loss", lambda r: r.get("avg_opp_mons_alive_on_loss")),
+            ]) if title.startswith("resource / endgame") else (title, group)
+            for title, group in charts
+        ]
         body.append(phase2_trajectories(
-            rows_foul, charts,
+            rows_foul, foul_charts,
             heading="Trait breakdowns by checkpoint — vs FoulPlay",
             sub="Same categories as the self-play trajectories above, measured in games against "
                 "FoulPlay. Only the bot seat is measured; self-play and foul-play are never merged."))
