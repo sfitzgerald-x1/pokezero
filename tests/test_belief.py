@@ -30,6 +30,22 @@ class FakeSetSource:
 
 
 class PublicBattleBeliefEngineTest(unittest.TestCase):
+    def test_tracks_public_gender_from_switch_details(self) -> None:
+        replay = parse_showdown_replay(
+            [
+                "|start",
+                "|switch|p1a: Delcatty|Delcatty, L82, F|300/300",
+                "|switch|p2a: Tauros|Tauros, L76, M|300/300",
+                "|turn|1",
+            ],
+            battle_id="battle-gen3randombattle-gender",
+        )
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+
+        self.assertEqual(snapshot.side("p1")[0].gender, "F")
+        self.assertEqual(snapshot.side("p2")[0].gender, "M")
+        self.assertEqual(snapshot.side("p1")[0].to_overlay_payload()["gender"], "F")
+
     def test_tracks_public_reveals_moves_and_conditions(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
 

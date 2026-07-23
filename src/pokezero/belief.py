@@ -67,6 +67,7 @@ class RevealedPokemonBelief:
     condition: Optional[str] = None
     status: Optional[str] = None
     active: bool = False
+    gender: Optional[str] = None
     revealed_moves: tuple[str, ...] = ()
     revealed_ability: Optional[str] = None
     revealed_item: Optional[str] = None
@@ -138,6 +139,7 @@ class RevealedPokemonBelief:
             "condition": self.condition,
             "status": self.status,
             "active": self.active,
+            "gender": self.gender,
             "revealed_moves": list(self.revealed_moves),
             "revealed_ability": self.revealed_ability,
             "revealed_item": self.revealed_item,
@@ -188,6 +190,7 @@ class DeterminizedOpponentPokemon:
     showdown_slot: str
     species: str
     active: bool
+    gender: Optional[str] = None
     condition: Optional[str] = None
     status: Optional[str] = None
     revealed_moves: tuple[str, ...] = ()
@@ -214,6 +217,7 @@ class DeterminizedOpponentPokemon:
             "showdown_slot": self.showdown_slot,
             "species": self.species,
             "active": self.active,
+            "gender": self.gender,
             "condition": self.condition,
             "status": self.status,
             "revealed_moves": list(self.revealed_moves),
@@ -410,6 +414,7 @@ class PublicBattleBeliefEngine:
                 species=str(primary),
                 condition=_string_or_none(secondary),
                 active=True,
+                gender=_gender_from_switch_line(raw_line),
             )
             belief = self._on_switch_in(belief, condition=_string_or_none(secondary), raw_line=raw_line)
             if self._can_queue_intimidate_non_trigger(belief):
@@ -905,6 +910,7 @@ class PublicBattleBeliefEngine:
         species: str,
         condition: Optional[str] = None,
         active: Optional[bool] = None,
+        gender: Optional[str] = None,
     ) -> RevealedPokemonBelief:
         normalized_species = _normalize_species(species)
         side = self._sides.setdefault(showdown_slot, [])
@@ -915,6 +921,8 @@ class PublicBattleBeliefEngine:
                     updated = replace(updated, condition=condition)
                 if active is not None:
                     updated = replace(updated, active=active)
+                if gender is not None:
+                    updated = replace(updated, gender=gender)
                 updated = self._with_set_summary(updated)
                 side[index] = updated
                 return updated
@@ -924,6 +932,7 @@ class PublicBattleBeliefEngine:
                 species=species,
                 condition=condition,
                 active=bool(active),
+                gender=gender,
             )
         )
         side.append(created)
@@ -1417,6 +1426,7 @@ def _determinized_pokemon(
             showdown_slot=pokemon.showdown_slot,
             species=pokemon.species,
             active=pokemon.active,
+            gender=pokemon.gender,
             condition=pokemon.condition,
             status=pokemon.status,
             revealed_moves=pokemon.revealed_moves,
@@ -1431,6 +1441,7 @@ def _determinized_pokemon(
         showdown_slot=pokemon.showdown_slot,
         species=pokemon.species,
         active=pokemon.active,
+        gender=pokemon.gender,
         condition=pokemon.condition,
         status=pokemon.status,
         revealed_moves=pokemon.revealed_moves,
@@ -1686,6 +1697,17 @@ def _species_from_ident(ident: Optional[str]) -> Optional[str]:
         return None
     species = str(ident).split(":", 1)[-1].strip()
     return species or None
+
+
+def _gender_from_switch_line(raw_line: Optional[str]) -> Optional[str]:
+    parts = str(raw_line or "").split("|")
+    if len(parts) < 4 or parts[1] not in {"switch", "drag", "replace"}:
+        return None
+    for part in parts[3].split(","):
+        token = part.strip().upper()
+        if token in {"M", "F", "N"}:
+            return token
+    return None
 
 
 def _base_species_id(species: str) -> str:

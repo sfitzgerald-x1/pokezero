@@ -268,7 +268,8 @@ def pokemon_spec_from_request_member(
     if not isinstance(member, Mapping):
         raise TypeError(f"member must be a mapping, got {type(member).__name__}")
     ident = member.get("ident")
-    species, level = parse_details(str(member.get("details", "")))
+    details = str(member.get("details", ""))
+    species, level = parse_details(details)
     hp, maxhp = parse_condition(str(member.get("condition", "")))
     if maxhp is None:
         raise ValueError(f"party member {ident!r} condition has no max HP to build a spec from")
@@ -297,8 +298,17 @@ def pokemon_spec_from_request_member(
         speed=_stat(stats, "spe", ident),
         ability=normalize_id(ability) if ability else None,
         item=normalize_id(item) if item else None,
+        gender=_gender_from_details(details),
         moves=_member_moves(member, active_row),
     )
+
+
+def _gender_from_details(details: str) -> str | None:
+    for part in details.split(","):
+        gender = part.strip().upper()
+        if gender in {"M", "F", "N"}:
+            return gender
+    return None
 
 
 def side_spec_from_request(request: Mapping[str, Any], dex: "ShowdownDex") -> SideSpec:

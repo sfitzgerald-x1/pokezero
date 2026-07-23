@@ -20,7 +20,7 @@ GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
 # simulator surface that determines protocol emissions and state mutations. An
 # audit cannot claim to pin engine behavior from the random-battle generator
 # alone.
-_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v6"
+_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v7"
 _AUDIT_ENGINE_RELATIVE_PATHS = (
     "sim",
     "data/mods/gen3",
@@ -998,7 +998,13 @@ for (const move of dex.moves.all()) {
   };
 }
 for (const species of dex.species.all()) {
-  out.species[species.id] = {name: species.name, types: species.types || [], baseStats: species.baseStats || {}};
+  out.species[species.id] = {
+    name: species.name,
+    types: species.types || [],
+    baseStats: species.baseStats || {},
+    gender: species.gender || null,
+    genderRatio: species.genderRatio || null
+  };
 }
 console.log(JSON.stringify(out));
 """

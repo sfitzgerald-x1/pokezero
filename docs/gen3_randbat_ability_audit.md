@@ -1,0 +1,259 @@
+# Gen 3 randbats ability audit
+
+Status: complete for Pokemon Showdown source hash `f9e35e1fddae5064` (2026-07-22).
+
+## Scope and result
+
+This audit maps every ability reachable from the current Gen 3 random-battle set
+catalog to the Rust poke-engine behavior used by v3 search. It is a mechanics
+audit, not an enum-presence check: switch entry/exit, move modification,
+immunities, chance branches, residuals, trapping, weather suppression, and the
+Python-to-Rust root-state seam were inspected separately.
+
+- **71/71 catalog abilities have an explicit disposition.** The executable
+  catalog test fails if the live source adds or removes an ability.
+- **No catalog ability has a missing decision effect.** Public or sampled gender
+  is carried through belief worlds, serialized engine state, and native search
+  world transitions, so Cute Charm is now modeled rather than treated as an
+  omission.
+- **53 are modeled directly, 13 use documented bounded arithmetic/operational
+  approximations, four are correctly inert in Gen 3 singles, and Sturdy is
+  exact for this format because the source move universe contains no OHKO move.**
+- Lightning Rod is not in the current variant catalog, but its reachable engine
+  behavior was audited as a supplemental guard. Its modern immunity/SpA boost
+  was removed; Gen 3 Lightning Rod is redirect-only and therefore inert in
+  singles.
+
+`Exact` below means the relevant Gen 3 state transition and branch probability
+are represented by the engine. `Bounded` means the decision effect is modeled,
+but not at bit-identical cartridge rounding or full-horizon bookkeeping.
+
+## Training accuracy implications
+
+Here, training accuracy means fidelity of collected transitions, outcome returns,
+and policy/value targets, rather than the model's in-sample action accuracy.
+
+| Path | Effect of these findings |
+|---|---|
+| Current recipe-faithful PPO self-play | **No direct impact.** Collection and terminal outcomes come from Pokemon Showdown; the Rust engine is not in the training loop. These fixes therefore do not invalidate existing PPO checkpoints or require data re-encoding. |
+| Net-alone Showdown evaluation | **No direct impact.** The evaluated policy still acts in Pokemon Showdown. |
+| V3 observation training | **No schema or feature-distribution change.** V3 already encoded public gender from Showdown `details`; this work carries the same public fact, or a sampled hidden fact, into determinized Rust worlds. |
+| Test-time Rust MCTS | **Direct accuracy impact.** Before the fixes, affected search branches could contain impossible survival, damage, status, immunity, or weather outcomes and therefore mis-rank legal actions. |
+| Future MCTS-generated training targets or rollout collection | **Direct target-quality impact if enabled.** Search visits/actions produced by the old engine can encode biased policy targets or trajectories. Pre-fix search artifacts should not be mixed into a search-supervised training corpus without an explicit legacy label. No current PPO checkpoint is known to contain such targets because the documented recipe keeps search out of training. |
+
+The fixed defects with the largest potential to change search-derived labels are
+the outcome/immunity errors (Sturdy, Wonder Guard, Rock Head/Struggle, weather
+suppression/Forecast, Flash Fire, and status-prevention seams). Probability and
+ordering errors (contact abilities, Synchronize, Early Bird, Shed Skin, and Cute
+Charm) are generally more state-specific but can still change expected leaf value
+and action ranking when reached.
+
+Thirteen ledger entries remain intentionally `Bounded`. They are not defects in
+Showdown PPO collection, but they are residual accuracy risks if Rust MCTS is ever
+used to create training targets:
+
+- Blaze, Guts, Huge Power, Hustle, Marvel Scale, Overgrow, Pure Power, Swarm,
+  Thick Fat, and Torrent use power proxies instead of bit-identical cartridge
+  stat/damage rounding. The main risk is a near-threshold KO or survival flip.
+- Battle Armor and Shell Armor inherit the search engine's deep-ply critical-hit
+  elision. The main risk is mispricing high-variance lines beyond the explicitly
+  branched horizon.
+- Pressure inherits high-PP decrement elision. The main risk is long-horizon PP
+  stall valuation, not ordinary short tactical lines.
+
+Accordingly, the present audit supports test-time-search evaluation, but a future
+decision to train from Rust-search targets should retain differential monitoring
+for these bounded classes rather than treating the engine as a bit-exact oracle.
+
+## Findings fixed
+
+The audit found and patched these concrete defects in poke-engine 0.0.47:
+
+1. Sturdy acted as a modern full-HP Focus Sash. In Gen 3 it only blocks OHKO
+   moves; ordinary lethal damage must KO.
+2. Rock Head did not suppress ordinary recoil, while Struggle had no recoil.
+   Rock Head now suppresses move recoil but not Struggle/crash recoil.
+3. Wonder Guard incorrectly blocked Struggle. It now blocks only direct,
+   non-super-effective attacks and does not block status or residual damage.
+4. Air Lock/Cloud Nine suppressed weather damage modifiers but not several
+   other weather effects, and a fainted suppressor stayed active through the
+   residual phase. Recovery, Solar Beam, Weather Ball, speed abilities,
+   residuals, and Forecast now use the same live-holder predicate.
+5. Forecast did not update Castform. Weather changes update its engine type,
+   world construction latches the correct type at the search root, and native
+   V3 leaf encoding now propagates in-tree type changes instead of reverting
+   Castform to its base Normal token.
+6. Sand Veil omitted its 20% accuracy reduction. It now also retains its Gen 3
+   sand-damage immunity, with both effects disabled by weather suppressors.
+7. Early Bird and Shed Skin were not represented correctly. Early Bird now
+   uses the Gen 3 conditional wake curve/Rest decrement, and Shed Skin branches
+   at Showdown's exact 33/100 rate before status residual damage.
+8. Own Tempo and Oblivious did not prevent their volatile conditions. They now
+   reject and clear Confusion/Attract respectively, including after Trace.
+9. Status-prevention abilities blocked new direct status but did not cover Yawn
+   or cure an incompatible status after Trace. Water Veil, Magma Armor, Limber,
+   Immunity, Insomnia, and Vital Spirit now cover those seams. Yawn applies
+   Safeguard and ordinary sleep-immunity checks when the volatile starts, then
+   applies Sleep Clause but not Safeguard when the delayed sleep resolves.
+10. Synchronize was absent. Burn/paralysis/poison now reflect after a successful
+    application, including statuses caused by contact abilities and the
+    Lum-Berry event seams on either side; Gen 3 Toxic reflection becomes regular
+    poison. Reflections respect Safeguard while bypassing Substitute, matching
+    Showdown's direct `trySetStatus` path.
+11. Poison Point, Flame Body, Static, and Effect Spore used inaccurate or
+    independently composed probabilities and could trigger through Substitute.
+    They now branch at 1/3, 1/3, 1/3, and 1/10 total (1/30 per status), only
+    after unprotected contact. All four respect Safeguard; invalid Effect Spore
+    outcomes remain no-ops, and its sleep outcome respects Sleep Clause rather
+    than transferring mass.
+12. Intimidate lowered Attack through Substitute. The Gen 3 substitute immunity
+    is now respected.
+13. Flash Fire could falsely activate from Will-O-Wisp against a Fire type,
+    already-statused target, or Substitute, and from damaging Fire attacks while
+    frozen. Those no-op cases no longer seed the boost; real Fire hits thaw.
+14. Defender abilities could intercept self/field moves. A target guard now
+    prevents Water Absorb, Soundproof, Flash Fire, and similar hooks from
+    consuming Rain Dance, Heal Bell, and other non-opponent moves. Heal Bell's
+    team cure now preserves every Soundproof holder, including its user,
+    matching the Gen 3 party boundary.
+15. Speed-tie evaluation reused already-mutated `Choice` objects. The second
+    ordering could therefore apply ability modifiers twice; each ordering now
+    starts from a pristine clone.
+16. Supplemental Lightning Rod used modern-generation semantics. The immunity
+    and SpA boost were removed for Gen 3 singles.
+17. Drizzle, Drought, and Sand Stream failed to replace finite same-type weather
+    with their permanent ability weather. Entry now refreshes the duration even
+    when the weather type is unchanged.
+18. Liquid Ooze could reduce a low-HP drain user below zero. Reversed drain is
+    now capped at the user's current HP while retaining the reversible negative-
+    heal instruction.
+19. Cute Charm had no access to the public gender already encoded by V3. Gender
+    now flows through request/belief materialization, sampled hidden worlds, the
+    Python binding, serialized Rust state, and synthesized switch details. The
+    engine applies the exact 1/3 contact Attract branch only for opposite male/
+    female pairs, with Substitute and Oblivious gates, and clears the relation
+    when either active leaves the field. This does not change the observation
+    schema or model feature distribution: native mon tokens continue to consume
+    the existing V3 `observation_metadata`; the added materialization `details`
+    field is used to construct the sampled Rust world.
+20. Hidden non-fixed gender sampling incorrectly used species gender ratios.
+    Gen 3 randbats leaves those set genders unset, so Showdown uniformly rolls
+    male/female at battle construction; determinized worlds now do the same.
+21. Adding gender to the Python `Pokemon` constructor shifted every legacy
+    positional argument. Gender is now the final optional argument, preserving
+    the upstream positional API while retaining keyword support.
+22. Liquid Ooze covered direct draining moves but not Leech Seed, and native
+    event rendering mislabeled reversible negative heals as healing. Both drain
+    paths now produce capped, potentially lethal Liquid Ooze damage events.
+23. A Pokemon fainted by entry Spikes still activated Sand Stream, Drizzle,
+    Drought, Intimidate, Trace, or other switch-in abilities. Start abilities
+    are now gated on surviving entry hazards.
+
+All upstream Rust engine changes are carried by
+`third_party/poke-engine-gen3-ability-fidelity.patch`, applied last and with
+`--fuzz=0` by both Python-wheel and native-Rust vendor scripts.
+
+## Ability ledger
+
+| Ability | Disposition | Audited behavior |
+|---|---|---|
+| Air Lock | Exact, patched | Suppresses all active weather effects without clearing weather; Forecast follows suppression, and fainted holders no longer suppress residuals. |
+| Arena Trap | Exact | Traps grounded opposing Pokemon; Flying/Levitate remain switchable. |
+| Battle Armor | Bounded | Critical-hit branch mass is zero wherever the search enables damage branching; deep plies inherit the engine's deliberate crit elision. |
+| Blaze | Bounded | Correct low-HP Fire multiplier; represented as base-power scaling, so cartridge rounding is not bit-exact. |
+| Chlorophyll | Exact, patched seam | Doubles effective speed only in unsuppressed sun. |
+| Clear Body | Exact | Rejects opponent-caused stat drops. |
+| Cloud Nine | Exact, patched | Same global weather suppression contract as Air Lock. |
+| Color Change | Exact | Changes the surviving target to the damaging move's type after a real HP hit. |
+| Compound Eyes | Exact | Applies the Gen 3 1.3x accuracy modifier. |
+| Cute Charm | Exact, patched | Opposite-gender damaging contact applies Attract at 1/3; same-gender/genderless pairs, Substitute, and Oblivious correctly block it, and either participant switching ends it. Public gender is preserved, species-fixed gender is honored, and other hidden randbat genders use Showdown's uniform M/F battle roll. |
+| Drizzle | Exact, patched seam | Sets indefinite rain on entry, including replacement of finite rain. |
+| Drought | Exact, patched seam | Sets indefinite sun on entry, including replacement of finite sun. |
+| Early Bird | Exact, patched | Correct conditional natural-sleep wake curve and doubled Rest countdown. |
+| Effect Spore | Exact, patched | 10% total contact proc, split uniformly among sleep/paralysis/poison; blocked by Substitute, with invalid choices retained as no-op mass and Sleep Clause enforced. |
+| Flame Body | Exact, patched | 1/3 contact burn; blocked by Substitute. |
+| Flash Fire | Exact, patched | Fire immunity/boost volatile plus Gen 3 Will-O-Wisp and frozen-target exceptions; damaging Fire hits thaw. |
+| Forecast | Exact, patched | Castform type follows unsuppressed sun/rain/hail at root and after in-tree weather changes, including native V3 leaf tokens. |
+| Guts | Bounded | Correct burn cancellation and 1.5x physical effect; implemented through power scaling rather than Attack-stat rounding. |
+| Huge Power | Bounded | Correct physical doubling effect via power proxy. |
+| Hustle | Bounded | Correct 1.5x physical damage and 0.8x accuracy via power proxy. |
+| Hyper Cutter | Exact | Rejects opponent-caused Attack drops. |
+| Immunity | Exact, patched seam | Blocks poison/toxic and cures either status when acquired through Trace. |
+| Inner Focus | Exact | Rejects flinch. |
+| Insomnia | Exact, patched seam | Blocks direct sleep and Yawn resolution; cures sleep when acquired through Trace. |
+| Intimidate | Exact, patched | Entry Attack drop respects Substitute and stat-drop immunities. |
+| Keen Eye | Exact | Rejects opponent-caused accuracy drops. |
+| Levitate | Exact | Ground immunity and Arena Trap grounding interaction. |
+| Limber | Exact, patched seam | Blocks paralysis and cures it when acquired through Trace. |
+| Liquid Ooze | Exact, patched seam | Reverses direct-drain and Leech Seed healing into correctly rendered damage and clamps lethal reversal at zero HP. |
+| Magma Armor | Exact, patched seam | Blocks freeze and cures it when acquired through Trace. |
+| Magnet Pull | Exact | Traps opposing Steel types. |
+| Marvel Scale | Bounded | Correct status-conditioned physical bulk via inverse power proxy. |
+| Minus | Inert | Partner check cannot activate in singles. |
+| Natural Cure | Exact | Clears persistent status on switch-out. |
+| Oblivious | Exact, patched | Prevents/clears Attract; does not import modern Taunt/Intimidate behavior. |
+| Overgrow | Bounded | Correct low-HP Grass multiplier via power scaling. |
+| Own Tempo | Exact, patched | Prevents/clears confusion; does not import modern Intimidate immunity. |
+| Pickup | Inert | Post-turn/post-battle item pickup has no Gen 3 singles battle decision effect. |
+| Plus | Inert | Partner check cannot activate in singles. |
+| Poison Point | Exact, patched | 1/3 contact poison; blocked by Substitute and normal status immunities. |
+| Pressure | Bounded | Correct two-PP consumption once PP is engine-relevant; high-PP decrements are intentionally elided by upstream search optimization. |
+| Pure Power | Bounded | Correct physical doubling effect via power proxy. |
+| Rock Head | Exact, patched | Suppresses ordinary recoil but not Struggle or crash damage. |
+| Rough Skin | Exact | Contact attacker loses 1/16 max HP after real target damage. |
+| Run Away | Inert | Wild-battle escape has no trainer-battle effect. |
+| Sand Stream | Exact, patched seam | Sets indefinite sand, replaces finite sand, and participates in the shared suppression predicate. |
+| Sand Veil | Exact, patched | 0.8x opposing accuracy plus sand residual immunity; disabled by suppression. |
+| Serene Grace | Exact | Doubles eligible secondary-effect probabilities, capped by branch evaluation. |
+| Shadow Tag | Exact | Traps the opposing active in Gen 3, including the Gen 3 mirror behavior. |
+| Shed Skin | Exact, patched | Independent 33/100 end-turn cure before status damage, matching Showdown's Gen 3 implementation. |
+| Shell Armor | Bounded | Critical-hit branch mass is zero wherever the search enables damage branching; deep plies inherit the engine's deliberate crit elision. |
+| Shield Dust | Exact | Removes opponent-targeting secondary effects. |
+| Soundproof | Exact, patched seam | Blocks opposing sound moves and Perish Song; Heal Bell skips every Soundproof holder, including the user, while Aromatherapy cures normally. |
+| Speed Boost | Exact | Adds one Speed stage at end of turn up to +6. |
+| Static | Exact, patched | 1/3 contact paralysis; blocked by Substitute. |
+| Sticky Hold | Exact | Prevents item removal. |
+| Sturdy | Format-exact, patched | No modern sash behavior. Gen 3 OHKO immunity is unreachable because the current randbat move universe has no OHKO move. |
+| Suction Cups | Exact | Prevents forced switching/drag effects. |
+| Swarm | Bounded | Correct low-HP Bug multiplier via power scaling. |
+| Swift Swim | Exact, patched seam | Doubles effective speed only in unsuppressed rain. |
+| Synchronize | Exact, patched | Reflects move- or contact-ability-inflicted burn/paralysis/poison before Lum Berry cures on either side; reflected Toxic becomes regular poison, bypasses Substitute, and rechecks immunity/Safeguard. |
+| Thick Fat | Bounded | Correct Fire/Ice halving via inverse power proxy. |
+| Torrent | Bounded | Correct low-HP Water multiplier via power scaling. |
+| Trace | Exact, patched seam | Copies the opposing ability in singles, activates entry effects, and applies newly gained immunity cures. |
+| Truant | Exact | Alternates action and loaf turns; world construction carries the live phase. |
+| Vital Spirit | Exact, patched seam | Blocks direct sleep and Yawn resolution; cures sleep when acquired through Trace. |
+| Volt Absorb | Exact | Gen 3 damaging Electric immunity/heal; Thunder Wave is not absorbed. |
+| Water Absorb | Exact, patched seam | Water immunity/heal without intercepting self/field moves. |
+| Water Veil | Exact, patched seam | Blocks burn and cures it when acquired through Trace. |
+| White Smoke | Exact | Rejects opponent-caused stat drops. |
+| Wonder Guard | Exact, patched | Blocks only non-super-effective direct attacks; status, residuals, and Struggle remain effective. |
+
+Supplemental: **Lightning Rod** is not present in the source-hash variant
+universe above. Its Gen 3 singles behavior is nevertheless pinned as inert so
+future source changes cannot silently restore modern immunity/boost semantics.
+
+## Verification evidence
+
+- Fresh upstream sdist build: all five patches apply in order with `--fuzz=0`,
+  then the Python extension builds with `poke-engine/gen3` and no default
+  generation feature.
+- `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
+  `tests.test_engine_world.ForecastRootTypeTests`: **44/44 checks pass**.
+- Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
+  turns clean**.
+- Additional high-risk Showdown differential (Wonder Guard neutral/super-
+  effective/status, Rock Head, Water Veil, Limber, Insomnia, Volt Absorb,
+  Water Absorb, Soundproof): **10/10 cases, 80/80 seeded turns clean**.
+- Native integration: `cargo check --manifest-path rust/pokezero-search/Cargo.toml`
+  and its **27-test** suite pass (one pre-existing unreachable-pattern warning
+  in `leaf.rs`). The reconstructed upstream Gen 3 crate also passes all **17**
+  of its enabled tests.
+
+## Residual risk
+
+The bounded power proxies can differ from cartridge integer rounding by a small
+amount near damage thresholds. Pressure deliberately omits high-PP bookkeeping,
+and deep search plies use the engine's existing crit elision for all defenders,
+including Battle Armor/Shell Armor holders. Those are visible accepted
+approximations, not silent claims of bit-exactness.

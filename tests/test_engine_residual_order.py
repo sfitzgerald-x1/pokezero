@@ -77,14 +77,34 @@ class ResidualOrderTests(unittest.TestCase):
         damage_pos = next(i for i, s in enumerate(instructions) if s == "Damage SideTwo: 20")
         self.assertLess(heal_pos, damage_pos)
 
-    def test_shed_skin_cures_before_status_damage(self) -> None:
-        # Shed Skin (order 5.3) removes the status before it deals damage; the
-        # engine does not branch on its 1/3 chance, so the cure is deterministic.
-        side, instructions = self._end_of_turn(
-            item="none", hp=100, status="poison", ability="shedskin"
+    def test_shed_skin_branches_at_showdown_rate_before_status_damage(self) -> None:
+        pe = poke_engine
+        dummy = pe.Pokemon(id="pikachu", level=1, hp=0)
+        holder = pe.Pokemon(
+            id="seviper", level=80, types=("poison", "typeless"), hp=100, maxhp=self.MAXHP,
+            ability="shedskin", item="none", attack=100, defense=120, special_attack=140,
+            special_defense=120, speed=150, status="poison",
+            moves=[pe.Move(id="calmmind", pp=16)],
         )
-        self.assertEqual(side.pokemon[0].hp, 100)  # no poison damage after cure
-        self.assertEqual(str(side.pokemon[0].status).upper(), "NONE")
+        other = pe.Pokemon(
+            id="swampert", level=80, types=("water", "ground"), hp=291, maxhp=291,
+            ability="torrent", item="none", attack=200, defense=190, special_attack=180,
+            special_defense=190, speed=140, moves=[pe.Move(id="curse", pp=16)],
+        )
+        state = pe.State(
+            side_one=pe.Side(active_index="0", pokemon=[other] + [dummy] * 5),
+            side_two=pe.Side(active_index="0", pokemon=[holder] + [dummy] * 5),
+            weather="none", terrain="none", trick_room=False,
+        )
+
+        outcomes: dict[tuple[int, str], float] = {}
+        for branch in pe.generate_instructions(state, "curse", "calmmind"):
+            applied = state.apply_instructions(branch)
+            key = (applied.side_two.pokemon[0].hp, str(applied.side_two.pokemon[0].status).upper())
+            outcomes[key] = outcomes.get(key, 0.0) + float(branch.percentage)
+
+        self.assertAlmostEqual(outcomes[(100, "NONE")], 33.0, places=4)
+        self.assertAlmostEqual(outcomes[(80, "POISON")], 67.0, places=4)
 
 
 @unittest.skipIf(poke_engine is None, "poke-engine wheel not installed")

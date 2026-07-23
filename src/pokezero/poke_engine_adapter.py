@@ -81,6 +81,7 @@ class PokemonSpec:
     ability: str | None = None
     item: str | None = None
     nature: str | None = None
+    gender: str | None = None
     rest_turns: int = 0
     sleep_turns: int = 0
     weight_kg: float | None = None
@@ -483,6 +484,12 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
         kwargs["item"] = member.item
     if member.nature is not None:
         kwargs["nature"] = member.nature
+    if member.gender is not None:
+        gender = str(member.gender).strip().upper()
+        mapped_gender = {"M": "male", "F": "female", "N": "none"}.get(gender)
+        if mapped_gender is None:
+            raise ValueError(f"{path}.gender must be M, F, N, or None, got {member.gender!r}")
+        kwargs["gender"] = mapped_gender
     if _require_non_negative_int(member.rest_turns, f"{path}.rest_turns"):
         kwargs["rest_turns"] = member.rest_turns
     if _require_non_negative_int(member.sleep_turns, f"{path}.sleep_turns"):

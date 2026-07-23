@@ -63,7 +63,7 @@ orderings directly against the engine at mid-battle HP states the one-turn
 differential cannot reach. Worth reporting upstream: the original
 all-items-after-status ordering is a real gen3 bug in poke-engine 0.0.47.
 
-## Confirmed deviation 3: Attract volatile accepted but ignored
+## Confirmed deviation 3: Attract volatile was accepted but ignored
 
 poke-engine 0.0.47 has `PokemonVolatileStatus::ATTRACT` in the gen3 enum
 (`src/gen3/state.rs`) but **zero behavioral references** to it in
@@ -116,26 +116,16 @@ sleep → confusion → **attract** (the patch) → move. Consequences:
   (an events.rs concern) depends on which volatile is credited — invisible to
   search value.
 
-**Source-leave decision (explicit).** Real Gen 3 Attract clears when the
-infatuation source leaves play (`onUpdate` removes the volatile when
+**Source-leave handling (closed 2026-07-22).** Real Gen 3 Attract clears when
+the infatuation source leaves play (`onUpdate` removes the volatile when
 `effectState.source` goes inactive; Showdown emits a public
-`|-end|mon|Attract|[silent]`). The engine does not track the infatuation
-source, and adding source-identity tracking to the world state is out of scope
-for a proc-gated singleton. **Chosen: a bounded in-search over-model** — attract
-persists across the 2-3 ply search horizon even if the source switches out. This
-is a small over-model strictly in the immobilizing (pessimistic) direction, the
-exact opposite of the prior total no-op (which was optimistic), and it is bounded
-to deep plies: the *live* attract state is always exact because the observation
-parser clears the volatile on the real `-end`/switch (the volatile is seeded
-verbatim from the public payload each decision). Only hypothetical in-search
-lines where the source switches are affected, and there the pessimism is
-self-limiting (the attracted mon usually cannot force the source out). This
-matches the confusion / partial-trap no-expiry approximation class already
-accepted in this engine (live state exact; in-search future duration a
-pessimistic bound). The alternative — minimal source-tracking + clear-on-leave —
-buys exactness on a singleton at the cost of new cross-side world state and a
-parser-tracked source id; not justified now, revisit if post-fix sweeps show
-attract above singleton rates.
+`|-end|mon|Attract|[silent]`). The engine does not store an infatuation source
+id, but Gen 3 random battles are singles: if either active switches, that active
+must be either the holder or the holder's sole possible source. The ability-
+fidelity patch therefore clears Attract from the opposite side during switch
+generation; the engine's existing switch cleanup clears it from the switching
+side. A regression test pins the source-switch case. This removes the former
+bounded over-model without adding hidden source identity to the state.
 
 Regression gates (all in the dedicated `.venv-attract`, never the shared venv):
 `scripts/attract_differential.py` is the residual-order-caliber ground-truth
