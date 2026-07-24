@@ -12,6 +12,10 @@ from ..randbat import Gen3RandbatSource, Gen3RandbatVariant, load_gen3_randbat_s
 from ..showdown_fixture import pack_team
 from .domain import (
     EndgameScenario,
+    SCENARIO_SIDE_CONDITION_LIMITS,
+    SCENARIO_STATUS_IDS,
+    SCENARIO_VOLATILE_IDS,
+    SCENARIO_WEATHER_IDS,
     ScenarioMove,
     ScenarioPokemon,
     ScenarioSide,
@@ -198,6 +202,12 @@ class ScenarioCatalog:
             "format_id": self.source.metadata.format_id,
             "source_hash": self.source_hash,
             "species": species,
+            "conditions": {
+                "statuses": list(SCENARIO_STATUS_IDS),
+                "volatiles": list(SCENARIO_VOLATILE_IDS),
+                "weather": list(SCENARIO_WEATHER_IDS),
+                "side_conditions": dict(SCENARIO_SIDE_CONDITION_LIMITS),
+            },
         }
 
 
@@ -279,6 +289,14 @@ def validate_scenario(scenario: EndgameScenario, catalog: ScenarioCatalog) -> En
             raise ScenarioValidationError("must select a living active Pokemon", path=f"{path}/active_slot")
         if not any(pokemon.current_hp > 0 for pokemon in side.pokemon):
             raise ScenarioValidationError("must have one living Pokemon", path=f"{path}/pokemon")
+        for index, pokemon in enumerate(side.pokemon):
+            pokemon_path = f"{path}/pokemon/{index}"
+            if pokemon.current_hp == 0 and pokemon.status.status_id:
+                raise ScenarioValidationError(
+                    "a fainted Pokemon cannot retain a major status", path=f"{pokemon_path}/status"
+                )
+            _validate_status_compatibility(pokemon, catalog, path=f"{pokemon_path}/status")
+        _validate_active_volatiles(scenario, side_id, catalog)
     return scenario
 
 
@@ -293,13 +311,43 @@ def scenario_start_override(scenario: EndgameScenario) -> BattleStartOverride:
 
 def scenario_bridge_patch(scenario: EndgameScenario) -> dict[str, Any]:
     return {
+        "turn": scenario.turn_number,
+        "field": {
+            "weather": scenario.battle_field.weather_id,
+            "turnsRemaining": scenario.battle_field.turns_remaining,
+            "permanent": scenario.battle_field.permanent,
+        },
         "sides": {
             side_id: {
                 "activeSlot": scenario.side(side_id).active_slot,
+                "sideConditions": dict(scenario.side(side_id).side_conditions),
+                "activeVolatiles": [
+                    {
+                        "id": volatile.volatile_id,
+                        **(
+                            {"turnsRemaining": volatile.turns_remaining}
+                            if volatile.turns_remaining is not None
+                            else {}
+                        ),
+                        **(
+                            {"turnsElapsed": volatile.turns_elapsed}
+                            if volatile.turns_elapsed is not None
+                            else {}
+                        ),
+                        **({"hp": volatile.hp} if volatile.hp is not None else {}),
+                        **({"moveId": volatile.move_id} if volatile.move_id is not None else {}),
+                    }
+                    for volatile in scenario.side(side_id).active_volatiles
+                ],
                 "pokemon": [
                     {
                         "slot": index,
                         "hp": pokemon.current_hp,
+                        "status": {
+                            "id": pokemon.status.status_id,
+                            "sleepTurnsRemaining": pokemon.status.sleep_turns_remaining,
+                            "toxicStage": pokemon.status.toxic_stage,
+                        },
                         "moves": [{"id": move.move_id, "pp": move.pp} for move in pokemon.moves],
                     }
                     for index, pokemon in enumerate(scenario.side(side_id).pokemon)
@@ -308,6 +356,87 @@ def scenario_bridge_patch(scenario: EndgameScenario) -> dict[str, Any]:
             for side_id in ("p1", "p2")
         }
     }
+
+
+def _validate_status_compatibility(
+    pokemon: ScenarioPokemon,
+    catalog: ScenarioCatalog,
+    *,
+    path: str,
+) -> None:
+    status = pokemon.status.status_id
+    if not status:
+        return
+    species = catalog.dex.species_info(pokemon.species)
+    types = {normalize_id(type_name) for type_name in species.types} if species is not None else set()
+    ability = normalize_id(pokemon.ability)
+    if status == "brn" and ("fire" in types or ability == "waterveil"):
+        raise ScenarioValidationError("is prevented by this Pokemon's type or ability", path=path)
+    if status in {"psn", "tox"} and (
+        types & {"poison", "steel"} or ability == "immunity"
+    ):
+        raise ScenarioValidationError("is prevented by this Pokemon's type or ability", path=path)
+    if status == "par" and ability == "limber":
+        raise ScenarioValidationError("is prevented by Limber", path=path)
+    if status == "slp" and ability in {"insomnia", "vitalspirit"}:
+        raise ScenarioValidationError("is prevented by this Pokemon's ability", path=path)
+    if status == "frz" and ("ice" in types or ability == "magmaarmor"):
+        raise ScenarioValidationError("is prevented by this Pokemon's type or ability", path=path)
+
+
+def _validate_active_volatiles(
+    scenario: EndgameScenario,
+    side_id: str,
+    catalog: ScenarioCatalog,
+) -> None:
+    side = scenario.side(side_id)
+    active = side.pokemon[side.active_slot]
+    active_path = f"/teams/{side_id}/active_volatiles"
+    by_id = {volatile.volatile_id: volatile for volatile in side.active_volatiles}
+    if len(by_id) != len(side.active_volatiles):
+        raise ScenarioValidationError("cannot contain duplicate effects", path=active_path)
+    active_moves = {move.move_id: move for move in active.moves}
+    for index, volatile in enumerate(side.active_volatiles):
+        path = f"{active_path}/{index}"
+        if volatile.move_id is not None:
+            move = active_moves.get(volatile.move_id)
+            if move is None:
+                raise ScenarioValidationError(
+                    "must name a move on the active Pokemon", path=f"{path}/move_id"
+                )
+            if move.pp <= 0:
+                raise ScenarioValidationError(
+                    "must name a move with PP remaining", path=f"{path}/move_id"
+                )
+        if volatile.volatile_id == "substitute":
+            maximum = active.max_hp // 4
+            if volatile.hp is None or volatile.hp > maximum:
+                raise ScenarioValidationError(
+                    f"must be at most the Gen 3 initial Substitute HP {maximum}",
+                    path=f"{path}/hp",
+                )
+        if volatile.volatile_id == "nightmare" and active.status.status_id != "slp":
+            raise ScenarioValidationError("requires the active Pokemon to be asleep", path=path)
+        if volatile.volatile_id == "yawn" and active.status.status_id:
+            raise ScenarioValidationError("cannot coexist with a major status", path=path)
+        if volatile.volatile_id == "flashfire" and normalize_id(active.ability) != "flashfire":
+            raise ScenarioValidationError("requires the Flash Fire ability", path=path)
+        species = catalog.dex.species_info(active.species)
+        types = {normalize_id(type_name) for type_name in species.types} if species is not None else set()
+        if volatile.volatile_id == "leechseed" and "grass" in types:
+            raise ScenarioValidationError("cannot affect a Grass-type Pokemon", path=path)
+        if volatile.volatile_id == "perishsong" and normalize_id(active.ability) == "soundproof":
+            raise ScenarioValidationError("cannot affect a Pokemon with Soundproof", path=path)
+        if volatile.volatile_id == "attract":
+            opponent_id = "p2" if side_id == "p1" else "p1"
+            opponent = scenario.side(opponent_id)
+            source = opponent.pokemon[opponent.active_slot]
+            if normalize_id(active.ability) == "oblivious":
+                raise ScenarioValidationError("cannot affect a Pokemon with Oblivious", path=path)
+            if {active.gender, source.gender} != {"M", "F"}:
+                raise ScenarioValidationError(
+                    "requires opposite-gender active Pokemon", path=path
+                )
 
 
 def _materializable_variant_move_ids(variant: Gen3RandbatVariant) -> tuple[str, ...]:

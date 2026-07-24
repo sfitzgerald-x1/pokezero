@@ -117,6 +117,41 @@ class ScenarioRepositoryTest(unittest.TestCase):
         with self.assertRaisesRegex(ScenarioValidationError, "gen3customgame"):
             EndgameScenario.from_payload(invalid)
 
+    def test_condition_contract_round_trips_and_rejects_invalid_counters(self) -> None:
+        payload = json.loads(json.dumps(self.payload))
+        p1 = payload["teams"]["p1"]
+        p2 = payload["teams"]["p2"]
+        p1["pokemon"][0]["status"] = {"id": "par"}
+        p2["pokemon"][0]["status"] = {"id": "tox", "toxic_stage": 4}
+        p1["side_conditions"] = {"spikes": 2, "reflect": 3}
+        p1["active_volatiles"] = [
+            {"id": "substitute", "hp": p1["pokemon"][0]["max_hp"] // 4},
+            {"id": "focusenergy"},
+        ]
+        p2["active_volatiles"] = [
+            {"id": "confusion", "turns_remaining": 2, "turns_elapsed": 1},
+        ]
+        payload["turn"] = 17
+        payload["field"] = {
+            "weather": "raindance",
+            "turns_remaining": 2,
+            "permanent": False,
+        }
+
+        scenario = EndgameScenario.from_payload(payload)
+        restored = EndgameScenario.from_payload_json(scenario.canonical_json())
+
+        self.assertEqual(restored.to_payload(), scenario.to_payload())
+        self.assertEqual(restored.turn_number, 17)
+        self.assertEqual(restored.battle_field.turns_remaining, 2)
+        self.assertEqual(restored.side("p1").side_conditions["spikes"], 2)
+        self.assertEqual(restored.side("p2").pokemon[0].status.toxic_stage, 4)
+
+        invalid = json.loads(json.dumps(payload))
+        invalid["teams"]["p2"]["active_volatiles"][0]["turns_remaining"] = 9
+        with self.assertRaisesRegex(ScenarioValidationError, "between 1 and 4"):
+            EndgameScenario.from_payload(invalid)
+
 
 @unittest.skipUnless(SHOWDOWN_READY, "requires node and built Pokemon Showdown checkout")
 class ScenarioStudioIntegrationTest(unittest.TestCase):
@@ -141,6 +176,47 @@ class ScenarioStudioIntegrationTest(unittest.TestCase):
         self.assertEqual([move["id"] for move in unown["moves"]], ["hiddenpowerbug"])
         self.assertTrue(result["validation"]["set_valid"])
         self.assertTrue(result["validation"]["state_consistent"])
+        self.assertTrue(result["legal_actions"]["p1"])
+
+    def test_status_volatile_weather_and_side_conditions_materialize_together(self) -> None:
+        payload = json.loads(json.dumps(self.payload))
+        p1 = payload["teams"]["p1"]
+        p2 = payload["teams"]["p2"]
+        p1["pokemon"][0]["status"] = {"id": "par"}
+        p2["pokemon"][0]["status"] = {"id": "tox", "toxic_stage": 3}
+        p1["side_conditions"] = {"spikes": 2, "reflect": 3}
+        p2["side_conditions"] = {"lightscreen": 2}
+        p1["active_volatiles"] = [
+            {"id": "substitute", "hp": p1["pokemon"][0]["max_hp"] // 4},
+            {"id": "focusenergy"},
+        ]
+        p2["active_volatiles"] = [
+            {"id": "confusion", "turns_remaining": 2, "turns_elapsed": 1},
+            {"id": "leechseed"},
+        ]
+        payload["turn"] = 12
+        payload["field"] = {
+            "weather": "sandstorm",
+            "turns_remaining": 2,
+            "permanent": False,
+        }
+
+        result = self.service.validate_payload(payload)
+
+        self.assertEqual(result["materialization"]["turn"], 12)
+        self.assertEqual(result["materialization"]["field"]["weather"], "sandstorm")
+        self.assertEqual(
+            result["materialization"]["sides"]["p1"]["sideConditions"],
+            {"spikes": 2, "reflect": 3},
+        )
+        self.assertEqual(
+            result["materialization"]["sides"]["p2"]["pokemon"][0]["status"]["toxicStage"],
+            3,
+        )
+        self.assertEqual(
+            {row["id"] for row in result["materialization"]["sides"]["p2"]["activeVolatiles"]},
+            {"confusion", "leechseed"},
+        )
         self.assertTrue(result["legal_actions"]["p1"])
 
     def test_committed_endgame_suite_contains_ten_distinct_showdown_materializations(self) -> None:

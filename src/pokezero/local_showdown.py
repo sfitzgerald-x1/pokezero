@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
-from .dex import load_showdown_dex_cached
+from .dex import load_showdown_dex_cached, normalize_id
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -640,14 +640,14 @@ class LocalShowdownEnv:
         self._investment_trackers = {}
 
     def materialize_scenario_state(self, *, scenario_state: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Apply a validated HP/PP scenario patch and rebuild a synthetic public boundary.
+        """Apply a validated scenario patch and rebuild a synthetic public boundary.
 
         This is intentionally a separate authoring seam from public-belief search materialization.
         The bridge starts from the packed Custom Game teams already loaded in this environment and
-        accepts only active-slot, HP, and move-PP values.  It never receives a caller-supplied
-        Showdown snapshot.  The returned boundary is represented as fully revealed synthetic
-        protocol state so normal observation encoding and legal-action handling stay paired with
-        the materialized simulator world.
+        accepts only typed active-slot, HP, PP, status, volatile, weather, and side-condition
+        values. It never receives a caller-supplied Showdown snapshot. The returned boundary is
+        represented as fully revealed synthetic protocol state so normal observation encoding and
+        legal-action handling stay paired with the materialized simulator world.
         """
 
         if self._battle_token is None:
@@ -670,6 +670,7 @@ class LocalShowdownEnv:
         synthetic_lines = scenario_public_protocol_lines(state, direct_requests)
         synthetic_parser = _ReplayParser(self._battle_id)
         synthetic_parser.feed(synthetic_lines)
+        _seed_scenario_parser_state(synthetic_parser, state)
         synthetic_replay = synthetic_parser.snapshot()
         synthetic_belief = PublicBattleBeliefEngine.from_events(
             synthetic_replay.public_events,
@@ -1740,7 +1741,7 @@ def scenario_public_protocol_lines(
             fainted = row.get("fainted")
             if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
                 raise LocalShowdownError(f"Scenario materialization state has invalid HP for {player} {species}.")
-            condition = "0 fnt" if fainted else f"{hp}/{max_hp}"
+            condition = _scenario_condition(row, player, species)
             ident = f"{player}a: {species}"
             lines.append(f"|switch|{ident}|{details}|{condition}")
             ability = _scenario_protocol_optional_field(row.get("ability"), "ability")
@@ -1780,8 +1781,41 @@ def scenario_public_protocol_lines(
         fainted = active_row.get("fainted")
         if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
             raise LocalShowdownError(f"Scenario materialization state has invalid active HP for {player}.")
-        condition = "0 fnt" if fainted else f"{hp}/{max_hp}"
+        condition = _scenario_condition(active_row, player, species)
         lines.append(f"|switch|{player}a: {species}|{details}|{condition}")
+    field = state.get("field")
+    if not isinstance(field, Mapping):
+        raise LocalShowdownError("Scenario materialization state is missing field conditions.")
+    weather = _scenario_protocol_optional_field(field.get("weather"), "weather")
+    if weather:
+        suffix = "|[from] ability: scenario" if field.get("permanent") is True else ""
+        lines.append(f"|-weather|{weather}{suffix}")
+    for player in PLAYER_IDS:
+        side = sides[player]
+        assert isinstance(side, Mapping)
+        side_conditions = side.get("sideConditions")
+        if not isinstance(side_conditions, Mapping):
+            raise LocalShowdownError(f"Scenario materialization state has invalid {player} side conditions.")
+        for raw_name, raw_value in sorted(side_conditions.items()):
+            name = _scenario_protocol_field(raw_name, "side condition")
+            if not isinstance(raw_value, int) or raw_value < 1:
+                raise LocalShowdownError(
+                    f"Scenario materialization state has invalid {player} {name}."
+                )
+            repeats = raw_value if normalize_id(name) == "spikes" else 1
+            for _ in range(repeats):
+                lines.append(f"|-sidestart|{player}: scenario|{name}")
+        active_volatiles = side.get("activeVolatiles")
+        if not isinstance(active_volatiles, list):
+            raise LocalShowdownError(f"Scenario materialization state has invalid {player} volatiles.")
+        species = _scenario_protocol_field(active_rows[player].get("species"), "species")
+        for volatile in active_volatiles:
+            if not isinstance(volatile, Mapping):
+                raise LocalShowdownError(
+                    f"Scenario materialization state has an invalid {player} volatile."
+                )
+            name = _scenario_protocol_field(volatile.get("id"), "volatile")
+            lines.append(f"|-start|{player}a: {species}|{name}")
     lines.append(f"|turn|{int(state.get('turn') or 1)}")
     for player in PLAYER_IDS:
         request = requests.get(player)
@@ -1789,6 +1823,114 @@ def scenario_public_protocol_lines(
             raise LocalShowdownError(f"Scenario materialization did not return a {player} request.")
         lines.append(f"|request|{json.dumps(request, separators=(',', ':'))}")
     return tuple(lines)
+
+
+def _scenario_condition(row: Mapping[str, Any], player: str, species: str) -> str:
+    hp = row.get("hp")
+    max_hp = row.get("maxHp")
+    fainted = row.get("fainted")
+    if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
+        raise LocalShowdownError(f"Scenario materialization state has invalid HP for {player} {species}.")
+    if fainted:
+        return "0 fnt"
+    status = row.get("status")
+    if not isinstance(status, Mapping):
+        raise LocalShowdownError(
+            f"Scenario materialization state has invalid status for {player} {species}."
+        )
+    status_id = _scenario_protocol_optional_field(status.get("id"), "status")
+    return f"{hp}/{max_hp}{f' {status_id}' if status_id else ''}"
+
+
+def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any]) -> None:
+    """Latch exact public counters that compact synthetic protocol cannot reconstruct alone."""
+
+    turn = state.get("turn")
+    sides = state.get("sides")
+    field = state.get("field")
+    if not isinstance(turn, int) or not isinstance(sides, Mapping) or not isinstance(field, Mapping):
+        raise LocalShowdownError("Scenario materialization returned malformed condition state.")
+    weather = normalize_id(str(field.get("weather") or ""))
+    turns_remaining = field.get("turnsRemaining")
+    permanent = field.get("permanent")
+    if not isinstance(turns_remaining, int) or not isinstance(permanent, bool):
+        raise LocalShowdownError("Scenario materialization returned malformed weather state.")
+    parser.weather = weather
+    parser.weather_from_ability = bool(weather and permanent)
+    parser.weather_set_turn = turn if weather else None
+    parser.weather_upkeeps = 0 if permanent else max(0, 5 - turns_remaining)
+
+    for player in PLAYER_IDS:
+        side = sides.get(player)
+        if not isinstance(side, Mapping):
+            raise LocalShowdownError(f"Scenario materialization returned malformed {player} state.")
+        side_conditions = side.get("sideConditions")
+        if not isinstance(side_conditions, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} side conditions."
+            )
+        parser.side_condition_counts[player] = {}
+        parser.side_condition_set_turns[player] = {}
+        for raw_name, raw_value in side_conditions.items():
+            name = normalize_id(str(raw_name))
+            if not name or not isinstance(raw_value, int) or raw_value < 1:
+                raise LocalShowdownError(
+                    f"Scenario materialization returned malformed {player} {raw_name}."
+                )
+            parser.side_condition_counts[player][name] = raw_value if name == "spikes" else 1
+            if name != "spikes":
+                parser.side_condition_set_turns[player][name] = turn - (5 - raw_value)
+
+        active_volatiles = side.get("activeVolatiles")
+        pokemon = side.get("pokemon")
+        active_slot = side.get("activeSlot")
+        if (
+            not isinstance(active_volatiles, list)
+            or not isinstance(pokemon, list)
+            or not isinstance(active_slot, int)
+            or not 0 <= active_slot < len(pokemon)
+        ):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active state."
+            )
+        by_id: dict[str, Mapping[str, Any]] = {}
+        for item in active_volatiles:
+            if not isinstance(item, Mapping):
+                raise LocalShowdownError(
+                    f"Scenario materialization returned malformed {player} volatile."
+                )
+            volatile_id = normalize_id(str(item.get("id") or ""))
+            if not volatile_id or volatile_id in by_id:
+                raise LocalShowdownError(
+                    f"Scenario materialization returned duplicate or invalid {player} volatile."
+                )
+            by_id[volatile_id] = item
+        parser.volatiles[player] = set(by_id)
+        parser.confusion_elapsed[player] = int(
+            by_id.get("confusion", {}).get("turnsElapsed") or 0
+        )
+        parser.encore_elapsed[player] = int(by_id.get("encore", {}).get("turnsElapsed") or 0)
+        parser.wrap_trap_elapsed[player] = 0
+        if "leechseed" in by_id:
+            parser.leech_seed_source_sides[player] = "p2" if player == "p1" else "p1"
+        else:
+            parser.leech_seed_source_sides.pop(player, None)
+
+        active = pokemon[active_slot]
+        if not isinstance(active, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active Pokemon."
+            )
+        status = active.get("status")
+        if not isinstance(status, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active status."
+            )
+        parser.toxic_stage[player] = (
+            int(status.get("toxicStage") or 0)
+            if normalize_id(str(status.get("id") or "")) == "tox"
+            else 0
+        )
 
 
 def _scenario_protocol_field(value: Any, label: str) -> str:

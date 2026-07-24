@@ -146,6 +146,7 @@ def _materialization_summary(event: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Scenario bridge returned malformed materialization event.")
     return {
         "turn": state.get("turn"),
+        "field": state.get("field"),
         "sides": state.get("sides"),
         "requested_players": event.get("requested"),
     }

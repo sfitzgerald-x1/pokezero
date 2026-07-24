@@ -1,8 +1,8 @@
 """Canonical, portable endgame-scenario data model.
 
 The browser deliberately edits these typed values instead of a serialized Pokemon Showdown
-battle.  A scenario describes the allowed authoring surface only; the local bridge owns the
-simulator snapshot and applies the separately validated HP/PP patch.
+battle. A scenario describes the allowed authoring surface only; the local bridge owns the
+simulator snapshot and applies the separately validated battle-boundary patch.
 """
 
 from __future__ import annotations
@@ -20,6 +20,43 @@ _SIDES = ("p1", "p2")
 _CONSTRUCTION_MODES = frozenset({"generated", "source-composed"})
 _OBJECTIVE_KINDS = frozenset({"forced_win", "best_move", "survival", "custom"})
 _VERIFICATION_STATUSES = frozenset({"unverified", "manual", "engine_exhaustive", "probabilistic"})
+SCENARIO_STATUS_IDS = ("", "brn", "par", "psn", "tox", "slp", "frz")
+SCENARIO_WEATHER_IDS = ("", "raindance", "sunnyday", "sandstorm", "hail")
+SCENARIO_SIDE_CONDITION_LIMITS = {
+    "spikes": 3,
+    "reflect": 5,
+    "lightscreen": 5,
+    "safeguard": 5,
+    "mist": 5,
+}
+SCENARIO_VOLATILE_IDS = (
+    "confusion",
+    "substitute",
+    "leechseed",
+    "taunt",
+    "encore",
+    "disable",
+    "torment",
+    "attract",
+    "nightmare",
+    "curse",
+    "ingrain",
+    "focusenergy",
+    "yawn",
+    "perishsong",
+    "flashfire",
+    "mudsport",
+    "watersport",
+)
+_VOLATILE_TURN_LIMITS = {
+    "confusion": (1, 4),
+    "taunt": (1, 2),
+    "encore": (1, 6),
+    "disable": (1, 5),
+    "yawn": (1, 1),
+    "perishsong": (1, 3),
+}
+_VOLATILE_MOVE_IDS = frozenset({"encore", "disable"})
 
 
 class ScenarioValidationError(ValueError):
@@ -56,6 +93,21 @@ def _integer(value: Any, *, path: str, minimum: int | None = None) -> int:
     return value
 
 
+def _optional_integer(
+    value: Any,
+    *,
+    path: str,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    if value is None:
+        return None
+    result = _integer(value, path=path, minimum=minimum)
+    if maximum is not None and result > maximum:
+        raise ScenarioValidationError(f"must be at most {maximum}", path=path)
+    return result
+
+
 def _string_mapping(value: Any, *, path: str) -> dict[str, int]:
     if value is None:
         return {}
@@ -64,6 +116,20 @@ def _string_mapping(value: Any, *, path: str) -> dict[str, int]:
     for key, item in mapping.items():
         result[_string(key, path=path)] = _integer(item, path=f"{path}/{key}", minimum=0)
     return result
+
+
+def _condition_mapping(value: Any, *, path: str) -> dict[str, int]:
+    result = _string_mapping(value, path=path)
+    for raw_name, count in result.items():
+        name = normalize_id(raw_name)
+        maximum = SCENARIO_SIDE_CONDITION_LIMITS.get(name)
+        if maximum is None:
+            raise ScenarioValidationError("has an unsupported Gen 3 side condition", path=f"{path}/{raw_name}")
+        if count > maximum:
+            raise ScenarioValidationError(f"must be at most {maximum}", path=f"{path}/{raw_name}")
+        if count == 0:
+            raise ScenarioValidationError("must be omitted instead of set to zero", path=f"{path}/{raw_name}")
+    return {normalize_id(name): count for name, count in result.items()}
 
 
 @dataclass(frozen=True)
@@ -86,6 +152,208 @@ class ScenarioMove:
 
 
 @dataclass(frozen=True)
+class ScenarioStatus:
+    status_id: str = ""
+    sleep_turns_remaining: int | None = None
+    toxic_stage: int | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Any, *, path: str) -> "ScenarioStatus":
+        if payload is None:
+            return cls()
+        value = _mapping(payload, path=path)
+        status_id = normalize_id(_string(value.get("id", ""), path=f"{path}/id", allow_empty=True))
+        if status_id not in SCENARIO_STATUS_IDS:
+            raise ScenarioValidationError("has an unsupported Gen 3 status", path=f"{path}/id")
+        sleep_turns = _optional_integer(
+            value.get("sleep_turns_remaining"),
+            path=f"{path}/sleep_turns_remaining",
+            minimum=1,
+            maximum=4,
+        )
+        toxic_stage = _optional_integer(
+            value.get("toxic_stage"),
+            path=f"{path}/toxic_stage",
+            minimum=0,
+            maximum=15,
+        )
+        if status_id == "slp":
+            if sleep_turns is None:
+                raise ScenarioValidationError(
+                    "is required for sleep", path=f"{path}/sleep_turns_remaining"
+                )
+        elif sleep_turns is not None:
+            raise ScenarioValidationError(
+                "is only valid for sleep", path=f"{path}/sleep_turns_remaining"
+            )
+        if status_id == "tox":
+            if toxic_stage is None:
+                raise ScenarioValidationError("is required for toxic", path=f"{path}/toxic_stage")
+        elif toxic_stage is not None:
+            raise ScenarioValidationError("is only valid for toxic", path=f"{path}/toxic_stage")
+        return cls(
+            status_id=status_id,
+            sleep_turns_remaining=sleep_turns,
+            toxic_stage=toxic_stage,
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"id": self.status_id}
+        if self.sleep_turns_remaining is not None:
+            payload["sleep_turns_remaining"] = self.sleep_turns_remaining
+        if self.toxic_stage is not None:
+            payload["toxic_stage"] = self.toxic_stage
+        return payload
+
+
+@dataclass(frozen=True)
+class ScenarioVolatile:
+    volatile_id: str
+    turns_remaining: int | None = None
+    turns_elapsed: int | None = None
+    hp: int | None = None
+    move_id: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Any, *, path: str) -> "ScenarioVolatile":
+        value = _mapping(payload, path=path)
+        volatile_id = normalize_id(_string(value.get("id"), path=f"{path}/id"))
+        if volatile_id not in SCENARIO_VOLATILE_IDS:
+            raise ScenarioValidationError("has an unsupported reconstructable volatile", path=f"{path}/id")
+        turns_remaining = _optional_integer(
+            value.get("turns_remaining"),
+            path=f"{path}/turns_remaining",
+            minimum=1,
+        )
+        turns_elapsed = _optional_integer(
+            value.get("turns_elapsed"),
+            path=f"{path}/turns_elapsed",
+            minimum=0,
+        )
+        hp = _optional_integer(value.get("hp"), path=f"{path}/hp", minimum=1)
+        move_id = value.get("move_id")
+        if move_id is not None:
+            move_id = normalize_id(_string(move_id, path=f"{path}/move_id"))
+
+        limits = _VOLATILE_TURN_LIMITS.get(volatile_id)
+        if limits is not None:
+            if turns_remaining is None:
+                raise ScenarioValidationError("is required", path=f"{path}/turns_remaining")
+            if not limits[0] <= turns_remaining <= limits[1]:
+                raise ScenarioValidationError(
+                    f"must be between {limits[0]} and {limits[1]}",
+                    path=f"{path}/turns_remaining",
+                )
+        elif turns_remaining is not None:
+            raise ScenarioValidationError(
+                "is not used by this volatile", path=f"{path}/turns_remaining"
+            )
+
+        if volatile_id in {"confusion", "encore"}:
+            maximum = 5 if volatile_id == "confusion" else 6
+            if turns_elapsed is None or turns_elapsed > maximum:
+                raise ScenarioValidationError(
+                    f"must be between 0 and {maximum}", path=f"{path}/turns_elapsed"
+                )
+        elif turns_elapsed is not None:
+            raise ScenarioValidationError(
+                "is not used by this volatile", path=f"{path}/turns_elapsed"
+            )
+
+        if volatile_id == "substitute":
+            if hp is None:
+                raise ScenarioValidationError("is required", path=f"{path}/hp")
+        elif hp is not None:
+            raise ScenarioValidationError("is only valid for Substitute", path=f"{path}/hp")
+
+        if volatile_id in _VOLATILE_MOVE_IDS:
+            if not move_id:
+                raise ScenarioValidationError("is required", path=f"{path}/move_id")
+        elif move_id is not None:
+            raise ScenarioValidationError(
+                "is only valid for Encore or Disable", path=f"{path}/move_id"
+            )
+        return cls(
+            volatile_id=volatile_id,
+            turns_remaining=turns_remaining,
+            turns_elapsed=turns_elapsed,
+            hp=hp,
+            move_id=move_id,
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"id": self.volatile_id}
+        if self.turns_remaining is not None:
+            payload["turns_remaining"] = self.turns_remaining
+        if self.turns_elapsed is not None:
+            payload["turns_elapsed"] = self.turns_elapsed
+        if self.hp is not None:
+            payload["hp"] = self.hp
+        if self.move_id is not None:
+            payload["move_id"] = self.move_id
+        return payload
+
+
+@dataclass(frozen=True)
+class ScenarioField:
+    weather_id: str = ""
+    turns_remaining: int = 0
+    permanent: bool = False
+
+    @classmethod
+    def from_payload(cls, payload: Any, *, path: str) -> "ScenarioField":
+        if payload is None:
+            return cls()
+        value = _mapping(payload, path=path)
+        weather_id = normalize_id(
+            _string(value.get("weather", ""), path=f"{path}/weather", allow_empty=True)
+        )
+        if weather_id not in SCENARIO_WEATHER_IDS:
+            raise ScenarioValidationError("has an unsupported Gen 3 weather", path=f"{path}/weather")
+        turns_remaining = _integer(
+            value.get("turns_remaining", 0),
+            path=f"{path}/turns_remaining",
+            minimum=0,
+        )
+        permanent = value.get("permanent", False)
+        if not isinstance(permanent, bool):
+            raise ScenarioValidationError("must be a boolean", path=f"{path}/permanent")
+        if not weather_id:
+            if turns_remaining or permanent:
+                raise ScenarioValidationError(
+                    "clear weather cannot have duration or permanence", path=path
+                )
+        elif permanent:
+            if weather_id not in {"raindance", "sunnyday", "sandstorm"}:
+                raise ScenarioValidationError(
+                    "only ability-backed rain, sun, or sand can be permanent in Gen 3",
+                    path=f"{path}/permanent",
+                )
+            if turns_remaining != 5:
+                raise ScenarioValidationError(
+                    "permanent weather must use the pinned five-turn feature value",
+                    path=f"{path}/turns_remaining",
+                )
+        elif not 1 <= turns_remaining <= 5:
+            raise ScenarioValidationError(
+                "timed weather must have one to five turns remaining",
+                path=f"{path}/turns_remaining",
+            )
+        return cls(
+            weather_id=weather_id,
+            turns_remaining=turns_remaining,
+            permanent=permanent,
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "weather": self.weather_id,
+            "turns_remaining": self.turns_remaining,
+            "permanent": self.permanent,
+        }
+
+
+@dataclass(frozen=True)
 class ScenarioPokemon:
     variant_id: str
     species: str
@@ -99,6 +367,7 @@ class ScenarioPokemon:
     gender: str | None = None
     evs: Mapping[str, int] = field(default_factory=dict)
     ivs: Mapping[str, int] = field(default_factory=dict)
+    status: ScenarioStatus = field(default_factory=ScenarioStatus)
 
     @classmethod
     def from_payload(cls, payload: Any, *, path: str) -> "ScenarioPokemon":
@@ -123,10 +392,11 @@ class ScenarioPokemon:
             gender=gender,
             evs=_string_mapping(value.get("evs"), path=f"{path}/evs"),
             ivs=_string_mapping(value.get("ivs"), path=f"{path}/ivs"),
+            status=ScenarioStatus.from_payload(value.get("status"), path=f"{path}/status"),
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "variant_id": self.variant_id,
             "species": self.species,
             "level": self.level,
@@ -140,6 +410,9 @@ class ScenarioPokemon:
             "evs": dict(sorted(self.evs.items())),
             "ivs": dict(sorted(self.ivs.items())),
         }
+        if self.status.status_id:
+            payload["status"] = self.status.to_payload()
+        return payload
 
     def to_fixture(self) -> FixturePokemon:
         return FixturePokemon(
@@ -161,6 +434,8 @@ class ScenarioSide:
     generated_team_seed: int | None
     active_slot: int
     pokemon: tuple[ScenarioPokemon, ...]
+    side_conditions: Mapping[str, int] = field(default_factory=dict)
+    active_volatiles: tuple[ScenarioVolatile, ...] = ()
 
     @classmethod
     def from_payload(cls, payload: Any, *, path: str) -> "ScenarioSide":
@@ -180,15 +455,29 @@ class ScenarioSide:
                 ScenarioPokemon.from_payload(pokemon, path=f"{path}/pokemon/{index}")
                 for index, pokemon in enumerate(raw_pokemon)
             ),
+            side_conditions=_condition_mapping(
+                value.get("side_conditions"), path=f"{path}/side_conditions"
+            ),
+            active_volatiles=tuple(
+                ScenarioVolatile.from_payload(item, path=f"{path}/active_volatiles/{index}")
+                for index, item in enumerate(
+                    _list(value.get("active_volatiles", []), path=f"{path}/active_volatiles")
+                )
+            ),
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "construction_mode": self.construction_mode,
             "generated_team_seed": self.generated_team_seed,
             "active_slot": self.active_slot,
             "pokemon": [pokemon.to_payload() for pokemon in self.pokemon],
         }
+        if self.side_conditions:
+            payload["side_conditions"] = dict(sorted(self.side_conditions.items()))
+        if self.active_volatiles:
+            payload["active_volatiles"] = [item.to_payload() for item in self.active_volatiles]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -266,6 +555,8 @@ class EndgameScenario:
     knowledge_mode: str = "fully_revealed"
     author_notes: str = ""
     replay_proven: bool = False
+    turn_number: int = 1
+    battle_field: ScenarioField = field(default_factory=ScenarioField)
     schema_version: str = ENDGAME_SCENARIO_SCHEMA_VERSION
 
     @classmethod
@@ -310,11 +601,13 @@ class EndgameScenario:
             knowledge_mode=knowledge_mode,
             author_notes=_string(value.get("author_notes", ""), path="/author_notes", allow_empty=True),
             replay_proven=bool(provenance.get("replay_proven", False)),
+            turn_number=_integer(value.get("turn", 1), path="/turn", minimum=1),
+            battle_field=ScenarioField.from_payload(value.get("field"), path="/field"),
             schema_version=schema_version,
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "scenario_id": self.scenario_id,
             "title": self.title,
@@ -334,6 +627,11 @@ class EndgameScenario:
             "objective": self.objective.to_payload(),
             "author_notes": self.author_notes,
         }
+        if self.battle_field.weather_id:
+            payload["field"] = self.battle_field.to_payload()
+        if self.turn_number != 1:
+            payload["turn"] = self.turn_number
+        return payload
 
     def canonical_json(self) -> str:
         return json.dumps(self.to_payload(), sort_keys=True, indent=2) + "\n"

@@ -46,8 +46,27 @@
             <select id="side-to-move"><option value="p1">p1</option><option value="p2">p2</option></select>
           </label>
           <label>Seed <input id="scenario-seed" type="number" min="0" step="1" /></label>
+          <label>Battle turn <input id="scenario-turn" type="number" min="1" step="1" /></label>
         </div>
         <label class="wide">Description <textarea id="scenario-description" rows="2" placeholder="What makes this line forced?"></textarea></label>
+      </section>
+
+      <section class="field-card card">
+        <div class="section-heading"><span>Battlefield</span><span class="microcopy">Exact Gen 3 request-boundary state</span></div>
+        <div class="field-controls">
+          <label>Weather
+            <select id="field-weather">
+              <option value="">Clear</option>
+              <option value="raindance">Rain</option>
+              <option value="sunnyday">Sun</option>
+              <option value="sandstorm">Sandstorm</option>
+              <option value="hail">Hail</option>
+            </select>
+          </label>
+          <label>Turns remaining <input id="field-weather-turns" type="number" min="1" max="5" /></label>
+          <label class="check-label"><input id="field-weather-permanent" type="checkbox" /> Ability-set / permanent</label>
+          <p class="field-note">Side-specific Spikes and screens are set beside each roster. Active volatile effects are tied to the selected active Pokemon.</p>
+        </div>
       </section>
 
       <section class="team-grid" id="team-grid" aria-label="Scenario teams"></section>

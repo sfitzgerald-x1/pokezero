@@ -483,6 +483,96 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             after = env.snapshot().bridge_snapshot["battle"]
             self.assertEqual(after["sides"][0]["pokemon"][0]["hp"], before["sides"][0]["pokemon"][0]["hp"])
 
+    def test_scenario_materialization_restores_conditions_and_steps(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=79, start_override=start_override)
+            before = env.snapshot().bridge_snapshot["battle"]
+            p1 = before["sides"][0]["pokemon"][0]
+            p2 = before["sides"][1]["pokemon"][0]
+            state = {
+                "turn": 12,
+                "field": {"weather": "sandstorm", "turnsRemaining": 2, "permanent": False},
+                "sides": {
+                    "p1": {
+                        "activeSlot": 0,
+                        "sideConditions": {"spikes": 2, "reflect": 3},
+                        "activeVolatiles": [
+                            {"id": "substitute", "hp": p1["maxhp"] // 4},
+                            {"id": "focusenergy"},
+                        ],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": p1["maxhp"],
+                                "status": {
+                                    "id": "par",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": None,
+                                },
+                                "moves": [{"id": move["id"], "pp": move["pp"]} for move in p1["moveSlots"]],
+                            }
+                        ],
+                    },
+                    "p2": {
+                        "activeSlot": 0,
+                        "sideConditions": {"lightscreen": 2},
+                        "activeVolatiles": [
+                            {"id": "confusion", "turnsRemaining": 2, "turnsElapsed": 1},
+                            {"id": "leechseed"},
+                        ],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": p2["maxhp"],
+                                "status": {
+                                    "id": "tox",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": 3,
+                                },
+                                "moves": [{"id": move["id"], "pp": move["pp"]} for move in p2["moveSlots"]],
+                            }
+                        ],
+                    },
+                },
+            }
+
+            event = env.materialize_scenario_state(scenario_state=state)
+            bridge = env.snapshot().bridge_snapshot["battle"]
+            p1_state = env._state_for_player("p1")
+
+            self.assertEqual(event["state"]["field"]["weather"], "sandstorm")
+            self.assertEqual(bridge["field"]["weather"], "sandstorm")
+            self.assertEqual(bridge["field"]["weatherState"]["duration"], 2)
+            self.assertEqual(bridge["sides"][0]["sideConditions"]["spikes"]["layers"], 2)
+            self.assertEqual(bridge["sides"][0]["sideConditions"]["reflect"]["duration"], 3)
+            self.assertEqual(bridge["sides"][0]["pokemon"][0]["status"], "par")
+            self.assertEqual(bridge["sides"][1]["pokemon"][0]["statusState"]["stage"], 3)
+            self.assertEqual(bridge["sides"][0]["pokemon"][0]["volatiles"]["substitute"]["hp"], p1["maxhp"] // 4)
+            self.assertEqual(bridge["sides"][1]["pokemon"][0]["volatiles"]["confusion"]["time"], 2)
+            self.assertEqual(p1_state.weather, "sandstorm")
+            self.assertEqual(p1_state.self_side_condition_counts["spikes"], 2)
+            self.assertEqual(p1_state.self_timed_condition_turns["reflect"], 3)
+            self.assertEqual(p1_state.opponent_toxic_stage, 3)
+            self.assertEqual(p1_state.opponent_confusion_elapsed, 1)
+            self.assertIn("substitute", p1_state.self_active_volatiles)
+            self.assertIn("leechseed", p1_state.opponent_active_volatiles)
+
+            result = env.step({"p1": 1, "p2": 1})
+            self.assertIsNone(result.terminal)
+
     def test_reset_with_start_override_runs_custom_game_with_injected_teams(self) -> None:
         config = integration_config()
         assert config is not None

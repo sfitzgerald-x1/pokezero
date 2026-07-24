@@ -10,8 +10,53 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 
+const STATUS_OPTIONS = [
+  ["", "Healthy"],
+  ["brn", "Burn"],
+  ["par", "Paralysis"],
+  ["psn", "Poison"],
+  ["tox", "Bad poison"],
+  ["slp", "Sleep"],
+  ["frz", "Freeze"],
+];
+
+const SIDE_CONDITIONS = [
+  ["spikes", "Spikes layers", 3],
+  ["reflect", "Reflect turns", 5],
+  ["lightscreen", "Light Screen turns", 5],
+  ["safeguard", "Safeguard turns", 5],
+  ["mist", "Mist turns", 5],
+];
+
+const VOLATILE_DEFINITIONS = [
+  { id: "confusion", label: "Confusion", turns: [1, 4], elapsed: [0, 5] },
+  { id: "substitute", label: "Substitute", hp: true },
+  { id: "leechseed", label: "Leech Seed" },
+  { id: "taunt", label: "Taunt", turns: [1, 2] },
+  { id: "encore", label: "Encore", turns: [1, 6], elapsed: [0, 6], move: true },
+  { id: "disable", label: "Disable", turns: [1, 5], move: true },
+  { id: "torment", label: "Torment" },
+  { id: "attract", label: "Attract" },
+  { id: "nightmare", label: "Nightmare" },
+  { id: "curse", label: "Ghost Curse" },
+  { id: "ingrain", label: "Ingrain" },
+  { id: "focusenergy", label: "Focus Energy" },
+  { id: "yawn", label: "Yawn", turns: [1, 1] },
+  { id: "perishsong", label: "Perish Song", turns: [1, 3] },
+  { id: "flashfire", label: "Flash Fire boost" },
+  { id: "mudsport", label: "Mud Sport" },
+  { id: "watersport", label: "Water Sport" },
+];
+
 function blankSide() {
-  return { construction_mode: "source-composed", generated_team_seed: null, active_slot: 0, pokemon: [] };
+  return {
+    construction_mode: "source-composed",
+    generated_team_seed: null,
+    active_slot: 0,
+    pokemon: [],
+    side_conditions: {},
+    active_volatiles: [],
+  };
 }
 
 function blankScenario() {
@@ -24,14 +69,31 @@ function blankScenario() {
     format_id: "gen3customgame",
     source_format_id: "gen3randombattle",
     seed: 1,
+    turn: 1,
     provenance: { randbat_source_hash: state.catalog?.source_hash || "", replay_proven: false },
     knowledge_mode: "fully_revealed",
     perspective: "p1",
     side_to_move: "p1",
+    field: { weather: "", turns_remaining: 0, permanent: false },
     teams: { p1: blankSide(), p2: blankSide() },
     objective: { kind: "forced_win", expected_root_actions: [], principal_variation: [], max_plies: 6, verification: { status: "unverified", engine: null, artifact: null } },
     author_notes: "",
   };
+}
+
+function normalizeScenario(scenario) {
+  scenario.turn = Math.max(1, Number(scenario.turn) || 1);
+  scenario.field ||= { weather: "", turns_remaining: 0, permanent: false };
+  scenario.field.weather ||= "";
+  scenario.field.turns_remaining = Number(scenario.field.turns_remaining) || 0;
+  scenario.field.permanent = Boolean(scenario.field.permanent);
+  ["p1", "p2"].forEach((sideId) => {
+    const side = scenario.teams[sideId];
+    side.side_conditions ||= {};
+    side.active_volatiles ||= [];
+    side.pokemon.forEach((pokemon) => { pokemon.status ||= { id: "" }; });
+  });
+  return scenario;
 }
 
 async function api(path, options = {}) {
@@ -73,6 +135,7 @@ function variantPokemon(variant) {
     gender: null,
     evs: {},
     ivs: {},
+    status: { id: "" },
   };
 }
 
@@ -87,7 +150,13 @@ function metadataRender() {
   $("#perspective").value = scenario.perspective;
   $("#side-to-move").value = scenario.side_to_move;
   $("#scenario-seed").value = scenario.seed;
+  $("#scenario-turn").value = scenario.turn;
   $("#scenario-description").value = scenario.description;
+  $("#field-weather").value = scenario.field.weather;
+  $("#field-weather-turns").value = scenario.field.turns_remaining || "";
+  $("#field-weather-turns").disabled = !scenario.field.weather || scenario.field.permanent;
+  $("#field-weather-permanent").checked = scenario.field.permanent;
+  $("#field-weather-permanent").disabled = !scenario.field.weather || scenario.field.weather === "hail";
   $("#objective-kind").value = scenario.objective.kind;
   $("#objective-plies").value = scenario.objective.max_plies;
   $("#objective-status").value = scenario.objective.verification.status;
@@ -131,6 +200,20 @@ function pokemonCard(sideId, pokemon, index, activeSlot) {
   const variants = state.variantsBySpecies.get(variant ? normalizeId(variant.species) : "") || [];
   const moves = pokemon.moves.map((move, moveIndex) => `
     <label class="move"><span>${escapeHtml(move.id)}</span><input data-move-pp="${sideId}:${index}:${moveIndex}" type="number" min="0" max="${move.max_pp}" value="${move.pp}" aria-label="${escapeHtml(move.id)} remaining PP" /></label>`).join("");
+  const status = pokemon.status || { id: "" };
+  const statusOptions = STATUS_OPTIONS.map(([id, label]) => `<option value="${id}" ${status.id === id ? "selected" : ""}>${label}</option>`).join("");
+  const genderOptions = [
+    [null, "Unspecified"],
+    ["M", "Male"],
+    ["F", "Female"],
+    ["N", "Genderless"],
+  ].map(([id, label]) => `<option value="${id || ""}" ${pokemon.gender === id ? "selected" : ""}>${label}</option>`).join("");
+  let statusCounter = `<span></span>`;
+  if (status.id === "slp") {
+    statusCounter = `<label>Sleep turns remaining <input data-status-counter="${sideId}:${index}:sleep_turns_remaining" type="number" min="1" max="4" value="${status.sleep_turns_remaining ?? 2}" /></label>`;
+  } else if (status.id === "tox") {
+    statusCounter = `<label>Toxic stage <input data-status-counter="${sideId}:${index}:toxic_stage" type="number" min="0" max="15" value="${status.toxic_stage ?? 1}" /></label>`;
+  }
   return `
     <article class="pokemon ${index === activeSlot ? "active" : ""} ${fainted ? "fainted" : ""}">
       <div class="pokemon-head">
@@ -145,9 +228,56 @@ function pokemonCard(sideId, pokemon, index, activeSlot) {
       <div class="pokemon-grid">
         <label>Exact legal set <select data-variant="${sideId}:${index}">${variants.map((choice) => `<option value="${escapeHtml(choice.variant_id)}" ${choice.variant_id === pokemon.variant_id ? "selected" : ""}>${escapeHtml(choice.role)} - ${escapeHtml(choice.moves.map((move) => move.name).join(" / "))}</option>`).join("")}</select></label>
         <label>Current HP <div class="hp-row"><input data-hp-range="${sideId}:${index}" type="range" min="0" max="${pokemon.max_hp}" value="${pokemon.current_hp}" /><input data-hp="${sideId}:${index}" type="number" min="0" max="${pokemon.max_hp}" value="${pokemon.current_hp}" /></div></label>
+        <div class="full status-row">
+          <label>Gender <select data-gender="${sideId}:${index}">${genderOptions}</select></label>
+          <label>Major status <select data-status="${sideId}:${index}">${statusOptions}</select></label>
+          ${statusCounter}
+        </div>
         <div class="full moves">${moves}</div>
       </div>
     </article>`;
+}
+
+function sideConditionControls(sideId, side) {
+  return SIDE_CONDITIONS.map(([id, label, maximum]) => `
+    <label>${label}<input data-side-condition="${sideId}:${id}" type="number" min="0" max="${maximum}" value="${side.side_conditions[id] || 0}" /></label>
+  `).join("");
+}
+
+function volatileById(side, volatileId) {
+  return side.active_volatiles.find((volatile) => volatile.id === volatileId);
+}
+
+function defaultVolatile(definition, active) {
+  const result = { id: definition.id };
+  if (definition.turns) result.turns_remaining = definition.turns[1];
+  if (definition.elapsed) result.turns_elapsed = definition.elapsed[0];
+  if (definition.hp) result.hp = Math.max(1, Math.floor((active?.max_hp || 4) / 4));
+  if (definition.move) result.move_id = active?.moves.find((move) => move.pp > 0)?.id || active?.moves[0]?.id || "";
+  return result;
+}
+
+function volatileControl(sideId, side, definition) {
+  const volatile = volatileById(side, definition.id);
+  const active = side.pokemon[side.active_slot];
+  const params = [];
+  if (volatile && definition.turns) {
+    params.push(`<label>Turns left <input data-volatile-param="${sideId}:${definition.id}:turns_remaining" type="number" min="${definition.turns[0]}" max="${definition.turns[1]}" value="${volatile.turns_remaining}" /></label>`);
+  }
+  if (volatile && definition.elapsed) {
+    params.push(`<label>Turns elapsed <input data-volatile-param="${sideId}:${definition.id}:turns_elapsed" type="number" min="${definition.elapsed[0]}" max="${definition.elapsed[1]}" value="${volatile.turns_elapsed}" /></label>`);
+  }
+  if (volatile && definition.hp) {
+    params.push(`<label>Sub HP <input data-volatile-param="${sideId}:${definition.id}:hp" type="number" min="1" max="${Math.max(1, Math.floor((active?.max_hp || 4) / 4))}" value="${volatile.hp}" /></label>`);
+  }
+  if (volatile && definition.move) {
+    params.push(`<label>Bound move <select data-volatile-param="${sideId}:${definition.id}:move_id">${(active?.moves || []).map((move) => `<option value="${escapeHtml(move.id)}" ${move.id === volatile.move_id ? "selected" : ""}>${escapeHtml(move.id)} (${move.pp} PP)</option>`).join("")}</select></label>`);
+  }
+  return `
+    <div class="condition-control">
+      <label class="check-label"><input data-volatile-toggle="${sideId}:${definition.id}" type="checkbox" ${volatile ? "checked" : ""} ${active ? "" : "disabled"} /> ${definition.label}</label>
+      ${params.length ? `<div class="condition-params">${params.join("")}</div>` : ""}
+    </div>`;
 }
 
 function teamPanel(sideId) {
@@ -163,6 +293,14 @@ function teamPanel(sideId) {
         <label>Exact set <select data-picker-variant="${sideId}" ${selection.species ? "" : "disabled"}>${variantOptions(selection.species, selection.variant)}</select></label>
         <button data-add="${sideId}" ${!selection.variant || side.pokemon.length >= 6 ? "disabled" : ""}>Add</button>
         <button data-generate="${sideId}" class="quiet generate">Generate full randbats side</button>
+      </div>
+      <div class="condition-panel">
+        <div class="condition-title">Side conditions <span>0 means absent; screens are turns remaining</span></div>
+        <div class="side-condition-grid">${sideConditionControls(sideId, side)}</div>
+      </div>
+      <div class="condition-panel">
+        <div class="condition-title">Active volatile effects <span>applied to the selected active Pokemon</span></div>
+        <div class="volatile-grid">${VOLATILE_DEFINITIONS.map((definition) => volatileControl(sideId, side, definition)).join("")}</div>
       </div>
       <div class="roster">${cards}</div>
     </section>`;
@@ -194,6 +332,7 @@ function sourceComposePokemon(pokemon) {
     gender: pokemon.gender,
     evs: pokemon.evs,
     ivs: pokemon.ivs,
+    status: pokemon.status || { id: "" },
   };
 }
 
@@ -234,7 +373,10 @@ function bindTeamEvents() {
       notice("Generating a Showdown randbats team...");
       const seed = Math.floor(Math.random() * 2 ** 31);
       const result = await api("/api/teams/generate", { method: "POST", body: JSON.stringify({ seed }) });
-      state.scenario.teams[sideId] = result.side;
+      state.scenario.teams[sideId] = normalizeScenario({
+        ...state.scenario,
+        teams: { ...state.scenario.teams, [sideId]: result.side },
+      }).teams[sideId];
       state.selection[sideId] = { filter: "", species: "", variant: "" };
       invalidate(); renderTeams(); notice(`Generated ${sideId} from seed ${result.seed}.`, "success");
     } catch (error) { notice(error.message, "error"); }
@@ -259,6 +401,49 @@ function bindTeamEvents() {
     const [sideId, pokemonText, moveText] = element.dataset.movePp.split(":"); const move = selectedSide(sideId).pokemon[Number(pokemonText)].moves[Number(moveText)];
     move.pp = Math.max(0, Math.min(move.max_pp, Number(element.value) || 0)); invalidate(); renderTeams();
   }));
+  document.querySelectorAll("[data-status]").forEach((element) => element.addEventListener("change", () => {
+    const [sideId, indexText] = element.dataset.status.split(":");
+    const pokemon = selectedSide(sideId).pokemon[Number(indexText)];
+    pokemon.status = { id: element.value };
+    if (element.value === "slp") pokemon.status.sleep_turns_remaining = 2;
+    if (element.value === "tox") pokemon.status.toxic_stage = 1;
+    invalidate(); renderTeams();
+  }));
+  document.querySelectorAll("[data-gender]").forEach((element) => element.addEventListener("change", () => {
+    const [sideId, indexText] = element.dataset.gender.split(":");
+    selectedSide(sideId).pokemon[Number(indexText)].gender = element.value || null;
+    invalidate();
+  }));
+  document.querySelectorAll("[data-status-counter]").forEach((element) => element.addEventListener("input", () => {
+    const [sideId, indexText, key] = element.dataset.statusCounter.split(":");
+    selectedSide(sideId).pokemon[Number(indexText)].status[key] = Number(element.value);
+    invalidate();
+  }));
+  document.querySelectorAll("[data-side-condition]").forEach((element) => element.addEventListener("input", () => {
+    const [sideId, condition] = element.dataset.sideCondition.split(":");
+    const value = Number(element.value) || 0;
+    if (value > 0) selectedSide(sideId).side_conditions[condition] = value;
+    else delete selectedSide(sideId).side_conditions[condition];
+    invalidate();
+  }));
+  document.querySelectorAll("[data-volatile-toggle]").forEach((element) => element.addEventListener("change", () => {
+    const [sideId, volatileId] = element.dataset.volatileToggle.split(":");
+    const side = selectedSide(sideId);
+    if (element.checked) {
+      const definition = VOLATILE_DEFINITIONS.find((item) => item.id === volatileId);
+      side.active_volatiles.push(defaultVolatile(definition, side.pokemon[side.active_slot]));
+    } else {
+      side.active_volatiles = side.active_volatiles.filter((item) => item.id !== volatileId);
+    }
+    invalidate(); renderTeams();
+  }));
+  document.querySelectorAll("[data-volatile-param]").forEach((element) => element.addEventListener("input", () => {
+    const [sideId, volatileId, key] = element.dataset.volatileParam.split(":");
+    const volatile = volatileById(selectedSide(sideId), volatileId);
+    if (!volatile) return;
+    volatile[key] = key === "move_id" ? element.value : Number(element.value);
+    invalidate();
+  }));
   document.querySelectorAll("[data-variant]").forEach((element) => element.addEventListener("change", () => {
     const [sideId, indexText] = element.dataset.variant.split(":"); const side = selectedSide(sideId); const replacement = state.variantById.get(element.value); if (!replacement) return;
     markSourceComposed(side); side.pokemon[Number(indexText)] = variantPokemon(replacement); invalidate(); renderTeams();
@@ -267,15 +452,30 @@ function bindTeamEvents() {
 
 function bindMetadataEvents() {
   const fields = [
-    ["#scenario-id", "scenario_id"], ["#scenario-title", "title"], ["#scenario-description", "description"], ["#scenario-seed", "seed"], ["#perspective", "perspective"], ["#side-to-move", "side_to_move"], ["#author-notes", "author_notes"],
+    ["#scenario-id", "scenario_id"], ["#scenario-title", "title"], ["#scenario-description", "description"], ["#scenario-seed", "seed"], ["#scenario-turn", "turn"], ["#perspective", "perspective"], ["#side-to-move", "side_to_move"], ["#author-notes", "author_notes"],
   ];
-  fields.forEach(([selector, key]) => $(selector).addEventListener("input", (event) => { state.scenario[key] = key === "seed" ? Number(event.target.value) || 0 : event.target.value; invalidate(); renderBadges(); }));
+  fields.forEach(([selector, key]) => $(selector).addEventListener("input", (event) => { state.scenario[key] = ["seed", "turn"].includes(key) ? Number(event.target.value) || (key === "turn" ? 1 : 0) : event.target.value; invalidate(); renderBadges(); }));
   $("#scenario-tags").addEventListener("input", (event) => { state.scenario.tags = event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean); invalidate(); renderBadges(); });
   $("#objective-kind").addEventListener("change", (event) => { state.scenario.objective.kind = event.target.value; invalidate(); });
   $("#objective-plies").addEventListener("input", (event) => { state.scenario.objective.max_plies = Math.max(1, Number(event.target.value) || 1); invalidate(); });
   $("#objective-status").addEventListener("change", (event) => { state.scenario.objective.verification.status = event.target.value; invalidate(); });
   $("#expected-actions").addEventListener("input", (event) => { state.scenario.objective.expected_root_actions = event.target.value.split(",").map((item) => item.trim()).filter(Boolean); invalidate(); });
   $("#principal-variation").addEventListener("input", (event) => { state.scenario.objective.principal_variation = event.target.value.split("\n").map((item) => item.trim()).filter(Boolean); invalidate(); });
+  $("#field-weather").addEventListener("change", (event) => {
+    state.scenario.field = event.target.value
+      ? { weather: event.target.value, turns_remaining: 5, permanent: false }
+      : { weather: "", turns_remaining: 0, permanent: false };
+    invalidate(); metadataRender();
+  });
+  $("#field-weather-turns").addEventListener("input", (event) => {
+    state.scenario.field.turns_remaining = Math.max(1, Math.min(5, Number(event.target.value) || 1));
+    invalidate();
+  });
+  $("#field-weather-permanent").addEventListener("change", (event) => {
+    state.scenario.field.permanent = event.target.checked;
+    if (event.target.checked) state.scenario.field.turns_remaining = 5;
+    invalidate(); metadataRender();
+  });
 }
 
 function renderReadout(result) {
@@ -286,7 +486,7 @@ function renderReadout(result) {
 async function validateCurrent() {
   notice("Validating source, state, and Showdown materialization...");
   const result = await api("/api/validate", { method: "POST", body: JSON.stringify({ scenario: state.scenario }) });
-  state.scenario = result.scenario; state.lastValidation = result; metadataRender(); renderTeams(); renderReadout(result); notice("Scenario is set-valid and state-consistent in Showdown.", "success");
+  state.scenario = normalizeScenario(result.scenario); state.lastValidation = result; metadataRender(); renderTeams(); renderReadout(result); notice("Scenario is set-valid and state-consistent in Showdown.", "success");
   return result;
 }
 
@@ -313,10 +513,10 @@ function bindCommands() {
     notice("Duplicated in memory. Choose a new filename before saving.", "success");
   });
   $("#validate-button").addEventListener("click", () => validateCurrent().catch((error) => notice(error.message, "error")));
-  $("#save-button").addEventListener("click", async () => { try { const slug = $("#slug-input").value.trim(); if (!slug) throw new Error("Choose a lowercase scenario filename before saving."); const existing = [...$("#scenario-select").options].some((option) => option.value === slug); if (existing && !window.confirm(`Replace existing ${slug}.json?`)) return; notice("Validating and saving..."); const result = await api(`/api/scenarios/${encodeURIComponent(slug)}`, { method: "PUT", body: JSON.stringify({ scenario: state.scenario }) }); state.scenario = result.scenario; state.lastValidation = result; markClean(); metadataRender(); renderTeams(); renderReadout(result); await refreshScenarioList(); $("#scenario-select").value = slug; notice(`Saved ${slug}.json.`, "success"); } catch (error) { notice(error.message, "error"); } });
+  $("#save-button").addEventListener("click", async () => { try { const slug = $("#slug-input").value.trim(); if (!slug) throw new Error("Choose a lowercase scenario filename before saving."); const existing = [...$("#scenario-select").options].some((option) => option.value === slug); if (existing && !window.confirm(`Replace existing ${slug}.json?`)) return; notice("Validating and saving..."); const result = await api(`/api/scenarios/${encodeURIComponent(slug)}`, { method: "PUT", body: JSON.stringify({ scenario: state.scenario }) }); state.scenario = normalizeScenario(result.scenario); state.lastValidation = result; markClean(); metadataRender(); renderTeams(); renderReadout(result); await refreshScenarioList(); $("#scenario-select").value = slug; notice(`Saved ${slug}.json.`, "success"); } catch (error) { notice(error.message, "error"); } });
   $("#export-button").addEventListener("click", exportScenario);
-  $("#load-button").addEventListener("click", async () => { try { const slug = $("#scenario-select").value; if (!slug) throw new Error("Choose a saved scenario first."); const result = await api(`/api/scenarios/${encodeURIComponent(slug)}`); state.scenario = result.scenario; $("#slug-input").value = slug; state.selection = blankSelection(); invalidate(); markClean(); metadataRender(); renderTeams(); $("#readout").textContent = "Loaded. Validate to inspect Showdown actions."; $("#evaluation").innerHTML = ""; notice(`Loaded ${slug}.`, "success"); } catch (error) { notice(error.message, "error"); } });
-  $("#import-input").addEventListener("change", async (event) => { const [file] = event.target.files; if (!file) return; try { const imported = JSON.parse(await file.text()); state.scenario = imported; state.scenario.provenance ||= {}; state.scenario.provenance.randbat_source_hash ||= state.catalog.source_hash; state.selection = blankSelection(); invalidate(); metadataRender(); renderTeams(); notice("Imported JSON. Validate before saving.", "success"); } catch (error) { notice(`Import failed: ${error.message}`, "error"); } finally { event.target.value = ""; } });
+  $("#load-button").addEventListener("click", async () => { try { const slug = $("#scenario-select").value; if (!slug) throw new Error("Choose a saved scenario first."); const result = await api(`/api/scenarios/${encodeURIComponent(slug)}`); state.scenario = normalizeScenario(result.scenario); $("#slug-input").value = slug; state.selection = blankSelection(); invalidate(); markClean(); metadataRender(); renderTeams(); $("#readout").textContent = "Loaded. Validate to inspect Showdown actions."; $("#evaluation").innerHTML = ""; notice(`Loaded ${slug}.`, "success"); } catch (error) { notice(error.message, "error"); } });
+  $("#import-input").addEventListener("change", async (event) => { const [file] = event.target.files; if (!file) return; try { const imported = JSON.parse(await file.text()); state.scenario = normalizeScenario(imported); state.scenario.provenance ||= {}; state.scenario.provenance.randbat_source_hash ||= state.catalog.source_hash; state.selection = blankSelection(); invalidate(); metadataRender(); renderTeams(); notice("Imported JSON. Validate before saving.", "success"); } catch (error) { notice(`Import failed: ${error.message}`, "error"); } finally { event.target.value = ""; } });
   $("#evaluate-button").addEventListener("click", async () => { try { const checkpointPath = $("#checkpoint-path").value.trim(); if (!checkpointPath) throw new Error("Enter a checkpoint path first."); notice("Loading checkpoint and ranking root actions..."); const result = await api("/api/evaluate-root", { method: "POST", body: JSON.stringify({ scenario: state.scenario, checkpoint_path: checkpointPath }) }); $("#evaluation").innerHTML = result.actions.map((action) => `<div class="action-line ${action.expected ? "expected" : ""}"><span>#${action.rank} ${escapeHtml(action.label)}</span><span>${(action.probability * 100).toFixed(2)}%</span></div>`).join(""); notice("Root action ranking complete. This is a synthetic fully revealed scenario.", "success"); } catch (error) { notice(error.message, "error"); } });
 }
 
@@ -325,7 +525,7 @@ async function boot() {
     state.catalog = await api("/api/catalog");
     state.catalog.species.forEach((species) => { state.variantsBySpecies.set(species.id, species.variants); species.variants.forEach((variant) => state.variantById.set(variant.variant_id, variant)); });
     $("#source-provenance").textContent = `Pinned Gen 3 randbats source ${state.catalog.source_hash} | ${state.catalog.species.length} species`;
-    state.scenario = blankScenario();
+    state.scenario = normalizeScenario(blankScenario());
     bindMetadataEvents(); bindCommands(); metadataRender(); renderTeams(); await refreshScenarioList(); markClean(); notice("Choose exact legal sets for each side, then validate the position.");
   } catch (error) { notice(`Unable to start the studio: ${error.message}`, "error"); }
 }
