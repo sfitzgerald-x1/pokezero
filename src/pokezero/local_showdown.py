@@ -1760,10 +1760,13 @@ def scenario_public_protocol_lines(
                 max_pp = move.get("maxPp")
                 if not isinstance(pp, int) or not isinstance(max_pp, int) or pp < 0 or max_pp < pp:
                     raise LocalShowdownError(f"Scenario materialization state has invalid PP for {player} {move_id}.")
-                # One synthetic reveal exposes an unused move; further declarations make the
-                # belief PP ledger agree with the exact remaining PP supplied by the bridge.
-                for _ in range(max(1, max_pp - pp)):
+                # Plain ``|move|`` lines charge one PP in the normal belief ledger. Emit the
+                # exact number of charged uses first, then a Sleep-Talk-called synthetic reveal:
+                # that protocol form proves the move belongs to the set while charging none of
+                # the callee's PP. This preserves exact opponent PP even when it is still full.
+                for _ in range(max_pp - pp):
                     lines.append(f"|move|{ident}|{move_id}|{target}")
+                lines.append(f"|move|{ident}|{move_id}|{target}|[from] move: Sleep Talk")
         active_row = pokemon_rows[active_slot]
         if not isinstance(active_row, Mapping):
             raise LocalShowdownError(f"Scenario materialization state has no active {player} row.")

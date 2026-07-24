@@ -432,6 +432,14 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             revealed_opponent = {pokemon.species: pokemon for pokemon in p1_state.opponent_team}
             self.assertEqual(set(revealed_opponent["Squirtle"].moves), {"watergun", "tackle"})
             self.assertEqual(revealed_opponent["Squirtle"].ability, "torrent")
+            squirtle_belief = p1_state.belief_view.opponent_by_species()["squirtle"]
+            self.assertEqual(
+                dict(squirtle_belief.move_uses),
+                {
+                    move["id"]: initial["sides"][1]["pokemon"][0]["moveSlots"][index]["maxpp"] - move["pp"]
+                    for index, move in enumerate(state["sides"]["p2"]["pokemon"][0]["moves"])
+                },
+            )
             self.assertFalse(p1_state.recent_events)
             self.assertEqual(env.requested_players(), ("p1", "p2"))
 

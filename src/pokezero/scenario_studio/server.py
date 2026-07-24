@@ -29,7 +29,7 @@ class ScenarioStudioHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], service: ScenarioStudioService) -> None:
-        if address[0] not in {"127.0.0.1", "::1"}:
+        if address[0] != "127.0.0.1":
             raise ValueError("Scenario studio must bind to a loopback address.")
         super().__init__(address, ScenarioStudioRequestHandler)
         self.service = service
