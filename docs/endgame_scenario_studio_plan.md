@@ -1,7 +1,8 @@
 # Endgame Scenario Studio Plan
 
 **Audience:** an implementation agent working from current `main`.
-**Status:** approved design target; implementation not started.
+**Status:** implemented locally; the first ten source-composed materialization fixtures are
+committed, while forced-line proof remains deferred.
 **Primary outcome:** a local website for constructing, validating, saving, loading, and
 evaluating Gen 3 randbats endgame scenarios.
 
@@ -13,11 +14,12 @@ Build a small local "scenario studio" that lets an author:
 2. Build each side explicitly by adding, removing, and ordering selected randbats Pokemon.
 3. Set each Pokemon's current HP.
 4. Set each move's remaining PP.
-5. Select the active Pokemon and side to move.
-6. Record the expected winning action or line.
-7. Validate the scenario through Pokemon Showdown.
-8. Save and load stable, reviewable JSON files.
-9. Inspect how a checkpoint ranks the legal root actions.
+5. Set major status, active volatile effects, weather, hazards, and screens.
+6. Select the active Pokemon and side to move.
+7. Record the expected winning action or line.
+8. Validate the scenario through Pokemon Showdown.
+9. Save and load stable, reviewable JSON files.
+10. Inspect how a checkpoint ranks the legal root actions.
 
 The first use is a curated endgame set that asks whether a policy can identify a guaranteed
 line to victory. This is an authoring and evaluation tool, not a replacement battle simulator.
@@ -33,8 +35,8 @@ The easiest trustworthy implementation is:
 - A side-roster builder backed by `Gen3RandbatSource`, with species and exact-set selection.
 - Pokemon Showdown's `Teams.generate("gen3randombattle")` as an optional full-team shortcut.
 - `FixturePokemon` and `pack_team` for packed-team construction.
-- A dedicated, allowlisted battle-bridge command for applying current HP, PP, and active-slot
-  overrides to a `gen3customgame` battle.
+- A dedicated, allowlisted battle-bridge command for applying current HP, PP, active-slot,
+  major-status, volatile, weather, and side-condition overrides to a `gen3customgame` battle.
 - Versioned JSON files under `scenarios/endgame/` as the canonical persistence format.
 
 Do not begin with React, a database, user accounts, cloud hosting, arbitrary simulator JSON
@@ -104,6 +106,8 @@ as an extension to the packed-team string.
 - Add, remove, replace, and reorder Pokemon on either side.
 - Browse exact source variants.
 - Set active slots, current HP, and remaining PP.
+- Set exact major status counters, reconstructable active volatiles, Gen 3 weather, Spikes,
+  Reflect, Light Screen, Safeguard, and Mist.
 - Mark unavailable Pokemon by setting HP to zero.
 - Perfect-information endgame scenarios.
 - Record expected root actions and an optional principal variation.
@@ -247,7 +251,7 @@ slots, and legal actions match the materialized battle.
 The follow-on hidden-information mode must store true world and public knowledge separately.
 It is not a boolean "hide opponent" switch.
 
-## 7. HP/PP Materialization Spike
+## 7. Battle-State Materialization
 
 This is the first implementation task because it decides whether the rest of the website has a
 sound execution path.
@@ -259,7 +263,11 @@ Add a dedicated command to `scripts/battle_bridge.mjs` that:
 3. Applies only allowlisted fields:
    - active party index;
    - current HP;
-   - remaining PP for existing move slots.
+   - remaining PP for existing move slots;
+   - major status and its exact sleep/toxic counter;
+   - reconstructable active volatile effects and their required counters;
+   - weather and its duration/permanence;
+   - Spikes layers and timed side conditions.
 4. Rejects unknown paths, extra fields, invalid slots, invalid move IDs, and invalid values.
 5. Restores the patched state through Showdown's deserializer.
 6. Regenerates a clean actionable request boundary for both players.
@@ -276,7 +284,7 @@ One deterministic two-on-two fixture must prove:
 - Exact HP appears correctly in self requests and public protocol.
 - Remaining PP appears correctly in the owning player's move slots.
 - The legal action mask is correct.
-- Snapshot, restore, and a second snapshot preserve HP/PP exactly.
+- Snapshot, restore, and a second snapshot preserve authored state exactly.
 - One legal turn can be stepped after materialization.
 - An out-of-range HP or PP value fails before mutating the live battle.
 
@@ -454,12 +462,12 @@ agent should complete them in order and keep this status table current.
 
 | Task | Deliverable | Status |
 |---|---|---|
-| S0 | Domain contract and HP/PP materialization spike | Not started |
-| S1 | Catalog, validation, and atomic JSON persistence | Not started |
-| S2 | Local server and team editor website | Not started |
-| S3 | Save/load/import/export and browser workflow tests | Not started |
-| S4 | Root checkpoint evaluation and report contract | Not started |
-| S5 | Seed endgame suite and batch scorecard | Not started |
+| S0 | Domain contract and typed battle-state materialization | Complete |
+| S1 | Catalog, validation, and atomic JSON persistence | Complete |
+| S2 | Local server and team editor website | Complete |
+| S3 | Save/load/import/export and browser workflow tests | Complete |
+| S4 | Root checkpoint evaluation and report contract | Complete (torch-backed checkpoint smoke remains environment-dependent) |
+| S5 | Seed endgame suite and batch scorecard | Complete for the initial 10-fixture materialization suite; tactical proof is deferred |
 | S6 | Optional replay proof and Rust forced-line verifier | Deferred |
 
 ### S0: Contract and materialization
@@ -470,7 +478,7 @@ Deliver:
 - Canonical JSON round trip.
 - Exact source-variant resolver.
 - Dedicated bridge materialization command.
-- Deterministic HP/PP fixture satisfying the spike acceptance criteria.
+- Deterministic battle-state fixture satisfying the materialization acceptance criteria.
 
 Stop condition:
 
@@ -566,7 +574,7 @@ objective verification fields.
 |---|---|
 | Scenario domain | JSON round trip, stable formatting, version rejection, migration hook. |
 | Randbat legality | Every selected set resolves to the pinned source; generated teams retain seeds. |
-| HP/PP | Boundary values, invalid values, fainted slots, Struggle, snapshot/restore. |
+| Battle state | HP/PP, status counters, volatile counters, weather, hazards, screens, invalid values, snapshot/restore. |
 | Active slot | Living active requirement, switch legality, force-switch boundary rejection. |
 | Showdown | Start, patch, request, legal mask, one step, terminal path. |
 | Observation | Declared knowledge mode, HP/PP/reveal parity, legal-action parity. |

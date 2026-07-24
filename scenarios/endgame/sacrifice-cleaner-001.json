@@ -1,0 +1,153 @@
+{
+  "author_notes": "Synthetic fully revealed seed scenario. It materializes through Showdown, but its tactical claim remains unverified until manual review or a future proof artifact.",
+  "description": "A fainted lead and a living Arcanine cleaner exercise active-slot selection and party preservation.",
+  "format_id": "gen3customgame",
+  "knowledge_mode": "fully_revealed",
+  "objective": {
+    "expected_root_actions": [],
+    "kind": "best_move",
+    "max_plies": 1,
+    "principal_variation": [],
+    "verification": {
+      "artifact": null,
+      "engine": null,
+      "status": "unverified"
+    }
+  },
+  "perspective": "p1",
+  "provenance": {
+    "randbat_source_hash": "f9e35e1fddae5064",
+    "replay_proven": false
+  },
+  "scenario_id": "sacrifice-cleaner-001",
+  "schema_version": "endgame-scenario-v1",
+  "seed": 9110,
+  "side_to_move": "p1",
+  "source_format_id": "gen3randombattle",
+  "tags": [
+    "two-on-one",
+    "cleaner"
+  ],
+  "teams": {
+    "p1": {
+      "active_slot": 1,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Keen Eye",
+          "current_hp": 0,
+          "evs": {},
+          "gender": null,
+          "item": "Choice Band",
+          "ivs": {},
+          "level": 87,
+          "max_hp": 268,
+          "moves": [
+            {
+              "id": "aerialace",
+              "max_pp": 32,
+              "pp": 32
+            },
+            {
+              "id": "doubleedge",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "hiddenpowerground",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "quickattack",
+              "max_pp": 48,
+              "pp": 48
+            }
+          ],
+          "nature": "",
+          "species": "Pidgeot",
+          "variant_id": "pidgeot-1-variant-1"
+        },
+        {
+          "ability": "Intimidate",
+          "current_hp": 131,
+          "evs": {},
+          "gender": null,
+          "item": "Choice Band",
+          "ivs": {},
+          "level": 78,
+          "max_hp": 252,
+          "moves": [
+            {
+              "id": "doubleedge",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "extremespeed",
+              "max_pp": 8,
+              "pp": 6
+            },
+            {
+              "id": "fireblast",
+              "max_pp": 8,
+              "pp": 8
+            },
+            {
+              "id": "irontail",
+              "max_pp": 24,
+              "pp": 24
+            }
+          ],
+          "nature": "",
+          "species": "Arcanine",
+          "variant_id": "arcanine-2-variant-3"
+        }
+      ]
+    },
+    "p2": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Levitate",
+          "current_hp": 60,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 74,
+          "max_hp": 195,
+          "moves": [
+            {
+              "id": "destinybond",
+              "max_pp": 8,
+              "pp": 8
+            },
+            {
+              "id": "firepunch",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "icepunch",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "thunderbolt",
+              "max_pp": 24,
+              "pp": 24
+            }
+          ],
+          "nature": "",
+          "species": "Gengar",
+          "variant_id": "gengar-1-variant-1"
+        }
+      ]
+    }
+  },
+  "title": "Sacrifice into cleaner"
+}

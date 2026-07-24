@@ -1,0 +1,118 @@
+{
+  "author_notes": "Synthetic fully revealed seed scenario. It materializes through Showdown, but its tactical claim remains unverified until manual review or a future proof artifact.",
+  "description": "Compare Hyper Beam commitment with the other attacks on a Truant endgame state.",
+  "format_id": "gen3customgame",
+  "knowledge_mode": "fully_revealed",
+  "objective": {
+    "expected_root_actions": [],
+    "kind": "best_move",
+    "max_plies": 1,
+    "principal_variation": [],
+    "verification": {
+      "artifact": null,
+      "engine": null,
+      "status": "unverified"
+    }
+  },
+  "perspective": "p1",
+  "provenance": {
+    "randbat_source_hash": "f9e35e1fddae5064",
+    "replay_proven": false
+  },
+  "scenario_id": "recharge-commitment-001",
+  "schema_version": "endgame-scenario-v1",
+  "seed": 9105,
+  "side_to_move": "p1",
+  "source_format_id": "gen3randombattle",
+  "tags": [
+    "recharge",
+    "commitment"
+  ],
+  "teams": {
+    "p1": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Truant",
+          "current_hp": 170,
+          "evs": {},
+          "gender": null,
+          "item": "Choice Band",
+          "ivs": {},
+          "level": 78,
+          "max_hp": 346,
+          "moves": [
+            {
+              "id": "doubleedge",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "earthquake",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "hyperbeam",
+              "max_pp": 8,
+              "pp": 1
+            },
+            {
+              "id": "shadowball",
+              "max_pp": 24,
+              "pp": 24
+            }
+          ],
+          "nature": "",
+          "species": "Slaking",
+          "variant_id": "slaking-1-variant-1"
+        }
+      ]
+    },
+    "p2": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Torrent",
+          "current_hp": 153,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 82,
+          "max_hp": 246,
+          "moves": [
+            {
+              "id": "protect",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "refresh",
+              "max_pp": 32,
+              "pp": 32
+            },
+            {
+              "id": "surf",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "toxic",
+              "max_pp": 16,
+              "pp": 16
+            }
+          ],
+          "nature": "",
+          "species": "Blastoise",
+          "variant_id": "blastoise-3-variant-16"
+        }
+      ]
+    }
+  },
+  "title": "Recharge commitment"
+}
