@@ -1,0 +1,118 @@
+{
+  "author_notes": "Synthetic fully revealed seed scenario. It materializes through Showdown, but its tactical claim remains unverified until manual review or a future proof artifact.",
+  "description": "Compare Toxic pressure with direct attacks against a Soft-Boiled opponent.",
+  "format_id": "gen3customgame",
+  "knowledge_mode": "fully_revealed",
+  "objective": {
+    "expected_root_actions": [],
+    "kind": "best_move",
+    "max_plies": 1,
+    "principal_variation": [],
+    "verification": {
+      "artifact": null,
+      "engine": null,
+      "status": "unverified"
+    }
+  },
+  "perspective": "p1",
+  "provenance": {
+    "randbat_source_hash": "f9e35e1fddae5064",
+    "replay_proven": false
+  },
+  "scenario_id": "recovery-denial-001",
+  "schema_version": "endgame-scenario-v1",
+  "seed": 9107,
+  "side_to_move": "p1",
+  "source_format_id": "gen3randombattle",
+  "tags": [
+    "toxic",
+    "recovery"
+  ],
+  "teams": {
+    "p1": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Torrent",
+          "current_hp": 167,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 82,
+          "max_hp": 246,
+          "moves": [
+            {
+              "id": "icebeam",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "protect",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "surf",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "toxic",
+              "max_pp": 16,
+              "pp": 4
+            }
+          ],
+          "nature": "",
+          "species": "Blastoise",
+          "variant_id": "blastoise-3-variant-14"
+        }
+      ]
+    },
+    "p2": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Cute Charm",
+          "current_hp": 124,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 85,
+          "max_hp": 282,
+          "moves": [
+            {
+              "id": "fireblast",
+              "max_pp": 8,
+              "pp": 8
+            },
+            {
+              "id": "return",
+              "max_pp": 32,
+              "pp": 32
+            },
+            {
+              "id": "softboiled",
+              "max_pp": 16,
+              "pp": 3
+            },
+            {
+              "id": "toxic",
+              "max_pp": 16,
+              "pp": 16
+            }
+          ],
+          "nature": "",
+          "species": "Clefable",
+          "variant_id": "clefable-1-variant-5"
+        }
+      ]
+    }
+  },
+  "title": "Recovery denial"
+}

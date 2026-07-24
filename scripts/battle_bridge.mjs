@@ -30,8 +30,9 @@ if (!showdownRoot) {
 let BattleStream;
 let getPlayerStreams;
 let State;
+let Teams;
 try {
-  ({ BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
   ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
 } catch (error) {
   emit({
@@ -391,6 +392,240 @@ function materializeBattle(command) {
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
+}
+
+function materializeScenarioBattle(command) {
+  const startedAt = process.hrtime.bigint();
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  const scenarioState = command.scenarioState;
+  if (!scenarioState || typeof scenarioState !== "object" || Array.isArray(scenarioState)) {
+    throw new Error("Scenario materialization requires a scenarioState object.");
+  }
+
+  // Scenario authoring may set only the current battle boundary. It must never accept a
+  // browser-supplied serialized Showdown world, which would bypass all simulator invariants.
+  const snapshot = State.serializeBattle(battle.battleStream.battle);
+  if (normalizeId(snapshot.formatid) !== "gen3customgame") {
+    throw new Error("Scenario materialization requires a gen3customgame battle.");
+  }
+  applyScenarioState(snapshot, scenarioState);
+
+  const send = battle.battleStream.battle.send;
+  battle.battleStream.battle = State.deserializeBattle(snapshot);
+  battle.battleStream.battle.restart(send);
+  battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  battle.readyScheduled = false;
+  battle.terminalScheduled = false;
+  battle.tRecv = null;
+  emit({
+    type: "scenario_materialized",
+    battleId: battle.battleId,
+    boundaryRequests: battle.boundaryRequests,
+    state: scenarioStateSummary(battle.battleStream.battle),
+    requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
+function generateScenarioTeam(command) {
+  const startedAt = process.hrtime.bigint();
+  if (!Number.isInteger(command.seed)) {
+    throw new Error("Scenario team generation requires an integer seed.");
+  }
+  if (!Teams || typeof Teams.generate !== "function") {
+    throw new Error("Pokemon Showdown does not expose Teams.generate for scenario generation.");
+  }
+  const parts = deriveSeed(String(command.seed), "scenario-team")
+    .split(",")
+    .map(part => Number(part));
+  const team = Teams.generate("gen3randombattle", {seed: parts});
+  if (!Array.isArray(team) || team.length !== 6) {
+    throw new Error("Pokemon Showdown did not generate a complete Gen 3 random-battle team.");
+  }
+  emit({
+    type: "scenario_team_generated",
+    seed: command.seed,
+    team: team.map(set => ({
+      species: set.species || set.name || "",
+      moves: Array.isArray(set.moves) ? set.moves : [],
+      ability: set.ability || "",
+      item: set.item || "",
+      level: set.level || 100,
+      nature: set.nature || "",
+      gender: set.gender || "",
+      evs: set.evs || {},
+      ivs: set.ivs || {},
+    })),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
+function applyScenarioState(snapshot, scenarioState) {
+  if (!scenarioState.sides || typeof scenarioState.sides !== "object" || Array.isArray(scenarioState.sides)) {
+    throw new Error("Scenario materialization requires both sides.");
+  }
+  const extraSideKeys = Object.keys(scenarioState.sides).filter(sideId => !["p1", "p2"].includes(sideId));
+  if (extraSideKeys.length || !scenarioState.sides.p1 || !scenarioState.sides.p2) {
+    throw new Error("Scenario materialization requires exactly p1 and p2 sides.");
+  }
+  if (scenarioState.turn !== undefined && (!Number.isInteger(scenarioState.turn) || scenarioState.turn < 1)) {
+    throw new Error("Scenario materialization turn must be a positive integer.");
+  }
+
+  // The MVP intentionally starts at a clean decision boundary. Hazards, boosts, statuses,
+  // weather, and queued effects need their own public-history contract before they are editable.
+  snapshot.turn = scenarioState.turn ?? 1;
+  snapshot.requestState = "move";
+  snapshot.lastMove = null;
+  snapshot.lastMoveLine = 0;
+  snapshot.lastSuccessfulMoveThisTurn = null;
+  snapshot.lastDamage = 0;
+  snapshot.midTurn = false;
+  snapshot.queue = [];
+  snapshot.faintQueue = [];
+  snapshot.activeMove = null;
+  snapshot.activePokemon = null;
+  snapshot.activeTarget = null;
+  snapshot.field.weather = "";
+  snapshot.field.weatherState = {id: "", effectOrder: 0};
+  snapshot.field.pseudoWeather = {};
+
+  for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
+    const scenarioSide = scenarioState.sides[sideId];
+    const serializedSide = snapshot.sides?.[sideIndex];
+    if (!scenarioSide || typeof scenarioSide !== "object" || Array.isArray(scenarioSide) || !serializedSide) {
+      throw new Error(`Scenario materialization is missing ${sideId}.`);
+    }
+    const rows = scenarioSide.pokemon;
+    if (!Array.isArray(rows) || rows.length !== serializedSide.pokemon.length || rows.length < 1) {
+      throw new Error(`Scenario materialization requires one row for every ${sideId} Pokemon.`);
+    }
+    const activeSlot = scenarioSide.activeSlot;
+    if (!Number.isInteger(activeSlot) || activeSlot < 0 || activeSlot >= rows.length) {
+      throw new Error(`Scenario materialization received an invalid active slot for ${sideId}.`);
+    }
+    const seenSlots = new Set();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error(`Scenario materialization received an invalid ${sideId} Pokemon row.`);
+      }
+      if (!Number.isInteger(row.slot) || row.slot < 0 || row.slot >= rows.length || seenSlots.has(row.slot)) {
+        throw new Error(`Scenario materialization received invalid ${sideId} Pokemon slots.`);
+      }
+      seenSlots.add(row.slot);
+      const pokemon = serializedSide.pokemon[row.slot];
+      if (!Number.isInteger(row.hp) || row.hp < 0 || row.hp > pokemon.maxhp) {
+        throw new Error(`Scenario materialization received invalid HP for ${sideId} slot ${row.slot}.`);
+      }
+      applyScenarioPokemonState(pokemon, row, sideId);
+    }
+    if (seenSlots.size !== rows.length) {
+      throw new Error(`Scenario materialization did not cover every ${sideId} Pokemon.`);
+    }
+    const active = serializedSide.pokemon[activeSlot];
+    if (!active || active.fainted || active.hp <= 0) {
+      throw new Error(`Scenario materialization requires a living active ${sideId} Pokemon.`);
+    }
+    if (!serializedSide.pokemon.some(pokemon => !pokemon.fainted && pokemon.hp > 0)) {
+      throw new Error(`Scenario materialization requires a living ${sideId} Pokemon.`);
+    }
+    moveActivePokemonToFront(serializedSide, activeSlot);
+    serializedSide.active = [`[Pokemon:${sideId}a]`];
+    serializedSide.sideConditions = {};
+    serializedSide.slotConditions = [{}];
+    serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
+    serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
+    delete serializedSide.activeRequest;
+  }
+}
+
+function applyScenarioPokemonState(pokemon, row, sideId) {
+  const expectedKeys = ["slot", "hp", "moves"];
+  const extraKeys = Object.keys(row).filter(key => !expectedKeys.includes(key));
+  if (extraKeys.length) {
+    throw new Error(`Scenario materialization received unsupported ${sideId} Pokemon fields.`);
+  }
+  pokemon.hp = row.hp;
+  pokemon.fainted = row.hp === 0;
+  pokemon.status = "";
+  pokemon.statusState = {id: "", effectOrder: 0};
+  pokemon.boosts = normalizedBoosts(null);
+  pokemon.volatiles = {};
+  pokemon.lastMove = null;
+  pokemon.lastMoveUsed = null;
+  pokemon.attackedBy = [];
+  pokemon.lastDamage = 0;
+  pokemon.activeMoveActions = 0;
+  pokemon.moveThisTurn = "";
+  pokemon.switchFlag = false;
+  pokemon.forceSwitchFlag = false;
+  pokemon.isActive = false;
+
+  if (!Array.isArray(row.moves) || row.moves.length !== pokemon.moveSlots.length) {
+    throw new Error(`Scenario materialization requires every move PP for ${sideId} slot ${row.slot}.`);
+  }
+  const seenMoves = new Set();
+  const seenMoveSlots = new Set();
+  for (const moveState of row.moves) {
+    if (!moveState || typeof moveState !== "object" || Array.isArray(moveState) ||
+        typeof moveState.id !== "string" || !Number.isInteger(moveState.pp)) {
+      throw new Error(`Scenario materialization received invalid move PP for ${sideId} slot ${row.slot}.`);
+    }
+    const moveId = normalizeId(moveState.id);
+    if (!moveId || seenMoves.has(moveId)) {
+      throw new Error(`Scenario materialization received duplicate or invalid moves for ${sideId} slot ${row.slot}.`);
+    }
+    seenMoves.add(moveId);
+    const moveSlot = pokemon.moveSlots.find(slot => scenarioMoveIdsMatch(normalizeId(slot.id), moveId));
+    if (!moveSlot || moveState.pp < 0 || moveState.pp > moveSlot.maxpp) {
+      throw new Error(`Scenario materialization received invalid PP for ${sideId} ${moveState.id}.`);
+    }
+    if (seenMoveSlots.has(moveSlot)) {
+      throw new Error(`Scenario materialization received duplicate move slots for ${sideId} slot ${row.slot}.`);
+    }
+    seenMoveSlots.add(moveSlot);
+    moveSlot.pp = moveState.pp;
+    moveSlot.disabled = false;
+    moveSlot.disabledSource = "";
+    moveSlot.used = moveState.pp < moveSlot.maxpp;
+  }
+}
+
+function scenarioMoveIdsMatch(slotId, scenarioMoveId) {
+  if (slotId === scenarioMoveId) return true;
+  // Showdown serializes every typed Hidden Power as its one generic ``hiddenpower`` slot. The
+  // scenario catalog retains the concrete source type (for example hiddenpowerbug), and a team
+  // can contain only one such slot after the generator's Hidden Power culling.
+  return slotId === "hiddenpower" && scenarioMoveId.startsWith("hiddenpower");
+}
+
+function scenarioStateSummary(simulatorBattle) {
+  const sides = {};
+  for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
+    const side = simulatorBattle.sides[sideIndex];
+    sides[sideId] = {
+      activeSlot: side.pokemon.findIndex(pokemon => pokemon === side.active?.[0]),
+      pokemon: side.pokemon.map((pokemon, slot) => ({
+        slot,
+        species: pokemon.set?.species || pokemon.set?.name || "",
+        details: pokemon.details || "",
+        ability: pokemon.ability || "",
+        item: pokemon.item || "",
+        hp: pokemon.hp,
+        maxHp: pokemon.maxhp,
+        fainted: Boolean(pokemon.fainted),
+        moves: (pokemon.moveSlots || []).map(move => ({
+          id: move.id,
+          pp: move.pp,
+          maxPp: move.maxpp,
+        })),
+      })),
+    };
+  }
+  return {turn: simulatorBattle.turn, sides};
 }
 
 function applyPublicState(snapshot, publicState) {
@@ -1090,6 +1325,12 @@ async function handleCommand(command) {
       break;
     case "materialize":
       materializeBattle(command);
+      break;
+    case "scenario_materialize":
+      materializeScenarioBattle(command);
+      break;
+    case "scenario_generate_team":
+      generateScenarioTeam(command);
       break;
     case "reseed":
       await reseedBattle(command);

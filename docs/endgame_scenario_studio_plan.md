@@ -1,7 +1,8 @@
 # Endgame Scenario Studio Plan
 
 **Audience:** an implementation agent working from current `main`.
-**Status:** approved design target; implementation not started.
+**Status:** implemented locally; the first ten source-composed materialization fixtures are
+committed, while forced-line proof remains deferred.
 **Primary outcome:** a local website for constructing, validating, saving, loading, and
 evaluating Gen 3 randbats endgame scenarios.
 
@@ -454,12 +455,12 @@ agent should complete them in order and keep this status table current.
 
 | Task | Deliverable | Status |
 |---|---|---|
-| S0 | Domain contract and HP/PP materialization spike | Not started |
-| S1 | Catalog, validation, and atomic JSON persistence | Not started |
-| S2 | Local server and team editor website | Not started |
-| S3 | Save/load/import/export and browser workflow tests | Not started |
-| S4 | Root checkpoint evaluation and report contract | Not started |
-| S5 | Seed endgame suite and batch scorecard | Not started |
+| S0 | Domain contract and HP/PP materialization spike | Complete |
+| S1 | Catalog, validation, and atomic JSON persistence | Complete |
+| S2 | Local server and team editor website | Complete |
+| S3 | Save/load/import/export and browser workflow tests | Complete |
+| S4 | Root checkpoint evaluation and report contract | Complete (torch-backed checkpoint smoke remains environment-dependent) |
+| S5 | Seed endgame suite and batch scorecard | Complete for the initial 10-fixture materialization suite; tactical proof is deferred |
 | S6 | Optional replay proof and Rust forced-line verifier | Deferred |
 
 ### S0: Contract and materialization

@@ -1,0 +1,128 @@
+:root {
+  --ink: #202522;
+  --muted: #62706a;
+  --paper: #f5f0e5;
+  --panel: rgba(255, 253, 248, 0.86);
+  --line: #d8d0c1;
+  --leaf: #1f5b47;
+  --leaf-dark: #143c30;
+  --sun: #df8d39;
+  --rose: #a54f4a;
+  --sky: #4d7a8f;
+  --shadow: 0 16px 44px rgba(46, 49, 41, 0.11);
+  font-family: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 8% 2%, rgba(223, 141, 57, 0.18), transparent 27rem),
+    radial-gradient(circle at 94% 13%, rgba(77, 122, 143, 0.17), transparent 31rem),
+    linear-gradient(126deg, #f8f5ed, #edf1e8 58%, #f5eee2);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.3;
+  background-image: linear-gradient(rgba(31, 91, 71, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(31, 91, 71, 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+button, input, select, textarea { font: inherit; }
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--leaf);
+  border-radius: 999px;
+  color: white;
+  background: var(--leaf);
+  padding: 0.54rem 0.9rem;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+button:hover { background: var(--leaf-dark); transform: translateY(-1px); }
+button:disabled { cursor: not-allowed; opacity: 0.45; transform: none; }
+button.quiet { color: var(--leaf-dark); background: transparent; border-color: #9eb6ac; }
+button.quiet:hover { background: rgba(31, 91, 71, 0.08); }
+button.accent { background: var(--sun); border-color: var(--sun); color: #281909; }
+button.accent:hover { background: #ef9f4b; }
+
+.shell { position: relative; width: min(1450px, calc(100% - 2rem)); margin: 0 auto; padding: 2.2rem 0 3.5rem; }
+.masthead { display: flex; justify-content: space-between; gap: 2rem; align-items: end; margin-bottom: 1.6rem; }
+.eyebrow { margin: 0 0 0.25rem; color: var(--leaf); font-size: 0.76rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; }
+h1 { margin: 0; font: 700 clamp(2.3rem, 5vw, 4.8rem)/0.95 "Iowan Old Style", "Palatino Linotype", Georgia, serif; letter-spacing: -0.05em; }
+.subtitle { margin: 0.7rem 0 0; max-width: 44rem; color: var(--muted); font-size: 1.04rem; }
+.provenance { max-width: 23rem; color: var(--leaf-dark); font-size: 0.8rem; text-align: right; }
+
+.command-bar, .card {
+  border: 1px solid rgba(216, 208, 193, 0.9);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+.command-bar { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: 0.8rem; border-radius: 1rem; margin-bottom: 1rem; }
+.command-group { display: flex; flex-wrap: wrap; align-items: end; gap: 0.55rem; }
+.load-group { justify-content: end; }
+.card { border-radius: 1rem; padding: 1.05rem; }
+
+label { display: grid; gap: 0.3rem; color: var(--muted); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.025em; }
+input, select, textarea {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.48rem;
+  background: rgba(255,255,255,0.7);
+  color: var(--ink);
+  padding: 0.49rem 0.55rem;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+textarea { resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: 2px solid rgba(223, 141, 57, 0.55); outline-offset: 1px; }
+.file-button { display: inline-flex; align-items: center; cursor: pointer; border: 1px solid #9eb6ac; border-radius: 999px; color: var(--leaf-dark); padding: 0.54rem 0.9rem; }
+.file-button input { display: none; }
+
+.metadata { margin-bottom: 1rem; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.8rem; color: var(--leaf-dark); font: 700 1.08rem "Iowan Old Style", Georgia, serif; }
+.metadata-grid { display: grid; grid-template-columns: 1.2fr 1.7fr 1.2fr 0.62fr 0.72fr 0.7fr; gap: 0.7rem; }
+.metadata-grid.compact { grid-template-columns: 1.1fr 0.65fr 1.1fr; }
+.wide { margin-top: 0.75rem; }
+.badges { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: end; }
+.badge { border-radius: 999px; padding: 0.28rem 0.5rem; font: 700 0.64rem/1 "Avenir Next", sans-serif; letter-spacing: 0.06em; text-transform: uppercase; }
+.badge.good { color: #124b39; background: #d9ebdf; }.badge.muted { color: #6f6556; background: #eee6d9; }.badge.bad { color: #7c312e; background: #f6ddda; }
+
+.team-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.team { position: relative; overflow: hidden; min-height: 28rem; }
+.team::after { content: attr(data-side); position: absolute; right: 0.6rem; bottom: -1.8rem; color: rgba(31,91,71,0.06); font: 900 10rem/1 Georgia, serif; pointer-events: none; }
+.team-header { display: flex; gap: 0.6rem; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.team-title { display: flex; align-items: baseline; gap: 0.45rem; }.team-title strong { color: var(--leaf-dark); font: 700 1.45rem "Iowan Old Style", Georgia, serif; }.team-title span { color: var(--muted); font-size: 0.76rem; }
+.team-controls { display: grid; grid-template-columns: 0.85fr 1fr 1.2fr auto; gap: 0.45rem; padding: 0.7rem; border-radius: 0.75rem; background: rgba(31,91,71,0.055); }
+.team-controls .species-filter { min-width: 0; }
+.team-controls .generate { grid-column: span 4; justify-self: start; }
+.roster { position: relative; display: grid; gap: 0.65rem; margin-top: 0.8rem; }
+.empty-roster { padding: 2.2rem 1rem; border: 1px dashed #b9c4bc; border-radius: 0.75rem; color: var(--muted); text-align: center; }
+.pokemon { border: 1px solid var(--line); border-left: 0.32rem solid var(--sky); border-radius: 0.75rem; background: rgba(255,255,255,0.62); padding: 0.72rem; }
+.pokemon.active { border-left-color: var(--sun); background: #fff9e9; }.pokemon.fainted { opacity: 0.58; filter: grayscale(0.42); }
+.pokemon-head { display: flex; justify-content: space-between; gap: 0.6rem; align-items: start; }.pokemon-name { color: var(--leaf-dark); font: 700 1.12rem "Iowan Old Style", Georgia, serif; }.pokemon-meta { color: var(--muted); font-size: 0.74rem; }
+.pokemon-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 0.35rem; }.pokemon-actions button { padding: 0.25rem 0.5rem; font-size: 0.69rem; }
+.pokemon-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.65rem; }.pokemon-grid .full { grid-column: 1 / -1; }
+.hp-row { display: grid; grid-template-columns: 1fr 4.4rem; gap: 0.45rem; align-items: center; }.hp-row input[type="range"] { width: 100%; padding: 0; accent-color: var(--sun); }
+.moves { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.35rem; }.move { display: grid; grid-template-columns: 1fr 3.6rem; align-items: center; gap: 0.35rem; border-radius: 0.42rem; background: #edf2ed; padding: 0.36rem 0.45rem; color: #34423a; font-size: 0.75rem; }.move input { padding: 0.27rem; text-align: center; }
+
+.lower-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr); gap: 1rem; margin-top: 1rem; }
+.microcopy { color: var(--muted); font: 500 0.69rem/1.2 "Avenir Next", sans-serif; text-align: right; }.readout-card { min-height: 17rem; }.empty-state { color: var(--muted); padding: 1rem 0; }.legal-actions, .evaluation { display: grid; gap: 0.35rem; }.action-line { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.45rem 0.55rem; border-radius: 0.45rem; background: #eff3ee; font-size: 0.8rem; }.action-line.expected { box-shadow: inset 0 0 0 1px var(--sun); background: #fff7e7; }.evaluate-row { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; align-items: end; margin-top: 1rem; }
+.notice { min-height: 1.2rem; padding: 0.8rem 0.2rem 0; color: var(--muted); font-size: 0.86rem; }.notice.error { color: var(--rose); }.notice.success { color: var(--leaf); }
+
+@media (max-width: 960px) {
+  .masthead, .command-bar { align-items: stretch; flex-direction: column; }.provenance { text-align: left; }.load-group { justify-content: start; }.metadata-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.team-grid, .lower-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 580px) {
+  .shell { width: min(100% - 1rem, 1450px); padding-top: 1.1rem; }.metadata-grid, .metadata-grid.compact, .pokemon-grid, .moves { grid-template-columns: 1fr; }.team-controls { grid-template-columns: 1fr; }.team-controls .generate { grid-column: auto; }.command-group { align-items: stretch; flex-direction: column; }.evaluate-row { grid-template-columns: 1fr; }.pokemon-actions { justify-content: start; }
+}
