@@ -10,7 +10,7 @@ evaluating Gen 3 randbats endgame scenarios.
 Build a small local "scenario studio" that lets an author:
 
 1. Generate source-valid Gen 3 randbats teams.
-2. Choose which Pokemon remain available on each side.
+2. Build each side explicitly by adding, removing, and ordering selected randbats Pokemon.
 3. Set each Pokemon's current HP.
 4. Set each move's remaining PP.
 5. Select the active Pokemon and side to move.
@@ -30,8 +30,8 @@ The easiest trustworthy implementation is:
 
 - A loopback-only Python HTTP server using the standard library.
 - A vanilla HTML/CSS/JavaScript frontend served by that process.
-- `Gen3RandbatSource` as the exact-set catalog.
-- Pokemon Showdown's `Teams.generate("gen3randombattle")` as the default full-team generator.
+- A side-roster builder backed by `Gen3RandbatSource`, with species and exact-set selection.
+- Pokemon Showdown's `Teams.generate("gen3randombattle")` as an optional full-team shortcut.
 - `FixturePokemon` and `pack_team` for packed-team construction.
 - A dedicated, allowlisted battle-bridge command for applying current HP, PP, and active-slot
   overrides to a `gen3customgame` battle.
@@ -59,12 +59,14 @@ Two team-construction modes are useful:
 
 | Mode | Contract |
 |---|---|
-| `generated` | The full six-Pokemon party came from Showdown's randbats team generator. This is the default. |
-| `source-composed` | Every exact set is source-valid; composition may not be generator-reachable. |
+| `generated` | The untouched six-Pokemon party came from Showdown's randbats team generator. |
+| `source-composed` | The author selected one to six source-valid Pokemon; composition may not be generator-reachable. |
 
-For a generated endgame, retain the full original party and represent unavailable Pokemon with
-zero HP. That preserves team provenance while allowing one-on-one, two-on-two, and other late
-game positions.
+Both modes are first-class creation workflows. An author can start with an empty side and add
+specific species, or generate a full party as a shortcut. Replacing, removing, or adding a
+Pokemon on a generated party automatically changes that side to `source-composed`. Merely
+marking generated party members fainted retains `generated` provenance. This preserves honest
+provenance while allowing one-on-one, two-on-two, and other late-game positions.
 
 ## 3. Existing Building Blocks
 
@@ -97,6 +99,9 @@ as an extension to the packed-team string.
 - Gen 3 singles only.
 - Local machine only, bound to `127.0.0.1`.
 - Generate complete random-battle teams.
+- Select one to six specific Pokemon independently for each side.
+- Choose an exact source-valid randbats set for every selected species.
+- Add, remove, replace, and reorder Pokemon on either side.
 - Browse exact source variants.
 - Set active slots, current HP, and remaining PP.
 - Mark unavailable Pokemon by setting HP to zero.
@@ -141,7 +146,6 @@ Add a typed Python domain model and a stable JSON representation. A representati
   "seed": 1701,
   "provenance": {
     "randbat_source_hash": "required",
-    "team_mode": "source-composed",
     "replay_proven": false
   },
   "knowledge_mode": "fully_revealed",
@@ -149,6 +153,7 @@ Add a typed Python domain model and a stable JSON representation. A representati
   "side_to_move": "p1",
   "teams": {
     "p1": {
+      "construction_mode": "source-composed",
       "generated_team_seed": null,
       "active_slot": 0,
       "pokemon": [
@@ -171,6 +176,7 @@ Add a typed Python domain model and a stable JSON representation. A representati
       ]
     },
     "p2": {
+      "construction_mode": "source-composed",
       "generated_team_seed": null,
       "active_slot": 0,
       "pokemon": [
@@ -212,6 +218,7 @@ The implementation may normalize field names during the first schema PR, but the
 properties are required:
 
 - Files store stable IDs and source provenance, not display text alone.
+- Construction provenance is recorded independently for p1 and p2.
 - Current HP and PP are exact integers.
 - `max_hp` and `max_pp` are validator-derived and checked on load.
 - Variant fields remain present for human review, but `variant_id` is authoritative.
@@ -344,9 +351,14 @@ Python tracebacks or filesystem paths to the browser.
 
 ### Team editing
 
+- Each side starts with `Add Pokemon` and optional `Generate team` actions.
+- `Add Pokemon` opens a searchable species picker sourced from `Gen3RandbatSource`.
+- Selecting a species shows only its exact legal randbats variants.
+- Selecting a variant adds that Pokemon, its legal moves, ability, item, and level to the side.
+- Each Pokemon can be replaced, removed, and reordered independently.
 - `Generate team` creates all six sets through Showdown from a displayed seed.
-- Species and exact-variant cards come from `Gen3RandbatSource`.
-- `source-composed` mode requires an explicit opt-in.
+- Editing the membership of a generated party automatically labels it `source-composed`.
+- A side may contain one to six selected Pokemon, independent of the other side's count.
 - Each Pokemon card shows level, item, ability, moves, max HP, current HP, and PP.
 - HP has both a number input and slider.
 - PP is an integer input bounded by Showdown-derived max PP.
@@ -389,7 +401,7 @@ Local validation must complete before starting Showdown:
 - Move slots and PP entries have the same length and IDs.
 - All-zero PP is accepted only if Showdown returns the intended Struggle action.
 - `perspective` and `side_to_move` are valid player IDs.
-- `generated` mode preserves the generated team and seed provenance.
+- Each side's `generated` mode preserves that side's complete generated party and seed provenance.
 - A source-hash mismatch requires explicit revalidation or migration; never silently relatch.
 
 Showdown validation must then prove:
@@ -484,15 +496,17 @@ Stop condition:
 Deliver:
 
 - Loopback server and static assets.
-- Generated team workflow.
-- Source-composed opt-in.
+- Independent side-roster builders with add, replace, remove, and reorder controls.
+- Searchable species picker and exact legal-set picker.
+- Optional generated-team shortcut with automatic provenance downgrade after membership edits.
 - Active, HP, and PP controls.
 - Objective editor, validity badges, and validation errors.
 - Responsive desktop and narrow-window layout.
 
 Stop condition:
 
-- A user can create a two-on-two endgame from generated teams without editing JSON.
+- A user can select four specific Pokemon, arrange a two-on-two endgame, and validate it without
+  editing JSON.
 
 ### S3: Persistence workflow
 
@@ -589,7 +603,8 @@ not hold a foreground agent session open by polling.
 The core goal is complete when:
 
 - A local command starts the studio.
-- Both teams can be generated from the pinned Gen 3 randbats source.
+- Both sides can be built from independently selected Pokemon and exact legal randbats sets.
+- Either side can optionally be populated by the full-team generator.
 - The author can select active Pokemon and edit exact HP and PP.
 - Invalid sets and inconsistent states fail closed with useful errors.
 - A valid scenario materializes and steps in Showdown.
@@ -605,7 +620,7 @@ manual or unverified and must be labeled accordingly.
 
 - Pokemon Showdown is the source of legality and state-transition truth.
 - The website edits a narrow domain contract, never raw simulator state.
-- Generated teams are the default; source-composed teams are visibly weaker provenance.
+- Direct side composition and generated teams are both supported; provenance distinguishes them.
 - HP/PP must round-trip through a real actionable Showdown request before UI work proceeds.
 - The first scenario set is perfect-information and synthetic-history by explicit design.
 - Formal proof is valuable but does not block scenario authoring.
