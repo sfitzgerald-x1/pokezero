@@ -239,7 +239,7 @@ future source changes cannot silently restore modern immunity/boost semantics.
   then the Python extension builds with `poke-engine/gen3` and no default
   generation feature.
 - `tests.test_engine_gen3_abilities`, `tests.test_engine_residual_order`, and
-  `tests.test_engine_world.ForecastRootTypeTests`: **44/44 checks pass**.
+  `tests.test_engine_world.ForecastRootTypeTests`: **45/45 checks pass**.
 - Existing Showdown-vs-engine fidelity battery: **15/15 cases, 120/120 seeded
   turns clean**.
 - Additional high-risk Showdown differential (Wonder Guard neutral/super-

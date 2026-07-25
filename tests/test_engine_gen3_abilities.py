@@ -151,6 +151,40 @@ class AbilityMechanicsTests(unittest.TestCase):
             trick_room=False,
         )
 
+    def test_blaze_boosts_only_fire_damage_at_or_below_one_third_hp(self) -> None:
+        defender = self._mon("snorlax", "immunity", "splash", hp=1000, maxhp=1000)
+
+        def opening_damage(hp: int, move: str) -> tuple[int, ...]:
+            attacker = self._mon(
+                "charizard",
+                "blaze",
+                move,
+                types=("fire", "flying"),
+                hp=hp,
+                maxhp=300,
+                speed=200,
+            )
+            branches = poke_engine.generate_instructions(
+                self._state(attacker, defender), move, "splash"
+            )
+            return tuple(
+                sorted(
+                    {
+                        int(self._text(branch).split("Damage SideTwo: ", 1)[1].split()[0])
+                        for branch in branches
+                    }
+                )
+            )
+
+        boosted_fire = opening_damage(100, "flamethrower")
+        ordinary_fire = opening_damage(101, "flamethrower")
+        self.assertEqual(len(boosted_fire), len(ordinary_fire))
+        for boosted, ordinary in zip(boosted_fire, ordinary_fire, strict=True):
+            self.assertGreater(boosted, ordinary)
+            self.assertAlmostEqual(boosted / ordinary, 1.5, delta=0.03)
+
+        self.assertEqual(opening_damage(100, "tackle"), opening_damage(101, "tackle"))
+
     @staticmethod
     def _text(branch) -> str:
         return " | ".join(str(instruction) for instruction in branch.instruction_list)
