@@ -326,12 +326,27 @@ V3_EXTRA_CHARTS = [
     ]),
 ]
 
-# Report sets → each renders its own standalone HTML. Membership is a RULE, not a curated list
-# (owner decision): any lineage with "v3" in its name belongs to the v3 report and gets the v3-only
-# chart groups; everything else renders in the v2 report. New v3 arms added to the inventory land in
-# the v3 report automatically. ("v22-*" does not contain the substring "v3", so v2.2 stays in v2.)
+# Report sets → each renders its own standalone HTML. Membership is a RULE, not a curated list.
+# Any lineage with "v3" in its name is a v3 lineage (gets the v3-only chart groups + the vs-FoulPlay
+# section). The v3 lineages split into two standalone reports (owner decision):
+#   * v3_legacy  — the three original history-length arms (v3-k16/k32/k64), now retired. Bare arm
+#                  names with no variant suffix.
+#   * v3_ent_fix — the entropy-fix experiment variants (v3-k64-enthalf, v3-k64-eps-entq, and any
+#                  future v3 variant): every v3 lineage that is NOT one of the bare legacy arms.
+# ("v22-*" does not contain "v3", so v2.2 stays in v2.)
+LEGACY_V3_LINEAGES = {"v3-k16", "v3-k32", "v3-k64"}
+
+
 def is_v3(lineage):
     return "v3" in (lineage or "")
+
+
+def is_v3_legacy(lineage):
+    return lineage in LEGACY_V3_LINEAGES
+
+
+def is_v3_variant(lineage):
+    return is_v3(lineage) and lineage not in LEGACY_V3_LINEAGES
 
 
 def _traj_excluded(lineage, milestone):
@@ -695,12 +710,17 @@ tr.grp td{background:var(--card);color:var(--accent);font-weight:600;text-align:
 
 
 def build_html(rows, report_set="v2"):
-    # Each report set is a standalone HTML. v3 renders only the v3 lineages plus the v3-only chart
-    # groups; v2 renders everything else (minus the fully-excluded lineages).
-    if report_set == "v3":
-        rows = [r for r in rows if is_v3(r.get("lineage"))]
+    # Each report set is a standalone HTML. The two v3 sub-sets render only their lineages plus the
+    # v3-only chart groups + vs-FoulPlay section; v2 renders everything else (minus excluded lines).
+    is_v3_set = report_set in ("v3_legacy", "v3_ent_fix")
+    if report_set == "v3_legacy":
+        rows = [r for r in rows if is_v3_legacy(r.get("lineage"))]
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
-        title = "PokeZero checkpoint trait tracking — v3"
+        title = "PokeZero checkpoint trait tracking — v3 legacy (history-length arms)"
+    elif report_set == "v3_ent_fix":
+        rows = [r for r in rows if is_v3_variant(r.get("lineage"))]
+        charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
+        title = "PokeZero checkpoint trait tracking — v3 entropy-fix variants"
     else:
         rows = [r for r in rows if r.get("lineage") not in REPORT_EXCLUDE_LINEAGES
                 and not is_v3(r.get("lineage"))]
@@ -714,7 +734,7 @@ def build_html(rows, report_set="v2"):
             f'lineages: {esc(", ".join(sorted({r.get("lineage") for r in rows if r.get("lineage")})) or "none yet")}</p>']
     body.append(phase1_section(rows_self))
     body.append(phase2_trajectories(rows_self, charts))
-    if report_set == "v3":
+    if is_v3_set:
         # v3: the same chart categories measured in games AGAINST FoulPlay (500k checkpoints and
         # each arm's frontier as foul-play evals land). Only the bot seat is measured there, so the
         # rates read the same way as the self-play per-seat-game rates. Renders nothing until the
@@ -766,7 +786,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics-dir", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--set", default="v2", choices=["v2", "v3"], help="which report set to render")
+    ap.add_argument("--set", default="v2", choices=["v2", "v3_legacy", "v3_ent_fix"],
+                    help="which report set to render")
     args = ap.parse_args()
     rows = load(args.metrics_dir)
     open(args.out, "w").write(build_html(rows, report_set=args.set))
