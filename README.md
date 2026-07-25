@@ -85,6 +85,23 @@ python scripts/compare_root_puct_vs_foulplay.py --checkpoint <policy.pt> \
 head for leaf evaluation (see `pokezero.value_calibration`); omitted, search prices leaves with
 the checkpoint's raw value head.
 
+## Endgame Scenario Studio
+
+Build small, fully revealed Gen 3 randbats positions locally before evaluating a checkpoint or
+search policy. The studio is deliberately loopback-only: it lets you independently choose one to
+six exact source-valid Pokemon and sets for each side, select the active slots, set current HP,
+remaining PP, major status, active volatile effects, weather, Spikes, and timed side conditions,
+validate the resulting Custom Game boundary in Showdown, and save/load portable JSON scenarios.
+
+```bash
+pokezero-scenarios --showdown-root /path/to/pokemon-showdown
+```
+
+The command prints a `127.0.0.1` URL and opens it by default. Use `--no-browser` when launching
+from a shell-only environment. The initial regression scenarios live in
+[`scenarios/endgame/`](scenarios/endgame/); their authoring and verification contract is in
+[`docs/endgame_scenario_studio_plan.md`](docs/endgame_scenario_studio_plan.md).
+
 ## Public Prior/Belief Profile
 
 Capture a `pokezero.public-decision-corpus.v1` sidecar from controlled raw-policy FoulPlay games.

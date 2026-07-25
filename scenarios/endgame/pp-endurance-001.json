@@ -1,0 +1,119 @@
+{
+  "author_notes": "Synthetic fully revealed seed scenario. It materializes through Showdown, but its tactical claim remains unverified until manual review or a future proof artifact.",
+  "description": "Inspect the available root moves when recovery and attack PP are deliberately scarce.",
+  "format_id": "gen3customgame",
+  "knowledge_mode": "fully_revealed",
+  "objective": {
+    "expected_root_actions": [],
+    "kind": "best_move",
+    "max_plies": 1,
+    "principal_variation": [],
+    "verification": {
+      "artifact": null,
+      "engine": null,
+      "status": "unverified"
+    }
+  },
+  "perspective": "p1",
+  "provenance": {
+    "randbat_source_hash": "f9e35e1fddae5064",
+    "replay_proven": false
+  },
+  "scenario_id": "pp-endurance-001",
+  "schema_version": "endgame-scenario-v1",
+  "seed": 9104,
+  "side_to_move": "p1",
+  "source_format_id": "gen3randombattle",
+  "tags": [
+    "pp",
+    "rest",
+    "sleep-talk"
+  ],
+  "teams": {
+    "p1": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Torrent",
+          "current_hp": 89,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 82,
+          "max_hp": 246,
+          "moves": [
+            {
+              "id": "icebeam",
+              "max_pp": 16,
+              "pp": 2
+            },
+            {
+              "id": "rest",
+              "max_pp": 16,
+              "pp": 1
+            },
+            {
+              "id": "sleeptalk",
+              "max_pp": 16,
+              "pp": 1
+            },
+            {
+              "id": "surf",
+              "max_pp": 24,
+              "pp": 3
+            }
+          ],
+          "nature": "",
+          "species": "Blastoise",
+          "variant_id": "blastoise-1-variant-1"
+        }
+      ]
+    },
+    "p2": {
+      "active_slot": 0,
+      "construction_mode": "source-composed",
+      "generated_team_seed": null,
+      "pokemon": [
+        {
+          "ability": "Thick Fat",
+          "current_hp": 188,
+          "evs": {},
+          "gender": null,
+          "item": "Leftovers",
+          "ivs": {},
+          "level": 71,
+          "max_hp": 330,
+          "moves": [
+            {
+              "id": "bodyslam",
+              "max_pp": 24,
+              "pp": 24
+            },
+            {
+              "id": "curse",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "earthquake",
+              "max_pp": 16,
+              "pp": 16
+            },
+            {
+              "id": "rest",
+              "max_pp": 16,
+              "pp": 1
+            }
+          ],
+          "nature": "",
+          "species": "Snorlax",
+          "variant_id": "snorlax-3-variant-6"
+        }
+      ]
+    }
+  },
+  "title": "PP endurance"
+}

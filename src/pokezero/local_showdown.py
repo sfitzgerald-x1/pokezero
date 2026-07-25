@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
-from .dex import load_showdown_dex_cached
+from .dex import load_showdown_dex_cached, normalize_id
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -396,6 +396,24 @@ class LocalShowdownEnv:
             )
         self._reset(seed=seed, format_id=effective_format_id, start_override=start_override)
 
+    def generate_scenario_team(self, *, seed: int) -> tuple[Mapping[str, Any], ...]:
+        """Generate one complete Gen 3 randbats party through the warmed Showdown bridge."""
+
+        if not isinstance(seed, int):
+            raise ValueError("scenario team generation seed must be an integer.")
+        if self._process is None or self._process.poll() is not None:
+            # Starting any ordinary battle initializes the bridge process; generation itself is
+            # stateless and does not read the battle, so the temporary random-game shell is safe.
+            self.reset(seed=seed)
+        event = self._bridge_request_event(
+            {"type": "scenario_generate_team", "seed": seed},
+            "scenario_team_generated",
+        )
+        rows = event.get("team")
+        if not isinstance(rows, list) or len(rows) != 6 or not all(isinstance(row, Mapping) for row in rows):
+            raise LocalShowdownError(f"Bridge emitted malformed scenario team: {event!r}")
+        return tuple(_json_clone_mapping(row) for row in rows)
+
     def _reset(
         self,
         *,
@@ -620,6 +638,67 @@ class LocalShowdownEnv:
         self._belief_fed_count = len(replay.public_events)
         self._tier2_trackers = {}
         self._investment_trackers = {}
+
+    def materialize_scenario_state(self, *, scenario_state: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Apply a validated scenario patch and rebuild a synthetic public boundary.
+
+        This is intentionally a separate authoring seam from public-belief search materialization.
+        The bridge starts from the packed Custom Game teams already loaded in this environment and
+        accepts only typed active-slot, HP, PP, status, volatile, weather, and side-condition
+        values. It never receives a caller-supplied Showdown snapshot. The returned boundary is
+        represented as fully revealed synthetic protocol state so normal observation encoding and
+        legal-action handling stay paired with the materialized simulator world.
+        """
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot materialize a scenario before reset.")
+        event = self._bridge_request_event(
+            {
+                "type": "scenario_materialize",
+                "battleId": self._battle_token,
+                "scenarioState": dict(scenario_state),
+            },
+            "scenario_materialized",
+        )
+        requests = event.get("boundaryRequests")
+        state = event.get("state")
+        if not isinstance(requests, Mapping) or not isinstance(state, Mapping):
+            raise LocalShowdownError(f"Bridge emitted malformed scenario materialization: {event!r}")
+        direct_requests = _json_clone_requests(requests)
+        if set(direct_requests) != set(PLAYER_IDS):
+            raise LocalShowdownError("Scenario materialization did not produce both player requests.")
+        synthetic_lines = scenario_public_protocol_lines(state, direct_requests)
+        synthetic_parser = _ReplayParser(self._battle_id)
+        synthetic_parser.feed(synthetic_lines)
+        _seed_scenario_parser_state(synthetic_parser, state)
+        synthetic_replay = synthetic_parser.snapshot()
+        synthetic_belief = PublicBattleBeliefEngine.from_events(
+            synthetic_replay.public_events,
+            format_id=self._observation_format_id,
+            set_source=self._belief_set_source,
+        )
+        # The reveal ledger is intentionally retained in the belief engine, while the fabricated
+        # disclosure lines never become transition-history training features. Future real protocol
+        # lines are appended normally and incrementally folded into both objects.
+        self._parser = _ReplayParser.from_snapshot(
+            replace(synthetic_replay, public_events=(), public_lines=())
+        )
+        self._belief_engine = synthetic_belief
+        self._lines = list(synthetic_lines)
+        self._parsed_line_count = len(self._lines)
+        self._belief_fed_count = 0
+        self._latest_requests = direct_requests
+        self._first_requests = _json_clone_requests(direct_requests)
+        self._request_history = {
+            player: [_json_clone_mapping(request)] for player, request in direct_requests.items()
+        }
+        turn = state.get("turn")
+        self._latest_turn = int(turn) if isinstance(turn, int) else 1
+        self._terminal = None
+        self._last_step_had_error = False
+        self._tier2_trackers = {}
+        self._investment_trackers = {}
+        return event
 
     def snapshot(self) -> LocalShowdownSnapshot:
         """Capture a restorable snapshot of the current live battle.
@@ -1618,6 +1697,255 @@ def showdown_seed_from_int(seed: int) -> str:
 
 def requested_players_from_requests(requests: Mapping[PlayerId, Mapping[str, Any]]) -> tuple[PlayerId, ...]:
     return tuple(player for player in PLAYER_IDS if _is_actionable_request(requests.get(player)))
+
+
+def scenario_public_protocol_lines(
+    state: Mapping[str, Any],
+    requests: Mapping[PlayerId, Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Build a synthetic, fully revealed public root for a scenario-materialized battle.
+
+    The battle bridge owns the true simulator state. This compact disclosure prefix gives the
+    normal parser and belief engine the same active identities, HP, moves, abilities, items, and
+    PP ledger without pretending those synthetic reveal actions were real transition history.
+    Callers retain the belief result but clear the fabricated events before encoding history.
+    """
+
+    sides = state.get("sides")
+    if not isinstance(sides, Mapping):
+        raise LocalShowdownError("Scenario materialization state is missing sides.")
+    lines: list[str] = [
+        f"|player|p1|{_DEFAULT_PLAYER_NAMES['p1']}|",
+        f"|player|p2|{_DEFAULT_PLAYER_NAMES['p2']}|",
+    ]
+    active_rows: dict[PlayerId, Mapping[str, Any]] = {}
+    for player in PLAYER_IDS:
+        side = sides.get(player)
+        if not isinstance(side, Mapping):
+            raise LocalShowdownError(f"Scenario materialization state is missing {player}.")
+        pokemon_rows = side.get("pokemon")
+        active_slot = side.get("activeSlot")
+        if not isinstance(pokemon_rows, list) or not isinstance(active_slot, int):
+            raise LocalShowdownError(f"Scenario materialization state has malformed {player} Pokemon.")
+        if active_slot < 0 or active_slot >= len(pokemon_rows):
+            raise LocalShowdownError(f"Scenario materialization state has an invalid {player} active slot.")
+        opponent = "p2" if player == "p1" else "p1"
+        target = f"{opponent}a: scenario-target"
+        for row in pokemon_rows:
+            if not isinstance(row, Mapping):
+                raise LocalShowdownError(f"Scenario materialization state has an invalid {player} Pokemon row.")
+            species = _scenario_protocol_field(row.get("species"), "species")
+            details = _scenario_protocol_field(row.get("details"), "details")
+            hp = row.get("hp")
+            max_hp = row.get("maxHp")
+            fainted = row.get("fainted")
+            if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
+                raise LocalShowdownError(f"Scenario materialization state has invalid HP for {player} {species}.")
+            condition = _scenario_condition(row, player, species)
+            ident = f"{player}a: {species}"
+            lines.append(f"|switch|{ident}|{details}|{condition}")
+            ability = _scenario_protocol_optional_field(row.get("ability"), "ability")
+            if ability:
+                lines.append(f"|-ability|{ident}|{ability}")
+            item = _scenario_protocol_optional_field(row.get("item"), "item")
+            if item:
+                lines.append(f"|-item|{ident}|{item}")
+            moves = row.get("moves")
+            if not isinstance(moves, list):
+                raise LocalShowdownError(f"Scenario materialization state has invalid moves for {player} {species}.")
+            for move in moves:
+                if not isinstance(move, Mapping):
+                    raise LocalShowdownError(f"Scenario materialization state has an invalid move for {player} {species}.")
+                move_id = _scenario_protocol_field(move.get("id"), "move id")
+                pp = move.get("pp")
+                max_pp = move.get("maxPp")
+                if not isinstance(pp, int) or not isinstance(max_pp, int) or pp < 0 or max_pp < pp:
+                    raise LocalShowdownError(f"Scenario materialization state has invalid PP for {player} {move_id}.")
+                # Plain ``|move|`` lines charge one PP in the normal belief ledger. Emit the
+                # exact number of charged uses first, then a Sleep-Talk-called synthetic reveal:
+                # that protocol form proves the move belongs to the set while charging none of
+                # the callee's PP. This preserves exact opponent PP even when it is still full.
+                for _ in range(max_pp - pp):
+                    lines.append(f"|move|{ident}|{move_id}|{target}")
+                lines.append(f"|move|{ident}|{move_id}|{target}|[from] move: Sleep Talk")
+        active_row = pokemon_rows[active_slot]
+        if not isinstance(active_row, Mapping):
+            raise LocalShowdownError(f"Scenario materialization state has no active {player} row.")
+        active_rows[player] = active_row
+    for player in PLAYER_IDS:
+        active_row = active_rows[player]
+        species = _scenario_protocol_field(active_row.get("species"), "species")
+        details = _scenario_protocol_field(active_row.get("details"), "details")
+        hp = active_row.get("hp")
+        max_hp = active_row.get("maxHp")
+        fainted = active_row.get("fainted")
+        if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
+            raise LocalShowdownError(f"Scenario materialization state has invalid active HP for {player}.")
+        condition = _scenario_condition(active_row, player, species)
+        lines.append(f"|switch|{player}a: {species}|{details}|{condition}")
+    field = state.get("field")
+    if not isinstance(field, Mapping):
+        raise LocalShowdownError("Scenario materialization state is missing field conditions.")
+    weather = _scenario_protocol_optional_field(field.get("weather"), "weather")
+    if weather:
+        suffix = "|[from] ability: scenario" if field.get("permanent") is True else ""
+        lines.append(f"|-weather|{weather}{suffix}")
+    for player in PLAYER_IDS:
+        side = sides[player]
+        assert isinstance(side, Mapping)
+        side_conditions = side.get("sideConditions")
+        if not isinstance(side_conditions, Mapping):
+            raise LocalShowdownError(f"Scenario materialization state has invalid {player} side conditions.")
+        for raw_name, raw_value in sorted(side_conditions.items()):
+            name = _scenario_protocol_field(raw_name, "side condition")
+            if not isinstance(raw_value, int) or raw_value < 1:
+                raise LocalShowdownError(
+                    f"Scenario materialization state has invalid {player} {name}."
+                )
+            repeats = raw_value if normalize_id(name) == "spikes" else 1
+            for _ in range(repeats):
+                lines.append(f"|-sidestart|{player}: scenario|{name}")
+        active_volatiles = side.get("activeVolatiles")
+        if not isinstance(active_volatiles, list):
+            raise LocalShowdownError(f"Scenario materialization state has invalid {player} volatiles.")
+        species = _scenario_protocol_field(active_rows[player].get("species"), "species")
+        for volatile in active_volatiles:
+            if not isinstance(volatile, Mapping):
+                raise LocalShowdownError(
+                    f"Scenario materialization state has an invalid {player} volatile."
+                )
+            name = _scenario_protocol_field(volatile.get("id"), "volatile")
+            lines.append(f"|-start|{player}a: {species}|{name}")
+    lines.append(f"|turn|{int(state.get('turn') or 1)}")
+    for player in PLAYER_IDS:
+        request = requests.get(player)
+        if not isinstance(request, Mapping):
+            raise LocalShowdownError(f"Scenario materialization did not return a {player} request.")
+        lines.append(f"|request|{json.dumps(request, separators=(',', ':'))}")
+    return tuple(lines)
+
+
+def _scenario_condition(row: Mapping[str, Any], player: str, species: str) -> str:
+    hp = row.get("hp")
+    max_hp = row.get("maxHp")
+    fainted = row.get("fainted")
+    if not isinstance(hp, int) or not isinstance(max_hp, int) or not isinstance(fainted, bool):
+        raise LocalShowdownError(f"Scenario materialization state has invalid HP for {player} {species}.")
+    if fainted:
+        return "0 fnt"
+    status = row.get("status")
+    if not isinstance(status, Mapping):
+        raise LocalShowdownError(
+            f"Scenario materialization state has invalid status for {player} {species}."
+        )
+    status_id = _scenario_protocol_optional_field(status.get("id"), "status")
+    return f"{hp}/{max_hp}{f' {status_id}' if status_id else ''}"
+
+
+def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any]) -> None:
+    """Latch exact public counters that compact synthetic protocol cannot reconstruct alone."""
+
+    turn = state.get("turn")
+    sides = state.get("sides")
+    field = state.get("field")
+    if not isinstance(turn, int) or not isinstance(sides, Mapping) or not isinstance(field, Mapping):
+        raise LocalShowdownError("Scenario materialization returned malformed condition state.")
+    weather = normalize_id(str(field.get("weather") or ""))
+    turns_remaining = field.get("turnsRemaining")
+    permanent = field.get("permanent")
+    if not isinstance(turns_remaining, int) or not isinstance(permanent, bool):
+        raise LocalShowdownError("Scenario materialization returned malformed weather state.")
+    parser.weather = weather
+    parser.weather_from_ability = bool(weather and permanent)
+    parser.weather_set_turn = turn if weather else None
+    parser.weather_upkeeps = 0 if permanent else max(0, 5 - turns_remaining)
+
+    for player in PLAYER_IDS:
+        side = sides.get(player)
+        if not isinstance(side, Mapping):
+            raise LocalShowdownError(f"Scenario materialization returned malformed {player} state.")
+        side_conditions = side.get("sideConditions")
+        if not isinstance(side_conditions, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} side conditions."
+            )
+        parser.side_condition_counts[player] = {}
+        parser.side_condition_set_turns[player] = {}
+        for raw_name, raw_value in side_conditions.items():
+            name = normalize_id(str(raw_name))
+            if not name or not isinstance(raw_value, int) or raw_value < 1:
+                raise LocalShowdownError(
+                    f"Scenario materialization returned malformed {player} {raw_name}."
+                )
+            parser.side_condition_counts[player][name] = raw_value if name == "spikes" else 1
+            if name != "spikes":
+                parser.side_condition_set_turns[player][name] = turn - (5 - raw_value)
+
+        active_volatiles = side.get("activeVolatiles")
+        pokemon = side.get("pokemon")
+        active_slot = side.get("activeSlot")
+        if (
+            not isinstance(active_volatiles, list)
+            or not isinstance(pokemon, list)
+            or not isinstance(active_slot, int)
+            or not 0 <= active_slot < len(pokemon)
+        ):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active state."
+            )
+        by_id: dict[str, Mapping[str, Any]] = {}
+        for item in active_volatiles:
+            if not isinstance(item, Mapping):
+                raise LocalShowdownError(
+                    f"Scenario materialization returned malformed {player} volatile."
+                )
+            volatile_id = normalize_id(str(item.get("id") or ""))
+            if not volatile_id or volatile_id in by_id:
+                raise LocalShowdownError(
+                    f"Scenario materialization returned duplicate or invalid {player} volatile."
+                )
+            by_id[volatile_id] = item
+        parser.volatiles[player] = set(by_id)
+        parser.confusion_elapsed[player] = int(
+            by_id.get("confusion", {}).get("turnsElapsed") or 0
+        )
+        parser.encore_elapsed[player] = int(by_id.get("encore", {}).get("turnsElapsed") or 0)
+        parser.wrap_trap_elapsed[player] = 0
+        if "leechseed" in by_id:
+            parser.leech_seed_source_sides[player] = "p2" if player == "p1" else "p1"
+        else:
+            parser.leech_seed_source_sides.pop(player, None)
+
+        active = pokemon[active_slot]
+        if not isinstance(active, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active Pokemon."
+            )
+        status = active.get("status")
+        if not isinstance(status, Mapping):
+            raise LocalShowdownError(
+                f"Scenario materialization returned malformed {player} active status."
+            )
+        parser.toxic_stage[player] = (
+            int(status.get("toxicStage") or 0)
+            if normalize_id(str(status.get("id") or "")) == "tox"
+            else 0
+        )
+
+
+def _scenario_protocol_field(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise LocalShowdownError(f"Scenario materialization state has an invalid {label}.")
+    normalized = value.strip()
+    if "|" in normalized or "\n" in normalized or "\r" in normalized:
+        raise LocalShowdownError(f"Scenario materialization state has an unsafe {label}.")
+    return normalized
+
+
+def _scenario_protocol_optional_field(value: Any, label: str) -> str | None:
+    if value is None or value == "":
+        return None
+    return _scenario_protocol_field(value, label)
 
 
 def _start_players_payload(start_override: BattleStartOverride | None) -> dict[PlayerId, str | dict[str, str]]:

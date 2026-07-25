@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PokeZero Endgame Scenario Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">PokeZero local tooling</p>
+          <h1>Endgame Scenario Studio</h1>
+          <p class="subtitle">Build a constrained randbats position, then ask a checkpoint what it sees.</p>
+        </div>
+        <div class="provenance" id="source-provenance">Loading pinned source...</div>
+      </header>
+
+      <section class="command-bar" aria-label="Scenario commands">
+        <div class="command-group">
+          <label>Scenario file <input id="slug-input" placeholder="my-endgame" /></label>
+          <button id="new-button" class="quiet">New</button>
+          <button id="duplicate-button" class="quiet">Duplicate</button>
+          <button id="validate-button">Validate</button>
+          <button id="save-button" class="accent">Save</button>
+          <button id="export-button" class="quiet">Export JSON</button>
+          <label class="file-button quiet">Import JSON <input id="import-input" type="file" accept="application/json" /></label>
+        </div>
+        <div class="command-group load-group">
+          <label>Saved scenarios <select id="scenario-select"><option value="">Load a scenario...</option></select></label>
+          <button id="load-button" class="quiet">Load</button>
+        </div>
+      </section>
+
+      <section class="metadata card">
+        <div class="section-heading"><span>Scenario brief</span><div id="validation-badges" class="badges"></div></div>
+        <div class="metadata-grid">
+          <label>Scenario ID <input id="scenario-id" placeholder="forced-win-001" /></label>
+          <label>Title <input id="scenario-title" placeholder="The one move that wins" /></label>
+          <label>Tags <input id="scenario-tags" placeholder="pp-race, priority" /></label>
+          <label>Perspective
+            <select id="perspective"><option value="p1">p1</option><option value="p2">p2</option></select>
+          </label>
+          <label>Side to move
+            <select id="side-to-move"><option value="p1">p1</option><option value="p2">p2</option></select>
+          </label>
+          <label>Seed <input id="scenario-seed" type="number" min="0" step="1" /></label>
+          <label>Battle turn <input id="scenario-turn" type="number" min="1" step="1" /></label>
+        </div>
+        <label class="wide">Description <textarea id="scenario-description" rows="2" placeholder="What makes this line forced?"></textarea></label>
+      </section>
+
+      <section class="field-card card">
+        <div class="section-heading"><span>Battlefield</span><span class="microcopy">Exact Gen 3 request-boundary state</span></div>
+        <div class="field-controls">
+          <label>Weather
+            <select id="field-weather">
+              <option value="">Clear</option>
+              <option value="raindance">Rain</option>
+              <option value="sunnyday">Sun</option>
+              <option value="sandstorm">Sandstorm</option>
+              <option value="hail">Hail</option>
+            </select>
+          </label>
+          <label>Turns remaining <input id="field-weather-turns" type="number" min="1" max="5" /></label>
+          <label class="check-label"><input id="field-weather-permanent" type="checkbox" /> Ability-set / permanent</label>
+          <p class="field-note">Side-specific Spikes and screens are set beside each roster. Active volatile effects are tied to the selected active Pokemon.</p>
+        </div>
+      </section>
+
+      <section class="team-grid" id="team-grid" aria-label="Scenario teams"></section>
+
+      <section class="lower-grid">
+        <section class="card objective-card">
+          <div class="section-heading"><span>Target line</span><span class="microcopy">Author assertion, not yet a solver proof</span></div>
+          <div class="metadata-grid compact">
+            <label>Objective
+              <select id="objective-kind">
+                <option value="forced_win">Forced win</option>
+                <option value="best_move">Best move</option>
+                <option value="survival">Survival</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label>Max plies <input id="objective-plies" type="number" min="1" value="6" /></label>
+            <label>Proof status
+              <select id="objective-status">
+                <option value="unverified">Unverified</option>
+                <option value="manual">Manually checked</option>
+                <option value="engine_exhaustive">Engine exhaustive</option>
+                <option value="probabilistic">Probabilistic</option>
+              </select>
+            </label>
+          </div>
+          <label class="wide">Expected root action labels <input id="expected-actions" placeholder="move:Surf, switch:Snorlax" /></label>
+          <label class="wide">Principal variation <textarea id="principal-variation" rows="3" placeholder="One action label per line"></textarea></label>
+          <label class="wide">Author notes <textarea id="author-notes" rows="3" placeholder="Why does this line win? What should a reviewer verify?"></textarea></label>
+        </section>
+
+        <section class="card readout-card">
+          <div class="section-heading"><span>Showdown readout</span><span class="microcopy">Validation creates a synthetic, fully revealed root</span></div>
+          <div id="readout" class="empty-state">Validate a scenario to inspect legal actions and materialized state.</div>
+          <div class="evaluate-row">
+            <label>Checkpoint path <input id="checkpoint-path" placeholder="/path/to/checkpoint.pt" /></label>
+            <button id="evaluate-button" class="quiet">Rank root actions</button>
+          </div>
+          <div id="evaluation" class="evaluation"></div>
+        </section>
+      </section>
+
+      <section class="notice" id="notice" role="status" aria-live="polite"></section>
+    </main>
+    <template id="pokemon-template"></template>
+    <script src="/app.js"></script>
+  </body>
+</html>

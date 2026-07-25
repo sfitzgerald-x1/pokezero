@@ -374,6 +374,205 @@ class BranchObservationTimingTest(unittest.TestCase):
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
 class LocalShowdownIntegrationTest(unittest.TestCase):
+    def test_scenario_materialization_latches_active_hp_pp_and_can_step(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),
+                        FixturePokemon(species="Rattata", ability="Run Away", moves=("Tackle", "Quick Attack")),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),
+                        FixturePokemon(species="Pidgey", ability="Keen Eye", moves=("Gust", "Tackle")),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=71, start_override=start_override)
+            initial = env.snapshot().bridge_snapshot["battle"]
+            state = {"sides": {}}
+            for side_index, side_id in enumerate(("p1", "p2")):
+                rows = initial["sides"][side_index]["pokemon"]
+                state["sides"][side_id] = {
+                    "activeSlot": 1 if side_id == "p1" else 0,
+                    "pokemon": [
+                        {
+                            "slot": slot,
+                            "hp": pokemon["maxhp"] - (slot + 7),
+                            "moves": [
+                                {"id": move["id"], "pp": max(0, move["pp"] - slot - 1)}
+                                for move in pokemon["moveSlots"]
+                            ],
+                        }
+                        for slot, pokemon in enumerate(rows)
+                    ],
+                }
+
+            event = env.materialize_scenario_state(scenario_state=state)
+            self.assertEqual(event["state"]["sides"]["p1"]["pokemon"][0]["species"], "Rattata")
+            self.assertEqual(event["state"]["sides"]["p1"]["pokemon"][0]["hp"], state["sides"]["p1"]["pokemon"][1]["hp"])
+            self.assertEqual(
+                event["state"]["sides"]["p1"]["pokemon"][0]["moves"][0]["pp"],
+                state["sides"]["p1"]["pokemon"][1]["moves"][0]["pp"],
+            )
+            p1_state = env._state_for_player("p1")
+            self.assertEqual(p1_state.self_active.species, "Rattata")
+            self.assertEqual(
+                p1_state.self_active.condition,
+                f"{state['sides']['p1']['pokemon'][1]['hp']}/{initial['sides'][0]['pokemon'][1]['maxhp']}",
+            )
+            self.assertEqual(len(p1_state.opponent_team), 2)
+            revealed_opponent = {pokemon.species: pokemon for pokemon in p1_state.opponent_team}
+            self.assertEqual(set(revealed_opponent["Squirtle"].moves), {"watergun", "tackle"})
+            self.assertEqual(revealed_opponent["Squirtle"].ability, "torrent")
+            squirtle_belief = p1_state.belief_view.opponent_by_species()["squirtle"]
+            self.assertEqual(
+                dict(squirtle_belief.move_uses),
+                {
+                    move["id"]: initial["sides"][1]["pokemon"][0]["moveSlots"][index]["maxpp"] - move["pp"]
+                    for index, move in enumerate(state["sides"]["p2"]["pokemon"][0]["moves"])
+                },
+            )
+            self.assertFalse(p1_state.recent_events)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+
+            post = env.snapshot().bridge_snapshot["battle"]
+            self.assertEqual(post["sides"][0]["pokemon"][0]["hp"], state["sides"]["p1"]["pokemon"][1]["hp"])
+            self.assertEqual(
+                post["sides"][0]["pokemon"][0]["moveSlots"][0]["pp"],
+                state["sides"]["p1"]["pokemon"][1]["moves"][0]["pp"],
+            )
+            result = env.step({"p1": 0, "p2": 0})
+            self.assertIsNone(result.terminal)
+
+    def test_scenario_materialization_rejects_invalid_hp_without_mutating_battle(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team((FixturePokemon(species="Charmander", moves=("Ember", "Tackle")),)),
+                "p2": pack_team((FixturePokemon(species="Squirtle", moves=("Water Gun", "Tackle")),)),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=73, start_override=start_override)
+            before = env.snapshot().bridge_snapshot["battle"]
+            max_hp = before["sides"][0]["pokemon"][0]["maxhp"]
+            state = {
+                "sides": {
+                    "p1": {
+                        "activeSlot": 0,
+                        "pokemon": [{"slot": 0, "hp": max_hp + 1, "moves": [{"id": "ember", "pp": 24}, {"id": "tackle", "pp": 56}]}],
+                    },
+                    "p2": {
+                        "activeSlot": 0,
+                        "pokemon": [{"slot": 0, "hp": before["sides"][1]["pokemon"][0]["maxhp"], "moves": [{"id": "watergun", "pp": 40}, {"id": "tackle", "pp": 56}]}],
+                    },
+                }
+            }
+            with self.assertRaisesRegex(LocalShowdownError, "invalid HP"):
+                env.materialize_scenario_state(scenario_state=state)
+            after = env.snapshot().bridge_snapshot["battle"]
+            self.assertEqual(after["sides"][0]["pokemon"][0]["hp"], before["sides"][0]["pokemon"][0]["hp"])
+
+    def test_scenario_materialization_restores_conditions_and_steps(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=79, start_override=start_override)
+            before = env.snapshot().bridge_snapshot["battle"]
+            p1 = before["sides"][0]["pokemon"][0]
+            p2 = before["sides"][1]["pokemon"][0]
+            state = {
+                "turn": 12,
+                "field": {"weather": "sandstorm", "turnsRemaining": 2, "permanent": False},
+                "sides": {
+                    "p1": {
+                        "activeSlot": 0,
+                        "sideConditions": {"spikes": 2, "reflect": 3},
+                        "activeVolatiles": [
+                            {"id": "substitute", "hp": p1["maxhp"] // 4},
+                            {"id": "focusenergy"},
+                        ],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": p1["maxhp"],
+                                "status": {
+                                    "id": "par",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": None,
+                                },
+                                "moves": [{"id": move["id"], "pp": move["pp"]} for move in p1["moveSlots"]],
+                            }
+                        ],
+                    },
+                    "p2": {
+                        "activeSlot": 0,
+                        "sideConditions": {"lightscreen": 2},
+                        "activeVolatiles": [
+                            {"id": "confusion", "turnsRemaining": 2, "turnsElapsed": 1},
+                            {"id": "leechseed"},
+                        ],
+                        "pokemon": [
+                            {
+                                "slot": 0,
+                                "hp": p2["maxhp"],
+                                "status": {
+                                    "id": "tox",
+                                    "sleepTurnsRemaining": None,
+                                    "toxicStage": 3,
+                                },
+                                "moves": [{"id": move["id"], "pp": move["pp"]} for move in p2["moveSlots"]],
+                            }
+                        ],
+                    },
+                },
+            }
+
+            event = env.materialize_scenario_state(scenario_state=state)
+            bridge = env.snapshot().bridge_snapshot["battle"]
+            p1_state = env._state_for_player("p1")
+
+            self.assertEqual(event["state"]["field"]["weather"], "sandstorm")
+            self.assertEqual(bridge["field"]["weather"], "sandstorm")
+            self.assertEqual(bridge["field"]["weatherState"]["duration"], 2)
+            self.assertEqual(bridge["sides"][0]["sideConditions"]["spikes"]["layers"], 2)
+            self.assertEqual(bridge["sides"][0]["sideConditions"]["reflect"]["duration"], 3)
+            self.assertEqual(bridge["sides"][0]["pokemon"][0]["status"], "par")
+            self.assertEqual(bridge["sides"][1]["pokemon"][0]["statusState"]["stage"], 3)
+            self.assertEqual(bridge["sides"][0]["pokemon"][0]["volatiles"]["substitute"]["hp"], p1["maxhp"] // 4)
+            self.assertEqual(bridge["sides"][1]["pokemon"][0]["volatiles"]["confusion"]["time"], 2)
+            self.assertEqual(p1_state.weather, "sandstorm")
+            self.assertEqual(p1_state.self_side_condition_counts["spikes"], 2)
+            self.assertEqual(p1_state.self_timed_condition_turns["reflect"], 3)
+            self.assertEqual(p1_state.opponent_toxic_stage, 3)
+            self.assertEqual(p1_state.opponent_confusion_elapsed, 1)
+            self.assertIn("substitute", p1_state.self_active_volatiles)
+            self.assertIn("leechseed", p1_state.opponent_active_volatiles)
+
+            result = env.step({"p1": 1, "p2": 1})
+            self.assertIsNone(result.terminal)
+
     def test_reset_with_start_override_runs_custom_game_with_injected_teams(self) -> None:
         config = integration_config()
         assert config is not None

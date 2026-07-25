@@ -30,8 +30,9 @@ if (!showdownRoot) {
 let BattleStream;
 let getPlayerStreams;
 let State;
+let Teams;
 try {
-  ({ BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
   ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
 } catch (error) {
   emit({
@@ -391,6 +392,465 @@ function materializeBattle(command) {
     requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
+}
+
+function materializeScenarioBattle(command) {
+  const startedAt = process.hrtime.bigint();
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  const scenarioState = command.scenarioState;
+  if (!scenarioState || typeof scenarioState !== "object" || Array.isArray(scenarioState)) {
+    throw new Error("Scenario materialization requires a scenarioState object.");
+  }
+
+  // Scenario authoring may set only the current battle boundary. It must never accept a
+  // browser-supplied serialized Showdown world, which would bypass all simulator invariants.
+  const snapshot = State.serializeBattle(battle.battleStream.battle);
+  if (normalizeId(snapshot.formatid) !== "gen3customgame") {
+    throw new Error("Scenario materialization requires a gen3customgame battle.");
+  }
+  applyScenarioState(snapshot, scenarioState);
+
+  const send = battle.battleStream.battle.send;
+  battle.battleStream.battle = State.deserializeBattle(snapshot);
+  battle.battleStream.battle.restart(send);
+  battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  battle.readyScheduled = false;
+  battle.terminalScheduled = false;
+  battle.tRecv = null;
+  emit({
+    type: "scenario_materialized",
+    battleId: battle.battleId,
+    boundaryRequests: battle.boundaryRequests,
+    state: scenarioStateSummary(battle.battleStream.battle, scenarioState),
+    requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
+function generateScenarioTeam(command) {
+  const startedAt = process.hrtime.bigint();
+  if (!Number.isInteger(command.seed)) {
+    throw new Error("Scenario team generation requires an integer seed.");
+  }
+  if (!Teams || typeof Teams.generate !== "function") {
+    throw new Error("Pokemon Showdown does not expose Teams.generate for scenario generation.");
+  }
+  const parts = deriveSeed(String(command.seed), "scenario-team")
+    .split(",")
+    .map(part => Number(part));
+  const team = Teams.generate("gen3randombattle", {seed: parts});
+  if (!Array.isArray(team) || team.length !== 6) {
+    throw new Error("Pokemon Showdown did not generate a complete Gen 3 random-battle team.");
+  }
+  emit({
+    type: "scenario_team_generated",
+    seed: command.seed,
+    team: team.map(set => ({
+      species: set.species || set.name || "",
+      moves: Array.isArray(set.moves) ? set.moves : [],
+      ability: set.ability || "",
+      item: set.item || "",
+      level: set.level || 100,
+      nature: set.nature || "",
+      gender: set.gender || "",
+      evs: set.evs || {},
+      ivs: set.ivs || {},
+    })),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
+const SCENARIO_STATUS_IDS = new Set(["", "brn", "par", "psn", "tox", "slp", "frz"]);
+const SCENARIO_WEATHER_IDS = new Set(["", "raindance", "sunnyday", "sandstorm", "hail"]);
+const SCENARIO_TIMED_VOLATILES = new Set(["confusion", "taunt", "encore", "disable", "yawn", "perishsong"]);
+const SCENARIO_STATIC_VOLATILES = new Set([
+  "torment", "ingrain", "focusenergy", "flashfire", "mudsport", "watersport",
+]);
+const SCENARIO_SOURCE_VOLATILES = new Set(["leechseed", "attract", "nightmare", "curse", "yawn"]);
+const SCENARIO_SIDE_CONDITION_LIMITS = new Map([
+  ["spikes", 3],
+  ["reflect", 5],
+  ["lightscreen", 5],
+  ["safeguard", 5],
+  ["mist", 5],
+]);
+
+function applyScenarioState(snapshot, scenarioState) {
+  const expectedKeys = ["field", "sides", "turn"];
+  if (Object.keys(scenarioState).some(key => !expectedKeys.includes(key))) {
+    throw new Error("Scenario materialization received unsupported top-level fields.");
+  }
+  if (!scenarioState.sides || typeof scenarioState.sides !== "object" || Array.isArray(scenarioState.sides)) {
+    throw new Error("Scenario materialization requires both sides.");
+  }
+  const extraSideKeys = Object.keys(scenarioState.sides).filter(sideId => !["p1", "p2"].includes(sideId));
+  if (extraSideKeys.length || !scenarioState.sides.p1 || !scenarioState.sides.p2) {
+    throw new Error("Scenario materialization requires exactly p1 and p2 sides.");
+  }
+  if (scenarioState.turn !== undefined && (!Number.isInteger(scenarioState.turn) || scenarioState.turn < 1)) {
+    throw new Error("Scenario materialization turn must be a positive integer.");
+  }
+
+  // Scenario authoring is restricted to a clean request boundary. The typed condition patch below
+  // restores only state whose public observation and simulator effect shape are both defined.
+  snapshot.turn = scenarioState.turn ?? 1;
+  snapshot.requestState = "move";
+  snapshot.lastMove = null;
+  snapshot.lastMoveLine = 0;
+  snapshot.lastSuccessfulMoveThisTurn = null;
+  snapshot.lastDamage = 0;
+  snapshot.midTurn = false;
+  snapshot.queue = [];
+  snapshot.faintQueue = [];
+  snapshot.activeMove = null;
+  snapshot.activePokemon = null;
+  snapshot.activeTarget = null;
+  applyScenarioField(
+    snapshot.field,
+    scenarioState.field ?? {weather: "", turnsRemaining: 0, permanent: false},
+  );
+  snapshot.field.pseudoWeather = {};
+
+  for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
+    const scenarioSide = scenarioState.sides[sideId];
+    const serializedSide = snapshot.sides?.[sideIndex];
+    if (!scenarioSide || typeof scenarioSide !== "object" || Array.isArray(scenarioSide) || !serializedSide) {
+      throw new Error(`Scenario materialization is missing ${sideId}.`);
+    }
+    const expectedSideKeys = ["activeSlot", "activeVolatiles", "pokemon", "sideConditions"];
+    if (Object.keys(scenarioSide).some(key => !expectedSideKeys.includes(key))) {
+      throw new Error(`Scenario materialization received unsupported ${sideId} fields.`);
+    }
+    const rows = scenarioSide.pokemon;
+    if (!Array.isArray(rows) || rows.length !== serializedSide.pokemon.length || rows.length < 1) {
+      throw new Error(`Scenario materialization requires one row for every ${sideId} Pokemon.`);
+    }
+    const activeSlot = scenarioSide.activeSlot;
+    if (!Number.isInteger(activeSlot) || activeSlot < 0 || activeSlot >= rows.length) {
+      throw new Error(`Scenario materialization received an invalid active slot for ${sideId}.`);
+    }
+    const seenSlots = new Set();
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error(`Scenario materialization received an invalid ${sideId} Pokemon row.`);
+      }
+      if (!Number.isInteger(row.slot) || row.slot < 0 || row.slot >= rows.length || seenSlots.has(row.slot)) {
+        throw new Error(`Scenario materialization received invalid ${sideId} Pokemon slots.`);
+      }
+      seenSlots.add(row.slot);
+      const pokemon = serializedSide.pokemon[row.slot];
+      if (!Number.isInteger(row.hp) || row.hp < 0 || row.hp > pokemon.maxhp) {
+        throw new Error(`Scenario materialization received invalid HP for ${sideId} slot ${row.slot}.`);
+      }
+      applyScenarioPokemonState(pokemon, row, sideId);
+    }
+    if (seenSlots.size !== rows.length) {
+      throw new Error(`Scenario materialization did not cover every ${sideId} Pokemon.`);
+    }
+    const active = serializedSide.pokemon[activeSlot];
+    if (!active || active.fainted || active.hp <= 0) {
+      throw new Error(`Scenario materialization requires a living active ${sideId} Pokemon.`);
+    }
+    if (!serializedSide.pokemon.some(pokemon => !pokemon.fainted && pokemon.hp > 0)) {
+      throw new Error(`Scenario materialization requires a living ${sideId} Pokemon.`);
+    }
+    moveActivePokemonToFront(serializedSide, activeSlot);
+    serializedSide.active = [`[Pokemon:${sideId}a]`];
+    applyScenarioSideConditions(serializedSide, scenarioSide.sideConditions ?? {}, sideId);
+    applyScenarioVolatiles(
+      serializedSide.pokemon[0],
+      scenarioSide.activeVolatiles ?? [],
+      sideId,
+    );
+    serializedSide.slotConditions = [{}];
+    serializedSide.pokemonLeft = serializedSide.pokemon.filter(pokemon => !pokemon.fainted).length;
+    serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
+    delete serializedSide.activeRequest;
+  }
+}
+
+function applyScenarioPokemonState(pokemon, row, sideId) {
+  const expectedKeys = ["slot", "hp", "moves", "status"];
+  const extraKeys = Object.keys(row).filter(key => !expectedKeys.includes(key));
+  if (extraKeys.length) {
+    throw new Error(`Scenario materialization received unsupported ${sideId} Pokemon fields.`);
+  }
+  pokemon.hp = row.hp;
+  pokemon.fainted = row.hp === 0;
+  applyScenarioStatus(
+    pokemon,
+    row.status ?? {id: "", sleepTurnsRemaining: null, toxicStage: null},
+    sideId,
+    row.slot,
+  );
+  pokemon.boosts = normalizedBoosts(null);
+  pokemon.volatiles = {};
+  pokemon.lastMove = null;
+  pokemon.lastMoveUsed = null;
+  pokemon.attackedBy = [];
+  pokemon.lastDamage = 0;
+  pokemon.activeMoveActions = 0;
+  pokemon.moveThisTurn = "";
+  pokemon.switchFlag = false;
+  pokemon.forceSwitchFlag = false;
+  pokemon.isActive = false;
+
+  if (!Array.isArray(row.moves) || row.moves.length !== pokemon.moveSlots.length) {
+    throw new Error(`Scenario materialization requires every move PP for ${sideId} slot ${row.slot}.`);
+  }
+  const seenMoves = new Set();
+  const seenMoveSlots = new Set();
+  for (const moveState of row.moves) {
+    if (!moveState || typeof moveState !== "object" || Array.isArray(moveState) ||
+        typeof moveState.id !== "string" || !Number.isInteger(moveState.pp)) {
+      throw new Error(`Scenario materialization received invalid move PP for ${sideId} slot ${row.slot}.`);
+    }
+    const moveId = normalizeId(moveState.id);
+    if (!moveId || seenMoves.has(moveId)) {
+      throw new Error(`Scenario materialization received duplicate or invalid moves for ${sideId} slot ${row.slot}.`);
+    }
+    seenMoves.add(moveId);
+    const moveSlot = pokemon.moveSlots.find(slot => scenarioMoveIdsMatch(normalizeId(slot.id), moveId));
+    if (!moveSlot || moveState.pp < 0 || moveState.pp > moveSlot.maxpp) {
+      throw new Error(`Scenario materialization received invalid PP for ${sideId} ${moveState.id}.`);
+    }
+    if (seenMoveSlots.has(moveSlot)) {
+      throw new Error(`Scenario materialization received duplicate move slots for ${sideId} slot ${row.slot}.`);
+    }
+    seenMoveSlots.add(moveSlot);
+    moveSlot.pp = moveState.pp;
+    moveSlot.disabled = false;
+    moveSlot.disabledSource = "";
+    moveSlot.used = moveState.pp < moveSlot.maxpp;
+  }
+}
+
+function applyScenarioStatus(pokemon, rawStatus, sideId, slot) {
+  if (!rawStatus || typeof rawStatus !== "object" || Array.isArray(rawStatus)) {
+    throw new Error(`Scenario materialization requires a status object for ${sideId} slot ${slot}.`);
+  }
+  const expectedKeys = ["id", "sleepTurnsRemaining", "toxicStage"];
+  if (Object.keys(rawStatus).some(key => !expectedKeys.includes(key))) {
+    throw new Error(`Scenario materialization received unsupported status fields for ${sideId} slot ${slot}.`);
+  }
+  const status = normalizeId(rawStatus.id);
+  if (!SCENARIO_STATUS_IDS.has(status)) {
+    throw new Error(`Scenario materialization received invalid status for ${sideId} slot ${slot}.`);
+  }
+  if (pokemon.fainted && status) {
+    throw new Error(`Scenario materialization cannot status fainted ${sideId} slot ${slot}.`);
+  }
+  pokemon.status = status;
+  pokemon.statusState = {id: status, effectOrder: 0};
+  if (status === "slp") {
+    if (!Number.isInteger(rawStatus.sleepTurnsRemaining) ||
+        rawStatus.sleepTurnsRemaining < 1 || rawStatus.sleepTurnsRemaining > 4) {
+      throw new Error(`Scenario materialization requires one to four sleep turns for ${sideId} slot ${slot}.`);
+    }
+    pokemon.statusState.time = rawStatus.sleepTurnsRemaining;
+    pokemon.statusState.skippedTime = 0;
+  } else if (rawStatus.sleepTurnsRemaining != null) {
+    throw new Error(`Scenario materialization received sleep timing for non-sleeping ${sideId} slot ${slot}.`);
+  }
+  if (status === "tox") {
+    if (!Number.isInteger(rawStatus.toxicStage) ||
+        rawStatus.toxicStage < 0 || rawStatus.toxicStage > 15) {
+      throw new Error(`Scenario materialization requires a valid toxic stage for ${sideId} slot ${slot}.`);
+    }
+    pokemon.statusState.stage = rawStatus.toxicStage;
+  } else if (rawStatus.toxicStage != null) {
+    throw new Error(`Scenario materialization received a toxic stage for non-toxic ${sideId} slot ${slot}.`);
+  }
+}
+
+function applyScenarioField(field, rawField) {
+  if (!rawField || typeof rawField !== "object" || Array.isArray(rawField)) {
+    throw new Error("Scenario materialization requires a field object.");
+  }
+  const expectedKeys = ["weather", "turnsRemaining", "permanent"];
+  if (Object.keys(rawField).some(key => !expectedKeys.includes(key))) {
+    throw new Error("Scenario materialization received unsupported field values.");
+  }
+  const weather = normalizeId(rawField.weather);
+  if (!SCENARIO_WEATHER_IDS.has(weather) || typeof rawField.permanent !== "boolean" ||
+      !Number.isInteger(rawField.turnsRemaining)) {
+    throw new Error("Scenario materialization received invalid weather.");
+  }
+  if (!weather) {
+    if (rawField.turnsRemaining !== 0 || rawField.permanent) {
+      throw new Error("Scenario materialization received state for clear weather.");
+    }
+    field.weather = "";
+    field.weatherState = {id: "", effectOrder: 0};
+    return;
+  }
+  if (rawField.turnsRemaining < 1 || rawField.turnsRemaining > 5) {
+    throw new Error("Scenario materialization received invalid weather duration.");
+  }
+  if (rawField.permanent && !["raindance", "sunnyday", "sandstorm"].includes(weather)) {
+    throw new Error("Scenario materialization received impossible permanent weather.");
+  }
+  field.weather = weather;
+  field.weatherState = {id: weather, effectOrder: 0, target: "[Field]"};
+  if (!rawField.permanent) field.weatherState.duration = rawField.turnsRemaining;
+}
+
+function applyScenarioSideConditions(serializedSide, rawConditions, sideId) {
+  if (!rawConditions || typeof rawConditions !== "object" || Array.isArray(rawConditions)) {
+    throw new Error(`Scenario materialization requires side conditions for ${sideId}.`);
+  }
+  serializedSide.sideConditions = {};
+  for (const [rawName, rawValue] of Object.entries(rawConditions)) {
+    const name = normalizeId(rawName);
+    const maximum = SCENARIO_SIDE_CONDITION_LIMITS.get(name);
+    if (!maximum || !Number.isInteger(rawValue) || rawValue < 1 || rawValue > maximum) {
+      throw new Error(`Scenario materialization received invalid ${rawName} for ${sideId}.`);
+    }
+    const state = {id: name, effectOrder: 2, target: `[Side:${sideId}]`};
+    if (name === "spikes") state.layers = rawValue;
+    else state.duration = rawValue;
+    serializedSide.sideConditions[name] = state;
+  }
+}
+
+function applyScenarioVolatiles(pokemon, rawVolatiles, sideId) {
+  if (!Array.isArray(rawVolatiles)) {
+    throw new Error(`Scenario materialization requires active volatile effects for ${sideId}.`);
+  }
+  pokemon.volatiles = {};
+  const seen = new Set();
+  const otherSide = sideId === "p1" ? "p2" : "p1";
+  for (const raw of rawVolatiles) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Scenario materialization received an invalid volatile for ${sideId}.`);
+    }
+    const expectedKeys = ["hp", "id", "moveId", "turnsElapsed", "turnsRemaining"];
+    if (Object.keys(raw).some(key => !expectedKeys.includes(key))) {
+      throw new Error(`Scenario materialization received unsupported volatile fields for ${sideId}.`);
+    }
+    const id = normalizeId(raw.id);
+    if (!id || seen.has(id)) {
+      throw new Error(`Scenario materialization received a duplicate or invalid volatile for ${sideId}.`);
+    }
+    seen.add(id);
+    const state = {id, effectOrder: 0, target: `[Pokemon:${sideId}a]`};
+    if (SCENARIO_TIMED_VOLATILES.has(id)) {
+      if (!Number.isInteger(raw.turnsRemaining) || raw.turnsRemaining < 1) {
+        throw new Error(`Scenario materialization requires volatile timing for ${sideId} ${id}.`);
+      }
+      if (id === "confusion") state.time = raw.turnsRemaining;
+      else state.duration = raw.turnsRemaining;
+    } else if (raw.turnsRemaining != null) {
+      throw new Error(`Scenario materialization received timing for untimed ${sideId} ${id}.`);
+    }
+    if (id === "substitute") {
+      if (!Number.isInteger(raw.hp) || raw.hp < 1 || raw.hp > Math.floor(pokemon.maxhp / 4)) {
+        throw new Error(`Scenario materialization received invalid Substitute HP for ${sideId}.`);
+      }
+      state.hp = raw.hp;
+    } else if (raw.hp != null) {
+      throw new Error(`Scenario materialization received HP for non-Substitute ${sideId} ${id}.`);
+    }
+    if (id === "encore" || id === "disable") {
+      const moveId = normalizeId(raw.moveId);
+      const moveSlot = pokemon.moveSlots.find(move => normalizeId(move.id) === moveId);
+      if (!moveId || !moveSlot || moveSlot.pp <= 0) {
+        throw new Error(`Scenario materialization received invalid ${id} move for ${sideId}.`);
+      }
+      state.move = moveId;
+    } else if (raw.moveId != null) {
+      throw new Error(`Scenario materialization received a move for ${sideId} ${id}.`);
+    }
+    if (SCENARIO_SOURCE_VOLATILES.has(id)) {
+      state.source = `[Pokemon:${otherSide}a]`;
+      state.sourceSlot = `${otherSide}a`;
+    }
+    if (id === "nightmare" && pokemon.status !== "slp") {
+      throw new Error(`Scenario materialization requires sleep for ${sideId} Nightmare.`);
+    }
+    if (id === "yawn" && pokemon.status) {
+      throw new Error(`Scenario materialization cannot Yawn statused ${sideId}.`);
+    }
+    if (!SCENARIO_TIMED_VOLATILES.has(id) &&
+        !SCENARIO_STATIC_VOLATILES.has(id) &&
+        !SCENARIO_SOURCE_VOLATILES.has(id) &&
+        id !== "substitute") {
+      throw new Error(`Scenario materialization does not support volatile ${id}.`);
+    }
+    pokemon.volatiles[id] = state;
+  }
+}
+
+function scenarioMoveIdsMatch(slotId, scenarioMoveId) {
+  if (slotId === scenarioMoveId) return true;
+  // Showdown serializes every typed Hidden Power as its one generic ``hiddenpower`` slot. The
+  // scenario catalog retains the concrete source type (for example hiddenpowerbug), and a team
+  // can contain only one such slot after the generator's Hidden Power culling.
+  return slotId === "hiddenpower" && scenarioMoveId.startsWith("hiddenpower");
+}
+
+function scenarioStateSummary(simulatorBattle, requestedState) {
+  const sides = {};
+  for (const [sideIndex, sideId] of ["p1", "p2"].entries()) {
+    const side = simulatorBattle.sides[sideIndex];
+    const requestedVolatiles = new Map(
+      (requestedState.sides?.[sideId]?.activeVolatiles || []).map(row => [normalizeId(row.id), row]),
+    );
+    sides[sideId] = {
+      activeSlot: side.pokemon.findIndex(pokemon => pokemon === side.active?.[0]),
+      sideConditions: Object.fromEntries(
+        Object.entries(side.sideConditions || {}).map(([id, condition]) => [
+          id,
+          id === "spikes" ? condition.layers : condition.duration,
+        ]),
+      ),
+      activeVolatiles: Object.entries(side.active?.[0]?.volatiles || {}).map(([id, condition]) => ({
+        id,
+        ...(condition.duration != null ? {turnsRemaining: condition.duration} : {}),
+        ...(condition.time != null ? {turnsRemaining: condition.time} : {}),
+        ...(condition.hp != null ? {hp: condition.hp} : {}),
+        ...(condition.move != null ? {moveId: condition.move} : {}),
+        ...(requestedVolatiles.get(id)?.turnsElapsed != null
+          ? {turnsElapsed: requestedVolatiles.get(id).turnsElapsed}
+          : {}),
+      })),
+      pokemon: side.pokemon.map((pokemon, slot) => ({
+        slot,
+        species: pokemon.set?.species || pokemon.set?.name || "",
+        details: pokemon.details || "",
+        ability: pokemon.ability || "",
+        item: pokemon.item || "",
+        hp: pokemon.hp,
+        maxHp: pokemon.maxhp,
+        fainted: Boolean(pokemon.fainted),
+        status: {
+          id: pokemon.status || "",
+          ...(pokemon.status === "slp" ? {sleepTurnsRemaining: pokemon.statusState.time} : {}),
+          ...(pokemon.status === "tox" ? {toxicStage: pokemon.statusState.stage} : {}),
+        },
+        moves: (pokemon.moveSlots || []).map(move => ({
+          id: move.id,
+          pp: move.pp,
+          maxPp: move.maxpp,
+        })),
+      })),
+    };
+  }
+  const weather = simulatorBattle.field.weather || "";
+  return {
+    turn: simulatorBattle.turn,
+    field: {
+      weather,
+      turnsRemaining: weather
+        ? (simulatorBattle.field.weatherState.duration ?? 5)
+        : 0,
+      permanent: Boolean(weather && simulatorBattle.field.weatherState.duration == null),
+    },
+    sides,
+  };
 }
 
 function applyPublicState(snapshot, publicState) {
@@ -1090,6 +1550,12 @@ async function handleCommand(command) {
       break;
     case "materialize":
       materializeBattle(command);
+      break;
+    case "scenario_materialize":
+      materializeScenarioBattle(command);
+      break;
+    case "scenario_generate_team":
+      generateScenarioTeam(command);
       break;
     case "reseed":
       await reseedBattle(command);
