@@ -1012,6 +1012,44 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
 
+    def test_grass_fire_conditional_rate_gates_denominator(self):
+        # Grass-on-Leech-Seed is a CONDITIONAL rate: the denominator is games where the opponent used
+        # Leech Seed AND this seat's team has a grass type — counted even when the read is NOT made.
+        def game(seed, proto, ms):
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        # A: p1 switches its grass mon in ON p2's Leech Seed -> qualifies AND the read fires.
+        gA = game(1, [
+            "|turn|1", "|switch|p1a: Venusaur|Venusaur, M|300/300",
+            "|move|p2a: Blissey|Leech Seed|p1a: Venusaur", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Venusaur", "moves": ["Sludge Bomb"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        # C: p2 uses Leech Seed and p1's TEAM has a grass type, but p1 does not switch it in on the
+        # seed -> qualifies (denominator), read = 0.
+        gC = game(2, [
+            "|turn|1", "|move|p2a: Blissey|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}, {"species": "Venusaur", "moves": ["Sludge Bomb"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        # D: p2 uses Leech Seed but p1 has NO grass on the team -> does NOT qualify.
+        gD = game(3, [
+            "|turn|1", "|move|p2a: Blissey|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in (gA, gC, gD):
+                    f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        # p1 qualifies in A and C (not D); p2 never qualifies (p1 never used Leech Seed, p2 has no grass)
+        self.assertEqual(m["grass_leech_present_seat_games"], 2)
+        self.assertEqual(m["grass_switchin_on_leechseed_rate"], 0.5)   # 1 read / 2 qualifying games
+        # no Will-O-Wisp / fire anywhere -> the fire rate is None (undefined, not 0)
+        self.assertEqual(m["fire_wow_present_seat_games"], 0)
+        self.assertIsNone(m["fire_switchin_on_wow_rate"])
+
     def test_old_data_drops_absorb_but_keeps_intimidate_fallback(self):
         # Movesets WITHOUT ability info (pre-capture data): absorb requires exact gating, so it is
         # dropped (rate None); intimidate keeps the protocol-presence fallback (it fired), so it

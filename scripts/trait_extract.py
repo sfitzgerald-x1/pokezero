@@ -790,6 +790,11 @@ def extract(files, lineage=None, milestone=None):
     insom_present = 0; insom_reads = 0       # Insomnia / Vital Spirit mon in on a sleep move
     limber_present = 0; limber_reads = 0     # Limber mon in on a paralysis move
     ooze_present = 0; ooze_drain_reads = 0; ooze_seed_reads = 0  # Liquid Ooze in on drain / Leech Seed
+    # type-based reads as CONDITIONAL rates: denominator = decided games where the opponent used the
+    # move AND this seat's team carries the requisite type (the only games where the read is both
+    # possible and relevant). Every read already implies both, so the numerator is the read count.
+    grass_leech_present = 0; grass_leech_reads = 0   # grass in on the opponent's Leech Seed
+    fire_wow_present = 0; fire_wow_reads = 0          # fire in on the opponent's Will-O-Wisp
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -898,6 +903,16 @@ def extract(files, lineage=None, milestone=None):
                     ooze_present += 1
                     ooze_drain_reads += gp.ev[seat]["ooze_switchin_on_drain"]
                     ooze_seed_reads += gp.ev[seat]["ooze_switchin_on_leechseed"]
+                # type-based reads, gated to games where the opponent actually used the move AND this
+                # seat's team carries the type. cat_leechseed / cat_burn are single-move categories
+                # (Leech Seed / Will-O-Wisp), so the OTHER seat's count > 0 means the opponent used it.
+                team_species = {mid(m["species"]) for m in g.get("movesets", {}).get(seat, [])}
+                if gp.ev[OTHER_SEAT[seat]]["cat_leechseed"] > 0 and team_species & GRASS_SPECIES:
+                    grass_leech_present += 1
+                    grass_leech_reads += gp.ev[seat]["grass_switchin_on_leechseed"]
+                if gp.ev[OTHER_SEAT[seat]]["cat_burn"] > 0 and team_species & FIRE_SPECIES:
+                    fire_wow_present += 1
+                    fire_wow_reads += gp.ev[seat]["fire_switchin_on_wow"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -1061,9 +1076,14 @@ def extract(files, lineage=None, milestone=None):
         "ooze_present_seat_games": ooze_present,
         "ooze_switchin_on_drain_per_game": (round(ooze_drain_reads / ooze_present, 4) if ooze_present else None),
         "ooze_switchin_on_leechseed_per_game": (round(ooze_seed_reads / ooze_present, 4) if ooze_present else None),
-        # Type-based switch-in reads (no ability gate — most teams have the type): per seat-game.
-        "grass_switchin_on_leechseed_per_game": round(cat_extra["grass_switchin_on_leechseed"] / (seat_games or 1), 4),
-        "fire_switchin_on_wow_per_game": round(cat_extra["fire_switchin_on_wow"] / (seat_games or 1), 4),
+        # Grass-on-Leech-Seed / Fire-on-Will-O-Wisp: CONDITIONAL rate — reads per decided game where
+        # the opponent used the move AND this seat's team carries the type (the games where the read
+        # is possible + relevant), not diluted across all seat-games.
+        "grass_leech_present_seat_games": grass_leech_present,
+        "grass_switchin_on_leechseed_rate": (round(grass_leech_reads / grass_leech_present, 4) if grass_leech_present else None),
+        "fire_wow_present_seat_games": fire_wow_present,
+        "fire_switchin_on_wow_rate": (round(fire_wow_reads / fire_wow_present, 4) if fire_wow_present else None),
+        # Ghost-on-Rapid-Spin stays per seat-game (its own "spikes down" condition is applied at read time).
         "ghost_switchin_on_spin_per_game": round(cat_extra["ghost_switchin_on_spin"] / (seat_games or 1), 4),
         # Struggle: total occurrences (should be very rare — everything out of PP).
         "struggle_uses": cat_extra["cat_struggle"],

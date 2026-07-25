@@ -260,9 +260,10 @@ TRAJECTORY_CHARTS = [
         ("Limber in on para / game (carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
         ("Liquid Ooze in on drain move / game (carried)", lambda r: r.get("ooze_switchin_on_drain_per_game")),
         ("Liquid Ooze in on leech seed / game (carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
-        # type-based switch-in reads (no ability gate) — per seat-game
-        ("Grass in on leech seed", lambda r: r.get("grass_switchin_on_leechseed_per_game")),
-        ("Fire in on will-o-wisp", lambda r: r.get("fire_switchin_on_wow_per_game")),
+        # type-based reads: grass/fire conditioned on (opp used the move) AND (type on team) — reads
+        # per qualifying game, not diluted across all seat-games.
+        ("Grass in on leech seed / game (opp used it, grass on team)", lambda r: r.get("grass_switchin_on_leechseed_rate")),
+        ("Fire in on will-o-wisp / game (opp used it, fire on team)", lambda r: r.get("fire_switchin_on_wow_rate")),
         ("Ghost in on rapid spin (spikes down)", lambda r: r.get("ghost_switchin_on_spin_per_game")),
     ]),
     # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
