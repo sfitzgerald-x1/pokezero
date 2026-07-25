@@ -233,7 +233,16 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
         if hasattr(cls, "tmpdir"):
             cls.tmpdir.cleanup()
 
-    def _search(self, *, sims: int, batch: int, seed: int, model_priors: bool) -> dict:
+    def _search(
+        self,
+        *,
+        sims: int,
+        batch: int,
+        seed: int,
+        model_priors: bool,
+        early_stop_min_sims: int = 0,
+        early_stop_side_one: bool = True,
+    ) -> dict:
         fold = pokezero_search.FoldState.from_payload(self.position["fold_state"])
         report = self.native.search_batched_multi_encoded(
             self.position["state_str"],
@@ -248,6 +257,8 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
             seed,
             True,
             model_priors,
+            early_stop_min_sims,
+            early_stop_side_one,
         )
         return json.loads(report)
 
@@ -282,6 +293,30 @@ class ModelPriorsEncodedSearchTest(unittest.TestCase):
         self.assertGreaterEqual(report["prior_branches"] + report["prior_fallbacks"], 0)
         for side in ("side_one", "side_two"):
             self.assertEqual(sum(entry["visits"] for entry in report[side]), 64)
+
+    def test_safe_early_stop_preserves_target_side_argmax(self) -> None:
+        stopped = self._search(
+            sims=128,
+            batch=8,
+            seed=5,
+            model_priors=True,
+            early_stop_min_sims=16,
+            early_stop_side_one=True,
+        )
+        full = self._search(sims=128, batch=8, seed=5, model_priors=True)
+
+        self.assertTrue(stopped["early_stopped"])
+        self.assertLess(stopped["iterations"], stopped["requested_iterations"])
+        self.assertEqual(
+            stopped["remaining_iterations"],
+            stopped["requested_iterations"] - stopped["iterations"],
+        )
+        self.assertEqual(stopped["side_one"][0]["move"], full["side_one"][0]["move"])
+        for side in ("side_one", "side_two"):
+            self.assertEqual(
+                sum(entry["visits"] for entry in stopped[side]),
+                stopped["iterations"],
+            )
 
 
 if __name__ == "__main__":

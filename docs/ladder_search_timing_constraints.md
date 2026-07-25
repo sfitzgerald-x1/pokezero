@@ -217,9 +217,16 @@ the state is fully revealed. It must instead combine:
 - hard delivery reserve;
 - model uncertainty or policy entropy;
 - disagreement between shallow search and the policy prior;
+- each side's remaining Pokemon, average and minimum team HP, and current active HP;
+- opponent boost stages and whether an immediate boosted sweep is plausible;
+- revealed-team fraction and the number of materially distinct belief worlds;
 - tactical features such as imminent KOs, forced switches, or irreversible commitments;
 - information value and number of plausible hidden worlds;
 - measured search throughput for the current state.
+
+Turn number may be retained as a descriptive feature, but it must not be the phase controller.
+Pokemon games do not have a fixed opening/middlegame/endgame boundary: a low-HP 3v3 on turn 12 can
+be more tactically resolved than a healthy 6v6 on turn 30.
 
 Non-negotiable scheduler invariants:
 
@@ -231,7 +238,47 @@ Non-negotiable scheduler invariants:
 6. Log the planned budget, actual search time, send time, acceptance evidence, and remaining bank
    for every decision.
 
-## 9. Open Measurements
+## 9. Opt-In Safe STOP Experiment
+
+Model-backed engine search exposes `--early-stop` with `--early-stop-min-sims N`. The feature is
+off by default. At completed leaf-evaluation batch boundaries after the minimum simulation floor,
+one belief-world tree uses the conservative `p = 1` STOP criterion from
+[Baier and Winands, *Time Management for Monte Carlo Tree Search*](https://dke.maastrichtuniversity.nl/m.winands/documents/time_management_for_monte_carlo_tree_search.pdf)
+and may stop only when:
+
+```text
+root_visit_leader - root_visit_runner_up > simulations_remaining
+```
+
+The strict inequality means the fixed-budget root argmax cannot change even if every remaining
+simulation visits the runner-up. This saves the tail of a settled search; it does not establish
+that the settled action is strategically correct, and it does not replace choosing an adequate
+search depth and minimum simulation floor.
+
+PokeZero aggregates normalized visit distributions across several belief worlds. A per-world STOP
+is therefore not sufficient by itself. The policy also computes conservative lower and upper
+bounds for every action's final cross-world weight. It accepts the shortcut only when one action's
+lower bound is strictly above every rival's upper bound. Otherwise, it reruns the stopped worlds
+at the original full budget and uses the ordinary aggregate. Telemetry records triggered world
+stops, accepted decisions, full-budget replays, and simulations actually saved.
+
+Test the flag with paired deterministic searches over the same decision-state corpus, checkpoint,
+world samples, seeds, depth, and requested budget:
+
+1. Stratify results by Pokemon remaining, team-health summaries, opponent boost stages,
+   policy entropy, legal-action count, and belief-world count. Turn number is a reporting column,
+   not the primary partition.
+2. Require zero selected-action disagreements between STOP and the full-budget reference and zero
+   new search fallbacks.
+3. Report simulations saved, wall-time delta, stop acceptance rate, and ambiguous full-budget
+   replay rate at p50/p90/p95. A high trigger rate with a high replay rate is not a speed win.
+4. Sweep the minimum floor and requested budget at each fixed depth. Do not tune STOP and depth in
+   the same comparison.
+5. Only after the corpus gate passes, run a paired rollout strength sanity check. STOP should be
+   behaviorally identical for fixed seeds; any measured strength delta indicates a contract bug or
+   nondeterminism and blocks ladder use.
+
+## 10. Open Measurements
 
 Before choosing final adaptive depth/breadth settings:
 

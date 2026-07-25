@@ -149,6 +149,48 @@ def _latch_encoder_tables_to_model_config(tables_json: str, model_config: Any) -
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _locked_aggregate_choice(
+    world_reports: Sequence[tuple[str, Mapping[str, Any]]],
+) -> Optional[str]:
+    """Return the final aggregate argmax only when skipped visits cannot change it."""
+
+    lower: Counter[str] = Counter()
+    upper: Counter[str] = Counter()
+    choices: set[str] = set()
+    for side_key, report in world_reports:
+        requested = int(report.get("requested_iterations", report.get("iterations", 0)))
+        completed = int(report.get("iterations", 0))
+        if requested <= 0 or completed < 0 or completed > requested:
+            return None
+        remaining = requested - completed
+        entries = report.get(side_key)
+        if not isinstance(entries, Sequence):
+            return None
+        visit_total = 0
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                return None
+            choice = str(entry.get("move") or "")
+            visits = int(entry.get("visits", -1))
+            if not choice or visits < 0:
+                return None
+            visit_total += visits
+            choices.add(choice)
+            # Each world's final aggregate weight is normalized by its full
+            # requested budget. Every skipped visit may conservatively land
+            # on any arm when constructing that arm's upper bound.
+            lower[choice] += visits / requested
+            upper[choice] += (visits + remaining) / requested
+        if visit_total != completed:
+            return None
+    if not choices:
+        return None
+    leader = max(choices, key=lambda choice: lower[choice])
+    if all(lower[leader] > upper[choice] for choice in choices if choice != leader):
+        return leader
+    return None
+
+
 class EnvTier2AnnotationSource:
     """Env→policy surface for the live fold's Tier-2 annotation overlay.
 
@@ -234,6 +276,11 @@ class EngineMctsConfig:
     # Self-side model priors in selection (the opponent side stays uniform in
     # this integration; docs/crate_search_design.md "Model priors").
     model_priors: bool = True
+    # Opt-in safe STOP rule. A tree may stop at a completed batch only after
+    # this floor and only when the unspent simulations cannot change its root
+    # visit argmax. Multi-world aggregation applies a second safety bound.
+    early_stop: bool = False
+    early_stop_min_sims: int = 64
     # Debug cross-check: per decision, batch-refold the whole public log
     # (production's per-observe path, turn_merged.extract_transition_products)
     # and compare its surfaces against the live incremental fold's products.
@@ -260,6 +307,12 @@ class EngineMctsConfig:
                     "search_batch must be <= search_sims (keep batch << sims; "
                     "docs/crate_search_design.md review caveats)."
                 )
+            if self.early_stop and not 0 < self.early_stop_min_sims <= self.search_sims:
+                raise ValueError(
+                    "early_stop_min_sims must be in 1..=search_sims when early_stop is enabled."
+                )
+        elif self.early_stop:
+            raise ValueError("early_stop is supported only with leaf_eval='model'.")
 
 
 @dataclass
@@ -294,6 +347,10 @@ class EngineMctsStats:
     model_evals: int = 0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
+    early_stop_triggered_worlds: int = 0
+    early_stop_accepted_decisions: int = 0
+    early_stop_full_budget_replays: int = 0
+    early_stop_sims_saved: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
     fold_cross_check_failures: int = 0
@@ -320,6 +377,10 @@ class EngineMctsStats:
             "model_evals": self.model_evals,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
+            "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
+            "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
+            "early_stop_full_budget_replays": self.early_stop_full_budget_replays,
+            "early_stop_sims_saved": self.early_stop_sims_saved,
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
             "fold_cross_check_failures": self.fold_cross_check_failures,
@@ -889,9 +950,55 @@ class EngineMctsPolicy:
         turn = int(getattr(replay, "turn_number", 0) or 0)
         config = self._config
 
-        aggregated: Counter = Counter()
-        worlds_searched_here = 0
+        world_runs: list[dict[str, Any]] = []
         search_started = time.perf_counter()
+
+        def run_world(
+            record: Mapping[str, Any], early_stop_min_sims: int
+        ) -> Optional[dict]:
+            try:
+                search_args = [
+                    record["state_str"],
+                    config.search_sims,
+                    config.search_batch,
+                    self._tables_json,
+                    root_inputs,
+                    record["ctx_json"],
+                    rust_fold,
+                    config.search_depth,
+                    config.c_puct,
+                    record["seed"],
+                    config.deep_ko_split,
+                    config.model_priors,
+                ]
+                if early_stop_min_sims:
+                    # Preserve the old native call contract while the feature
+                    # is disabled, so a stale image cannot break default
+                    # full-budget search merely because Python was updated.
+                    search_args.extend(
+                        [early_stop_min_sims, record["side_key"] == "side_one"]
+                    )
+                report = json.loads(
+                    native.search_batched_multi_encoded(*search_args)
+                )
+            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                detail = str(error).splitlines()[0][:160] if str(error) else type(error).__name__
+                reason = (
+                    f"native_early_stop_unsupported: {detail}"
+                    if early_stop_min_sims and isinstance(error, TypeError)
+                    else detail
+                )
+                self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
+                return None
+            # Invocation-level counters reflect actual compute. A stopped
+            # world that is conservatively replayed at full budget counts both
+            # invocations; worlds_searched is updated only for final records.
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.model_evals += int(report["model_evals"])
+            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            return report
+
         for world, state in worlds:
             ctx_json = json.dumps(
                 {
@@ -901,47 +1008,83 @@ class EngineMctsPolicy:
                 }
             )
             world_seed = rng.getrandbits(63)
-            try:
-                report = json.loads(
-                    native.search_batched_multi_encoded(
-                        state.to_string(),
-                        config.search_sims,
-                        config.search_batch,
-                        self._tables_json,
-                        root_inputs,
-                        ctx_json,
-                        rust_fold,
-                        config.search_depth,
-                        config.c_puct,
-                        world_seed,
-                        config.deep_ko_split,
-                        config.model_priors,
-                    )
-                )
-            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
-                detail = str(error).splitlines()[0][:160] if str(error) else type(error).__name__
-                self.stats.world_failure_reasons[f"crate_search: {detail}"] += 1
-                continue
             side_key = (
                 "side_one"
                 if world.slot_sides[context.player_id] == "side_one"
                 else "side_two"
             )
-            entries = report[side_key]
+            record: dict[str, Any] = {
+                "state_str": state.to_string(),
+                "ctx_json": ctx_json,
+                "seed": world_seed,
+                "side_key": side_key,
+            }
+            stop_floor = config.early_stop_min_sims if config.early_stop else 0
+            report = run_world(record, stop_floor)
+            if report is not None:
+                record["report"] = report
+                world_runs.append(record)
+
+        stopped_runs = [
+            record for record in world_runs if bool(record["report"].get("early_stopped"))
+        ]
+        self.stats.early_stop_triggered_worlds += len(stopped_runs)
+        locked_choice: Optional[str] = None
+        full_budget_replays = 0
+        simulations_saved = 0
+        replay_failed = False
+        if stopped_runs:
+            locked_choice = _locked_aggregate_choice(
+                [(record["side_key"], record["report"]) for record in world_runs]
+            )
+            if locked_choice is not None and self._map_choices(
+                context, Counter({locked_choice: 1.0})
+            ) is None:
+                locked_choice = None
+            if locked_choice is not None:
+                simulations_saved = sum(
+                    int(record["report"].get("remaining_iterations") or 0)
+                    for record in stopped_runs
+                )
+                self.stats.early_stop_accepted_decisions += 1
+                self.stats.early_stop_sims_saved += simulations_saved
+            else:
+                # Per-world STOP does not by itself preserve the normalized
+                # aggregate across belief worlds. Replay only stopped worlds
+                # at full budget; this is intentionally fail-open to the
+                # pre-feature behavior in ambiguous cases.
+                final_runs: list[dict[str, Any]] = []
+                for record in world_runs:
+                    if not record["report"].get("early_stopped"):
+                        final_runs.append(record)
+                        continue
+                    full_budget_replays += 1
+                    report = run_world(record, 0)
+                    if report is None:
+                        replay_failed = True
+                        break
+                    record["report"] = report
+                    final_runs.append(record)
+                world_runs = final_runs
+                self.stats.early_stop_full_budget_replays += full_budget_replays
+        self.stats.search_wall_seconds += time.perf_counter() - search_started
+
+        if replay_failed:
+            return self._fallback(context, rng, "early_stop_replay_failed")
+        worlds_searched_here = len(world_runs)
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
+        self.stats.worlds_searched += worlds_searched_here
+        aggregated: Counter[str] = Counter()
+        for record in world_runs:
+            entries = record["report"][record["side_key"]]
             total = max(sum(entry["visits"] for entry in entries), 1)
             for entry in entries:
                 aggregated[entry["move"]] += entry["visits"] / total
-            self.stats.total_iterations += int(report["iterations"])
-            self.stats.model_evals += int(report["model_evals"])
-            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
-            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
-            self.stats.worlds_searched += 1
-            worlds_searched_here += 1
-        self.stats.search_wall_seconds += time.perf_counter() - search_started
-
-        if not worlds_searched_here:
-            return self._fallback(context, rng, "crate_search_failed")
-        action_index = self._map_choices(context, aggregated)
+        choice_weights = (
+            Counter({locked_choice: 1.0}) if locked_choice is not None else aggregated
+        )
+        action_index = self._map_choices(context, choice_weights)
         if action_index is None:
             return self._fallback(context, rng, "choices_unmapped")
         self.stats.searched_decisions += 1
@@ -954,6 +1097,17 @@ class EngineMctsPolicy:
                     "worlds_searched": worlds_searched_here,
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                    },
+                    "aggregated_choices_basis": (
+                        "stopped_prefix" if locked_choice is not None else "full_budget"
+                    ),
+                    "early_stop": {
+                        "enabled": config.early_stop,
+                        "worlds_stopped": len(stopped_runs),
+                        "aggregate_locked": locked_choice is not None,
+                        "locked_choice": locked_choice,
+                        "full_budget_replays": full_budget_replays,
+                        "simulations_saved": simulations_saved,
                     },
                 }
             },
@@ -1358,6 +1512,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="max decision plies (model mode)")
     parser.add_argument("--no-model-priors", action="store_true",
                         help="model mode with uniform priors (A/B kill switch)")
+    parser.add_argument("--early-stop", action="store_true",
+                        help="model mode: stop only when remaining sims cannot change the action")
+    parser.add_argument("--early-stop-min-sims", type=int, default=64,
+                        help="minimum per-world sims before safe STOP checks (default: 64)")
     parser.add_argument("--fold-cross-check", action="store_true",
                         help="debug: batch-refold vs the live incremental fold per decision")
     parser.add_argument("--argmax-compare", type=int, default=0,
@@ -1391,6 +1549,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         search_batch=args.batch,
         search_depth=args.depth,
         model_priors=not args.no_model_priors,
+        early_stop=args.early_stop,
+        early_stop_min_sims=args.early_stop_min_sims,
         fold_cross_check=args.fold_cross_check,
     )
     # Model mode needs the belief candidate-set source: the checkpoint observation's
@@ -1493,6 +1653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "batch": args.batch,
             "depth": args.depth,
             "model_priors": config.model_priors,
+            "early_stop": config.early_stop,
+            "early_stop_min_sims": config.early_stop_min_sims,
         },
         "wins": wins,
         "win_rate": wins / args.games if args.games else 0.0,
