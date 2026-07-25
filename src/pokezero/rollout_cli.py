@@ -462,9 +462,9 @@ def _explicit_feature_masks_from_args(
     base = base_masks or DEFAULT_OBSERVATION_FEATURE_MASKS
     capacity = transition_token_capacity or TRANSITION_TOKEN_COUNT
     resolved_budget = min(base.transition_token_budget, capacity) if budget is None else budget
-    if not 0 < resolved_budget <= capacity:
+    if not 0 <= resolved_budget <= capacity:
         raise ValueError(
-            f"transition_token_budget must be in 1..{capacity} for the resolved "
+            f"transition_token_budget must be in 0..{capacity} for the resolved "
             f"observation schema, got {resolved_budget}."
         )
 

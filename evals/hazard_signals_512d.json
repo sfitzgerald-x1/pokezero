@@ -1,0 +1,36 @@
+{
+  "corpus_games": 150,
+  "corpus_states": 8000,
+  "checkpoints": [
+    {
+      "label": "512d-405k",
+      "checkpoint": "checkpoints/curated/foundation-512d-500k-belief-i259.pt",
+      "spikes_legal_states": 243,
+      "spikes_p_by_turn": {
+        "1-2": 0.0164,
+        "11-20": 0.0354,
+        "21+": 0.0451,
+        "3-5": 0.0377,
+        "6-10": 0.0417
+      },
+      "spikes_p_by_opp_layers": {
+        "0": 0.0352,
+        "1": 0.0477,
+        "2": 0.0452,
+        "3": 0.0498
+      },
+      "spikes_argmax_rate": 0.0,
+      "rapid_spin_legal_states": 109,
+      "rapid_spin_p_by_self_spikes": {
+        "0": 0.0248,
+        "1": 0.0248,
+        "2": 0.0248,
+        "3": 0.0249
+      },
+      "rapid_spin_argmax_rate_at_3": 0.0,
+      "spikes_early_tilt": -0.0143,
+      "spikes_layer_sensitivity": -0.0123,
+      "spin_hazard_response": 0.0001
+    }
+  ]
+}

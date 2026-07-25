@@ -211,7 +211,7 @@ class MaskDerivationTest(unittest.TestCase):
         payload.pop("transition_token_budget")
         self.assertEqual(TransformerPolicyConfig.from_dict(payload).transition_token_budget, 64)
 
-        with self.assertRaisesRegex(ValueError, "1..64"):
+        with self.assertRaisesRegex(ValueError, "0..64"):
             TransformerPolicyConfig.compact_category(
                 category_vocab=("species:a",),
                 category_oov_buckets=2,

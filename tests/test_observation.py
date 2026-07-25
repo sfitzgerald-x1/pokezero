@@ -70,8 +70,12 @@ class ObservationSpecTest(unittest.TestCase):
     def test_feature_masks_validate_transition_budget(self) -> None:
         masks = ObservationFeatureMasks(transition_token_budget=32)
         self.assertEqual(masks.transition_token_budget, 32)
+        # 0 is valid: fully-masked region (Markov-state-only ablations).
+        self.assertEqual(
+            ObservationFeatureMasks(transition_token_budget=0).transition_token_budget, 0
+        )
         with self.assertRaisesRegex(ValueError, "transition_token_budget"):
-            ObservationFeatureMasks(transition_token_budget=0)
+            ObservationFeatureMasks(transition_token_budget=-1)
         with self.assertRaisesRegex(ValueError, "transition_token_budget"):
             ObservationFeatureMasks(transition_token_budget=TRANSITION_TOKEN_COUNT + 1)
 

@@ -149,9 +149,11 @@ class ObservationFeatureMasks:
     tier2_investment: bool = False
 
     def __post_init__(self) -> None:
-        if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
+        # 0 is a valid budget: the transition region exists but is fully masked
+        # (Markov-state-only ablations). The encoder fill/mask paths handle it.
+        if not 0 <= self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
             raise ValueError(
-                f"transition_token_budget must be in 1..{TRANSITION_TOKEN_COUNT}, "
+                f"transition_token_budget must be in 0..{TRANSITION_TOKEN_COUNT}, "
                 f"got {self.transition_token_budget}."
             )
 
