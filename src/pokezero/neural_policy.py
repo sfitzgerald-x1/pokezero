@@ -351,10 +351,10 @@ class TransformerPolicyConfig:
                 f"1..{transition_token_capacity} for observation schema "
                 f"{self.observation_schema_version!r}."
             )
-        if not 0 < self.transition_token_budget <= self.transition_token_count:
+        if not 0 <= self.transition_token_budget <= self.transition_token_count:
             raise ValueError(
                 "transition_token_budget must be in "
-                f"1..{self.transition_token_count} (the model's transition region) — "
+                f"0..{self.transition_token_count} (the model's transition region) — "
                 "a budget above the physical region cannot have been trained."
             )
         # Region/token-count coherence: the transition region is the FINAL layout segment,
