@@ -44,5 +44,8 @@ echo "$tasks" | xargs -P "${JOBS:-10}" -L1 bash -c 'run_one "$@"' _ | grep -c '^
 # v2 report (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and the separate v3 report (empty until v3 runs
 # exist and V3_LINEAGES/ACTIVE are populated).
 python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report.html" --set v2
-python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report_v3.html" --set v3
-echo "EXTRACTED $n metric sets -> $REPORT/trait_report.html (+ trait_report_v3.html)"
+# Two standalone v3 reports: legacy (retired k16/k32/k64 history-length arms) and ent_fix (the
+# active entropy-fix variants — enthalf, eps-entq, and any future v3 variant).
+python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report_v3_legacy.html" --set v3_legacy
+python3 "$SCR/trait_report.py" --metrics-dir "$REPORT" --out "$REPORT/trait_report_v3_ent_fix.html" --set v3_ent_fix
+echo "EXTRACTED $n metric sets -> trait_report.html + trait_report_v3_legacy.html + trait_report_v3_ent_fix.html"
