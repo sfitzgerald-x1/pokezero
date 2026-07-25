@@ -231,7 +231,103 @@ Non-negotiable scheduler invariants:
 6. Log the planned budget, actual search time, send time, acceptance evidence, and remaining bank
    for every decision.
 
-## 9. Open Measurements
+## 9. Adaptive MCTS Time Strategy
+
+There should not be a fixed "start deep search on turn N" rule. Battle turn is a weak proxy for
+the quantities that actually determine whether depth is useful:
+
+- how many opponent sets and backline assignments remain plausible;
+- how many root actions are competitive;
+- how much the sampled worlds disagree about the best action;
+- whether shallow and deeper searches select different actions;
+- whether the current line contains an irreversible or forcing decision;
+- how much clock remains above the emergency floor.
+
+The search budget has two distinct breadth axes:
+
+1. **Root-action breadth:** cover every legal move and switch before concentrating visits.
+2. **Belief-world breadth:** cover materially different hidden teams, items, abilities, and
+   movesets before deeply optimizing against one sampled world.
+
+Early positions will usually favor belief-world breadth because hidden-state uncertainty is high.
+Later positions will often favor depth because reveals reduce the effective number of worlds and
+fewer surviving Pokemon reduce the action tree. These are tendencies, not phases: an early forced
+tactical sequence can justify depth, while a late unrevealed Choice item can still justify world
+breadth.
+
+The current `spike-sac` scenario is already a warning against making "shallow but wide" absolute.
+At depth 2, increasing simulations made both tested checkpoints increasingly confident in a wrong
+action. Depth 4 selected the preservation switch throughout the sweep. Breadth can reduce sampling
+error, but it cannot repair a search horizon that excludes the decisive consequence.
+
+### Research basis
+
+- Baier and Winands,
+  [*Time Management for Monte Carlo Tree Search*](https://dke.maastrichtuniversity.nl/m.winands/documents/time_management_for_monte_carlo_tree_search.pdf),
+  divide remaining time by estimated remaining moves, extend searches when the top two root moves
+  are close, and stop early when the runner-up cannot catch the leader with the expected remaining
+  simulations.
+- Lan et al.,
+  [*Learning to Stop: Dynamic Simulation Monte-Carlo Tree Search*](https://ojs.aaai.org/index.php/AAAI/article/download/16100/15907),
+  label state/search uncertainty using a much larger reference search and learn when a smaller
+  search can stop.
+- Kaufmann and Koolen,
+  [*Monte-Carlo Tree Search by Best Arm Identification*](https://proceedings.neurips.cc/paper/2017/hash/a6d259bfbfa2062843ef543e21d7ec8e-Abstract.html),
+  formulate root selection as best-arm identification and propagate confidence intervals from
+  deeper levels.
+- Silver and Veness,
+  [*Monte-Carlo Planning in Large POMDPs*](https://proceedings.neurips.cc/paper_files/paper/2010/hash/edfbe1afcf9246bb0d40eb4d8027d90f-Abstract.html),
+  sample root states from the current belief during online planning.
+- Cowling, Powley, and Whitehouse,
+  [*Information Set Monte Carlo Tree Search*](https://eprints.whiterose.ac.uk/75048/),
+  identify duplicated computation and strategy fusion as core weaknesses of independently searching
+  a small number of determinizations.
+
+### Proposed anytime controller
+
+Run search in short blocks and decide after each block whether the next block buys more value as
+world coverage or tree depth:
+
+1. Prepare a legal base-policy fallback.
+2. Complete a minimum tactical-depth sweep across every legal root action and an initial set of
+   belief worlds. The minimum depth must be validated on the endgame scenario suite; `spike-sac`
+   currently rules out depth 2 as a safe universal baseline.
+3. Add belief worlds while the top-action ranking or value estimate changes materially when world
+   coverage doubles.
+4. Add within-world visits/depth when world-level rankings agree but the top root actions remain
+   close, the principal variation is unstable, or the policy prior and search disagree.
+5. Stop when confidence intervals separate the best action, the choice remains stable across a
+   budget doubling, or the hard delivery deadline is reached.
+
+The useful threshold is therefore a **value-of-computation crossover**, not a battle turn:
+
+```text
+marginal action-quality gain per millisecond from more depth
+    >
+marginal action-quality gain per millisecond from more belief-world coverage
+```
+
+### How to learn the threshold
+
+Build a held-out corpus of real decision states, preferably from games against an independent
+opponent, stratified by turn, Pokemon remaining, revealed-team fraction, belief entropy, legal-action
+count, policy entropy, and tactical tags. For each state:
+
+1. run nested world-count, simulation-count, and depth budgets with matched random seeds;
+2. retain action rankings, values, confidence intervals, world disagreement, maximum depth reached,
+   and wall time after every block;
+3. use a much larger search as a reference, not as proof of optimality;
+4. use exact scenario proofs where the endgame studio can establish a true forced line;
+5. label the cheapest point that matches a near-optimal reference action within a chosen regret
+   tolerance;
+6. fit a small auditable scheduler or lookup table and validate it on entirely held-out battles.
+
+The first scheduler should use direct search statistics rather than a learned auxiliary network:
+top-two visit/value gap, action changes across blocks, per-world action disagreement, effective
+belief sample size, and remaining-bank pressure. A learned uncertainty head is justified only if
+those transparent signals leave substantial strength or clock efficiency on the table.
+
+## 10. Open Measurements
 
 Before choosing final adaptive depth/breadth settings:
 
@@ -244,6 +340,8 @@ Before choosing final adaptive depth/breadth settings:
 4. Replay complete games through candidate budget controllers and compare strength, timeout risk,
    and bank trajectory.
 5. Validate an emergency base-policy fallback under forced-switch and updated-request paths.
+6. Run the nested depth, simulation, and belief-world sweep above to locate the empirical
+   breadth-to-depth crossover and test whether one global threshold is adequate.
 
 This document should be revised if Pokemon Showdown changes its timer source or if Gen 3 Random
 Battle gains a format-specific timer rule.
