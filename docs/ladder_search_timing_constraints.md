@@ -30,6 +30,10 @@ The primary source is Pokemon Showdown `master` at
   shows that Gen 3 Random Battle uses `Standard` and does not override the default timer.
 - [`sim/SIM-PROTOCOL.md`](https://github.com/smogon/pokemon-showdown/blob/a97d40a3e71746c92ac238d9bd15ce550bf30617/sim/SIM-PROTOCOL.md)
   defines `|request|`, `rqid`, `/choose`, and invalid-choice responses.
+- The official client at
+  [`panel-battle.tsx`](https://github.com/smogon/pokemon-showdown-client/blob/2a5133088021c1fe2711a096802896b2055744a3/play.pokemonshowdown.com/src/panel-battle.tsx#L225-L282)
+  updates the displayed countdown locally once per second. This display cadence is distinct from
+  the authoritative server debit interval.
 - The Showdown administrator's
   [timer explanation](https://www.smogon.com/forums/threads/ps-timer-updates.3646406/)
   provides historical intent; current source code is authoritative where the two differ.
@@ -53,7 +57,8 @@ For default singles ladder battles:
 
 | Constraint | Value |
 |---|---:|
-| Timer tick | 5 seconds |
+| Visible client countdown | 1-second local updates |
+| Authoritative server debit interval | 5 seconds |
 | Initial total bank | 210 seconds |
 | Initial bank before grace | 150 seconds |
 | Initial grace | 60 seconds |
@@ -67,7 +72,9 @@ For default singles ladder battles:
 
 Important qualifications:
 
-- The clock is charged in five-second ticks, not continuously.
+- The browser visibly counts down once per second. Internally, the current server subtracts five
+  seconds from the authoritative bank every five seconds. The client interpolates the seconds
+  between server timer messages; it is not evidence that the server mutates the bank each second.
 - A new-turn refill is capped at 150 total seconds. The extra 60 seconds is initial grace, not a
   permanent 210-second bank.
 - The 150-second request cap applies even when the total bank is higher.
@@ -107,6 +114,24 @@ Therefore:
   use observed bank and request state rather than assume parity.
 - Before turn 100, a sub-15-second response can be bank-neutral in the timer's quantized model.
   That is available capacity, not a recommended default.
+
+### Finite-horizon example: ten-second decisions
+
+Assume the timer is enabled from the first decision, the player receives exactly one request per
+displayed turn, and each choice reaches the server after the second five-second debit. Then a
+uniform ten-second response:
+
+1. spends ten seconds on turn 1;
+2. is bank-neutral from turns 2 through 100 because each new turn restores ten seconds;
+3. spends five net seconds per turn from turn 101 onward because the refill drops to five seconds;
+4. completes turn 127 with five seconds left and forfeits on turn 128 when the next ten-second
+   charge reaches zero.
+
+Thus the conservative answer is **127 completed turns, with timeout on turn 128**. Forced
+replacement requests or other mid-turn decisions shorten that horizon. "Exactly ten seconds" is
+also a server-event-loop boundary race: a choice processed just before the second debit can be
+charged only five seconds, while one processed just after it is charged ten. Production budgeting
+must not rely on winning that race.
 
 ## 5. Networking And Submission Reserve
 
