@@ -250,8 +250,10 @@ TRAJECTORY_CHARTS = [
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
-        ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
-        ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
+        # sleeping/frozen pivots over seat-games where that status actually occurred (you cannot
+        # pivot a sleeping mon out of a game that never had one)
+        ("sleeping mon out / game (sleep occurred)", lambda r: r.get("switch_out_sleeping_rate")),
+        ("frozen mon out / game (freeze occurred)", lambda r: r.get("switch_out_frozen_rate")),
         ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
         # Switch-in reads, all CONDITIONAL: reads per game where the opponent used a move the
         # ability/type answers AND the seat's team carries it. A blank point means the read was never

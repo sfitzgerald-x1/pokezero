@@ -1012,6 +1012,36 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
 
+    def test_sleeping_frozen_pivot_rate_over_games_the_status_occurred(self):
+        # You cannot pivot a sleeping mon out of a game that never had one: the denominator is
+        # seat-games where the status actually occurred, not every seat-game.
+        def game(seed, proto):
+            ms = {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}],
+                  "p2": [{"species": "Blissey", "moves": ["Ice Beam"]}]}
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        # g1: p1's mon is slept and p1 pivots it out -> qualifies, read made.
+        g1 = game(1, ["|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+                      "|-status|p1a: Snorlax|slp", "|turn|2", "|switch|p1a: Gengar|Gengar|260/260"])
+        # g2: p1's mon is slept but stays in -> qualifies, no read (a real 0 for this game).
+        g2 = game(2, ["|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+                      "|-status|p1a: Snorlax|slp", "|turn|2", "|move|p1a: Snorlax|Body Slam|p2a: Blissey"])
+        # g3: nobody is ever slept -> does NOT qualify (must not dilute the rate).
+        g3 = game(3, ["|turn|1", "|move|p1a: Snorlax|Body Slam|p2a: Blissey"])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in (g1, g2, g3):
+                    f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["sleep_present_seat_games"], 2)        # g1 + g2 only
+        self.assertEqual(m["switch_out_sleeping_rate"], 0.5)      # 1 pivot / 2 qualifying games
+        # freeze never occurred -> None, not 0.0
+        self.assertEqual(m["frozen_present_seat_games"], 0)
+        self.assertIsNone(m["switch_out_frozen_rate"])
+
     def test_ability_read_none_when_never_available_vs_zero_when_passed(self):
         # The whole point of the conditional denominator: "the read was never available" (None) must
         # be distinguishable from "it was available and the bot passed" (0.0). Liquid Ooze is the

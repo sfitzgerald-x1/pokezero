@@ -373,6 +373,12 @@ class GameParse:
                 if seat:
                     sp = species_of(a[0])
                     self.status[seat][sp] = a[1] if len(a) > 1 else None
+                    # opportunity counters for the sleeping/frozen switch-out denominators: this seat
+                    # can only pivot a sleeping/frozen mon out in games where one was afflicted.
+                    if len(a) > 1 and a[1] == "slp":
+                        self.ev[seat]["had_sleeping"] += 1
+                    if len(a) > 1 and a[1] == "frz":
+                        self.ev[seat]["had_frozen"] += 1
                     if len(a) > 1 and a[1] == "tox":
                         self.tox[seat] = 0  # badly poisoned; counter ticks up each end-of-turn
                     if len(a) > 1 and a[1] == "slp":
@@ -796,6 +802,7 @@ def extract(files, lineage=None, milestone=None):
     imm_present = 0; imm_reads = 0           # Immunity mon in on Toxic / Poison Powder
     insom_present = 0; insom_reads = 0       # Insomnia / Vital Spirit mon in on a sleep move
     limber_present = 0; limber_reads = 0     # Limber mon in on a paralysis move
+    sleep_present = 0; frozen_present = 0     # seat-games where a sleeping / frozen mon existed at all
     ooze_drain_present = 0; ooze_drain_reads = 0   # Liquid Ooze in on a drain move
     ooze_seed_present = 0; ooze_seed_reads = 0     # Liquid Ooze in on Leech Seed
     # type-based reads as CONDITIONAL rates: denominator = decided games where the opponent used the
@@ -846,6 +853,13 @@ def extract(files, lineage=None, milestone=None):
             pivots.append(gp.ev[seat]["pivot"])
             for k in ("immunity_switchin","switch_out_sleeping","switch_out_frozen"):
                 switch_ev[k] += gp.ev[seat][k]
+            # denominators for the sleeping/frozen pivots: seat-games where the status actually
+            # occurred on this seat's team (you cannot pivot a sleeping mon out of a game that never
+            # had one). Counted over the same game set as the numerator above.
+            if gp.ev[seat]["had_sleeping"]:
+                sleep_present += 1
+            if gp.ev[seat]["had_frozen"]:
+                frozen_present += 1
             for cat, mids in CAT_MOVE.items():
                 carried = any(mids & {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, []))
                 if carried:
@@ -1131,6 +1145,13 @@ def extract(files, lineage=None, milestone=None):
                             if cat_extra["boom_faced"] else None),
         # Phase 2 switch behavior — per seat-game so self-play and foulplay are comparable
         "switch_behavior": {k: {"total": v, "per_seat_game": round(v / (seat_games or 1), 4)} for k, v in switch_ev.items()},
+        # Sleeping / frozen pivots as CONDITIONAL rates: over seat-games where that status actually
+        # occurred on this seat's team, not over every seat-game. None = the status never happened
+        # (nothing to pivot), which is distinct from 0.0 = it happened and the mon was left in.
+        "sleep_present_seat_games": sleep_present,
+        "switch_out_sleeping_rate": (round(switch_ev["switch_out_sleeping"] / sleep_present, 4) if sleep_present else None),
+        "frozen_present_seat_games": frozen_present,
+        "switch_out_frozen_rate": (round(switch_ev["switch_out_frozen"] / frozen_present, 4) if frozen_present else None),
         # Phase 2 resource / endgame
         "pp_exhaustion_bot_per_game": per_game(pp_exhaust_bot),
         "pp_exhaustion_opp_per_game": per_game(pp_exhaust_opp),
