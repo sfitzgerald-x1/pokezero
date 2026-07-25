@@ -1012,6 +1012,31 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
 
+    def test_ability_read_none_when_never_available_vs_zero_when_passed(self):
+        # The whole point of the conditional denominator: "the read was never available" (None) must
+        # be distinguishable from "it was available and the bot passed" (0.0). Liquid Ooze is the
+        # real-data case — carried in ~143 seat-games/checkpoint but the opponent used a drain move
+        # in 0 of them, which a carried-only denominator rendered as a behavioural 0.0.
+        def game(seed, proto, ms):
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        ooze = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Liquid Ooze"}],
+                "p2": [{"species": "Celebi", "moves": ["Giga Drain", "Leech Seed"], "ability": "Natural Cure"}]}
+        # p2 uses Leech Seed (so the seed read IS available) but never a drain move; p1 does not
+        # switch its Ooze mon in on the seed -> seed rate 0.0 (passed), drain rate None (unavailable).
+        g = game(1, ["|turn|1", "|move|p2a: Celebi|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Celebi"], ooze)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["ooze_seed_present_seat_games"], 1)      # seed read was available
+        self.assertEqual(m["ooze_switchin_on_leechseed_per_game"], 0.0)   # available, not taken
+        self.assertEqual(m["ooze_drain_present_seat_games"], 0)     # drain read never available
+        self.assertIsNone(m["ooze_switchin_on_drain_per_game"])     # -> None, NOT 0.0
+
     def test_grass_fire_conditional_rate_gates_denominator(self):
         # Grass-on-Leech-Seed is a CONDITIONAL rate: the denominator is games where the opponent used
         # Leech Seed AND this seat's team has a grass type — counted even when the read is NOT made.
