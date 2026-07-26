@@ -46,7 +46,15 @@ fi
 
 echo "[3/4] maturin build --release --features model"
 cd "$REPO/rust/pokezero-search"
-"$PYTHON" -m maturin build --release --features model -i "$PYTHON"
+# --skip-auditwheel: the extension deliberately LINKS the venv's own libtorch
+# through an embedded rpath (build.rs). Letting maturin's auditwheel repair copy
+# torch's .so files into the wheel produces a SECOND libtorch in the process, and
+# both copies try to register the same dispatch fallbacks:
+#   "Tried to register multiple backend fallbacks for the same dispatch key
+#    Conjugate" -> abort on `import torch; import pokezero_search`.
+# On Linux the repair only triggers once patchelf is present, so this stayed
+# invisible until the crate was first built in a container.
+"$PYTHON" -m maturin build --release --features model --skip-auditwheel -i "$PYTHON"
 
 echo "[4/4] install wheel"
 WHEEL="$(ls -t target/wheels/pokezero_search-*.whl | head -1)"
