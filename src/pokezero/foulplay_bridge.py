@@ -127,6 +127,17 @@ class ControlledFoulPlayConfig:
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
     policy_mode: str = "root-puct"
+    # Frozen Rust search configuration (policy_mode='engine-mcts'). These are the
+    # axes of the study's config_id; every one changes search semantics or wall
+    # time, so they are part of the frozen contract, never defaulted silently.
+    engine_model_path: Path | None = None
+    engine_tables_path: Path | None = None
+    engine_depth: int = 4
+    engine_sims: int = 1024
+    engine_batch: int = 16
+    engine_worlds: int = 4
+    engine_c_puct: float = 1.4
+    engine_model_priors: bool = True
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -179,8 +190,18 @@ class ControlledFoulPlayConfig:
             raise ValueError("search_time_ms must be positive.")
         if self.max_decision_rounds <= 0:
             raise ValueError("max_decision_rounds must be positive.")
-        if self.policy_mode not in {"raw", "root-puct"}:
-            raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
+        if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
+            raise ValueError("policy_mode must be 'raw', 'root-puct', or 'engine-mcts'.")
+        if self.policy_mode == "engine-mcts":
+            missing = [
+                name for name in ("engine_model_path", "engine_tables_path")
+                if getattr(self, name) is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"policy_mode='engine-mcts' requires {', '.join(missing)} "
+                    "(export them with mcts_eval.materialize_search_artifacts)."
+                )
         if self.capture_driver not in {"checkpoint", "random-legal"}:
             raise ValueError("capture_driver must be 'checkpoint' or 'random-legal'.")
         if self.capture_driver == "checkpoint":
@@ -2362,6 +2383,36 @@ def _build_policy(
 
     if config.policy_mode == "raw":
         return raw_policy(policy_id)
+
+    if config.policy_mode == "engine-mcts":
+        # Native Rust MCTS over sampled belief worlds with in-crate TorchScript
+        # leaves. Telemetry (including the per-phase encode/model/tree walls)
+        # lives on the returned policy's .stats, so a strength row can carry the
+        # same measurements its timing row did.
+        from .engine_search import EngineMctsConfig, EngineMctsPolicy
+
+        return EngineMctsPolicy(
+            dex=load_showdown_dex_cached(config.showdown_root),
+            set_source=(
+                load_gen3_randbat_source_cached(config.showdown_root)
+                if belief_set_source_env_enabled()
+                else None
+            ),
+            policy_id=f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}",
+            config=EngineMctsConfig(
+                leaf_eval="model",
+                checkpoint_path=str(config.checkpoint),
+                model_path=str(config.engine_model_path),
+                tables_path=str(config.engine_tables_path),
+                model_device=config.device or "cpu",
+                worlds=config.engine_worlds,
+                search_sims=config.engine_sims,
+                search_batch=config.engine_batch,
+                search_depth=config.engine_depth,
+                c_puct=config.engine_c_puct,
+                model_priors=config.engine_model_priors,
+            ),
+        )
 
     search_policy_id = f"{policy_id}+root-puct"
     # One accumulator spans the prior, opponent-prior, and value closures for

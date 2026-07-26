@@ -214,3 +214,55 @@ class EngineMctsPolicySpecTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EngineMctsPolicyModeTest(unittest.TestCase):
+    """policy_mode='engine-mcts' is how a lattice cell becomes a STRENGTH row:
+    the same frozen search configuration that produced a timing row must drive
+    the FoulPlay games, or the two axes of the frontier describe different
+    searches."""
+
+    def _config(self, **overrides):
+        from pathlib import Path as P
+
+        from pokezero.foulplay_bridge import ControlledFoulPlayConfig
+
+        values = dict(
+            checkpoint=P("/shared/ckpt.pt"),
+            showdown_root=P("/opt/pokemon-showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=P("/artifacts/model_ts.pt"),
+            engine_tables_path=P("/artifacts/encoder_tables.json"),
+        )
+        values.update(overrides)
+        return ControlledFoulPlayConfig(**values)
+
+    def test_engine_mcts_requires_exported_artifacts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "engine_model_path"):
+            self._config(engine_model_path=None)
+        with self.assertRaisesRegex(ValueError, "engine_tables_path"):
+            self._config(engine_tables_path=None)
+
+    def test_unknown_policy_mode_names_engine_mcts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "engine-mcts"):
+            self._config(policy_mode="bogus")
+
+    def test_search_axes_round_trip(self) -> None:
+        config = self._config(engine_depth=8, engine_sims=8192, engine_batch=256, engine_worlds=4)
+        self.assertEqual(
+            (config.engine_depth, config.engine_sims, config.engine_batch, config.engine_worlds),
+            (8, 8192, 256, 4),
+        )
+
+    def test_axes_match_the_lattice_config_id(self) -> None:
+        # A strength row must be joinable to its timing row on config_id.
+        cell = SearchConfig(depth=8, sims=8192, batch=256, worlds=4)
+        config = self._config(
+            engine_depth=cell.depth, engine_sims=cell.sims,
+            engine_batch=cell.batch, engine_worlds=cell.worlds,
+        )
+        self.assertEqual(
+            f"d{config.engine_depth}-s{config.engine_sims}-b{config.engine_batch}"
+            f"-w{config.engine_worlds}-local",
+            cell.config_id,
+        )

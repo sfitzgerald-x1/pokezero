@@ -2613,6 +2613,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
             stats_block_enabled = True
             exact_state_enabled = True
             transition_token_budget = 128
+            # Region-trim plumbing added transition_token_count to the model
+            # config; observation_spec_from_model_config reads it.
+            transition_token_count = 128
             tier2_residuals = True
             tier2_investment = False
 
@@ -2783,6 +2786,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
             stats_block_enabled = True
             exact_state_enabled = True
             transition_token_budget = 128
+            # Region-trim plumbing added transition_token_count to the model
+            # config; observation_spec_from_model_config reads it.
+            transition_token_count = 128
             tier2_residuals = True
             tier2_investment = False
 
