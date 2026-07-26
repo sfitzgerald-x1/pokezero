@@ -81,6 +81,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help=(
+            "Lattice worker PROCESSES. Cells are dealt round-robin across workers, so N "
+            "workers share M GPUs instead of reserving one GPU per cell."
+        ),
+    )
+    parser.add_argument(
+        "--gpus",
+        type=int,
+        default=0,
+        help=(
+            "Physical GPUs available to this run. Worker i is pinned to GPU i%%gpus via "
+            "CUDA_VISIBLE_DEVICES (the crate always asks for cuda:0, so the mapping is what "
+            "spreads and shares devices). 0 keeps the run on CPU."
+        ),
+    )
+    parser.add_argument(
         "--stage-through",
         default=None,
         choices=[stage.value for stage in Stage],
@@ -210,11 +229,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         corpus_path = stage_dir(out_root, Stage.BUILD_TIMING_CORPUS) / "timing-corpus.jsonl"
         _, records = read_corpus(corpus_path)
+
+        if args.workers > 1:
+            return _run_lattice_workers(directory)
+
         from pokezero.mcts_eval.lattice import time_lattice_cell
 
         rows = []
         for index, config in enumerate(configs):
             if index % args.shards != args.shard_id:
+                continue
+            target = directory / f"timing-{config.config_id}.json"
+            if target.is_file():  # a resumed worker never re-times a finished cell
+                rows.append(json.loads(target.read_text()))
                 continue
             row = time_lattice_cell(
                 config,
@@ -223,8 +250,52 @@ def main(argv: Sequence[str] | None = None) -> int:
                 showdown_root=args.showdown_root,
             )
             rows.append(row.to_payload())
-            _write_json(directory / f"timing-{config.config_id}.json", row.to_payload())
+            _write_json(target, row.to_payload())
         return [_write_json(directory / f"timing-shard-{args.shard_id}.json", rows)]
+
+    def _run_lattice_workers(directory: Path) -> list[str]:
+        """Fan the lattice across worker processes packed onto the available GPUs.
+
+        The crate always requests ``cuda:0``, so device spreading is done with
+        CUDA_VISIBLE_DEVICES: worker i sees GPU ``i % gpus`` as its only device.
+        Several workers may share one GPU — search is not GPU-saturating at these
+        batch sizes, so packing raises utilization instead of reserving a device
+        per cell. Each worker writes its own per-cell artifacts, so a worker that
+        dies is resumed without re-timing completed cells.
+        """
+        import subprocess
+
+        procs = []
+        for worker in range(args.workers):
+            env = dict(os.environ)
+            if args.gpus > 0:
+                env["CUDA_VISIBLE_DEVICES"] = str(worker % args.gpus)
+            # Keep per-process CPU use bounded so packed workers do not thrash.
+            env.setdefault("OMP_NUM_THREADS", str(args.torch_threads))
+            env.setdefault("MKL_NUM_THREADS", str(args.torch_threads))
+            command = [
+                sys.executable, str(Path(__file__).resolve()),
+                "--checkpoint", args.checkpoint,
+                "--out-root", str(out_root),
+                "--model-device", args.model_device,
+                "--depths", ",".join(str(d) for d in args.depths),
+                "--sims", ",".join(str(s) for s in args.sims),
+                "--batch", str(args.batch), "--worlds", str(args.worlds),
+                "--corpus-decisions", str(args.corpus_decisions),
+                "--concurrency", str(args.concurrency),
+                "--torch-threads", str(args.torch_threads),
+                "--shards", str(args.workers), "--shard-id", str(worker),
+                "--stage-through", Stage.RUN_TIMING_LATTICE.value,
+                "--workers", "1",
+            ]
+            if args.showdown_root:
+                command += ["--showdown-root", args.showdown_root]
+            procs.append((worker, subprocess.Popen(command, env=env)))
+        failures = [worker for worker, proc in procs if proc.wait() != 0]
+        if failures:
+            raise TerminalFailure(f"lattice worker(s) {failures} failed; see their stage artifacts")
+        shard_files = sorted(str(p) for p in directory.glob("timing-shard-*.json"))
+        return shard_files or [_write_json(directory / "timing-shard-merged.json", [])]
 
     @stage_handler(Stage.MERGE_AND_SELECT)
     def _select(directory: Path) -> list[str]:
