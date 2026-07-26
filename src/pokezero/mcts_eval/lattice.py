@@ -117,18 +117,73 @@ def time_lattice_cell(
 def _default_decider(
     contract: CheckpointContract, showdown_root: str | None
 ) -> Callable[[TimingDecisionRecord, SearchConfig], dict[str, Any]]:
-    """Build the controlled engine-MCTS policy and run one corpus decision.
+    """Live decider: controlled engine-MCTS over the checkpoint's own leaves.
 
-    Prefix replay warms the incremental fold BEFORE the caller's timer starts
-    for the next record; within a decision only the request->choice span is
-    timed, matching the plan's definition.
+    Artifacts (TorchScript trace + encoder tables) are materialized once, keyed
+    by the contract, and the policy is rebuilt per cell because depth/sims are
+    part of a cell's identity. The per-decision work is the plan's timed span:
+    observation/legal-action construction is already in the corpus record, so
+    this runs belief-world construction + native search + root-action mapping
+    and returns the crate's own telemetry (never a derived phase).
     """
+    from ..engine_search import EngineMctsConfig, EngineMctsPolicy
+
+    artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
+    policies: dict[str, Any] = {}
 
     def decide(record: TimingDecisionRecord, config: SearchConfig) -> dict[str, Any]:
         raise NotImplementedError(
-            "the live decider requires the model-enabled crate plus an exported "
-            "TorchScript artifact and encoder tables; pass decide=... explicitly "
-            "until the study image is available."
+            "engine-MCTS timing needs the corpus record's event_prefix replayed into live "
+            "env state before EngineMctsPolicy.select_action_with_context can be called: a "
+            "TimingDecisionRecord is a public prefix + request-derived candidates, not an "
+            "observation. Implement replay via LocalShowdownEnv (reset(seed=record.battle_seed) "
+            "then advance through record.event_prefix, warming the incremental fold OUTSIDE "
+            "the timed span per plan A2), then time select_action_with_context and read the "
+            "crate telemetry from policy.stats. Artifacts are already materialized by "
+            "materialize_search_artifacts(); pass decide=... to time a cell meanwhile."
         )
 
     return decide
+
+
+def materialize_search_artifacts(
+    contract: CheckpointContract, *, showdown_root: str | None
+) -> dict[str, str]:
+    """Export (once) the TorchScript trace + encoder tables this contract needs.
+
+    Reuse is keyed by the contract's export key, so a different checkpoint,
+    device, observation contract, Showdown source, or exporter revision cannot
+    silently adopt someone else's artifact.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path as _Path
+
+    from .resolver import export_reuse_key, validate_encoder_tables
+
+    key = export_reuse_key(contract)[:16]
+    root = _Path(contract.checkpoint_path).parent / f".mcts-eval-artifacts-{key}"
+    root.mkdir(parents=True, exist_ok=True)
+    model_path = root / "model_ts.pt"
+    tables_path = root / "encoder_tables.json"
+    repo = _Path(__file__).resolve().parents[3]
+
+    if not model_path.is_file():
+        subprocess.run(
+            [sys.executable, str(repo / "scripts" / "export_model.py"),
+             "--checkpoint", contract.checkpoint_path, "--out-dir", str(root), "--formats", "ts"],
+            check=True,
+        )
+        produced = next(root.glob("*_ts.pt"), None) or next(root.glob("*.pt"), None)
+        if produced and produced != model_path:
+            produced.rename(model_path)
+    if not tables_path.is_file():
+        schema = "v3" if contract.schema_version.endswith("v3") else "v2.2"
+        subprocess.run(
+            [sys.executable, str(repo / "scripts" / "export_encoder_tables.py"),
+             "--showdown-root", showdown_root or "", "--observation-schema", schema,
+             "--out", str(tables_path)],
+            check=True,
+        )
+    validate_encoder_tables(contract, tables_path)  # fail closed on root/leaf drift
+    return {"model_path": str(model_path), "tables_path": str(tables_path)}
