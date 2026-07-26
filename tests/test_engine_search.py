@@ -20,8 +20,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from pokezero.engine_search import (  # noqa: E402
     EngineMctsConfig,
     EngineMctsPolicy,
+    EngineMctsStats,
     EngineSearchFallbackError,
     _latch_encoder_tables_to_model_config,
+    _locked_aggregate_choice,
 )
 
 
@@ -431,6 +433,21 @@ class ModelConfigValidationTests(unittest.TestCase):
                 search_batch=16,
             )
 
+    def test_early_stop_is_model_only_and_floor_is_bounded(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
+            EngineMctsConfig(early_stop=True)
+        with self.assertRaisesRegex(ValueError, "early_stop_min_sims"):
+            EngineMctsConfig(
+                leaf_eval="model",
+                model_path="x.pt",
+                checkpoint_path="checkpoint.pt",
+                tables_path="t.json",
+                search_sims=8,
+                search_batch=8,
+                early_stop=True,
+                early_stop_min_sims=9,
+            )
+
     def test_missing_model_artifact_fails_at_init(self) -> None:
         with self.assertRaises(ValueError):
             EngineMctsPolicy(
@@ -549,6 +566,317 @@ class ModelObservationContractTests(unittest.TestCase):
         )
 
         policy._validate_model_root_observation(observation)
+
+
+class EarlyStopAggregateTests(unittest.TestCase):
+    @staticmethod
+    def _report(
+        *,
+        requested: int,
+        completed: int,
+        visits: tuple[tuple[str, int], ...],
+    ) -> dict:
+        return {
+            "requested_iterations": requested,
+            "iterations": completed,
+            "side_one": [
+                {"move": move, "visits": count, "q": 0.5} for move, count in visits
+            ],
+        }
+
+    def test_locked_choice_requires_strict_full_budget_separation(self) -> None:
+        locked = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 56), ("thunderwave", 4)),
+        )
+        tied_upper_bound = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 50), ("thunderwave", 10)),
+        )
+
+        self.assertEqual(
+            _locked_aggregate_choice([("side_one", locked)]),
+            "switch persian",
+        )
+        self.assertIsNone(
+            _locked_aggregate_choice([("side_one", tied_upper_bound)])
+        )
+
+    def test_multi_world_bound_includes_every_world(self) -> None:
+        stopped = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 56), ("thunderwave", 4)),
+        )
+        full = self._report(
+            requested=100,
+            completed=100,
+            visits=(("switch persian", 80), ("thunderwave", 20)),
+        )
+        opposing = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 4), ("thunderwave", 56)),
+        )
+
+        self.assertEqual(
+            _locked_aggregate_choice(
+                [("side_one", stopped), ("side_one", full)]
+            ),
+            "switch persian",
+        )
+        self.assertIsNone(
+            _locked_aggregate_choice(
+                [("side_one", stopped), ("side_one", opposing)]
+            )
+        )
+
+    def test_malformed_visit_conservation_cannot_lock(self) -> None:
+        malformed = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 55), ("thunderwave", 4)),
+        )
+        self.assertIsNone(_locked_aggregate_choice([("side_one", malformed)]))
+
+    def test_side_two_reports_use_the_requested_side(self) -> None:
+        report = self._report(
+            requested=100,
+            completed=60,
+            visits=(("switch persian", 56), ("thunderwave", 4)),
+        )
+        report["side_two"] = report.pop("side_one")
+        self.assertEqual(
+            _locked_aggregate_choice([("side_two", report)]),
+            "switch persian",
+        )
+
+
+class EarlyStopPolicyIntegrationTests(unittest.TestCase):
+    class _Native:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.calls = []
+
+        def search_batched_multi_encoded(self, *args):
+            self.calls.append(args)
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return json.dumps(response)
+
+    @staticmethod
+    def _report(
+        alpha: int,
+        beta: int,
+        *,
+        requested: int = 100,
+        stopped: bool,
+    ) -> dict:
+        completed = alpha + beta
+        return {
+            "iterations": completed,
+            "requested_iterations": requested,
+            "remaining_iterations": requested - completed,
+            "early_stopped": stopped,
+            "model_evals": completed,
+            "lossy_renders": 0,
+            "prior_fallbacks": 0,
+            "side_one": [
+                {"move": "alpha", "visits": alpha, "q": 0.5},
+                {"move": "beta", "visits": beta, "q": 0.5},
+            ],
+        }
+
+    @staticmethod
+    def _context():
+        observation = _FakeObservation(
+            (True, True, False, False, False, False, False, False, False),
+            [
+                {"action_index": 0, "kind": "move", "legal": True, "move_id": "alpha"},
+                {"action_index": 1, "kind": "move", "legal": True, "move_id": "beta"},
+            ],
+        )
+        return SimpleNamespace(
+            observation=observation,
+            public_materialization_state=SimpleNamespace(
+                replay=SimpleNamespace(turn_number=1)
+            ),
+            player_id="p1",
+            battle_id="early-stop-test",
+            decision_round_index=0,
+        )
+
+    @staticmethod
+    def _world(label: str):
+        return (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p1": "side_one"},
+            ),
+            SimpleNamespace(to_string=lambda: label),
+        )
+
+    def _policy(self, *, early_stop: bool, strict: bool = False):
+        policy = object.__new__(EngineMctsPolicy)
+        policy.policy_id = "early-stop-test"
+        policy._config = EngineMctsConfig(
+            worlds=2,
+            leaf_eval="model",
+            model_path="model.pt",
+            checkpoint_path="checkpoint.pt",
+            tables_path="tables.json",
+            search_sims=100,
+            search_batch=10,
+            early_stop=early_stop,
+            early_stop_min_sims=20,
+            strict_fallbacks=strict,
+        )
+        policy._tables_json = "{}"
+        policy.stats = EngineMctsStats()
+        policy._world_failures_before = {}
+        return policy
+
+    def _run(self, policy, native, worlds):
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+        live_fold = SimpleNamespace(to_payload=lambda: {})
+        with (
+            patch.dict(sys.modules, {"pokezero_search": fake_module}),
+            patch.object(EngineMctsPolicy, "_native", return_value=native),
+            patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ),
+            patch.object(EngineMctsPolicy, "_root_inputs_json", return_value="{}"),
+        ):
+            return policy._search_model(
+                self._context(), worlds, live_fold, random.Random(7)
+            )
+
+    def test_locked_multi_world_stop_is_accepted(self) -> None:
+        native = self._Native(
+            [
+                self._report(56, 4, stopped=True),
+                self._report(56, 4, stopped=True),
+            ]
+        )
+        policy = self._policy(early_stop=True)
+
+        decision = self._run(
+            policy,
+            native,
+            [self._world("world-a"), self._world("world-b")],
+        )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertTrue(decision.metadata["engine_mcts"]["early_stop"]["aggregate_locked"])
+        self.assertEqual(decision.metadata["engine_mcts"]["early_stop"]["simulations_saved"], 80)
+        self.assertEqual(policy.stats.early_stop_accepted_decisions, 1)
+        self.assertTrue(all(len(call) == 14 for call in native.calls))
+
+    def test_ambiguous_multi_world_stop_replays_full_budget(self) -> None:
+        native = self._Native(
+            [
+                self._report(56, 4, stopped=True),
+                self._report(4, 56, stopped=True),
+                self._report(60, 40, stopped=False),
+                self._report(55, 45, stopped=False),
+            ]
+        )
+        policy = self._policy(early_stop=True)
+
+        decision = self._run(
+            policy,
+            native,
+            [self._world("world-a"), self._world("world-b")],
+        )
+
+        self.assertEqual(decision.action_index, 0)
+        stop = decision.metadata["engine_mcts"]["early_stop"]
+        self.assertFalse(stop["aggregate_locked"])
+        self.assertEqual(stop["full_budget_replays"], 2)
+        self.assertEqual(policy.stats.total_iterations, 320)
+        self.assertEqual(policy.stats.early_stop_full_budget_replays, 2)
+
+    def test_failed_required_replay_fails_the_decision_closed(self) -> None:
+        native = self._Native(
+            [
+                self._report(56, 4, stopped=True),
+                self._report(4, 56, stopped=True),
+                RuntimeError("replay failed"),
+            ]
+        )
+        policy = self._policy(early_stop=True, strict=True)
+
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError, "reason=early_stop_replay_failed"
+        ):
+            self._run(
+                policy,
+                native,
+                [self._world("world-a"), self._world("world-b")],
+            )
+
+    def test_unmappable_locked_choice_replays_instead_of_falling_back(self) -> None:
+        native = self._Native(
+            [
+                self._report(56, 4, stopped=True),
+                self._report(40, 60, stopped=False),
+            ]
+        )
+        policy = self._policy(early_stop=True)
+        context = self._context()
+        context.observation.metadata["action_candidates"][0]["legal"] = False
+        context.observation.legal_action_mask = (
+            False,
+            True,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+        )
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+        with (
+            patch.dict(sys.modules, {"pokezero_search": fake_module}),
+            patch.object(EngineMctsPolicy, "_native", return_value=native),
+            patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ),
+            patch.object(EngineMctsPolicy, "_root_inputs_json", return_value="{}"),
+        ):
+            decision = policy._search_model(
+                context,
+                [self._world("world-a")],
+                SimpleNamespace(to_payload=lambda: {}),
+                random.Random(7),
+            )
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["early_stop"]["full_budget_replays"],
+            1,
+        )
+
+    def test_disabled_feature_preserves_old_native_call_shape(self) -> None:
+        report = self._report(70, 30, stopped=False)
+        report.pop("requested_iterations")
+        report.pop("remaining_iterations")
+        report.pop("early_stopped")
+        native = self._Native([report])
+        policy = self._policy(early_stop=False)
+
+        decision = self._run(policy, native, [self._world("world-a")])
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(len(native.calls[0]), 12)
 
 
 class _FakeEvent:

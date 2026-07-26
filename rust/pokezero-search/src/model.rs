@@ -37,7 +37,7 @@ use poke_engine::state::State;
 
 use crate::tree::{
     apply_self_priors, finalize, multiply_report_json, traverse, BranchSeam, LeafPrice,
-    MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
+    root_visit_lock, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -698,6 +698,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     spec: &ObsSpec,
     c_puct: f32,
     seed: u64,
+    early_stop_min_sims: usize,
+    early_stop_side_one: bool,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -713,6 +715,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
     let mut rounds = 0usize;
+    let mut early_stopped = false;
+    let mut early_stop_leader_visits = 0u32;
+    let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
@@ -925,6 +930,28 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         }
         completed += traversals.len();
         rounds += 1;
+        if early_stop_min_sims > 0
+            && completed >= early_stop_min_sims
+            && completed < iterations
+        {
+            let remaining = iterations - completed;
+            if let Some((locked, leader, runner_up)) =
+                root_visit_lock(&tree, early_stop_side_one, remaining)
+            {
+                early_stop_leader_visits = leader;
+                early_stop_runner_up_visits = runner_up;
+                if locked {
+                    early_stopped = true;
+                    break;
+                }
+            }
+        }
+    }
+    if let Some((_locked, leader, runner_up)) =
+        root_visit_lock(&tree, early_stop_side_one, iterations - completed)
+    {
+        early_stop_leader_visits = leader;
+        early_stop_runner_up_visits = runner_up;
     }
     let elapsed_s = start.elapsed().as_secs_f64();
     let outcome = MultiPlyOutcome {
@@ -946,7 +973,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_priors\":{}",
+         \"prior_fallbacks\":{},\"root_priors\":{},\"requested_iterations\":{},\
+         \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
+         \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
+         \"early_stop_leader_visits\":{},\"early_stop_runner_up_visits\":{}",
         batch_size,
         rounds,
         model_evals,
@@ -955,11 +985,19 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_priors,
         prior_branches,
         prior_fallbacks,
-        root_priors_json
+        root_priors_json,
+        iterations,
+        iterations - completed,
+        early_stop_min_sims > 0,
+        early_stopped,
+        early_stop_min_sims,
+        if early_stop_side_one { "side_one" } else { "side_two" },
+        early_stop_leader_visits,
+        early_stop_runner_up_visits,
     );
     Ok(multiply_report_json(
         &outcome,
-        iterations,
+        completed,
         &cfg,
         seed,
         "torchscript",
@@ -1295,6 +1333,8 @@ impl NativeLeafModel {
         seed = 0,
         deep_ko_split = true,
         model_priors = true,
+        early_stop_min_sims = 0,
+        early_stop_side_one = true,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1312,6 +1352,8 @@ impl NativeLeafModel {
         seed: u64,
         deep_ko_split: bool,
         model_priors: bool,
+        early_stop_min_sims: usize,
+        early_stop_side_one: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1320,6 +1362,11 @@ impl NativeLeafModel {
         }
         if max_depth == 0 || max_depth > 32 {
             return Err(PyValueError::new_err("max_depth must be in 1..=32"));
+        }
+        if early_stop_min_sims > iterations {
+            return Err(PyValueError::new_err(
+                "early_stop_min_sims must be <= iterations",
+            ));
         }
         let root_state = parse_state(state_str)?;
         let leaf_ctx = crate::leaf::LeafContext::new(
@@ -1348,6 +1395,8 @@ impl NativeLeafModel {
                 &spec,
                 c_puct,
                 seed,
+                early_stop_min_sims,
+                early_stop_side_one,
             )
         })
     }

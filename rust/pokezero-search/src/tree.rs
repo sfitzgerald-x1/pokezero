@@ -143,6 +143,41 @@ pub(crate) struct Tree {
     pub chances: Vec<ChanceNode>,
 }
 
+/// Whether the acting side's most-visited root arm is mathematically
+/// uncatchable within the remaining simulation budget.
+///
+/// The strict inequality preserves the full-budget argmax without relying on
+/// tie-breaking. A single legal arm is locked as soon as the caller's minimum
+/// simulation floor has been met.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) fn root_visit_lock(
+    tree: &Tree,
+    side_one: bool,
+    remaining: usize,
+) -> Option<(bool, u32, u32)> {
+    let root = tree.decisions.first()?;
+    let stats = if side_one {
+        &root.s1_stats
+    } else {
+        &root.s2_stats
+    };
+    if stats.is_empty() {
+        return None;
+    }
+    let mut top = 0u32;
+    let mut runner_up = 0u32;
+    for stat in stats {
+        if stat.visits > top {
+            runner_up = top;
+            top = stat.visits;
+        } else if stat.visits > runner_up {
+            runner_up = stat.visits;
+        }
+    }
+    let locked = stats.len() == 1 || usize::try_from(top - runner_up).ok()? > remaining;
+    Some((locked, top, runner_up))
+}
+
 impl Tree {
     /// Root decision node from the ROOT option surface (`root_get_all_options`
     /// — force-trapped / slow-uturn aware, matching the one-ply core).
@@ -873,6 +908,22 @@ mod tests {
             .expect("root has arms")
             .display
             .clone()
+    }
+
+    #[test]
+    fn root_visit_lock_is_strict_about_remaining_simulations() {
+        let state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let mut tree = Tree::from_root(&state).expect("root builds");
+        assert!(tree.decisions[0].s1_stats.len() >= 2);
+        tree.decisions[0].s1_stats[0].visits = 70;
+        tree.decisions[0].s1_stats[1].visits = 10;
+        tree.decisions[0].s2_stats[0].visits = 15;
+        tree.decisions[0].s2_stats[1].visits = 65;
+
+        assert_eq!(root_visit_lock(&tree, true, 59), Some((true, 70, 10)));
+        assert_eq!(root_visit_lock(&tree, true, 60), Some((false, 70, 10)));
+        assert_eq!(root_visit_lock(&tree, false, 49), Some((true, 65, 15)));
+        assert_eq!(root_visit_lock(&tree, false, 50), Some((false, 65, 15)));
     }
 
     /// (a) Analytical fixture: the root edge value equals the hand-computed
