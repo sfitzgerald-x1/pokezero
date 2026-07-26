@@ -7,6 +7,12 @@ the checkpoint reference is data, and every contract is derived from the
 checkpoint's own stamped model configuration (plan section 2.1).
 """
 
+from .manifest import (
+    MatrixManifest,
+    ResourceProfile,
+    SearchConfig,
+    default_lattice,
+)
 from .resolver import (
     CheckpointContract,
     ContractError,
@@ -14,11 +20,31 @@ from .resolver import (
     resolve_checkpoint_contract,
     sha256_file,
 )
+from .timing_corpus import (
+    CorpusError,
+    TimingCorpusManifest,
+    TimingDecisionRecord,
+    build_corpus,
+    label_strata,
+    read_corpus,
+    write_corpus,
+)
 
 __all__ = [
     "CheckpointContract",
     "ContractError",
+    "CorpusError",
+    "MatrixManifest",
+    "ResourceProfile",
+    "SearchConfig",
+    "TimingCorpusManifest",
+    "TimingDecisionRecord",
+    "build_corpus",
+    "default_lattice",
     "export_reuse_key",
+    "label_strata",
+    "read_corpus",
     "resolve_checkpoint_contract",
     "sha256_file",
+    "write_corpus",
 ]
