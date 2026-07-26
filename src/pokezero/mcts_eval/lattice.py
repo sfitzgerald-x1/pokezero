@@ -170,8 +170,13 @@ def materialize_search_artifacts(
 
     if not model_path.is_file():
         subprocess.run(
+            # TorchScript traces bake device constants (see model.rs: "Artifacts
+            # are PER-DEVICE"), so a CPU trace loaded on CUDA dies inside the
+            # interpreter. Trace on the device the search will run on; the export
+            # reuse key already includes model_device, so the cache stays correct.
             [sys.executable, str(repo / "scripts" / "export_model.py"),
-             "--checkpoint", contract.checkpoint_path, "--out-dir", str(root), "--formats", "ts"],
+             "--checkpoint", contract.checkpoint_path, "--out-dir", str(root),
+             "--formats", "ts", "--device", contract.model_device],
             check=True,
         )
         produced = next(root.glob("*_ts.pt"), None) or next(root.glob("*.pt"), None)
