@@ -1005,6 +1005,12 @@ class EngineMctsPolicy:
             # invocations; worlds_searched is updated only for final records.
             self.stats.total_iterations += int(report["iterations"])
             self.stats.model_evals += int(report["model_evals"])
+            # Crate-measured phase walls are per-INVOCATION compute, exactly like
+            # iterations/model_evals above: a conservatively replayed world spent
+            # that encode/model/tree time twice and must report it.
+            self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
+            self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
+            self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report
@@ -1091,16 +1097,6 @@ class EngineMctsPolicy:
             total = max(sum(entry["visits"] for entry in entries), 1)
             for entry in entries:
                 aggregated[entry["move"]] += entry["visits"] / total
-            self.stats.total_iterations += int(report["iterations"])
-            self.stats.model_evals += int(report["model_evals"])
-            # Crate-measured phase walls (absent on older crate revisions, which
-            # the study's provenance gate rejects anyway — default to 0 rather
-            # than inventing a value).
-            self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
-            self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
-            self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
-            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
-            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             self.stats.worlds_searched += 1
             worlds_searched_here += 1
         self.stats.search_wall_seconds += time.perf_counter() - search_started
