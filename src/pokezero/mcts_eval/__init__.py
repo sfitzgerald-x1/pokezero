@@ -7,6 +7,13 @@ the checkpoint reference is data, and every contract is derived from the
 checkpoint's own stamped model configuration (plan section 2.1).
 """
 
+from .controller import (
+    Stage,
+    RetryableFailure,
+    TerminalFailure,
+    next_incomplete_stage,
+    run_pipeline,
+)
 from .manifest import (
     MatrixManifest,
     ResourceProfile,
@@ -20,6 +27,24 @@ from .resolver import (
     resolve_checkpoint_contract,
     sha256_file,
 )
+from .report import (
+    StrengthRow,
+    TimingRow,
+    pareto_frontier,
+    render_markdown_table,
+    render_report,
+    select_candidates,
+)
+from .scoring import (
+    GameResult,
+    Interval,
+    MergeError,
+    bootstrap_indices,
+    bootstrap_mean,
+    bootstrap_paired_delta,
+    pair_scores,
+    parity_label,
+)
 from .timing_corpus import (
     CorpusError,
     TimingCorpusManifest,
@@ -31,6 +56,25 @@ from .timing_corpus import (
 )
 
 __all__ = [
+    "GameResult",
+    "Interval",
+    "MergeError",
+    "RetryableFailure",
+    "Stage",
+    "StrengthRow",
+    "TerminalFailure",
+    "TimingRow",
+    "bootstrap_indices",
+    "bootstrap_mean",
+    "bootstrap_paired_delta",
+    "next_incomplete_stage",
+    "pair_scores",
+    "pareto_frontier",
+    "parity_label",
+    "render_markdown_table",
+    "render_report",
+    "run_pipeline",
+    "select_candidates",
     "CheckpointContract",
     "ContractError",
     "CorpusError",
