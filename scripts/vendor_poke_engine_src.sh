@@ -47,7 +47,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
 VERSION="0.0.47"
 DEST="$REPO/third_party/poke-engine-src"
-DL_DIR="$(mktemp -d -t poke-engine-src)"
+# Portable temp dir: `mktemp -d -t NAME` is BSD syntax that GNU coreutils rejects
+# ("too few X's in template"), which broke vendoring inside the Linux image.
+# An explicit template with trailing X's behaves identically on both.
+DL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/poke-engine-src.XXXXXX")"
 trap 'rm -rf "$DL_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
