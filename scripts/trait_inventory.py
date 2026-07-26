@@ -52,6 +52,12 @@ LINEAGES = {
     "v3-k64": (r"^v3hist-k64-5m-.*$", []),
     "v3-k64-enthalf": (r"^v3hist-k64-enthalf-5m-.*$", []),   # halved entropy coeff; own entity from game 0
     "v3-k64-eps-entq": (r"^v3hist-k64-eps-entq-5m-.*$", []),  # epsilon + entropy-q variant; own entity from game 0
+    # enthalf swept across more history lengths (k0/k1/k8, 20260724). Each is its own game-0 entity,
+    # no base arm — all live in the ent_fix report. Anchored on the full `-enthalf-5m-` token so e.g.
+    # `v3hist-k1-enthalf-5m-*` can't be confused with the `v3hist-k16-5m-*` base arm.
+    "v3-k0-enthalf": (r"^v3hist-k0-enthalf-5m-.*$", []),
+    "v3-k1-enthalf": (r"^v3hist-k1-enthalf-5m-.*$", []),
+    "v3-k8-enthalf": (r"^v3hist-k8-enthalf-5m-.*$", []),
 }
 
 
