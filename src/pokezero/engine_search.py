@@ -345,6 +345,13 @@ class EngineMctsStats:
     unmapped_choices: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
+    # Native per-phase search wall (crate-measured, never derived by
+    # subtraction): leaf encoding, model forwards, and tree work. These are the
+    # inputs to the depth/throughput study's phase attribution
+    # (docs/mcts_depth_strength_eval_plan.md section 4).
+    encode_wall_seconds: float = 0.0
+    model_wall_seconds: float = 0.0
+    tree_wall_seconds: float = 0.0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -375,6 +382,9 @@ class EngineMctsStats:
             "fallback_reasons": dict(self.fallback_reasons),
             "unmapped_choices": dict(self.unmapped_choices),
             "model_evals": self.model_evals,
+            "encode_wall_seconds": self.encode_wall_seconds,
+            "model_wall_seconds": self.model_wall_seconds,
+            "tree_wall_seconds": self.tree_wall_seconds,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -1081,6 +1091,22 @@ class EngineMctsPolicy:
             total = max(sum(entry["visits"] for entry in entries), 1)
             for entry in entries:
                 aggregated[entry["move"]] += entry["visits"] / total
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.model_evals += int(report["model_evals"])
+            # Crate-measured phase walls (absent on older crate revisions, which
+            # the study's provenance gate rejects anyway — default to 0 rather
+            # than inventing a value).
+            self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
+            self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
+            self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
+            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            self.stats.worlds_searched += 1
+            worlds_searched_here += 1
+        self.stats.search_wall_seconds += time.perf_counter() - search_started
+
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
         choice_weights = (
             Counter({locked_choice: 1.0}) if locked_choice is not None else aggregated
         )

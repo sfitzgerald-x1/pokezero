@@ -684,6 +684,29 @@ fn is_single_none(options: &[MoveChoice]) -> bool {
 /// Priors reweight exploration only; values and the exact-expectation backup
 /// are untouched.
 #[allow(clippy::too_many_arguments)]
+/// Charges an elapsed span to a phase accumulator on every exit path (the leaf
+/// closure has several early returns, and an unmeasured error path would silently
+/// under-report encode time).
+struct PhaseTimer<'a> {
+    started: Instant,
+    sink: &'a mut u128,
+}
+
+impl<'a> PhaseTimer<'a> {
+    fn new(sink: &'a mut u128) -> Self {
+        Self {
+            started: Instant::now(),
+            sink,
+        }
+    }
+}
+
+impl Drop for PhaseTimer<'_> {
+    fn drop(&mut self) {
+        *self.sink += self.started.elapsed().as_nanos();
+    }
+}
+
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
     state_str: &str,
     iterations: usize,
@@ -728,6 +751,19 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // model vs fallbacks to uniform (unmapped option / underflow / mismatch).
     let mut prior_branches = 0usize;
     let mut prior_fallbacks = 0usize;
+    // Per-phase wall attribution (plan deliverable 4: "Do not estimate a
+    // missing phase by subtracting an assumed model cost"). Every phase is
+    // measured directly:
+    //   encode = branch event rendering + fold advance + leaf encode + action
+    //            maps, accumulated INSIDE the leaf-pricing closure;
+    //   model  = eval_batch spans only (root priors + per-round batches);
+    //   tree   = traversal/selection/backprop, computed as the traverse+
+    //            finalize span minus the encode measured within it. Both terms
+    //            are measured; nothing is assumed. eval_batch never runs inside
+    //            traverse (leaves are Deferred), so the spans do not overlap.
+    let mut encode_nanos = 0u128;
+    let mut model_nanos = 0u128;
+    let mut tree_nanos = 0u128;
     let mut root_priors: Option<Vec<f32>> = None;
     if model_priors {
         let root_options = if self_side_one {
@@ -738,9 +774,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         if !is_single_none(&root_options) {
             // One extra forward on the ROOT observation prices the root
             // node's priors (the root is never a chance-branch leaf).
+            let encode_started = Instant::now();
             let encoded = leaf_ctx.encode_leaf(&state, root_fold, root_turn, None, None)?;
             let batch = ObsBatch::from_encoded(spec, std::slice::from_ref(&encoded))?;
+            encode_nanos += encode_started.elapsed().as_nanos();
+            let model_started = Instant::now();
             let output = evaluator.eval_batch(&batch, None)?;
+            model_nanos += model_started.elapsed().as_nanos();
             model_evals += 1;
             let map = leaf_ctx.self_action_map(&state, &root_options, None, None)?;
             match gather_self_priors(&output.priors[..output.action_count], &map) {
@@ -762,6 +802,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // for every priced branch whose child decision node can exist.
         let mut pending_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> = Vec::new();
         let mut leaf_error: Option<PyErr> = None;
+        let traverse_started = Instant::now();
+        let encode_before_traverse = encode_nanos;
         while traversals.len() < traversal_budget && pending.len() < batch_size {
             let traversal = traverse(
                 &mut tree,
@@ -773,6 +815,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if leaf_error.is_some() {
                         return LeafPrice::Ready(0.5);
                     }
+                    // Everything from here to the Deferred return is encode
+                    // work; `_encode_guard` charges it on every exit path.
+                    let _encode_guard = PhaseTimer::new(&mut encode_nanos);
                     // Parent fold prefix: the root fold for root edges, the
                     // ancestor branch's advanced fold otherwise.
                     let (mut fold, mut turn, parent_order, parent_meta) = match seam.parent {
@@ -884,14 +929,23 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             );
             traversals.push(traversal);
         }
+        // Traversal span minus the encode measured inside it = pure tree work.
+        tree_nanos += traverse_started
+            .elapsed()
+            .as_nanos()
+            .saturating_sub(encode_nanos - encode_before_traverse);
         if let Some(error) = leaf_error {
             return Err(error);
         }
         let row_values = if pending.is_empty() {
             Vec::new()
         } else {
+            let encode_started = Instant::now();
             let batch = ObsBatch::from_encoded(spec, &pending)?;
+            encode_nanos += encode_started.elapsed().as_nanos();
+            let model_started = Instant::now();
             let output = evaluator.eval_batch(&batch, None)?;
+            model_nanos += model_started.elapsed().as_nanos();
             model_evals += pending.len();
             // Resolve this round's prior maps against the batch's policy
             // rows: store on the branch (consumed at child creation) and
@@ -925,9 +979,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             }
             output.values01
         };
+        let finalize_started = Instant::now();
         for traversal in &traversals {
             finalize(&mut tree, traversal, &row_values);
         }
+        tree_nanos += finalize_started.elapsed().as_nanos();
         completed += traversals.len();
         rounds += 1;
         if early_stop_min_sims > 0
@@ -973,7 +1029,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_priors\":{},\"requested_iterations\":{},\
+         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\
+         \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
          \"early_stop_leader_visits\":{},\"early_stop_runner_up_visits\":{}",
@@ -985,6 +1042,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_priors,
         prior_branches,
         prior_fallbacks,
+        encode_nanos as f64 / 1e9,
+        model_nanos as f64 / 1e9,
+        tree_nanos as f64 / 1e9,
         root_priors_json,
         iterations,
         iterations - completed,

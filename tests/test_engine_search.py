@@ -411,6 +411,40 @@ class PublicEffectSignalTests(unittest.TestCase):
         self.assertEqual(removed, {"p2": ("blissey",)})
 
 
+class PhaseTelemetryTests(unittest.TestCase):
+    """Crate-measured per-phase walls (encode/model/tree) reach the stats payload.
+
+    The depth study attributes decision wall to phases and explicitly forbids
+    deriving a missing phase by subtraction, so the transport must carry all
+    three and must not fabricate a value when an older crate omits them.
+    """
+
+    def test_phase_walls_accumulate_from_reports(self) -> None:
+        from pokezero.engine_search import EngineMctsStats
+
+        stats = EngineMctsStats()
+        for report in (
+            {"encode_s": 0.25, "model_s": 1.5, "tree_s": 0.125},
+            {"encode_s": 0.25, "model_s": 0.5, "tree_s": 0.125},
+        ):
+            stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
+            stats.model_wall_seconds += float(report.get("model_s") or 0.0)
+            stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
+        payload = stats.to_dict()
+        self.assertAlmostEqual(payload["encode_wall_seconds"], 0.5)
+        self.assertAlmostEqual(payload["model_wall_seconds"], 2.0)
+        self.assertAlmostEqual(payload["tree_wall_seconds"], 0.25)
+
+    def test_missing_phase_fields_default_to_zero_not_inferred(self) -> None:
+        from pokezero.engine_search import EngineMctsStats
+
+        stats = EngineMctsStats()
+        payload = stats.to_dict()
+        for key in ("encode_wall_seconds", "model_wall_seconds", "tree_wall_seconds"):
+            self.assertIn(key, payload)
+            self.assertEqual(payload[key], 0.0)
+
+
 class ModelConfigValidationTests(unittest.TestCase):
     def test_model_mode_requires_artifacts(self) -> None:
         with self.assertRaises(ValueError):
