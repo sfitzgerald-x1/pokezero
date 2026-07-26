@@ -174,5 +174,43 @@ class Sha256FileTest(unittest.TestCase):
             self.assertEqual(sha256_file(path), hashlib.sha256(b"pokezero" * 1000).hexdigest())
 
 
+
+class EngineMctsPolicySpecTest(unittest.TestCase):
+    """A lattice cell's identity IS its configuration, so the spec must never
+    fill in a default for a field that would mislabel a timing/strength row."""
+
+    def _factory(self, spec: str):
+        from pokezero.collection import policy_factory_from_spec
+
+        return policy_factory_from_spec(spec)
+
+    def test_required_options_enforced(self) -> None:
+        for spec, missing in (
+            ("engine-mcts:/c.pt", "depth"),
+            ("engine-mcts:/c.pt?depth=8", "sims"),
+            ("engine-mcts:/c.pt?depth=8&sims=4096", "model"),
+            ("engine-mcts:/c.pt?depth=8&sims=4096&model=/m.pt", "tables"),
+        ):
+            with self.assertRaisesRegex(ValueError, missing):
+                self._factory(spec)
+
+    def test_missing_checkpoint_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "checkpoint path"):
+            self._factory("engine-mcts:?depth=8&sims=4096&model=/m.pt&tables=/t.json")
+
+    def test_unknown_option_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown engine-mcts"):
+            self._factory(
+                "engine-mcts:/c.pt?depth=8&sims=4096&model=/m.pt&tables=/t.json&earlystop=1"
+            )
+
+    def test_full_spec_builds_lazily(self) -> None:
+        # Construction must not require the artifacts to exist (the controller
+        # materializes them); only invocation does.
+        factory = self._factory(
+            "engine-mcts:/c.pt?depth=8&sims=4096&batch=16&worlds=4&model=/m.pt&tables=/t.json"
+        )
+        self.assertTrue(callable(factory))
+
 if __name__ == "__main__":
     unittest.main()
