@@ -24,7 +24,9 @@ not confound the depth-by-breadth comparison.
 
 ## 1. Existing Evidence and Constraints
 
-The `spike-sac` GPU scenario sweep established useful starting bounds:
+The tracked
+[`spike-sac` GPU scenario sweep](../evals/spike-sac-gpu-depth-breadth-sweep.png)
+established useful starting bounds:
 
 - depth 2 can become confidently wrong as breadth increases;
 - depth 4 is a fast stable regime on that scenario;
@@ -48,17 +50,30 @@ Freeze these inputs before any timing or strength row is accepted:
 
 - checkpoint path, SHA-256, policy id, and model configuration;
 - checkpoint observation contract, history budget, encoder-table hash, and feature masks;
+- Showdown source hash used to export the encoder tables;
 - `pokezero-search`, Pokemon Showdown, FoulPlay, and image revisions;
 - belief-world count and belief sampling mode;
 - leaf calibration and model-prior settings;
 - search batch size, `c_puct`, chance branching, and deep-KO splitting;
 - deterministic search seed derivation;
 - FoulPlay battle and bot-RNG seed reservations;
-- accelerator type and inference mode.
+- FoulPlay strength rung, fixed at **FP-1000** (`--search-time-ms 1000`) for the primary read;
+- FoulPlay decision cap, fixed at `max_decision_rounds=250`;
+- accelerator type, inference mode, CPU/GPU allocation, Torch thread count, and worker
+  concurrency.
 
 Only maximum depth and simulations per world vary in the primary lattice. If batch size or world
 count is later varied, that is a separately labeled experiment because either can change search
 semantics as well as wall time.
+
+Fix belief worlds at **4**, the current `EngineMctsConfig.worlds` default. Because worlds are
+searched serially today, the 15-second aggregate gate implies an approximate 3.75-second budget
+per world. The upper lattice cells are allowed to fail this gate; that is a result, not a harness
+failure.
+
+`EngineMctsConfig.search_time_ms` and `threads` govern the handcrafted `hp_fraction` path, not the
+fixed-simulation model path in this plan. Record their inert configured values for provenance, but
+do not interpret `search_time_ms` as a model-search deadline.
 
 Primary rows require:
 
@@ -75,6 +90,7 @@ id, or checkpoint storage path. One invocation accepts:
 
 - an immutable checkpoint reference plus expected SHA-256;
 - an optional pre-exported TorchScript artifact and encoder tables;
+- a Showdown source reference plus expected source hash;
 - the desired fixed belief-world count and matrix override, if any;
 - an output root and a reserved seed-band identifier.
 
@@ -87,12 +103,24 @@ The materialization stage loads the checkpoint's own model configuration and der
 - encoder-table contract.
 
 If the checkpoint is engine-compatible but exported artifacts are absent, the job creates them
-once, validates them, and records their hashes. If the schema is unsupported, the checkpoint hash
-does not match, or root/leaf contracts disagree, the run fails terminally before launching the
-matrix. A rerun with the same checkpoint and manifest reuses validated exports.
+once, validates them, and records their hashes. Export reuse is keyed by checkpoint hash,
+accelerator device, observation contract, Showdown source hash, and exporter revision. If the
+schema is unsupported, the checkpoint hash does not match, or root/leaf contracts disagree, the
+run fails terminally before launching the matrix.
 
-The checkpoint reference is data. Changing it creates a new run id and new result namespace while
-using the same orchestration code.
+The checkpoint reference is data. Changing it creates a new result namespace while using the same
+orchestration code. Separate experiment identity from execution resources:
+
+```text
+experiment_id = sha256(frozen_contract_without_resource_profile + matrix_manifest)
+execution_id = sha256(experiment_id + resource_profile)
+```
+
+Stages 1 through 4 record `experiment_id` and may be reused when only the resource profile
+changes. Stages 5 through 9 record `execution_id`. A marker mismatch at its applicable identity
+scope is terminal and is never reused. Reducing concurrency creates a new execution under the
+same experiment rather than invalidating checkpoint materialization, validation, smoke, or corpus
+artifacts.
 
 ## 3. Statistical Meaning of 100 Games
 
@@ -100,8 +128,17 @@ Each FoulPlay entry is limited to exactly 100 games: 50 team seeds, with PokeZer
 seats for every seed. All entries reuse the same seed schedule and the same per-game FoulPlay RNG
 schedule.
 
-One hundred games is a screening sample, not proof of parity. At 50 wins, a 95% Wilson interval
-is approximately 40.4% to 59.6%. Report rows using these terms:
+Score each game using the existing controlled-FoulPlay convention: win = 1, tie or decision cap =
+0.5, loss = 0. Average the two seats for each team seed to produce 50 independent pair scores.
+The headline score and interval are the mean and a 95% bootstrap interval over those 50 pair
+scores. Also report raw wins, ties, caps, and losses separately.
+
+Use 10,000 deterministic percentile-bootstrap resamples. Freeze the bootstrap RNG seed in the
+matrix manifest and use the same resampled pair indices for every configuration delta.
+
+One hundred games is a screening sample, not proof of parity. With no ties or caps, 50 wins in 100
+games has an approximate 40.4% to 59.6% binomial Wilson interval, illustrating the uncertainty.
+Report rows using these terms:
 
 - **clearly below parity:** the 95% interval upper bound is below 50%;
 - **parity-compatible:** the 95% interval contains 50%;
@@ -113,12 +150,13 @@ worth a confirmatory run and whether additional compute improves paired outcomes
 
 For comparisons among configurations:
 
-- collapse the two seats of each team seed into one paired score;
 - bootstrap the 50 seed-pair score deltas;
 - report the paired delta and 95% interval against the no-search checkpoint and against the
   fastest lower-depth configuration;
 - retain wins, losses, ties, caps, and opponent crashes separately;
 - make no multiplicity-adjusted significance claim from the screening lattice.
+
+These are per-row descriptive screening labels. Family-wise error is unadjusted by design.
 
 ## 4. Phase A: Mechanics and Timing Funnel
 
@@ -137,8 +175,16 @@ Any failure stops the image. It must not be retried as if it were an unlucky bat
 
 ### A2. Representative decision corpus
 
-Build a checkpoint-independent timing corpus from held-out FoulPlay games. It should contain at
-least 200 legal PokeZero decision states and be stratified across:
+Build `pokezero.engine-mcts-timing-corpus.v1` from held-out FoulPlay games. It contains exactly
+256 legal PokeZero decisions. Every record carries:
+
+- the full public event prefix through the current request;
+- the acting player's current request-derived action candidates and legal mask;
+- battle, team, seat, and bot-RNG seeds;
+- the public belief inputs required to reconstruct the search worlds;
+- no opponent-private request or hidden team data.
+
+The 256 decisions are stratified across:
 
 - six, four, two, and one Pokemon remaining;
 - high, medium, and low team HP;
@@ -147,7 +193,14 @@ least 200 legal PokeZero decision states and be stratified across:
 - low and high hidden-world uncertainty;
 - early, middle, and late battle phases.
 
-This stratification is for coverage only. It does not create a dynamic policy.
+Strata may overlap. The corpus manifest records the deterministic held-out seed range, selection
+algorithm, and count in every bucket; changing any of them changes the corpus hash. This
+stratification is for coverage only. It does not create a dynamic policy.
+
+Timing a record replays its public game prefix through the normal observation path so the
+incremental fold is warm and path-faithful. Prefix replay and warm-up are excluded from the
+decision timer. A cold per-record fold or reuse of `public-decision-corpus.v1` is not valid for
+this study because that artifact omits the request-derived action mapping.
 
 ### A3. Broad fixed-configuration lattice
 
@@ -156,22 +209,48 @@ Measure this initial lattice on the same decision corpus:
 - depths: `2, 4, 6, 8, 10`;
 - simulations per world: `512, 1024, 2048, 4096, 8192`;
 - batch: the current validated fixed batch, initially `16`;
-- belief worlds: the current production fixed count.
+- belief worlds: `4`.
 
-The 25 cells are timing probes, not 100-game strength entries. Cells may run in parallel because
-they read the same immutable corpus and checkpoint.
+The 25 cells are timing probes, not 100-game strength entries. After at least 64 decisions, stop a
+cell early when its running mean decision wall is at least 15 seconds. Persist it as
+`gate_failed`, including its partial sample size and complete telemetry; this is a result, not a
+stage failure. Give each cell a 90-minute infrastructure deadline. A deadline before 64 decisions
+is retryable once and then terminal as a harness failure. Cells may run in parallel only when each
+receives the frozen resource profile and does not contend for the same inference queue or CPU
+allocation. Otherwise run cells in waves or serially on one device.
+
+Define end-to-end decision wall as:
+
+```text
+acting-player request available -> validated Showdown choice string ready to submit
+```
+
+This includes observation/legal-action construction, belief-world construction, native search,
+root-action mapping, and choice serialization. It excludes prefix replay for the timing corpus and
+network delivery, because the latter is not present in the offline harness. The existing
+`policy_elapsed_seconds` begins after observation/context construction, so it is a component, not
+the headline metric.
 
 Every cell records:
 
 - end-to-end decision wall mean, median, p95, and maximum;
 - search-only wall mean and p95;
-- configured depth and the distribution of `max_depth_reached`;
+- request-to-context, belief-world construction, native encoding, model forward, tree work,
+  action mapping, and choice-serialization timing;
+- configured depth and the distribution of native `max_depth_reached`;
 - simulations requested and completed;
 - model evaluations, expansions, decision nodes, and chance nodes;
 - inference time, queue time if applicable, and non-inference search time;
 - worlds attempted and searched;
 - fallback, timeout, and invalid-action counts;
 - root argmax and visit distribution for action-stability analysis.
+
+Add native encode/model/tree phase timers before running A3, then freeze that crate revision for
+all rows. Do not estimate a missing phase by subtracting an assumed model cost.
+
+Native `max_depth_reached` uses root depth 0 and saturates at `search_depth - 1`. The distribution
+is over the scalar maximum from every `(decision, belief world)` search. `cap_hit` means
+`max_depth_reached == search_depth - 1`; it is not a per-visit depth histogram.
 
 ### A4. Eligibility and pruning
 
@@ -183,17 +262,27 @@ A cell is eligible for a FoulPlay strength read only when:
 - the requested checkpoint and encoder provenance remain exact.
 
 The 15-second condition is an experiment gate, not a ladder safety guarantee. Always report p95
-and maximum latency so a later controller can reserve network and submission time.
+and maximum latency so a later controller can reserve network and submission time. The actual
+timer-bank and delivery constraints remain defined in
+[`ladder_search_timing_constraints.md`](ladder_search_timing_constraints.md).
 
 Prune dominated cells before playing games:
 
 - discard a cell that is slower and reaches no deeper than another cell at the same breadth;
 - discard a breadth increase that leaves root decisions unchanged and adds no realized depth on
   the timing corpus, unless one diagnostic row is retained to confirm saturation;
-- retain at least one eligible row at depths 2, 4, 6, and 8 when available;
-- retain no more than seven search configurations for Phase B.
+- for each configured depth, retain the eligible cell with the largest simulation count, breaking
+  ties by lower mean wall time;
+- if fewer than seven search cells are selected, add the fastest remaining eligible cell and then
+  the remaining cell nearest the median eligible wall time;
+- stop at seven search configurations.
 
 This caps Phase B at eight entries including the no-search checkpoint.
+
+Before accepting timings, replay a fixed 32-decision corpus subset at the most expensive eligible
+cell, once at concurrency 1 and once at the maximum configured concurrency. Mean and p95 decision
+wall must each agree within 10%. Otherwise reduce concurrency and start a new execution of A3;
+contention is not part of a search configuration.
 
 ## 5. Phase B: 100-Game FoulPlay Screen
 
@@ -202,7 +291,7 @@ This caps Phase B at eight entries including the no-search checkpoint.
 Evaluate:
 
 1. the raw checkpoint with no search;
-2. up to seven Pareto candidates from Phase A.
+2. up to seven screening candidates selected by A4.
 
 Each entry receives the same 100 games. A depth label is valid only alongside realized-depth
 telemetry; a `depth=10` configuration that never passes depth 6 is reported as a depth-10 cap
@@ -211,8 +300,8 @@ with its observed depth distribution, not as demonstrated depth-10 search.
 ### B2. Persistent cluster orchestration
 
 The complete experiment is submitted once as a persistent cluster orchestration Job. After
-submission, no laptop, terminal, Codex session, or agent polling loop is required to keep it
-alive. The controller owns this resumable state machine:
+submission, no foreground interactive session or polling loop is required to keep it alive. The
+controller owns this resumable state machine:
 
 1. `materialize-checkpoint`
 2. `validate-contract`
@@ -224,19 +313,19 @@ alive. The controller owns this resumable state machine:
 8. `merge-strength-results`
 9. `publish-report`
 
-Every stage writes its output atomically and writes a completion marker last. On restart, the
-controller validates and reuses complete stages, then resumes the first incomplete stage. It
-classifies failures as:
+Every stage writes its output atomically and writes a completion marker containing its applicable
+`experiment_id` or `execution_id` last. On restart, the controller validates and reuses complete
+stages, then resumes the first incomplete stage. It classifies failures as:
 
 - **retryable:** transient scheduling, transport, storage, or opponent-process failure; retry with
   bounded exponential backoff under the same run and shard id;
-- **terminal:** provenance mismatch, unsupported checkpoint contract, invalid matrix, duplicate
-  seed ownership, deterministic engine failure, or artifact validation error; stop the run and
-  publish the exact failure.
+- **terminal:** provenance mismatch, unsupported checkpoint contract, invalid matrix, conflicting
+  duplicate seed result, deterministic engine failure, or artifact validation error; stop the run
+  and publish the exact failure.
 
-The controller emits a machine-readable `status.json` with current stage, completed and total
-tasks, retry counts, latest artifact paths, and terminal failure details. Optional notifications
-consume that status artifact; they are not required for progress.
+The controller emits a machine-readable `status.json` with both identities, current stage,
+completed and total tasks, retry counts, latest artifact paths, and terminal failure details.
+Optional notifications consume that status artifact; they are not required for progress.
 
 The public repository owns the checkpoint-parameterized runner, manifest schema, validation,
 merge, and reporting logic. The private deployment repository owns the cluster Job wrapper,
@@ -249,15 +338,36 @@ Represent one entry as 50 mirrored seed pairs. Shard it into ten tasks of five s
 - each task runs ten games, five in each seat;
 - each task owns a disjoint seed-pair range;
 - tasks write partial results atomically and write a completion marker last;
+- each opponent crash receives one retry;
 - retries resume missing seeds and never discard completed games;
-- the merger rejects duplicate seeds, missing seats, provenance drift, and marker-less shards.
+- duplicate `(config_id, seed, seat)` results are idempotent when their canonical outcome fields
+  match: result, score, turn count, provenance hashes, and chosen-action sequence;
+- timing and telemetry differences between canonically matching duplicate attempts are retained as
+  retry diagnostics, not treated as conflicts;
+- canonical outcome conflicts, missing seats, provenance drift, and marker-less shards fail
+  closed.
 
-Run entries and shards concurrently, bounded by measured simulator, FoulPlay, and inference
-capacity. Parallelism must not change a configuration's effective inference batch or queue delay
-without recording that as a different execution mode.
+Pre-register ten spare seed pairs after the primary 50. If any pair still crashes after its retry
+in any entry, exclude that pair from every entry and promote the next spare pair for every entry.
+Continue until all entries share exactly 50 complete mirrored pairs or the spare band is
+exhausted. Exhaustion is terminal. The substitution order is fixed before outcomes are observed.
+Each promoted pair runs as an appended repair shard keyed by `(entry, spare_index)`. Excluded pairs
+remain in the ledger with `excluded_reason` and are omitted from every entry's shared 50-pair
+scoring set.
 
-The matrix runner should be a persistent cluster Job or equivalent durable controller, not a
-foreground Codex process. Progress and completion come from job-produced artifacts.
+Run entries and shards concurrently under the frozen per-game CPU/GPU allocation and Torch thread
+count. Parallelism must not change a configuration's effective inference batch, queue delay, or
+FoulPlay compute allocation without recording that as a different execution mode. When resources
+cannot isolate all entries, run equal-sized waves rather than oversubscribe.
+
+Before the first full wave, replay one fixed mirrored pair at concurrency 1 and at wave
+concurrency under the same resource limits. Record FoulPlay iterations-per-move if the opponent
+exposes it; otherwise record its CPU allocation and observed move wall. A material resource or
+opponent-compute discrepancy creates a new, lower-concurrency execution before strength games
+begin.
+
+The matrix runner is a persistent cluster Job or equivalent durable controller, not a foreground
+interactive process. Progress and completion come from job-produced artifacts.
 
 ### B4. Strength and timing report
 
@@ -266,8 +376,9 @@ Produce one table with:
 | Field | Meaning |
 |---|---|
 | `config_id` | Immutable depth, simulations, batch, worlds, and inference mode |
-| `wins/games` | PokeZero wins out of 100 |
-| `win_rate_95ci` | Wilson interval |
+| `foulplay_rung` | `FP-1000` for the primary read |
+| `record` | Wins, ties, caps, and losses out of 100 |
+| `score_95ci` | Mean pair score and 50-pair bootstrap interval |
 | `delta_vs_raw_95ci` | Paired bootstrap over 50 mirrored seed pairs |
 | `mean/p95/max_s` | End-to-end PokeZero decision wall |
 | `realized_depth` | Mean, p95, maximum, and cap-hit rate |
@@ -276,7 +387,7 @@ Produce one table with:
 
 Also publish:
 
-- win rate versus mean seconds per decision, with 95% intervals;
+- pair score and raw win rate versus mean seconds per decision, with 95% intervals on score;
 - realized depth versus simulations;
 - p95 latency versus strength;
 - root-action agreement between adjacent depth and breadth cells;
@@ -298,8 +409,8 @@ Use this decision sequence:
 
 1. Profile in-crate model time versus encoding, tree work, and belief-world construction.
 2. First try one evaluator process per checkpoint running several game shards while reusing one
-   loaded native model. This avoids both checkpoint reloads and GPU-per-pod reservations without
-   adding a network hop.
+   loaded native model. This tests checkpoint load-time and memory amortization only; it does not
+   batch independent search forwards and is not expected to improve inference throughput.
 3. If one process cannot feed enough parallel games, prototype a shared leaf-inference service
    with dynamic batching.
 4. Compare local and served modes on identical encoded leaves and the same timing corpus.
@@ -313,6 +424,11 @@ The served-inference pilot must prove:
 - at 1, 4, 8, and 16 concurrent search workers, mean decision wall regresses by no more than 10%
   while GPU utilization and aggregate games/hour improve;
 - no request is silently retried into a different search result.
+
+Before the multi-game process is considered viable, add a deterministic concurrent
+`eval_batch` thread-safety test over one shared native model. The local mechanism is several
+`asyncio.to_thread` searches sharing that evaluator; passing this test does not waive the measured
+throughput gate for served inference.
 
 Configurations for one checkpoint should share a service. Distinct checkpoints should not hot
 reload through one queue during a timing comparison. If several small checkpoints later share one
@@ -328,11 +444,13 @@ The public repository needs:
 2. A controlled FoulPlay engine-MCTS policy mode that accepts the frozen Rust search
    configuration and emits the native search telemetry.
 3. A decision-corpus timing runner for the Phase-A lattice.
-4. A versioned matrix manifest, deterministic `run_id`, and deterministic `config_id`.
-5. A resumable stage controller whose state is fully represented by persisted artifacts.
-6. A sharded FoulPlay runner and fail-closed merger for 50 mirrored seed pairs.
-7. A report generator for the tables and frontier plots.
-8. Optional served-leaf inference only if the profiling gate justifies it.
+4. Native per-phase encode/model/tree timers, landed before the crate revision is frozen.
+5. A versioned matrix manifest, deterministic `experiment_id`, deterministic `execution_id`, and
+   deterministic `config_id`.
+6. A resumable stage controller whose state is fully represented by persisted artifacts.
+7. A sharded FoulPlay runner and fail-closed merger for 50 mirrored seed pairs.
+8. A report generator for the tables and frontier plots.
+9. Optional served-leaf inference only if the profiling gate justifies it.
 
 Deployment-specific manifests, storage paths, credentials, and cluster identifiers remain in the
 private deployment repository. The public interface is parameterized by worker count, shard id,

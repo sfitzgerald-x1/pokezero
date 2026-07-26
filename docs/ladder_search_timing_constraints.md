@@ -247,8 +247,10 @@ Before choosing final adaptive depth/breadth settings:
 
 The fixed-budget precursor is specified in
 [`mcts_depth_strength_eval_plan.md`](mcts_depth_strength_eval_plan.md): first map the
-depth-by-breadth frontier below 15 seconds per decision, then use that evidence to constrain the
-later adaptive controller.
+depth-by-breadth frontier with mean decision wall below 15 seconds as an experimental pre-turn-100
+capacity screen, then use that evidence to constrain the later adaptive controller. This does not
+replace the strictly-below-five-second constant required for an arbitrarily long bank-neutral
+game.
 
 This document should be revised if Pokemon Showdown changes its timer source or if Gen 3 Random
 Battle gains a format-specific timer rule.
