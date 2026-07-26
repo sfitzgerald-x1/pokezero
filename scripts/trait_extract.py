@@ -373,6 +373,12 @@ class GameParse:
                 if seat:
                     sp = species_of(a[0])
                     self.status[seat][sp] = a[1] if len(a) > 1 else None
+                    # opportunity counters for the sleeping/frozen switch-out denominators: this seat
+                    # can only pivot a sleeping/frozen mon out in games where one was afflicted.
+                    if len(a) > 1 and a[1] == "slp":
+                        self.ev[seat]["had_sleeping"] += 1
+                    if len(a) > 1 and a[1] == "frz":
+                        self.ev[seat]["had_frozen"] += 1
                     if len(a) > 1 and a[1] == "tox":
                         self.tox[seat] = 0  # badly poisoned; counter ticks up each end-of-turn
                     if len(a) > 1 and a[1] == "slp":
@@ -627,6 +633,13 @@ class GameParse:
                 E["cat_rapidspin_spikesdown"] += 1
         if move == TOXIC:
             E["cat_toxic"] += 1
+        # Opportunity counters for the switch-in-read denominators: "did this seat use a move the
+        # opposing read is about". cat_toxic covers only Toxic, and no category tracked drain moves,
+        # so both families get their own counter (used from the OTHER seat at aggregation time).
+        if move in POISON_STATUS_MOVES:
+            E["cat_poison_status"] += 1
+        if move in DRAIN_MOVES:
+            E["cat_drain"] += 1
         if move in PARA_MOVES:
             E["cat_para"] += 1
         if move in SLEEP_MOVES:
@@ -789,7 +802,14 @@ def extract(files, lineage=None, milestone=None):
     imm_present = 0; imm_reads = 0           # Immunity mon in on Toxic / Poison Powder
     insom_present = 0; insom_reads = 0       # Insomnia / Vital Spirit mon in on a sleep move
     limber_present = 0; limber_reads = 0     # Limber mon in on a paralysis move
-    ooze_present = 0; ooze_drain_reads = 0; ooze_seed_reads = 0  # Liquid Ooze in on drain / Leech Seed
+    sleep_present = 0; frozen_present = 0     # seat-games where a sleeping / frozen mon existed at all
+    ooze_drain_present = 0; ooze_drain_reads = 0   # Liquid Ooze in on a drain move
+    ooze_seed_present = 0; ooze_seed_reads = 0     # Liquid Ooze in on Leech Seed
+    # type-based reads as CONDITIONAL rates: denominator = decided games where the opponent used the
+    # move AND this seat's team carries the requisite type (the only games where the read is both
+    # possible and relevant). Every read already implies both, so the numerator is the read count.
+    grass_leech_present = 0; grass_leech_reads = 0   # grass in on the opponent's Leech Seed
+    fire_wow_present = 0; fire_wow_reads = 0          # fire in on the opponent's Will-O-Wisp
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -833,6 +853,13 @@ def extract(files, lineage=None, milestone=None):
             pivots.append(gp.ev[seat]["pivot"])
             for k in ("immunity_switchin","switch_out_sleeping","switch_out_frozen"):
                 switch_ev[k] += gp.ev[seat][k]
+            # denominators for the sleeping/frozen pivots: seat-games where the status actually
+            # occurred on this seat's team (you cannot pivot a sleeping mon out of a game that never
+            # had one). Counted over the same game set as the numerator above.
+            if gp.ev[seat]["had_sleeping"]:
+                sleep_present += 1
+            if gp.ev[seat]["had_frozen"]:
+                frozen_present += 1
             for cat, mids in CAT_MOVE.items():
                 carried = any(mids & {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, []))
                 if carried:
@@ -879,25 +906,43 @@ def extract(files, lineage=None, milestone=None):
                 if ability_present(g, gp, seat, ABSORB_ABILITIES, "absorb_activation", require_exact=True):
                     absorb_present += 1
                     absorb_switchins += gp.ev[seat]["absorb_switchin"]
-                # (v3) Natural-Cure-mon switch-ins onto a status move / game, over games where a Natural
-                # Cure mon is on the team. Requires exact abilities (v3 captures them).
-                if ability_present(g, gp, seat, {NATURAL_CURE}, None, require_exact=True):
+                # Switch-in reads are CONDITIONAL rates: the denominator is games where the read was
+                # actually available — the ability is on the team AND the opponent used a move it
+                # answers. Gating on "carried" alone conflates "never had the chance" with "had the
+                # chance and passed": Liquid Ooze is carried in ~143 seat-games/checkpoint but the
+                # opponent used a drain move in 0 of them, which the carried-only rate rendered as a
+                # behavioural 0.0 instead of "undefined". opp_used reads the OTHER seat's counters.
+                opp = gp.ev[OTHER_SEAT[seat]]
+                if ability_present(g, gp, seat, {NATURAL_CURE}, None, require_exact=True) and opp["cat_status_move"]:
                     nc_present += 1
                     nc_switchins += gp.ev[seat]["nc_switchin_on_status"]
-                # status-immunity switch-in reads (exact ability gating, like Natural Cure)
-                if ability_present(g, gp, seat, {IMMUNITY_AB}, None, require_exact=True):
+                if ability_present(g, gp, seat, {IMMUNITY_AB}, None, require_exact=True) and opp["cat_poison_status"]:
                     imm_present += 1
                     imm_reads += gp.ev[seat]["imm_switchin_on_toxic"]
-                if ability_present(g, gp, seat, INSOMNIA_ABS, None, require_exact=True):
+                if ability_present(g, gp, seat, INSOMNIA_ABS, None, require_exact=True) and opp["cat_sleep"]:
                     insom_present += 1
                     insom_reads += gp.ev[seat]["insomnia_switchin_on_sleep"]
-                if ability_present(g, gp, seat, {LIMBER_AB}, None, require_exact=True):
+                if ability_present(g, gp, seat, {LIMBER_AB}, None, require_exact=True) and opp["cat_para"]:
                     limber_present += 1
                     limber_reads += gp.ev[seat]["limber_switchin_on_para"]
+                # Ooze answers two distinct move families, so each gets its own denominator.
                 if ability_present(g, gp, seat, {LIQUID_OOZE_AB}, None, require_exact=True):
-                    ooze_present += 1
-                    ooze_drain_reads += gp.ev[seat]["ooze_switchin_on_drain"]
-                    ooze_seed_reads += gp.ev[seat]["ooze_switchin_on_leechseed"]
+                    if opp["cat_drain"]:
+                        ooze_drain_present += 1
+                        ooze_drain_reads += gp.ev[seat]["ooze_switchin_on_drain"]
+                    if opp["cat_leechseed"]:
+                        ooze_seed_present += 1
+                        ooze_seed_reads += gp.ev[seat]["ooze_switchin_on_leechseed"]
+                # type-based reads, gated the same way: the opponent used the move AND this seat's
+                # team carries the type. cat_leechseed / cat_burn are single-move categories
+                # (Leech Seed / Will-O-Wisp), so the OTHER seat's count > 0 means the opponent used it.
+                team_species = {mid(m["species"]) for m in g.get("movesets", {}).get(seat, [])}
+                if opp["cat_leechseed"] and team_species & GRASS_SPECIES:
+                    grass_leech_present += 1
+                    grass_leech_reads += gp.ev[seat]["grass_switchin_on_leechseed"]
+                if opp["cat_burn"] and team_species & FIRE_SPECIES:
+                    fire_wow_present += 1
+                    fire_wow_reads += gp.ev[seat]["fire_switchin_on_wow"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -1046,24 +1091,30 @@ def extract(files, lineage=None, milestone=None):
         "aromatherapy_uses": cat_extra["cat_aromatherapy"],
         "aromatherapy_avg_cured": (round(cat_extra["aroma_cured"] / cat_extra["cat_aromatherapy"], 3)
                                    if cat_extra["cat_aromatherapy"] else None),
-        # Natural Cure: switch-ins of a Natural Cure mon onto an incoming status move, per game, over
-        # games where a Natural Cure mon is on the team (exact ability gating — v3 captures abilities).
+        # Ability-based switch-in reads, all CONDITIONAL: reads per decided game where the ability is
+        # on the team AND the opponent used a move it answers (see the aggregation note). *_present_
+        # seat_games is that qualifying count — a rate of None means the read was never available,
+        # which is a different statement from a rate of 0.0 (available, never taken).
         "nc_present_seat_games": nc_present,
         "nc_switchin_on_status_per_game": (round(nc_switchins / nc_present, 4) if nc_present else None),
-        # Status-immunity switch-in reads: bringing in a mon whose ability blanks the incoming status
-        # move, per game over games where the team carries that ability (exact gating, like NC).
         "imm_present_seat_games": imm_present,
         "imm_switchin_on_toxic_per_game": (round(imm_reads / imm_present, 4) if imm_present else None),
         "insomnia_present_seat_games": insom_present,
         "insomnia_switchin_on_sleep_per_game": (round(insom_reads / insom_present, 4) if insom_present else None),
         "limber_present_seat_games": limber_present,
         "limber_switchin_on_para_per_game": (round(limber_reads / limber_present, 4) if limber_present else None),
-        "ooze_present_seat_games": ooze_present,
-        "ooze_switchin_on_drain_per_game": (round(ooze_drain_reads / ooze_present, 4) if ooze_present else None),
-        "ooze_switchin_on_leechseed_per_game": (round(ooze_seed_reads / ooze_present, 4) if ooze_present else None),
-        # Type-based switch-in reads (no ability gate — most teams have the type): per seat-game.
-        "grass_switchin_on_leechseed_per_game": round(cat_extra["grass_switchin_on_leechseed"] / (seat_games or 1), 4),
-        "fire_switchin_on_wow_per_game": round(cat_extra["fire_switchin_on_wow"] / (seat_games or 1), 4),
+        "ooze_drain_present_seat_games": ooze_drain_present,
+        "ooze_switchin_on_drain_per_game": (round(ooze_drain_reads / ooze_drain_present, 4) if ooze_drain_present else None),
+        "ooze_seed_present_seat_games": ooze_seed_present,
+        "ooze_switchin_on_leechseed_per_game": (round(ooze_seed_reads / ooze_seed_present, 4) if ooze_seed_present else None),
+        # Grass-on-Leech-Seed / Fire-on-Will-O-Wisp: same conditional treatment, gated on type rather
+        # than ability — reads per decided game where the opponent used the move AND this seat's team
+        # carries the type, not diluted across all seat-games.
+        "grass_leech_present_seat_games": grass_leech_present,
+        "grass_switchin_on_leechseed_rate": (round(grass_leech_reads / grass_leech_present, 4) if grass_leech_present else None),
+        "fire_wow_present_seat_games": fire_wow_present,
+        "fire_switchin_on_wow_rate": (round(fire_wow_reads / fire_wow_present, 4) if fire_wow_present else None),
+        # Ghost-on-Rapid-Spin stays per seat-game (its own "spikes down" condition is applied at read time).
         "ghost_switchin_on_spin_per_game": round(cat_extra["ghost_switchin_on_spin"] / (seat_games or 1), 4),
         # Struggle: total occurrences (should be very rare — everything out of PP).
         "struggle_uses": cat_extra["cat_struggle"],
@@ -1094,6 +1145,13 @@ def extract(files, lineage=None, milestone=None):
                             if cat_extra["boom_faced"] else None),
         # Phase 2 switch behavior — per seat-game so self-play and foulplay are comparable
         "switch_behavior": {k: {"total": v, "per_seat_game": round(v / (seat_games or 1), 4)} for k, v in switch_ev.items()},
+        # Sleeping / frozen pivots as CONDITIONAL rates: over seat-games where that status actually
+        # occurred on this seat's team, not over every seat-game. None = the status never happened
+        # (nothing to pivot), which is distinct from 0.0 = it happened and the mon was left in.
+        "sleep_present_seat_games": sleep_present,
+        "switch_out_sleeping_rate": (round(switch_ev["switch_out_sleeping"] / sleep_present, 4) if sleep_present else None),
+        "frozen_present_seat_games": frozen_present,
+        "switch_out_frozen_rate": (round(switch_ev["switch_out_frozen"] / frozen_present, 4) if frozen_present else None),
         # Phase 2 resource / endgame
         "pp_exhaustion_bot_per_game": per_game(pp_exhaust_bot),
         "pp_exhaustion_opp_per_game": per_game(pp_exhaust_opp),

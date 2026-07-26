@@ -1012,6 +1012,99 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(m["intimidate_present_seat_games"], 0)      # no intimidator on either team
         self.assertIsNone(m["intimidate_activations_per_game"])
 
+    def test_sleeping_frozen_pivot_rate_over_games_the_status_occurred(self):
+        # You cannot pivot a sleeping mon out of a game that never had one: the denominator is
+        # seat-games where the status actually occurred, not every seat-game.
+        def game(seed, proto):
+            ms = {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}],
+                  "p2": [{"species": "Blissey", "moves": ["Ice Beam"]}]}
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        # g1: p1's mon is slept and p1 pivots it out -> qualifies, read made.
+        g1 = game(1, ["|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+                      "|-status|p1a: Snorlax|slp", "|turn|2", "|switch|p1a: Gengar|Gengar|260/260"])
+        # g2: p1's mon is slept but stays in -> qualifies, no read (a real 0 for this game).
+        g2 = game(2, ["|turn|1", "|switch|p1a: Snorlax|Snorlax, M|400/400",
+                      "|-status|p1a: Snorlax|slp", "|turn|2", "|move|p1a: Snorlax|Body Slam|p2a: Blissey"])
+        # g3: nobody is ever slept -> does NOT qualify (must not dilute the rate).
+        g3 = game(3, ["|turn|1", "|move|p1a: Snorlax|Body Slam|p2a: Blissey"])
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in (g1, g2, g3):
+                    f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["sleep_present_seat_games"], 2)        # g1 + g2 only
+        self.assertEqual(m["switch_out_sleeping_rate"], 0.5)      # 1 pivot / 2 qualifying games
+        # freeze never occurred -> None, not 0.0
+        self.assertEqual(m["frozen_present_seat_games"], 0)
+        self.assertIsNone(m["switch_out_frozen_rate"])
+
+    def test_ability_read_none_when_never_available_vs_zero_when_passed(self):
+        # The whole point of the conditional denominator: "the read was never available" (None) must
+        # be distinguishable from "it was available and the bot passed" (0.0). Liquid Ooze is the
+        # real-data case — carried in ~143 seat-games/checkpoint but the opponent used a drain move
+        # in 0 of them, which a carried-only denominator rendered as a behavioural 0.0.
+        def game(seed, proto, ms):
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        ooze = {"p1": [{"species": "Tentacruel", "moves": ["Surf"], "ability": "Liquid Ooze"}],
+                "p2": [{"species": "Celebi", "moves": ["Giga Drain", "Leech Seed"], "ability": "Natural Cure"}]}
+        # p2 uses Leech Seed (so the seed read IS available) but never a drain move; p1 does not
+        # switch its Ooze mon in on the seed -> seed rate 0.0 (passed), drain rate None (unavailable).
+        g = game(1, ["|turn|1", "|move|p2a: Celebi|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Celebi"], ooze)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        self.assertEqual(m["ooze_seed_present_seat_games"], 1)      # seed read was available
+        self.assertEqual(m["ooze_switchin_on_leechseed_per_game"], 0.0)   # available, not taken
+        self.assertEqual(m["ooze_drain_present_seat_games"], 0)     # drain read never available
+        self.assertIsNone(m["ooze_switchin_on_drain_per_game"])     # -> None, NOT 0.0
+
+    def test_grass_fire_conditional_rate_gates_denominator(self):
+        # Grass-on-Leech-Seed is a CONDITIONAL rate: the denominator is games where the opponent used
+        # Leech Seed AND this seat's team has a grass type — counted even when the read is NOT made.
+        def game(seed, proto, ms):
+            return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                    "capped": False, "protocol": ["|player|p1|Bot p1|", "|player|p2|Bot p2|"] + proto
+                    + ["|win|Bot p1"], "movesets": ms, "pp_track": []}
+        # A: p1 switches its grass mon in ON p2's Leech Seed -> qualifies AND the read fires.
+        gA = game(1, [
+            "|turn|1", "|switch|p1a: Venusaur|Venusaur, M|300/300",
+            "|move|p2a: Blissey|Leech Seed|p1a: Venusaur", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Venusaur", "moves": ["Sludge Bomb"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        # C: p2 uses Leech Seed and p1's TEAM has a grass type, but p1 does not switch it in on the
+        # seed -> qualifies (denominator), read = 0.
+        gC = game(2, [
+            "|turn|1", "|move|p2a: Blissey|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}, {"species": "Venusaur", "moves": ["Sludge Bomb"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        # D: p2 uses Leech Seed but p1 has NO grass on the team -> does NOT qualify.
+        gD = game(3, [
+            "|turn|1", "|move|p2a: Blissey|Leech Seed|p1a: Snorlax", "|turn|2", "|faint|p2a: Blissey",
+        ], {"p1": [{"species": "Snorlax", "moves": ["Body Slam"]}],
+            "p2": [{"species": "Blissey", "moves": ["Leech Seed"]}]})
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in (gA, gC, gD):
+                    f.write(json.dumps(g) + "\n")
+            m = TE.extract([path])
+        # p1 qualifies in A and C (not D); p2 never qualifies (p1 never used Leech Seed, p2 has no grass)
+        self.assertEqual(m["grass_leech_present_seat_games"], 2)
+        self.assertEqual(m["grass_switchin_on_leechseed_rate"], 0.5)   # 1 read / 2 qualifying games
+        # no Will-O-Wisp / fire anywhere -> the fire rate is None (undefined, not 0)
+        self.assertEqual(m["fire_wow_present_seat_games"], 0)
+        self.assertIsNone(m["fire_switchin_on_wow_rate"])
+
     def test_old_data_drops_absorb_but_keeps_intimidate_fallback(self):
         # Movesets WITHOUT ability info (pre-capture data): absorb requires exact gating, so it is
         # dropped (rate None); intimidate keeps the protocol-presence fallback (it fired), so it

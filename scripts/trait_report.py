@@ -251,19 +251,21 @@ TRAJECTORY_CHARTS = [
     ]),
     ("switch behavior / seat-game", [
         ("immunity switch-in", lambda r: _switchrate(r, "immunity_switchin")),
-        ("sleeping mon out", lambda r: _switchrate(r, "switch_out_sleeping")),
-        ("frozen mon out", lambda r: _switchrate(r, "switch_out_frozen")),
+        # sleeping/frozen pivots over seat-games where that status actually occurred (you cannot
+        # pivot a sleeping mon out of a game that never had one)
+        ("sleeping mon out / game (sleep occurred)", lambda r: r.get("switch_out_sleeping_rate")),
+        ("frozen mon out / game (freeze occurred)", lambda r: r.get("switch_out_frozen_rate")),
         ("double pivot %", lambda r: _pct(r.get("double_pivot_rate"))),
-        # status-immunity switch-in reads: bringing in the ability mon ON the incoming status move,
-        # per game over games where the team carries that ability (exact ability gating, like NC).
-        ("Immunity in on toxic / game (carried)", lambda r: r.get("imm_switchin_on_toxic_per_game")),
-        ("Insomnia/Vital Spirit in on sleep / game (carried)", lambda r: r.get("insomnia_switchin_on_sleep_per_game")),
-        ("Limber in on para / game (carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
-        ("Liquid Ooze in on drain move / game (carried)", lambda r: r.get("ooze_switchin_on_drain_per_game")),
-        ("Liquid Ooze in on leech seed / game (carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
-        # type-based switch-in reads (no ability gate) — per seat-game
-        ("Grass in on leech seed", lambda r: r.get("grass_switchin_on_leechseed_per_game")),
-        ("Fire in on will-o-wisp", lambda r: r.get("fire_switchin_on_wow_per_game")),
+        # Switch-in reads, all CONDITIONAL: reads per game where the opponent used a move the
+        # ability/type answers AND the seat's team carries it. A blank point means the read was never
+        # available in that checkpoint's games — a different statement from "available, never taken".
+        ("Immunity in on toxic / game (opp used it, carried)", lambda r: r.get("imm_switchin_on_toxic_per_game")),
+        ("Insomnia/Vital Spirit in on sleep / game (opp used it, carried)", lambda r: r.get("insomnia_switchin_on_sleep_per_game")),
+        ("Limber in on para / game (opp used it, carried)", lambda r: r.get("limber_switchin_on_para_per_game")),
+        ("Liquid Ooze in on drain move / game (opp used it, carried)", lambda r: r.get("ooze_switchin_on_drain_per_game")),
+        ("Liquid Ooze in on leech seed / game (opp used it, carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
+        ("Grass in on leech seed / game (opp used it, grass on team)", lambda r: r.get("grass_switchin_on_leechseed_rate")),
+        ("Fire in on will-o-wisp / game (opp used it, fire on team)", lambda r: r.get("fire_switchin_on_wow_rate")),
         ("Ghost in on rapid spin (spikes down)", lambda r: r.get("ghost_switchin_on_spin_per_game")),
     ]),
     # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
@@ -323,7 +325,7 @@ V3_EXTRA_CHARTS = [
         # Aromatherapy + Heal Bell grouped (mechanically identical); Heal Bell dominates the gen3
         # randbats usage (~11x Aromatherapy), so the label names both rather than the rarer move.
         ("party status-cure (Aromatherapy+Heal Bell): avg mons cured", lambda r: r.get("aromatherapy_avg_cured")),
-        ("NC switch-in on status / game", lambda r: r.get("nc_switchin_on_status_per_game")),
+        ("NC switch-in on status / game (opp used it, carried)", lambda r: r.get("nc_switchin_on_status_per_game")),
     ]),
 ]
 
