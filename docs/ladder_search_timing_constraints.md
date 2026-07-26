@@ -245,5 +245,10 @@ Before choosing final adaptive depth/breadth settings:
    and bank trajectory.
 5. Validate an emergency base-policy fallback under forced-switch and updated-request paths.
 
+The fixed-budget precursor is specified in
+[`mcts_depth_strength_eval_plan.md`](mcts_depth_strength_eval_plan.md): first map the
+depth-by-breadth frontier below 15 seconds per decision, then use that evidence to constrain the
+later adaptive controller.
+
 This document should be revised if Pokemon Showdown changes its timer source or if Gen 3 Random
 Battle gains a format-specific timer rule.
