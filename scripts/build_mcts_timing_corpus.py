@@ -33,16 +33,31 @@ from pokezero.mcts_eval.timing_corpus import (  # noqa: E402
 
 
 def _remaining_and_hp(state: Any) -> tuple[int, float]:
-    """Living count + team HP fraction for the acting side, from public state."""
-    team = getattr(state, "self_team", None) or getattr(state, "team", None) or []
-    alive, total, current = 0, 0.0, 0.0
-    for mon in team:
-        hp = float(getattr(mon, "current_hp", 0) or 0)
-        maxhp = float(getattr(mon, "max_hp", 0) or 0) or 1.0
-        if hp > 0:
+    """Living count + team HP fraction from PUBLIC state.
+
+    Showdown reports HP in ``condition``: "cur/max", "cur/max sta", or "0 fnt".
+    Reading it (rather than guessing at numeric fields) is what makes the strata
+    labels real — a silent zero here collapses every record into one bucket.
+    """
+    alive, current, total = 0, 0.0, 0.0
+    for mon in getattr(state, "self_team", ()) or ():
+        condition = (getattr(mon, "condition", None) or "").strip()
+        head = condition.split(" ")[0] if condition else ""
+        if "/" in head:
+            cur_text, _, max_text = head.partition("/")
+            try:
+                cur, mx = float(cur_text), float(max_text)
+            except ValueError:
+                continue
+        elif head in {"0", ""}:
+            cur, mx = 0.0, 1.0
+        else:
+            continue
+        mx = mx or 1.0
+        current += cur
+        total += mx
+        if cur > 0 and not condition.endswith("fnt"):
             alive += 1
-        current += hp
-        total += maxhp
     return (alive or 1), (current / total if total else 1.0)
 
 
@@ -73,55 +88,58 @@ def main(argv: list[str] | None = None) -> int:
     for offset in range(args.games):
         seed = args.seed_start + offset
         env = LocalShowdownEnv(env_config)
-        try:
-            observation = env.reset(seed=seed)
-        except TypeError:
-            observation = env.reset()
-        rng = random.Random(seed)
+        env.reset(seed=seed)
+        rngs = {"p1": random.Random(seed * 2 + 1), "p2": random.Random(seed * 2 + 2)}
         turn = 0
-        prefix: list[str] = []
-        while turn < args.max_decision_rounds:
-            mask = tuple(bool(v) for v in observation.legal_action_mask)
-            if not any(mask):
-                break
-            candidates = tuple(
-                dict(c) if isinstance(c, dict) else {"value": str(c)}
-                for c in (observation.metadata or {}).get("action_candidates", ()) or ()
-            )
-            if candidates:
-                remaining, hp_fraction = _remaining_and_hp(observation)
-                forced = not any(mask[:4])  # no move slot legal -> forced switch
+        while turn < args.max_decision_rounds and env.terminal() is None:
+            requested = env.requested_players()
+            actions: dict[str, int] = {}
+            for player in ("p1", "p2"):
+                if player not in requested:
+                    continue
+                observation = env.observe(player)
+                mask = tuple(bool(v) for v in observation.legal_action_mask)
+                if not any(mask):
+                    continue
+                decision = policy.select_action(observation, rng=rngs[player])
+                actions[player] = decision.action_index
+                if player != "p1":
+                    continue
+                candidates = tuple(
+                    dict(c) if isinstance(c, dict) else {"value": str(c)}
+                    for c in (getattr(observation, "metadata", None) or {}).get("action_candidates", ()) or ()
+                )
+                if not candidates:
+                    continue
+                state = env._state_for_player(player)
+                remaining, hp_fraction = _remaining_and_hp(state)
                 records.append(
                     TimingDecisionRecord(
                         decision_id=f"s{seed:07d}-t{turn:03d}",
                         battle_id=f"corpus-{seed}",
-                        seat="p1",
+                        seat=player,
                         turn_index=turn,
                         team_seed=seed,
                         battle_seed=seed,
                         bot_rng_seed=seed,
-                        event_prefix=tuple(prefix[-400:]),
+                        event_prefix=tuple(str(line) for line in (env.public_log() if hasattr(env, "public_log") else [])[-400:]),
                         action_candidates=candidates,
                         legal_action_mask=mask,
-                        public_belief_inputs={"turn": turn},
+                        public_belief_inputs={"turn": turn, "request_kind": str(getattr(state, "request_kind", ""))},
                         strata=label_strata(
                             remaining=remaining,
                             team_hp_fraction=hp_fraction,
-                            boosts=(observation.metadata or {}).get("boosts"),
-                            forced_switch=forced,
+                            boosts=getattr(state, "self_active_boosts", None),
+                            forced_switch=str(getattr(state, "request_kind", "")) == "forceSwitch",
                             hidden_world_count=1,
                             turn_index=turn,
                         ),
                     )
                 )
-            decision = policy.select_action(observation, rng=rng)
-            step = env.step(decision.action_index)
-            observation = step[0] if isinstance(step, tuple) else step
-            done = bool(getattr(step[2] if isinstance(step, tuple) and len(step) > 2 else step, "__bool__", lambda: False)())
-            prefix.extend(getattr(env, "last_lines", ()) or ())
-            turn += 1
-            if done:
+            if not actions:
                 break
+            env.step(actions)
+            turn += 1
         print(f"seed {seed}: {len(records)} decisions so far", flush=True)
         if len(records) >= args.decisions * 2:
             break
