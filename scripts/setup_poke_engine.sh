@@ -40,7 +40,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
 VERSION="0.0.47"
-BUILD_DIR="$(mktemp -d -t poke-engine-build)"
+# Portable temp dir: `mktemp -d -t NAME` is BSD syntax; GNU coreutils rejects it
+# ("too few X's in template"), which broke this script inside Linux images.
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/poke-engine-build.XXXXXX")"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
