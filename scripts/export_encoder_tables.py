@@ -106,8 +106,16 @@ def _numeric_slot(schema_version: str, legacy_index: int) -> int:
 
 def _layout_payload(
     schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
+    spec: Any = None,
 ) -> dict[str, Any]:
-    spec = observation_spec_for_schema(schema_version)
+    # A region-trimmed checkpoint's spec differs from the schema default only in
+    # transition_token_count (and therefore token_count). The transition region
+    # is the LAST token block, so every token_offset above it stays valid and a
+    # trimmed spec simply describes a shorter tail. Passing the checkpoint's own
+    # spec is what lets the crate encode leaves a trimmed model can consume;
+    # without it the tables describe 87 tokens while the model expects 39 and
+    # the root/leaf contract check (correctly) refuses to run.
+    spec = spec if spec is not None else observation_spec_for_schema(schema_version)
     masks = ObservationFeatureMasks()
     categorical_columns = {
         name: int(getattr(showdown, name))
@@ -241,11 +249,12 @@ def build_tables(
     showdown_root: str,
     *,
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
+    spec: Any = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": TABLES_SCHEMA_VERSION,
         "vocab": _vocab_payload(showdown_root),
-        "layout": _layout_payload(observation_schema_version),
+        "layout": _layout_payload(observation_schema_version, spec=spec),
         "dex": _dex_payload(showdown_root),
     }
 
@@ -260,13 +269,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Observation layout to export (default: v2.2 for compatibility).",
     )
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Derive the layout from this checkpoint's own model config instead of the "
+            "schema default. Required for a REGION-TRIMMED checkpoint, whose transition "
+            "region (and therefore token_count) is narrower than the schema's."
+        ),
+    )
     args = parser.parse_args(argv)
 
     schema_version = observation_schema_version_from_choice(args.observation_schema)
     if schema_version not in {OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3}:
         parser.error(f"unsupported encoder-table schema: {args.observation_schema!r}")
+    spec = None
+    if args.checkpoint is not None:
+        from pokezero.neural_policy import (  # noqa: PLC0415 - optional torch dependency
+            load_transformer_model_config,
+            observation_spec_from_model_config,
+        )
+
+        spec = observation_spec_from_model_config(
+            load_transformer_model_config(args.checkpoint)
+        )
+        if spec.schema_version != schema_version:
+            parser.error(
+                f"--checkpoint schema {spec.schema_version!r} != --observation-schema "
+                f"{schema_version!r}; refusing to emit tables the model cannot consume"
+            )
     tables = build_tables(
-        str(args.showdown_root), observation_schema_version=schema_version
+        str(args.showdown_root), observation_schema_version=schema_version, spec=spec
     )
     encoded = json.dumps(tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
