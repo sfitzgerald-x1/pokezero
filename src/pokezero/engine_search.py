@@ -354,6 +354,12 @@ class EngineMctsStats:
     tree_wall_seconds: float = 0.0
     # Sub-slice of encode_wall_seconds: per-leaf FoldStateInner deep clones.
     fold_clone_wall_seconds: float = 0.0
+    # Encode decomposition: instruction->protocol-text rendering, the fold's
+    # re-parse of that text, the observation tensor build, and action mapping.
+    render_wall_seconds: float = 0.0
+    fold_advance_wall_seconds: float = 0.0
+    tensor_wall_seconds: float = 0.0
+    action_map_wall_seconds: float = 0.0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -388,6 +394,10 @@ class EngineMctsStats:
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
             "fold_clone_wall_seconds": self.fold_clone_wall_seconds,
+            "render_wall_seconds": self.render_wall_seconds,
+            "fold_advance_wall_seconds": self.fold_advance_wall_seconds,
+            "tensor_wall_seconds": self.tensor_wall_seconds,
+            "action_map_wall_seconds": self.action_map_wall_seconds,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -1020,6 +1030,10 @@ class EngineMctsPolicy:
             self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
             self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
             self.stats.fold_clone_wall_seconds += float(report.get("fold_clone_s") or 0.0)
+            self.stats.render_wall_seconds += float(report.get("render_s") or 0.0)
+            self.stats.fold_advance_wall_seconds += float(report.get("fold_advance_s") or 0.0)
+            self.stats.tensor_wall_seconds += float(report.get("tensor_s") or 0.0)
+            self.stats.action_map_wall_seconds += float(report.get("action_map_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report
