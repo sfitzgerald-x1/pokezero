@@ -352,6 +352,8 @@ class EngineMctsStats:
     encode_wall_seconds: float = 0.0
     model_wall_seconds: float = 0.0
     tree_wall_seconds: float = 0.0
+    # Sub-slice of encode_wall_seconds: per-leaf FoldStateInner deep clones.
+    fold_clone_wall_seconds: float = 0.0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -385,6 +387,7 @@ class EngineMctsStats:
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
+            "fold_clone_wall_seconds": self.fold_clone_wall_seconds,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -1016,6 +1019,7 @@ class EngineMctsPolicy:
             self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
             self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
             self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
+            self.stats.fold_clone_wall_seconds += float(report.get("fold_clone_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report

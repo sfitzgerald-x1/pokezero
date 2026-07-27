@@ -762,6 +762,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     //            are measured; nothing is assumed. eval_batch never runs inside
     //            traverse (leaves are Deferred), so the spans do not overlap.
     let mut encode_nanos = 0u128;
+    // Sub-slice of encode: the per-leaf deep clone of the fold state.
+    // FoldStateInner carries ~9 BTreeMap<String, _> plus Vec<String>, so this
+    // is a heap-heavy copy paid on EVERY expanded leaf. Measuring it
+    // separately says whether encode cost is the fold copy or the tensor
+    // build, which decides the optimization (interning/CoW vs region trim).
+    let mut fold_clone_nanos = 0u128;
     let mut model_nanos = 0u128;
     let mut tree_nanos = 0u128;
     let mut root_priors: Option<Vec<f32>> = None;
@@ -820,6 +826,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     let _encode_guard = PhaseTimer::new(&mut encode_nanos);
                     // Parent fold prefix: the root fold for root edges, the
                     // ancestor branch's advanced fold otherwise.
+                    let clone_started = Instant::now();
                     let (mut fold, mut turn, parent_order, parent_meta) = match seam.parent {
                         None => (
                             root_fold.clone(),
@@ -842,6 +849,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             }
                         },
                     };
+                    fold_clone_nanos += clone_started.elapsed().as_nanos();
                     // The mapper wants the PRE-branch state: rewind a clone.
                     let mut pre = leaf.clone();
                     let instructions: Vec<Instruction> = seam.instructions.to_vec();
@@ -1029,7 +1037,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\
+         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1045,6 +1053,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
+        fold_clone_nanos as f64 / 1e9,
         root_priors_json,
         iterations,
         iterations - completed,
