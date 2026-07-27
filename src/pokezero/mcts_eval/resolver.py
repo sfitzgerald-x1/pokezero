@@ -31,7 +31,13 @@ from typing import Any, Mapping
 
 # Bump when the exporter's output semantics change; it is part of the reuse key
 # so previously exported artifacts are not adopted across an exporter change.
-EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v1"
+# v2: encoder tables are derived from the checkpoint (--checkpoint) rather than
+# the schema default, so region-trimmed models get tables of THEIR width.
+# Bumping this invalidates every artifact exported by v1 — which is the whole
+# point of having the field: a behaviour change in the exporter must not be
+# silently reused. (Missing this bump caused a trimmed run to reuse cached
+# 87-token tables and fail the root/leaf contract check.)
+EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v2"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
 SUPPORTED_OBSERVATION_SCHEMAS = ("pokezero.observation.v2.2", "pokezero.observation.v3")
