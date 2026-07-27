@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -33,6 +34,9 @@ ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v2"
 LINEAR_POLICY_SPEC_PREFIX = "linear:"
 NEURAL_POLICY_SPEC_PREFIX = "neural:"
 REMOTE_POLICY_SPEC_PREFIX = "remote:"
+# Controlled engine-MCTS search over a checkpoint's leaves; the query options
+# carry the frozen search configuration (depth/sims/batch/worlds + artifacts).
+ENGINE_MCTS_POLICY_SPEC_PREFIX = "engine-mcts:"
 
 
 @dataclass(frozen=True)
@@ -1144,6 +1148,13 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
             raise ValueError("neural policy spec must include a checkpoint path after 'neural:'.")
         neural_options = _neural_policy_options(options)
         return lambda: load_transformer_policy(Path(checkpoint), **neural_options)
+    if lowered.startswith(ENGINE_MCTS_POLICY_SPEC_PREFIX):
+        checkpoint = policy_body[len(ENGINE_MCTS_POLICY_SPEC_PREFIX) :].strip()
+        if not checkpoint:
+            raise ValueError(
+                "engine-mcts policy spec must include a checkpoint path after 'engine-mcts:'."
+            )
+        return _engine_mcts_policy_factory(checkpoint, options)
     if lowered.startswith(REMOTE_POLICY_SPEC_PREFIX):
         from .inference_service import remote_inference_policy
 
@@ -1158,8 +1169,84 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, max-damage, "
         "aggressive-damage, "
         "scripted-teacher, linear:/path/to/checkpoint.json, neural:/path/to/checkpoint.pt, "
+        "engine-mcts:/path/to/checkpoint.pt?depth=..&sims=..&model=..&tables=.., "
         "or remote:host:port."
     )
+
+
+# Required engine-mcts options: the study's frozen contract has no defaults for
+# the fields that define a lattice cell, so an omitted one is an error rather
+# than a silent fallback that would mislabel a timing row.
+_ENGINE_MCTS_REQUIRED_OPTIONS = ("depth", "sims", "model", "tables")
+_ENGINE_MCTS_INT_OPTIONS = {
+    "depth": "search_depth",
+    "sims": "search_sims",
+    "batch": "search_batch",
+    "worlds": "worlds",
+}
+
+
+def _engine_mcts_policy_factory(checkpoint: str, options: dict[str, str]) -> Callable[[], Policy]:
+    """Controlled engine-MCTS policy from a frozen search configuration (fixed
+    depth/sims/batch/worlds, model leaves, model priors, no adaptive budget).
+
+    Every knob is explicit in the spec: a lattice cell's identity is its
+    configuration, so this path never fills in a default for depth, sims, the
+    TorchScript artifact, or the encoder tables.
+    """
+    missing = [name for name in _ENGINE_MCTS_REQUIRED_OPTIONS if not options.get(name)]
+    if missing:
+        raise ValueError(
+            f"engine-mcts policy spec requires option(s) {', '.join(missing)}; a timing or "
+            "strength row must state its full configuration."
+        )
+    unknown = set(options) - set(_ENGINE_MCTS_INT_OPTIONS) - {
+        "model", "tables", "device", "c_puct", "deep_ko_split", "model_priors", "strict_fallbacks",
+    }
+    if unknown:
+        raise ValueError(f"unknown engine-mcts policy spec option(s): {sorted(unknown)}.")
+
+    config_kwargs: dict[str, Any] = {
+        "leaf_eval": "model",
+        "checkpoint_path": checkpoint,
+        "model_path": options["model"],
+        "tables_path": options["tables"],
+        "model_device": options.get("device", "cpu"),
+    }
+    for option, field_name in _ENGINE_MCTS_INT_OPTIONS.items():
+        if option in options:
+            config_kwargs[field_name] = int(options[option])
+    if "c_puct" in options:
+        config_kwargs["c_puct"] = float(options["c_puct"])
+    for flag in ("deep_ko_split", "model_priors", "strict_fallbacks"):
+        if flag in options:
+            config_kwargs[flag] = options[flag].strip().lower() in {"1", "true", "yes", "on"}
+
+    def factory() -> Policy:
+        from .dex import load_showdown_dex_cached
+        from .engine_search import EngineMctsConfig, EngineMctsPolicy
+        from .local_showdown import belief_set_source_env_enabled
+        from .randbat import load_gen3_randbat_source_cached
+
+        showdown_root = os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+        if not showdown_root:
+            raise ValueError(
+                "engine-mcts policy requires POKEZERO_SHOWDOWN_ROOT for the dex/belief source."
+            )
+        set_source = (
+            load_gen3_randbat_source_cached(showdown_root)
+            if belief_set_source_env_enabled()
+            else None
+        )
+        return EngineMctsPolicy(
+            dex=load_showdown_dex_cached(showdown_root),
+            set_source=set_source,
+            config=EngineMctsConfig(**config_kwargs),
+            policy_id=f"engine-mcts-d{config_kwargs.get('search_depth')}"
+            f"-s{config_kwargs.get('search_sims')}",
+        )
+
+    return factory
 
 
 def policy_from_name(name: str) -> Policy:
