@@ -34,6 +34,24 @@ use std::collections::HashMap;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Encode sub-phase counters (nanoseconds). Global + relaxed: the leaf-pricing
+/// closure has no per-search context to thread, and these are diagnostics, not
+/// control flow.
+pub(crate) static ROW_INPUT_NANOS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCTS_NANOS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static ROW_WRITE_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Drain the encode sub-phase counters, returning (row_inputs, products, write)
+/// in seconds and resetting them for the next search.
+pub(crate) fn drain_encode_subphases() -> (f64, f64, f64) {
+    (
+        ROW_INPUT_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e9,
+        PRODUCTS_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e9,
+        ROW_WRITE_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e9,
+    )
+}
 use pyo3::types::PyDict;
 use serde_json::{json, Map, Value};
 
@@ -1498,9 +1516,21 @@ impl LeafContext {
         self_order: Option<&[String]>,
         meta: Option<&LeafMeta>,
     ) -> PyResult<EncodedArrays> {
+        // tensor_s is 75% of encode, so split its three parts: building the row
+        // inputs from engine state, materializing the fold's derived products
+        // (transition/action token tails, rebuilt per leaf), and writing the
+        // arrays. Timers are process-global because encode_leaf is called from
+        // the leaf-pricing closure, which has no per-search context.
+        let t0 = std::time::Instant::now();
         let row = self.leaf_row_inputs(state, turn, self_order, meta)?;
+        ROW_INPUT_NANOS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let t1 = std::time::Instant::now();
         let products = fold.products();
-        encode_row_value(&self.tables, &row, Some(&products))
+        PRODUCTS_NANOS.fetch_add(t1.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let t2 = std::time::Instant::now();
+        let encoded = encode_row_value(&self.tables, &row, Some(&products));
+        ROW_WRITE_NANOS.fetch_add(t2.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        encoded
     }
 
     /// True when the acting seat is engine side one.

@@ -360,6 +360,11 @@ class EngineMctsStats:
     fold_advance_wall_seconds: float = 0.0
     tensor_wall_seconds: float = 0.0
     action_map_wall_seconds: float = 0.0
+    # tensor_s split: engine-state row inputs, the fold's derived products
+    # (rebuilt per leaf), and the array write.
+    row_input_wall_seconds: float = 0.0
+    products_wall_seconds: float = 0.0
+    row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -398,6 +403,9 @@ class EngineMctsStats:
             "fold_advance_wall_seconds": self.fold_advance_wall_seconds,
             "tensor_wall_seconds": self.tensor_wall_seconds,
             "action_map_wall_seconds": self.action_map_wall_seconds,
+            "row_input_wall_seconds": self.row_input_wall_seconds,
+            "products_wall_seconds": self.products_wall_seconds,
+            "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -1034,6 +1042,9 @@ class EngineMctsPolicy:
             self.stats.fold_advance_wall_seconds += float(report.get("fold_advance_s") or 0.0)
             self.stats.tensor_wall_seconds += float(report.get("tensor_s") or 0.0)
             self.stats.action_map_wall_seconds += float(report.get("action_map_s") or 0.0)
+            self.stats.row_input_wall_seconds += float(report.get("row_input_s") or 0.0)
+            self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
+            self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report

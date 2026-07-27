@@ -808,6 +808,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             }
         }
     }
+    let _ = crate::leaf::drain_encode_subphases(); // per-search reset
     let start = Instant::now();
     while completed < iterations {
         let traversal_budget = batch_size.min(iterations - completed);
@@ -1037,6 +1038,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         early_stop_leader_visits = leader;
         early_stop_runner_up_visits = runner_up;
     }
+    let (row_input_s, products_s, row_write_s) = crate::leaf::drain_encode_subphases();
     let elapsed_s = start.elapsed().as_secs_f64();
     let outcome = MultiPlyOutcome {
         tree,
@@ -1057,7 +1059,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\
+         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1078,6 +1080,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         fold_advance_nanos as f64 / 1e9,
         tensor_nanos as f64 / 1e9,
         action_map_nanos as f64 / 1e9,
+        row_input_s,
+        products_s,
+        row_write_s,
         root_priors_json,
         iterations,
         iterations - completed,
