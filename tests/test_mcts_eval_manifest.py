@@ -266,3 +266,31 @@ class EngineMctsPolicyModeTest(unittest.TestCase):
             f"-w{config.engine_worlds}-local",
             cell.config_id,
         )
+
+
+class MaterializationGateTest(unittest.TestCase):
+    """The FoulPlay bridge must decide by CAPABILITY, not by policy class.
+
+    Gating on isinstance(RootPUCTSearchPolicy) handed EngineMctsPolicy a None
+    materialization state, so engine search fell back to uniform-legal on every
+    decision — 0/20 against the raw policy's 10/20, with no error raised. A
+    silent capability mismatch is the most expensive kind of bug in a strength
+    study because it reads as a scientific result.
+    """
+
+    def test_engine_policy_declares_the_requirement(self) -> None:
+        from pokezero.engine_search import EngineMctsPolicy
+
+        self.assertTrue(
+            getattr(EngineMctsPolicy, "requires_public_materialization_state", False),
+            "EngineMctsPolicy must declare it needs a materialized public state",
+        )
+
+    def test_bridge_gates_on_capability_not_class(self) -> None:
+        import inspect
+
+        from pokezero import foulplay_bridge
+
+        source = inspect.getsource(foulplay_bridge)
+        gate = source[source.index("public_materialization_state = ("):][:1200]
+        self.assertIn("requires_public_materialization_state", gate)

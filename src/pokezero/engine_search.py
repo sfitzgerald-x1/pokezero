@@ -412,6 +412,11 @@ class EngineMctsStats:
 class EngineMctsPolicy:
     """ContextAwarePolicy running poke-engine MCTS over belief-sampled worlds."""
 
+    # Declares the requirement the FoulPlay bridge gates on. Engine search
+    # cannot run without a materialized public state; without this the bridge
+    # passes None and every decision degrades to uniform-legal fallback.
+    requires_public_materialization_state = True
+
     def __init__(
         self,
         *,
