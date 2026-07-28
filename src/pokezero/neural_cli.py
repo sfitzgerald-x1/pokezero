@@ -807,6 +807,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "encoding is untouched. Omit for full (128) history."
         ),
     )
+    benchmark.add_argument(
+        "--mixed-history",
+        action="store_true",
+        help=(
+            "Allow matchups between checkpoints trained at DIFFERENT transition_token_budget "
+            "(history length). One env encodes one budget, so the env is run at the MAX budget "
+            "among participants and every neural policy is masked back down to its own trained "
+            "budget at decision time. This is faithful, not a probe: the transformer has no "
+            "per-index positional embedding within a frame and the transition tokens share one "
+            "token type, so a masked frame is equivalent to an encode-time budget frame "
+            "(permutation-invariant; see truncate_history_tensors). Mutually exclusive with "
+            "--history-mask-k, which deliberately mismatches the trained budget."
+        ),
+    )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.add_argument(
         "--summary-out",
@@ -3480,6 +3494,12 @@ def _benchmark(args: argparse.Namespace) -> int:
     history_mask_k = args.history_mask_k
     if history_mask_k is not None and history_mask_k <= 0:
         raise ValueError(f"--history-mask-k must be positive, got {history_mask_k}.")
+    if args.mixed_history and history_mask_k is not None:
+        raise ValueError(
+            "--mixed-history and --history-mask-k are mutually exclusive: the former masks each "
+            "policy to the budget it was TRAINED at (faithful), the latter deliberately "
+            "mismatches it (probe). Pick one."
+        )
     deterministic = not bool(args.sample)
     checkpoint_policy = _policy_from_checkpoint(
         args.checkpoint,
@@ -3566,7 +3586,11 @@ def _benchmark(args: argparse.Namespace) -> int:
                 checkpoint_policy,
             )
         )
-    env_config = _env_config_with_matchup_masks(env_config, matchups, context="neural benchmark")
+    if args.mixed_history:
+        _apply_mixed_history_masks(matchups, context="neural benchmark")
+        env_config = _env_config_with_mixed_history_masks(env_config, matchups, context="neural benchmark")
+    else:
+        env_config = _env_config_with_matchup_masks(env_config, matchups, context="neural benchmark")
     report = benchmark_rollouts(
         games=args.games,
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -8338,6 +8362,72 @@ def _env_config_with_matchup_masks(env_config, matchups, *, context: str):
     return env_config_with_checkpoint_masks(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
+        context=context,
+        required_specs=[observation_spec_from_model_config(config) for config in configs],
+    )
+
+
+def _mixed_history_participants(matchups):
+    """Every distinct transformer-backed policy in the matchups, with its trained budget."""
+    seen: list = []
+    for matchup in matchups:
+        for policy in (matchup.p1_policy, matchup.p2_policy):
+            target = getattr(policy, "policy", policy)  # unwrap _PolicyIdAlias
+            config = getattr(getattr(target, "result", None), "model_config", None)
+            if config is None or not hasattr(config, "transition_token_budget"):
+                continue  # scripted baselines (random-legal/simple-legal) read no tensors
+            if any(target is other for other, _ in seen):
+                continue
+            seen.append((target, int(config.transition_token_budget)))
+    return seen
+
+
+def _apply_mixed_history_masks(matchups, *, context: str) -> None:
+    """Mask every neural policy back down to the budget it was TRAINED at.
+
+    The env encodes one budget for both seats (see _env_config_with_mixed_history_masks), so a
+    shorter-history arm would otherwise be fed more transition tokens than it ever saw. Masking
+    it to its own budget restores exactly its trained view: the surviving token multiset is the
+    same, and the model is permutation-invariant across the transition region, so the masked
+    frame is equivalent to an encode-time budget frame rather than an approximation of one.
+    """
+    participants = _mixed_history_participants(matchups)
+    if not participants:
+        return
+    budgets = sorted({budget for _, budget in participants})
+    if len(budgets) == 1:
+        return  # single budget: the plain latch already encodes it exactly
+    for policy, budget in participants:
+        policy.history_mask_k = budget
+    print(
+        f"{context}: MIXED-HISTORY matchup — budgets {budgets}; encoding at {budgets[-1]} and "
+        f"masking each policy to its own trained budget at decision time (faithful: the "
+        f"transition region is permutation-invariant, so this reproduces each arm's trained view).",
+        file=sys.stderr,
+    )
+
+
+def _env_config_with_mixed_history_masks(env_config, matchups, *, context: str):
+    """Adopt the SUPERSET encode-time masks for a mixed-history matchup.
+
+    Identical to _env_config_with_matchup_masks except that a differing transition_token_budget
+    is unified to the maximum instead of hard-failing: every participant is masked back to its
+    own budget by _apply_mixed_history_masks, so the env only has to be able to supply the
+    longest history any participant needs. Every OTHER mask field must still agree exactly —
+    those are genuine encode differences that masking cannot reconcile.
+    """
+    from dataclasses import replace as _replace
+
+    policies = [policy for matchup in matchups for policy in (matchup.p1_policy, matchup.p2_policy)]
+    configs = transformer_model_configs_from_policies(policies)
+    if not configs:
+        return env_config
+    masks = [feature_masks_from_model_config(config) for config in configs]
+    max_budget = max(mask.transition_token_budget for mask in masks)
+    unified = [_replace(mask, transition_token_budget=max_budget) for mask in masks]
+    return env_config_with_checkpoint_masks(
+        env_config,
+        unified,
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
     )
