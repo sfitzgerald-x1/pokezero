@@ -138,13 +138,20 @@ fn assert_close(actual: f32, expected: f32, what: &str) {
 // The duration ladder
 // ---------------------------------------------------------------------------
 
-/// Given `n` attacking turns already burned, the chance that the turn just taken
-/// was the LAST one carrying a self-hit roll is
-/// `P(time == n + 2 | time > n + 1)` for `time ~ Uniform{2,3,4,5}` — 1/4, 1/3,
-/// 1/2, forced. (The engine resolves the ladder at end of turn rather than at
-/// the start of the next attacking turn; see `chance_confusion_ends`. Showdown's
-/// snap-out turn carries no self-hit roll and lets the move through, exactly
-/// like a turn on which the volatile is already gone.)
+/// Indexing, since the counter is read at two different points in a turn:
+/// `confused_state(burned)` sets the counter as it stands at the START of the
+/// turn, the confusion check then increments it, and the ladder is evaluated at
+/// the END of the turn — so the rung reached here is
+/// `chance_confusion_ends(burned + 1)`, and the engine-side function is always
+/// indexed by turns burned INCLUDING the current one.
+///
+/// In those terms: given `burned` attacking turns already behind it, the chance
+/// that the turn just taken was the LAST one carrying a self-hit roll is
+/// `P(time == burned + 2 | time > burned + 1)` for `time ~ Uniform{2,3,4,5}` —
+/// 1/4, 1/3, 1/2, forced. (The engine resolves the ladder at end of turn rather
+/// than at the start of the next attacking turn; see `chance_confusion_ends`.
+/// Showdown's snap-out turn carries no self-hit roll and lets the move through,
+/// exactly like a turn on which the volatile is already gone.)
 #[test]
 fn snap_out_chance_matches_the_showdown_duration_roll() {
     for (burned, expected) in [
@@ -316,6 +323,106 @@ fn paralysis_is_rolled_after_the_confusion_check() {
         assert!(
             burns_a_confusion_turn(&branch.instruction_list),
             "every paralysis branch must still burn a confusion turn: {:?}",
+            branch.instruction_list
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Composition with the residual deferral (residual-defer-on-faint patch)
+// ---------------------------------------------------------------------------
+
+fn removals_of_confusion(list: &[Instruction]) -> usize {
+    list.iter()
+        .filter(|instruction| match instruction {
+            Instruction::RemoveVolatileStatus(remove) => {
+                remove.side_ref == SideReference::SideOne
+                    && remove.volatile_status == PokemonVolatileStatus::CONFUSION
+            }
+            _ => false,
+        })
+        .count()
+}
+
+/// The two end-of-turn patches share the `add_end_of_turn_branches` fork site,
+/// so their composition needs pinning, not just review.
+///
+/// A confused Pokemon KOs the opposing active. `end_of_turn_is_deferred` then
+/// suppresses the residual block on this ply and re-attaches it to the
+/// replacement ply. The confusion ladder must NOT follow the residual block: the
+/// counter was burned by THIS ply's confusion check, so the ladder belongs here.
+/// It is keyed on the `+1` marker in the instruction list rather than on the
+/// residual block, so it fires exactly once, on the deferring ply, at the same
+/// mass it would have without the deferral.
+#[test]
+fn confusion_ladder_fires_once_when_residuals_are_deferred() {
+    let mut state = confused_state(1);
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SWIFT);
+    state.side_two.get_active().hp = 1;
+
+    let branches = both_splash(&mut state);
+
+    // Same rung as the undeferred case: burning the second turn ends confusion
+    // with probability 1/3 whether or not the opponent fainted.
+    assert_close(
+        mass(&branches, drops_confusion),
+        100.0 / 3.0,
+        "snap-out mass on a ply whose residuals are deferred",
+    );
+    for branch in &branches {
+        assert!(
+            burns_a_confusion_turn(&branch.instruction_list),
+            "the confusion check ran, so every branch carries the marker: {:?}",
+            branch.instruction_list
+        );
+        assert!(
+            removals_of_confusion(&branch.instruction_list) <= 1,
+            "the ladder must not fire twice within one ply: {:?}",
+            branch.instruction_list
+        );
+    }
+
+    // Take the line where the KO landed and the confusion survived, so the
+    // replacement ply starts with a live counter and a pending force switch.
+    let ko_survivor = branches
+        .iter()
+        .find(|branch| {
+            !drops_confusion(&branch.instruction_list)
+                && branch
+                    .instruction_list
+                    .contains(&Instruction::ToggleSideTwoForceSwitch)
+        })
+        .expect("a KO branch that keeps the confusion")
+        .clone();
+    state.apply_instructions(&ko_survivor.instruction_list);
+    assert_eq!(
+        state.side_one.volatile_status_durations.confusion, 2,
+        "the burned turn must survive onto the replacement ply"
+    );
+
+    // The replacement ply re-attaches the deferred residual block, and
+    // `end_of_turn_triggered` lets it through on the force_switch flag — so
+    // `add_end_of_turn_branches` runs a SECOND time this turn. Its instruction
+    // list starts empty and no confusion check runs on a replacement ply, so
+    // there is no marker and the ladder must stay silent.
+    let replacement = generate(
+        &mut state,
+        &MoveChoice::None,
+        &MoveChoice::Switch(PokemonIndex::P1),
+    );
+    for branch in &replacement {
+        assert!(
+            !burns_a_confusion_turn(&branch.instruction_list),
+            "a replacement ply must not burn a confusion turn: {:?}",
+            branch.instruction_list
+        );
+        assert_eq!(
+            removals_of_confusion(&branch.instruction_list),
+            0,
+            "the ladder must not fire again on the replacement ply: {:?}",
             branch.instruction_list
         );
     }
