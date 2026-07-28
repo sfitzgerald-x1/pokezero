@@ -57,7 +57,24 @@
 #   Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
 #   spikes2layers/spikes3layers); pinned by
 #   rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs. Touches the
-#   switch routine in gen3/generate_instructions.rs only; applied last.
+#   switch routine in gen3/generate_instructions.rs only.
+#   poke-engine-gen3-residual-defer-on-faint.patch — gen3 resolves a forced
+#   replacement BEFORE the end-of-turn residual block. Showdown's runAction sees
+#   the pending switch flag, issues a `switch` request and returns with the
+#   queued `residual` action untouched, so the block runs only once the
+#   replacement is on the field — and applies to the replacement too. Upstream
+#   ran the residuals in the same instruction set as the faint (and, for a slow
+#   pivot, dropped them entirely), so an incoming Pokemon never took sand/hail/
+#   status damage on the turn it came in and the weather/screen counters ticked
+#   on the wrong side of the switch. The deferral is marked with the existing
+#   per-side `force_switch` flag via its existing reversible toggle instruction,
+#   which is what keeps a faint caused BY the residual block — already run — from
+#   being mistaken for a pending one and double-applying. Verified vs real gen3
+#   Showdown (scripts/gen3_switch_differential.py: faintresiduals + control);
+#   pinned by rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs.
+#   Touches the end-of-turn generation in gen3/generate_instructions.rs plus
+#   get_all_options in gen3/state.rs; authored against the spikes-patched tree,
+#   applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -86,7 +103,8 @@ for patch in \
   poke-engine-gen3-rapidspin-fidelity.patch \
   poke-engine-gen3-ability-fidelity.patch \
   poke-engine-gen3-batonpass-perish.patch \
-  poke-engine-gen3-spikes-layers.patch; do
+  poke-engine-gen3-spikes-layers.patch \
+  poke-engine-gen3-residual-defer-on-faint.patch; do
   if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
     echo "ERROR: failed to apply $patch" >&2
     exit 1
