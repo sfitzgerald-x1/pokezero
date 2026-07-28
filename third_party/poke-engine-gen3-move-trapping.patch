@@ -1,0 +1,196 @@
+diff --color -ruN a/src/choices.rs b/src/choices.rs
+--- a/src/choices.rs	2026-07-28 16:41:16
++++ b/src/choices.rs	2026-07-28 16:51:00
+@@ -1509,6 +1509,11 @@
+             move_id: Choices::BLOCK,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
++                // pokezero gen3 fix: same gen5-mod protect flag as Mean Look
++                // above (data/mods/gen5/moves.ts re-declares Block with
++                // `protect: 1`, and gen3 inherits it). Spider Web already carries
++                // the flag in the base data, so it needs no gate.
++                protect: cfg!(feature = "gen3"),
+                 reflectable: true,
+                 ..Default::default()
+             },
+@@ -10262,6 +10267,16 @@
+             move_id: Choices::MEANLOOK,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
++                // pokezero gen3 fix: gen3 Mean Look IS blocked by Protect. The
++                // modern move data carries no protect flag, but gen3 inherits
++                // gen4 -> gen5, and data/mods/gen5/moves.ts re-declares Mean Look
++                // with `flags: { protect: 1, ... }`. Verified against real gen3
++                // Showdown: Mean Look into Protect answers
++                // `-activate <target> Protect` and the target is NOT trapped. The
++                // MOVES map is built per-compiled-gen, so this compile-time gate
++                // leaves gen1/gen2/genx exactly as they were (mirrors the
++                // Struggle typing gate).
++                protect: cfg!(feature = "gen3"),
+                 reflectable: true,
+                 ..Default::default()
+             },
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-28 16:41:16
++++ b/src/gen3/choice_effects.rs	2026-07-28 16:50:47
+@@ -753,6 +753,51 @@
+                 instructions.instruction_list.push(apply_vs_instruction);
+             }
+         }
++        // pokezero gen3 fidelity fix: move-trapping. Mean Look, Spider Web and
++        // Block all resolve to `target.addVolatile('trapped', source, move,
++        // 'trapper')` in Showdown, which leaves the victim with no switch option
++        // at all until the trapper leaves the field. Upstream defined all three
++        // as pure no-ops (no volatile_status, no effect), so the engine believed
++        // they did nothing — the single biggest source of "the world cannot
++        // express this Showdown request" fallbacks in the search lane, because
++        // the real request comes back `trapped: true` while the engine's world
++        // still offers switches. Mean Look (Misdreavus) and Spider Web (Ariados)
++        // are both in the gen3 randbats pool; Block is not, and is included only
++        // because it is literally the same Showdown handler.
++        //
++        // This lives here rather than as a declarative `volatile_status` on the
++        // Choice because the MOVES table in src/choices.rs is shared by all four
++        // compiled generations and only gen3 has a TRAPPED variant.
++        //
++        // Substitute, Protect and the already-trapped case are all handled: the
++        // `blocked_by_protect` guard at the top of this function covers Protect
++        // (gen3 adds the protect flag to Mean Look and Block — verified against
++        // the sim, which answers `-activate ... Protect`), and
++        // `volatile_status_can_be_applied` covers Substitute (the sim answers
++        // `-fail`), a fainted target and a re-application.
++        Choices::MEANLOOK | Choices::SPIDERWEB | Choices::BLOCK => {
++            let can_trap = {
++                let defender = defending_side.get_active_immutable();
++                defender.volatile_status_can_be_applied(
++                    &PokemonVolatileStatus::TRAPPED,
++                    &defending_side.volatile_statuses,
++                    choice.first_move,
++                )
++            };
++            if can_trap {
++                instructions
++                    .instruction_list
++                    .push(Instruction::ApplyVolatileStatus(
++                        ApplyVolatileStatusInstruction {
++                            side_ref: attacking_side_ref.get_other_side(),
++                            volatile_status: PokemonVolatileStatus::TRAPPED,
++                        },
++                    ));
++                defending_side
++                    .volatile_statuses
++                    .insert(PokemonVolatileStatus::TRAPPED);
++            }
++        }
+         Choices::PERISHSONG => {
+             for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+                 let side = state.get_side(&side_ref);
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-28 16:41:16
++++ b/src/gen3/generate_instructions.rs	2026-07-28 16:50:34
+@@ -241,6 +241,32 @@
+         }
+     }
+ 
++    // pokezero gen3 fidelity fix: the Mean Look / Spider Web / Block trap is a
++    // LINKED volatile in Showdown — `addVolatile('trapped', source, move,
++    // 'trapper')` puts `trapper` on the user and `trapped` on the victim and
++    // links them, so the user leaving the field runs `clearVolatile()` ->
++    // `removeLinkedVolatiles()` and frees the victim. The trapper FAINTING frees
++    // it too (verified against real gen3 Showdown: the victim's very next request
++    // comes back untrapped), which this covers because the faint's forced
++    // replacement runs through this same routine, at the first boundary where the
++    // victim has a choice again.
++    if opposite_side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::TRAPPED)
++    {
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::RemoveVolatileStatus(
++                RemoveVolatileStatusInstruction {
++                    side_ref: switching_side_ref.get_other_side(),
++                    volatile_status: PokemonVolatileStatus::TRAPPED,
++                },
++            ));
++        opposite_side
++            .volatile_statuses
++            .remove(&PokemonVolatileStatus::TRAPPED);
++    }
++
+     if opposite_side
+         .volatile_statuses
+         .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs	2026-07-28 16:41:16
++++ b/src/gen3/state.rs	2026-07-28 16:50:14
+@@ -179,6 +179,10 @@
+         THROATCHOP,
+         TRUANT,
+         TORMENT,
++        // pokezero gen3 fidelity fix: the move-trapping volatile that Mean Look,
++        // Spider Web and Block apply (Showdown's `trapped`). Distinct from
++        // PARTIALLYTRAPPED, which is the Wrap/Fire Spin residual family.
++        TRAPPED,
+         TYPECHANGE,
+         UNBURDEN,
+         UPROAR,
+@@ -293,6 +297,15 @@
+                 }
+                 true
+             }
++            // pokezero gen3 fidelity fix: Mean Look / Spider Web / Block carry no
++            // `bypasssub` flag in gen3, so a Substitute blocks the trap outright
++            // — real gen3 Showdown answers `|-fail|` and the victim's request
++            // comes back untrapped. Nothing else blocks it: Ghost types are
++            // trappable in gen3 (verified against the sim), and the
++            // already-present / fainted guards are handled above.
++            PokemonVolatileStatus::TRAPPED => {
++                !active_volatiles.contains(&PokemonVolatileStatus::SUBSTITUTE)
++            }
+             PokemonVolatileStatus::ATTRACT => self.ability != Abilities::OBLIVIOUS,
+             PokemonVolatileStatus::SUBSTITUTE => self.hp > self.maxhp / 4,
+             PokemonVolatileStatus::FLINCH => {
+@@ -436,8 +449,21 @@
+         {
+             return true;
+         }
++        // pokezero gen3 fidelity fix: Mean Look / Spider Web / Block set
++        // Showdown's `trapped` volatile, whose `onTrapPokemon` calls
++        // `pokemon.tryTrap()` — the victim's request comes back with
++        // `trapped: true` and no switch options at all. Verified against real
++        // gen3 Showdown; Ghost types are NOT exempt (the trapping immunity
++        // arrives in gen6, and gen5's typechart override drops the `trapped: 3`
++        // entry that gen3 would otherwise inherit).
+         if self
+             .volatile_statuses
++            .contains(&PokemonVolatileStatus::TRAPPED)
++        {
++            return true;
++        }
++        if self
++            .volatile_statuses
+             .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+         {
+             return true;
+@@ -719,6 +745,20 @@
+                 | PokemonVolatileStatus::PERISH2
+                 | PokemonVolatileStatus::PERISH3
+                 | PokemonVolatileStatus::PERISH4 => baton_passing,
++                // pokezero gen3 fidelity fix: Baton Pass carries the Mean Look /
++                // Spider Web trap to the receiver. Same `copyVolatileFrom` rule
++                // as the perish counter above, and gen4's conditions.ts (which
++                // gen3 inherits) explicitly re-declares `trapped` and `trapper`
++                // with `noCopy: false` — gen5+ flips `trapped` back to
++                // `noCopy: true`, so this is a genuinely gen3/gen4-only carry.
++                // Showdown also re-points the trapper's link to the receiver, so
++                // the receiver is still freed when the TRAPPER leaves; the engine
++                // gets that for free by keying the release off the opposing
++                // side's switch-out. Verified against real gen3 Showdown: a
++                // trapped Misdreavus that Baton Passes into Blissey hands the
++                // receiver a `trapped: true` request. A plain switch-out (or a
++                // phazing drag) still drops it, per `Pokemon.clearVolatile()`.
++                PokemonVolatileStatus::TRAPPED => baton_passing,
+                 // pokezero gen3 fidelity fix: Baton Pass carries CONFUSION, and
+                 // carries it WITH its remaining duration. Same `copyVolatileFrom`
+                 // rule as the perish counter above — `confusion` carries no
