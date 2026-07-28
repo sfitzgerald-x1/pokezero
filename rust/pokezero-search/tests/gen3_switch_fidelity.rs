@@ -1,0 +1,370 @@
+//! Gen 3 switch-out / Protect fidelity pins, asserted directly against the
+//! vendored gen3-patched poke-engine (`third_party/poke-engine-src/`).
+//!
+//! Every expectation here was read off the **real** Node Showdown simulator
+//! driven through `scripts/gen3_switch_differential.py`; that script is the
+//! ground-truth gate and this file is the engine-contract pin, so a wheel
+//! rebuild or a version bump that silently drops one of the
+//! `third_party/poke-engine-gen3-*.patch` files fails `cargo test` instead of
+//! quietly regressing search fidelity.
+//!
+//! Coverage, and which patch each pin guards:
+//!
+//! * Rapid Spin blocked by Protect leaves the spinner's hazards alone, and a
+//!   connecting Rapid Spin clears hazards + Leech Seed + partial-trapping —
+//!   `poke-engine-gen3-rapidspin-fidelity.patch`.
+//! * Leech Seed ends when the seeded Pokemon leaves the field, and a partial
+//!   trap ends both when the victim is dragged out and when the TRAPPER leaves
+//!   — upstream behaviour, pinned because the two live in the same switch
+//!   routine as the patched code and have no other regression cover.
+//! * Baton Pass carries the Perish Song counter to the receiver —
+//!   `poke-engine-gen3-batonpass-perish.patch`.
+
+use poke_engine::choices::Choices;
+use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
+use poke_engine::instruction::{Instruction, StateInstructions};
+use poke_engine::state::{
+    PokemonIndex, PokemonMoveIndex, PokemonSideCondition, SideReference, State,
+};
+
+/// `generate_instructions_from_move_pair` must leave `state` untouched — the
+/// engine's own test suite asserts this and a patch that mutates without
+/// emitting a reversible instruction would silently corrupt search.
+fn generate(
+    state: &mut State,
+    side_one: &MoveChoice,
+    side_two: &MoveChoice,
+) -> Vec<StateInstructions> {
+    let before = format!("{:?}", state);
+    let instructions = generate_instructions_from_move_pair(state, side_one, side_two, false);
+    assert_eq!(before, format!("{:?}", state), "state was mutated");
+    instructions
+}
+
+fn only_branch(instructions: Vec<StateInstructions>) -> Vec<Instruction> {
+    assert_eq!(
+        instructions.len(),
+        1,
+        "expected a single deterministic branch, got {:?}",
+        instructions
+    );
+    instructions.into_iter().next().unwrap().instruction_list
+}
+
+fn removes_volatile(
+    list: &[Instruction],
+    side_ref: SideReference,
+    volatile_status: PokemonVolatileStatus,
+) -> bool {
+    list.iter().any(|instruction| match instruction {
+        Instruction::RemoveVolatileStatus(remove) => {
+            remove.side_ref == side_ref && remove.volatile_status == volatile_status
+        }
+        _ => false,
+    })
+}
+
+fn changes_side_condition(
+    list: &[Instruction],
+    side_ref: SideReference,
+    side_condition: PokemonSideCondition,
+) -> bool {
+    list.iter().any(|instruction| match instruction {
+        Instruction::ChangeSideCondition(change) => {
+            change.side_ref == side_ref && change.side_condition == side_condition
+        }
+        _ => false,
+    })
+}
+
+/// Side one spins, side two acts. `spikes` layers sit on the SPINNER's side —
+/// Rapid Spin clears the user's own hazards.
+fn spin_state(defender_move: Choices, defender_moves_first: bool) -> State {
+    let mut state = State::default();
+    state.side_one.side_conditions.spikes = 2;
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::RAPIDSPIN);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, defender_move);
+    if defender_moves_first {
+        state.side_two.get_active().speed = 500;
+    }
+    state
+}
+
+// ---------------------------------------------------------------------------
+// Rapid Spin / Protect (poke-engine-gen3-rapidspin-fidelity.patch)
+// ---------------------------------------------------------------------------
+
+/// Showdown gen3: `|move|p1a: Forretress|Rapid Spin|p2a: Blissey` followed by
+/// `|-activate|p2a: Blissey|Protect` and **no** `|-sideend| ... Spikes`.
+///
+/// The bug this guards: `Choice::remove_effects_for_protect()` zeroes
+/// base_power/category and the declarative effect fields but leaves `move_id`
+/// intact, and `choice_hazard_clear` dispatches on `move_id` — so a blocked
+/// Rapid Spin used to strip the spinner's own Spikes.
+#[test]
+fn rapid_spin_blocked_by_protect_leaves_hazards_alone() {
+    let mut state = spin_state(Choices::PROTECT, true);
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        !changes_side_condition(&list, SideReference::SideOne, PokemonSideCondition::Spikes),
+        "Protect-blocked Rapid Spin must not clear the spinner's Spikes: {:?}",
+        list
+    );
+}
+
+/// The Protect guard is on Protect specifically, NOT on damage/hit_sub, so a
+/// spin that connects still clears. Showdown gen3 additionally ends the
+/// spinner's Leech Seed and partial-trapping on a connecting spin.
+#[test]
+fn connecting_rapid_spin_clears_hazards_leech_seed_and_partial_trap() {
+    let mut state = spin_state(Choices::SPLASH, false);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        changes_side_condition(&list, SideReference::SideOne, PokemonSideCondition::Spikes),
+        "connecting Rapid Spin must clear the spinner's Spikes: {:?}",
+        list
+    );
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideOne,
+            PokemonVolatileStatus::LEECHSEED
+        ),
+        "connecting Rapid Spin must end the spinner's Leech Seed: {:?}",
+        list
+    );
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideOne,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "connecting Rapid Spin must free the spinner from partial-trapping: {:?}",
+        list
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Leech Seed on switch-out
+// ---------------------------------------------------------------------------
+
+/// Leech Seed is an ordinary volatile in Showdown, so `Pokemon.clearVolatile()`
+/// drops it when the seeded Pokemon leaves the field.
+#[test]
+fn leech_seed_ends_when_the_seeded_pokemon_switches_out() {
+    let mut state = State::default();
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideOne,
+            PokemonVolatileStatus::LEECHSEED
+        ),
+        "switching out must end Leech Seed: {:?}",
+        list
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Partial trapping (Wrap / Bind / Fire Spin / Clamp / Whirlpool)
+// ---------------------------------------------------------------------------
+
+/// A partially trapped Pokemon may not switch: Showdown's `partiallytrapped`
+/// condition calls `pokemon.tryTrap()` from `onTrapPokemon` while the trapper
+/// is still active.
+#[test]
+fn partially_trapped_pokemon_has_no_switch_options() {
+    let mut state = State::default();
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let (side_one_options, side_two_options) = state.get_all_options();
+
+    assert!(
+        !side_one_options
+            .iter()
+            .any(|option| matches!(option, MoveChoice::Switch(_))),
+        "the trapped side must not be offered switches: {:?}",
+        side_one_options
+    );
+    assert!(
+        side_two_options
+            .iter()
+            .any(|option| matches!(option, MoveChoice::Switch(_))),
+        "the untrapped side keeps its switches: {:?}",
+        side_two_options
+    );
+}
+
+/// Showdown gen3 (which inherits gen4 -> gen5) frees the victim once the
+/// trapper is gone: `partiallytrapped.onResidual` deletes the volatile when
+/// `!trapper.isActive || trapper.hp <= 0`, and `onTrapPokemon` stops trapping
+/// the moment the source leaves. The engine models that at switch time.
+#[test]
+fn partial_trap_ends_when_the_trapper_switches_out() {
+    let mut state = State::default();
+    // Side two is the victim, so side one holds the trap; side one switching
+    // out is the trapper leaving the field.
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "the trapper leaving must free the victim: {:?}",
+        list
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Baton Pass carry-over (poke-engine-gen3-batonpass-perish.patch)
+// ---------------------------------------------------------------------------
+
+/// Drive a Baton Pass to completion: the move sets `force_switch` +
+/// `baton_passing` and the switch itself resolves at the next decision
+/// boundary, so the carry-over is only observable after both plies.
+fn baton_pass_then_switch(volatile_status: PokemonVolatileStatus) -> Vec<Instruction> {
+    let mut state = State::default();
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::BATONPASS);
+    state.side_one.volatile_statuses.insert(volatile_status);
+
+    let pass = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+    state.apply_instructions(&pass);
+    assert!(
+        state.side_one.baton_passing,
+        "Baton Pass must arm the pass before the switch resolves"
+    );
+
+    only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::None,
+    ))
+}
+
+/// Showdown gen3 ground truth: a Perish-Songed Smeargle that Baton Passes into
+/// Snorlax emits `|-start|p1a: Snorlax|perish0` and then `|faint|p1a: Snorlax`
+/// — the counter rides the pass and kills the RECEIVER. `copyVolatileFrom`
+/// copies every volatile without a `noCopy` flag, and the perish volatiles
+/// carry none in gen3 (neither the gen4 nor the gen5 mod overrides them).
+///
+/// Upstream retained only Substitute and Leech Seed across a pass, so the
+/// engine believed Baton Pass escapes Perish Song.
+#[test]
+fn baton_pass_carries_the_perish_counter() {
+    for volatile_status in [
+        PokemonVolatileStatus::PERISH1,
+        PokemonVolatileStatus::PERISH2,
+        PokemonVolatileStatus::PERISH3,
+        PokemonVolatileStatus::PERISH4,
+    ] {
+        let list = baton_pass_then_switch(volatile_status);
+        assert!(
+            !removes_volatile(&list, SideReference::SideOne, volatile_status),
+            "Baton Pass must carry {:?} to the receiver: {:?}",
+            volatile_status,
+            list
+        );
+    }
+}
+
+/// Control for the pin above: the two volatiles upstream already passed still
+/// pass, so the fix widened the retention set rather than replacing it.
+#[test]
+fn baton_pass_still_carries_substitute_and_leech_seed() {
+    for volatile_status in [
+        PokemonVolatileStatus::SUBSTITUTE,
+        PokemonVolatileStatus::LEECHSEED,
+    ] {
+        let list = baton_pass_then_switch(volatile_status);
+        assert!(
+            !removes_volatile(&list, SideReference::SideOne, volatile_status),
+            "Baton Pass must carry {:?}: {:?}",
+            volatile_status,
+            list
+        );
+    }
+}
+
+/// Negative control: an ordinary switch (no pass armed) still drops the perish
+/// counter, matching `Pokemon.clearVolatile()` on a normal switch-out.
+#[test]
+fn an_ordinary_switch_still_drops_the_perish_counter() {
+    let mut state = State::default();
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PERISH3);
+
+    let list = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+
+    assert!(
+        removes_volatile(
+            &list,
+            SideReference::SideOne,
+            PokemonVolatileStatus::PERISH3
+        ),
+        "a plain switch-out must clear the perish counter: {:?}",
+        list
+    );
+}
