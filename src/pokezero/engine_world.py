@@ -69,7 +69,22 @@ _WEATHER_IDS = {
 # ``-end``/switch. The patched Gen 3 engine prices the 50%-per-turn move
 # immobilization as a chance branch and, in singles, clears the relationship
 # when either active switches.
-_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire", "attract"})
+# Volatiles the sampled world can express EXACTLY from public information.
+# ``destinybond`` qualifies on the vendored gen3 engine: it is a presence-only
+# volatile (gen3/choice_effects.rs clears it on any non-Destiny-Bond move, per
+# the gens 2-6 rule) that triggers on KO, so seeding it from the public
+# ``|-singlemove|` line reproduces the engine's state with no hidden component.
+# ``perish1``-``perish4`` qualify for the same reason from the other direction:
+# the counter is the ONLY state Perish Song carries, Showdown publishes it on
+# every ``|-start|<mon>|perishN`` line, and the vendored engine runs the
+# countdown itself (gen3/generate_instructions.rs decrements PERISH3 -> PERISH2
+# -> PERISH1 and faints at zero). Seeding the current count reproduces the
+# engine's state exactly, so a Perish-Song endgame is searched rather than
+# guessed — precisely the position where search matters most.
+_SUPPORTED_VOLATILES = frozenset({
+    "leechseed", "flashfire", "attract", "destinybond",
+    "perish1", "perish2", "perish3", "perish4",
+})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {
@@ -166,6 +181,54 @@ def _engine_species_id(species_id: str) -> str:
     if species_id.startswith("unown"):
         return "unown"
     return species_id
+
+
+# Showdown request flags that withhold hidden information rather than restrict the
+# action set. ``maybeTrapped``: the foe's unrevealed ability might trap us.
+# ``maybeDisabled``/``maybeLocked``: Imprison might have disabled a move (moves.ts
+# Imprison is their only producer; maybeLocked is derived from maybeDisabled). Each
+# belief world resolves these by committing to a concrete opponent hypothesis.
+_HIDDEN_INFORMATION_REQUEST_FLAGS = frozenset({"maybeTrapped", "maybeDisabled", "maybeLocked"})
+
+
+def _undischarged_materialization_blockers(
+    blockers: Any,
+    *,
+    removed_item_species: frozenset[str],
+    item_overrides: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Return the payload blockers the caller has NOT positively expressed.
+
+    ``materializationBlockers`` is written by the payload producer, which has no
+    view of the item signals a caller derives independently from the same belief
+    engine. Two producers therefore describe one fact: a publicly itemless mon
+    arrives here both as an ``item-state-removed:<species>`` blocker AND (from a
+    caller that resolves it) in ``removed_item_species``, whose whole purpose is
+    to clear the sampled set's item. Vetoing on the blocker discarded a world the
+    caller had already made exact — the single largest fallback source in the
+    2026-07-26 depth study (2811 world failures).
+
+    A blocker is discharged ONLY by the matching positive signal for the SAME
+    species: a removal by ``removed_item_species``, a mutation by a confirmed
+    ``item_overrides`` entry. Everything else — ambiguous rows, mutations with no
+    protocol-confirmed item, Baton-Pass volatiles, unknown Leech Seed source —
+    stays fail-closed, because nothing in the caller's signals expresses it and
+    guessing would search a mechanically false world.
+    """
+
+    if not blockers:
+        return ()
+    undischarged: list[str] = []
+    for raw in blockers:
+        token = str(raw)
+        kind, _, species = token.partition(":")
+        species_id = normalize_id(species)
+        if kind == "item-state-removed" and species_id in removed_item_species:
+            continue
+        if kind == "item-state-unconfirmed" and species_id in item_overrides:
+            continue
+        undischarged.append(token)
+    return tuple(undischarged)
 
 
 class EngineWorldUnsupported(ValueError):
@@ -266,6 +329,7 @@ def battle_spec_from_payload(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
@@ -331,10 +395,29 @@ def battle_spec_from_payload(
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
-        if raised:
+        # Only flags that BIND legality may fail construction. Showdown's
+        # ``maybe*`` flags are the opposite of a constraint: they are the sim
+        # DECLINING to tell us whether we are trapped or disabled, because
+        # answering would leak the opponent's hidden ability or move set
+        # (pokemon.ts getMoveRequestData). ``maybeTrapped`` in particular fires
+        # whenever the foe's unrevealed ability could be Arena Trap, Magnet
+        # Pull, or Shadow Tag — all in the gen3 randbats pool, which made this
+        # the second-largest fallback source in the 2026-07-26 depth study.
+        #
+        # Refusing to search on a hidden-information marker is backwards for a
+        # belief searcher: each sampled world commits to a concrete opponent
+        # set, so the engine derives that world's trapped/disabled truth exactly
+        # and consistently. Sampling the hypothesis IS the designed resolution,
+        # and it strictly dominates falling back to a uniform-legal guess.
+        #
+        # ``trapped`` stays fail-closed: it is a hard, already-disclosed "you
+        # cannot switch", and a world that let us switch anyway would search
+        # illegal actions.
+        binding = [flag for flag in raised if flag not in _HIDDEN_INFORMATION_REQUEST_FLAGS]
+        if binding:
             raise EngineWorldUnsupported(
                 "self_request_state_unsupported",
-                f"self active request flags {raised} constrain legality beyond this construction",
+                f"self active request flags {binding} constrain legality beyond this construction",
             )
 
     turn = payload.get("turn")
@@ -367,6 +450,7 @@ def battle_spec_from_payload(
             self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
             approximate_sleep_turns=approximate_sleep_turns,
             approximate_substitute_health=approximate_substitute_health,
+            approximate_partial_trap_turns=approximate_partial_trap_turns,
             force_switch=is_self_slot and self_force_switch,
             baton_passing=is_self_slot and self_baton_passing,
             opponent_committed_pending=(not is_self_slot) and self_baton_passing,
@@ -448,6 +532,7 @@ def world_battle_spec(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
@@ -473,6 +558,7 @@ def world_battle_spec(
         dex=dex,
         approximate_sleep_turns=approximate_sleep_turns,
         approximate_substitute_health=approximate_substitute_health,
+        approximate_partial_trap_turns=approximate_partial_trap_turns,
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
         removed_item_species=removed_item_species,
@@ -551,6 +637,7 @@ def _build_side_spec(
     self_benched_move_history: bool,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
     force_switch: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
@@ -562,11 +649,18 @@ def _build_side_spec(
     opponent_committed_pending: bool = False,
     rng: Any | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
-    blockers = side_payload.get("materializationBlockers")
-    if blockers:
-        raise EngineWorldUnsupported("materialization_blocker", f"{slot}: {', '.join(map(str, blockers))}")
-
     item_overrides = dict(current_item_overrides or {})
+    blockers = _undischarged_materialization_blockers(
+        side_payload.get("materializationBlockers"),
+        removed_item_species=removed_item_species,
+        item_overrides=item_overrides,
+    )
+    if blockers:
+        raise EngineWorldUnsupported(
+            "materialization_blocker",
+            f"{slot}: {', '.join(blockers)}",
+        )
+
     conflicted = sorted(removed_item_species & set(item_overrides))
     if conflicted:
         # One signal says "publicly holds nothing", the other "publicly holds
@@ -624,6 +718,20 @@ def _build_side_spec(
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    if approximate_partial_trap_turns:
+        # Gen 3 Wrap/Bind/Clamp/Fire Spin/Whirlpool run 2-5 RANDOM turns, and
+        # the public replay never sees the roll. The vendored engine models
+        # PARTIALLYTRAPPED with no duration counter at all: it traps and deals
+        # maxhp/16 per turn until the TRAPPER switches out
+        # (gen3/generate_instructions.rs). So the volatile has no exact
+        # expression, and this opt-in accepts the engine's own shape — a trap
+        # that outlives its real duration, i.e. PESSIMISTIC about escaping.
+        #
+        # That bias is the reason it is a named approximation rather than an
+        # allowlist entry: it belongs with approximate_sleep_turns and
+        # approximate_substitute_health, visible in the config and attributable
+        # in a run's provenance, not silently folded into "expressed exactly".
+        supported = supported | {"partiallytrapped"}
     if "encore" in volatiles:
         supported = supported | {"encore"}
     if must_recharge:

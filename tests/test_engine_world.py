@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
+    _SUPPORTED_VOLATILES,
     _apply_forecast_types,
+    _undischarged_materialization_blockers,
     battle_spec_from_payload,
     unpack_pokemon,
     unpack_team,
@@ -1022,6 +1024,143 @@ class BatonPassBoundaryTests(unittest.TestCase):
         with self.assertRaises(EngineWorldUnsupported) as caught:
             battle_spec_from_payload(payload, _override(), dex=self.dex, rng=_random.Random(1))
         self.assertEqual(caught.exception.reason, "pending_baton_pass")
+
+
+class MaterializationBlockerDischargeTests(unittest.TestCase):
+    """A payload blocker the CALLER has positively expressed is not a blocker.
+
+    The payload producer and the search caller derive item state from the same
+    belief engine but describe it differently: the producer emits a fail-closed
+    ``item-state-*`` token, the caller emits ``removed_item_species`` /
+    ``current_item_overrides`` that make the world exact. Vetoing on the token
+    discarded worlds the caller had already resolved.
+    """
+
+    def test_removal_token_is_discharged_by_removed_item_species(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax",),
+                removed_item_species=frozenset({"snorlax"}),
+                item_overrides={},
+            ),
+            (),
+        )
+
+    def test_removal_token_still_blocks_without_the_caller_signal(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax",),
+                removed_item_species=frozenset(),
+                item_overrides={},
+            ),
+            ("item-state-removed:Snorlax",),
+        )
+
+    def test_discharge_is_species_scoped_not_blanket(self) -> None:
+        # Resolving one mon's item must not excuse another mon's unresolved one.
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax", "item-state-removed:Zapdos"),
+                removed_item_species=frozenset({"snorlax"}),
+                item_overrides={},
+            ),
+            ("item-state-removed:Zapdos",),
+        )
+
+    def test_unconfirmed_mutation_is_discharged_only_by_a_confirmed_override(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-unconfirmed:Gengar",),
+                removed_item_species=frozenset(),
+                item_overrides={"gengar": "choiceband"},
+            ),
+            (),
+        )
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-unconfirmed:Gengar",),
+                removed_item_species=frozenset(),
+                item_overrides={},
+            ),
+            ("item-state-unconfirmed:Gengar",),
+        )
+
+    def test_non_item_blockers_are_never_discharged(self) -> None:
+        # Nothing in the caller's item signals expresses a Baton-Passed volatile
+        # or an unknown Leech Seed source, so these must stay fail-closed.
+        blockers = ("baton-pass:confusion", "leechseed-source-unknown", "item-state-ambiguous:Unown")
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                blockers, removed_item_species=frozenset({"unown"}), item_overrides={}
+            ),
+            blockers,
+        )
+
+
+class SelfRequestStateFlagTests(unittest.TestCase):
+    """Hidden-information request flags must not wall a belief searcher.
+
+    Showdown's ``maybe*`` flags mean "we decline to tell you", not "you may not".
+    Each sampled world commits to a concrete opponent hypothesis and derives the
+    truth itself, so refusing to search on them forfeits exactly the positions
+    where hidden information matters. ``trapped`` is a real disclosed constraint
+    and must still fail closed.
+    """
+
+    def _payload_with_flags(self, flags: dict[str, bool]) -> dict:
+        return {
+            "turn": 3,
+            "selfPlayer": "p1",
+            "selfRequestKind": "move",
+            "selfActiveRequestState": flags,
+            "sides": {"p1": {}, "p2": {}},
+        }
+
+    def _reason_for(self, flags: dict[str, bool]) -> str | None:
+        # The flag gate runs before any team/side work, so an empty override is
+        # enough to reach it: a non-flag payload defect surfaces as some OTHER
+        # reason, which is exactly what these assertions distinguish.
+        packed = pack_team((_SWAMPERT,))
+        override = BattleStartOverride(player_teams={"p1": packed, "p2": packed})
+        try:
+            battle_spec_from_payload(self._payload_with_flags(flags), override, dex=_dex())
+        except EngineWorldUnsupported as error:
+            return error.reason
+        return None
+
+    def test_maybe_flags_do_not_raise_self_request_state_unsupported(self) -> None:
+        for flag in ("maybeTrapped", "maybeDisabled", "maybeLocked"):
+            with self.subTest(flag=flag):
+                self.assertNotEqual(
+                    self._reason_for({flag: True}), "self_request_state_unsupported"
+                )
+
+    def test_trapped_still_fails_closed(self) -> None:
+        self.assertEqual(
+            self._reason_for({"trapped": True}), "self_request_state_unsupported"
+        )
+
+    def test_trapped_is_not_excused_by_accompanying_maybe_flags(self) -> None:
+        self.assertEqual(
+            self._reason_for({"trapped": True, "maybeTrapped": True}),
+            "self_request_state_unsupported",
+        )
+
+
+class SupportedVolatileTests(unittest.TestCase):
+    """Volatiles the vendored gen3 engine reproduces exactly are searchable."""
+
+    def test_destiny_bond_and_perish_counters_are_exact(self) -> None:
+        # Presence-only in the engine (Destiny Bond) or a fully public counter the
+        # engine decrements itself (Perish Song) — no hidden component to guess.
+        for volatile in ("destinybond", "perish1", "perish2", "perish3", "perish4"):
+            with self.subTest(volatile=volatile):
+                self.assertIn(volatile, _SUPPORTED_VOLATILES)
+
+    def test_partial_trap_is_an_opt_in_approximation_not_an_exact_volatile(self) -> None:
+        # The engine has no duration counter for it, so it must never be treated
+        # as exactly expressible — it is gated behind a named approximation.
+        self.assertNotIn("partiallytrapped", _SUPPORTED_VOLATILES)
 
 
 if __name__ == "__main__":
