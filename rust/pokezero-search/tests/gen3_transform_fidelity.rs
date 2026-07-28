@@ -546,11 +546,13 @@ fn transform_snapshot_survives_serialization() {
         state.side_one.get_active_immutable().serialize(),
         round_tripped.side_one.get_active_immutable().serialize()
     );
-    // Pokemon-level, not State-level: `Side::serialize` writes its volatile set
-    // with a TRAILING colon and `Side::deserialize` splits on ":" without
-    // discarding the empty tail, so any state carrying a volatile picks up a
-    // spurious `NONE` on a round trip. Upstream behaviour, fixed by the patch
-    // stacked on top of this one.
+    // Whole-State fixed point. This only holds because
+    // `poke-engine-gen3-state-roundtrip.patch` stopped `Side::deserialize` from
+    // reading the volatile set's trailing separator back as a `NONE` volatile —
+    // a transformed Pokemon always carries TRANSFORMED and TYPECHANGE, so this
+    // assertion is one of the states that used to drift. See
+    // tests/gen3_state_roundtrip.rs.
+    assert_eq!(state.serialize(), round_tripped.serialize());
 }
 
 /// A state that carries the TRANSFORMED volatile with no snapshot (an

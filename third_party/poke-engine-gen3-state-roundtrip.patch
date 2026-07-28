@@ -1,0 +1,65 @@
+# pokezero fidelity fix: State serialization must be a fixed point.
+#
+# `Side::serialize` writes the volatile-status set as a colon-SEPARATED list with
+# a TRAILING ":" ("SUBSTITUTE:"), and `Side::deserialize` split that on ":"
+# without discarding the empty final token.
+# `PokemonVolatileStatus::from_str("")` does not fail — the
+# define_enum_with_from_str! macro declares `default = NONE` — so every state
+# carrying at least one volatile silently gained a
+# `PokemonVolatileStatus::NONE`, and re-serializing emitted it right back
+# ("NONE:SUBSTITUTE:"). serialize -> deserialize -> serialize was therefore NOT
+# idempotent for exactly the states search cares about.
+#
+# This is not cosmetic here: `State::deserialize` is how pokezero_search receives
+# its root world (rust/pokezero-search/src/lib.rs), so a state that does not
+# survive the round trip is a state the engine searches differently from the one
+# the caller built. The phantom volatile also reached the instruction stream —
+# `remove_volatile_statuses_on_switch` iterates the bitset, so a round-tripped
+# state emitted a `RemoveVolatileStatus(NONE)` on every switch-out, an
+# instruction whose inverse re-applies a volatile nothing ever set.
+#
+# Fixed on the READER: empty tokens are skipped. The wire format is unchanged, so
+# every previously written state string still parses and nothing downstream of
+# `serialize()` sees a different byte.
+#
+# Not fixed here, and worth knowing: `from_str` has the same `default = NONE`
+# fallback for UNRECOGNISED names, so a volatile this engine build does not know
+# still deserializes silently to NONE rather than failing loudly. That is a
+# broader change to the macro's contract than a round-trip fix should make.
+#
+# Found while adding the Transform patch above, whose transformed Pokemon always
+# carries two volatiles and so could never round-trip cleanly. Pinned by
+# rust/pokezero-search/tests/gen3_state_roundtrip.rs (all three tests fail on the
+# tree without this patch). Touches the reader in src/state.rs only; authored
+# against the transform-patched tree.
+diff -u a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -1303,11 +1303,24 @@
+     pub fn deserialize(serialized: &str) -> Side {
+         let split: Vec<&str> = serialized.split("=").collect();
+ 
++        // pokezero fidelity fix: `Side::serialize` writes the volatile set with a
++        // TRAILING ":" separator, so splitting on ":" always yields an empty final
++        // token. `PokemonVolatileStatus::from_str("")` does not fail — the
++        // define_enum_with_from_str! macro declares `default = NONE` — so every
++        // state carrying at least one volatile used to gain a spurious
++        // `PokemonVolatileStatus::NONE` on a serialize -> deserialize round trip,
++        // and re-serializing then emitted it back ("NONE:SUBSTITUTE:"). That made
++        // the round trip non-idempotent for exactly the states search cares about,
++        // and left `remove_volatile_statuses_on_switch` emitting a
++        // `RemoveVolatileStatus(NONE)` instruction for a volatile nothing ever set.
++        // Fixed on the READER so the wire format is unchanged and every previously
++        // written state string still parses.
+         let mut vs_bitset = VolatileStatusBitset::default();
+-        if split[8] != "" {
+-            for item in split[8].split(":") {
+-                vs_bitset.insert(PokemonVolatileStatus::from_str(item).unwrap());
++        for item in split[8].split(":") {
++            if item.is_empty() {
++                continue;
+             }
++            vs_bitset.insert(PokemonVolatileStatus::from_str(item).unwrap());
+         }
+         Side {
+             pokemon: SidePokemon {

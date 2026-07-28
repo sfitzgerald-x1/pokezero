@@ -150,3 +150,16 @@ poke-engine-gen3-confusion-duration.patch
 # Authored against the confusion-patched tree.
 poke-engine-gen3-transform.patch
 
+# State serialization must be a fixed point. Side::serialize writes the volatile
+# set with a TRAILING ":" and Side::deserialize split on ":" without discarding
+# the empty tail; PokemonVolatileStatus::from_str("") does not fail (the
+# define_enum_with_from_str! macro declares `default = NONE`), so every state
+# carrying a volatile silently gained a NONE and re-serializing emitted it back.
+# State::deserialize is how pokezero_search receives its root world, so this made
+# search read a different state than the caller built, and the phantom volatile
+# reached the instruction stream as a RemoveVolatileStatus(NONE) on every
+# switch-out. Fixed on the READER, so the wire format is unchanged and every
+# previously written state string still parses. Pinned by
+# rust/pokezero-search/tests/gen3_state_roundtrip.rs. Touches src/state.rs only;
+# authored against the transform-patched tree.
+poke-engine-gen3-state-roundtrip.patch
