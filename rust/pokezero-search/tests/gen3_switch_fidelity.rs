@@ -271,8 +271,16 @@ fn partial_trap_ends_when_the_trapper_switches_out() {
 
 /// Drive a Baton Pass to completion: the move sets `force_switch` +
 /// `baton_passing` and the switch itself resolves at the next decision
-/// boundary, so the carry-over is only observable after both plies.
-fn baton_pass_then_switch(volatile_status: PokemonVolatileStatus) -> Vec<Instruction> {
+/// boundary, so the carry-over is only observable after both plies. Returns the
+/// second ply's instructions together with the state they were generated from.
+///
+/// That second ply also carries the turn's end-of-turn residual block: gen3
+/// sends the replacement out BEFORE the residuals run, so the block is deferred
+/// across the switch (`poke-engine-gen3-residual-defer-on-faint.patch`).
+/// Showdown's protocol for this exact line is `|move|p1a: Smeargle|Baton Pass`
+/// and nothing else, then `|switch|p1a: Snorlax|461/461|[from] Baton Pass`
+/// immediately followed by `|-start|p1a: Snorlax|perish2` and `|upkeep`.
+fn baton_pass_then_switch(volatile_status: PokemonVolatileStatus) -> (State, Vec<Instruction>) {
     let mut state = State::default();
     state
         .side_one
@@ -291,11 +299,12 @@ fn baton_pass_then_switch(volatile_status: PokemonVolatileStatus) -> Vec<Instruc
         "Baton Pass must arm the pass before the switch resolves"
     );
 
-    only_branch(generate(
+    let list = only_branch(generate(
         &mut state,
         &MoveChoice::Switch(PokemonIndex::P1),
         &MoveChoice::None,
-    ))
+    ));
+    (state, list)
 }
 
 /// Showdown gen3 ground truth: a Perish-Songed Smeargle that Baton Passes into
@@ -306,22 +315,53 @@ fn baton_pass_then_switch(volatile_status: PokemonVolatileStatus) -> Vec<Instruc
 ///
 /// Upstream retained only Substitute and Leech Seed across a pass, so the
 /// engine believed Baton Pass escapes Perish Song.
+///
+/// The receiver arrives before the residual block, so it also takes that turn's
+/// tick: the assertion is on the counter the receiver ENDS the ply with, which
+/// is what separates "the pass dropped the volatile" from "the volatile counted
+/// down normally on the new Pokemon".
 #[test]
 fn baton_pass_carries_the_perish_counter() {
-    for volatile_status in [
-        PokemonVolatileStatus::PERISH1,
-        PokemonVolatileStatus::PERISH2,
-        PokemonVolatileStatus::PERISH3,
-        PokemonVolatileStatus::PERISH4,
+    for (passed, after_the_tick) in [
+        (
+            PokemonVolatileStatus::PERISH2,
+            PokemonVolatileStatus::PERISH1,
+        ),
+        (
+            PokemonVolatileStatus::PERISH3,
+            PokemonVolatileStatus::PERISH2,
+        ),
+        (
+            PokemonVolatileStatus::PERISH4,
+            PokemonVolatileStatus::PERISH3,
+        ),
     ] {
-        let list = baton_pass_then_switch(volatile_status);
+        let (mut state, list) = baton_pass_then_switch(passed);
+        state.apply_instructions(&list);
         assert!(
-            !removes_volatile(&list, SideReference::SideOne, volatile_status),
-            "Baton Pass must carry {:?} to the receiver: {:?}",
-            volatile_status,
+            state.side_one.volatile_statuses.contains(&after_the_tick),
+            "Baton Pass must carry {:?} to the receiver (expected {:?} after the \
+             turn's tick): {:?}",
+            passed,
+            after_the_tick,
             list
         );
     }
+}
+
+/// The last step of the same countdown: a receiver that arrives on `PERISH1`
+/// takes the lethal tick the moment the deferred residual block runs, which is
+/// Showdown's `|-start| ... |perish0|` + `|faint|` on the ply the pass resolves.
+#[test]
+fn a_receiver_passed_the_last_perish_tick_faints_on_arrival() {
+    let (mut state, list) = baton_pass_then_switch(PokemonVolatileStatus::PERISH1);
+    state.apply_instructions(&list);
+    assert_eq!(
+        state.side_one.get_active_immutable().hp,
+        0,
+        "the receiver must faint to the perish counter it was passed: {:?}",
+        list
+    );
 }
 
 /// Control for the pin above: the two volatiles upstream already passed still
@@ -332,7 +372,7 @@ fn baton_pass_still_carries_substitute_and_leech_seed() {
         PokemonVolatileStatus::SUBSTITUTE,
         PokemonVolatileStatus::LEECHSEED,
     ] {
-        let list = baton_pass_then_switch(volatile_status);
+        let (_state, list) = baton_pass_then_switch(volatile_status);
         assert!(
             !removes_volatile(&list, SideReference::SideOne, volatile_status),
             "Baton Pass must carry {:?}: {:?}",

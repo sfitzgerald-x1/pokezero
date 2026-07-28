@@ -22,6 +22,21 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   partialtrap   : the TRAPPER switches out -> the victim stops taking partial-trap
                   damage (``partiallytrapped.onResidual`` frees it once the source
                   is no longer active); the no-switch control keeps taking it.
+  spikesNlayer(s) : a 461 max HP Snorlax switching into 1/2/3 layers of Spikes
+                  lands on exactly 404/385/346 — 1/8, 1/6 and 1/4 of max HP,
+                  floored. ``spikesminimum`` is the other end of the same
+                  ``clampIntRange(damage, 1)``: one layer FAINTS a 1 HP Shedinja.
+                  Both are the divergence
+                  ``third_party/poke-engine-gen3-spikes-layers.patch`` fixes;
+                  upstream dealt ``maxhp * layers / 8``.
+  faintresiduals / faintresidualsdeferred : a Pokemon that faints mid-turn defers
+                  the WHOLE end-of-turn residual block past its forced
+                  replacement — the faint ply's protocol ends at ``|faint|`` and
+                  the block (sandstorm upkeep, the incoming Pokemon's sandstorm
+                  damage, the survivor's Leftovers heal) lands in the NEXT ply,
+                  after ``|switch|``. The divergence
+                  ``third_party/poke-engine-gen3-residual-defer-on-faint.patch``
+                  fixes; ``faintresidualscontrol`` is the same line with no faint.
 
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
@@ -86,6 +101,31 @@ def _blissey():  # trap/seed victim
                           moves=("Splash", "Soft-Boiled"))
 
 
+def _spikes_skarmory():  # hazard setter with an inert filler move
+    return FixturePokemon(species="Skarmory", ability="Keen Eye", item="None",
+                          moves=("Spikes", "Splash"))
+
+
+def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Splash",))
+
+
+def _shedinja():  # 1 max HP: the Spikes minimum-damage clamp
+    return FixturePokemon(species="Shedinja", ability="Wonder Guard", item="None",
+                          moves=("Splash",))
+
+
+def _sand_tyranitar():  # permanent gen3 sandstorm + a Leftovers residual to watch
+    return FixturePokemon(species="Tyranitar", ability="Sand Stream", item="Leftovers",
+                          moves=("Crunch", "Splash"))
+
+
+def _abra():  # 191 max HP: dies to Crunch on any roll, chips Tyranitar meanwhile
+    return FixturePokemon(species="Abra", ability="Synchronize", item="None",
+                          moves=("Night Shade", "Splash"))
+
+
 def _has(lines, needle: str) -> bool:
     return any(needle in line for line in lines)
 
@@ -103,6 +143,34 @@ def _residual_from(lines, source: str, seat: str) -> bool:
         line.startswith(f"|-damage|{seat}") and "[from]" in line and source in line
         for line in lines
     )
+
+
+_SAND_UPKEEP = "|-weather|Sandstorm|[upkeep]"
+
+
+def _spikes_landing_hp(lines):
+    """The ``cur/max`` (or ``0 fnt``) p2 lands on after its Spikes hit."""
+    for line in lines:
+        if line.startswith("|-damage|p2a") and "[from] Spikes" in line:
+            return line.split("|")[3]
+    return None
+
+
+def _residual_block_ran(lines) -> bool:
+    """True if the end-of-turn residual block resolved inside ``lines``.
+
+    ``-weather ... [upkeep]`` is the field-level residual and is emitted
+    unconditionally whenever the block runs, so its presence brackets the WHOLE
+    block — not just the parts that happen to damage or heal someone.
+    """
+    return any(line.startswith(_SAND_UPKEEP) for line in lines)
+
+
+def _index_of(lines, prefix: str):
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            return index
+    return None
 
 
 # --- scenario specs ---------------------------------------------------------
@@ -202,11 +270,105 @@ def _spec(name):
             facts=lambda L: {"victim_ticked": _residual_from(L, "Fire Spin", "p2a")},
             expect={"victim_ticked": True},
             landmark=lambda L: True, landmark_desc="")
+    if name in ("spikes1layer", "spikes2layers", "spikes3layers"):
+        # p1 Skarmory stacks `layers` of Spikes on p2's side, then p2 sends in a
+        # 461 max HP Snorlax. Showdown's gen4 Spikes condition (which gen3
+        # inherits) deals `[0, 3, 4, 6][layers] * maxhp / 24` floored, i.e. 57 /
+        # 76 / 115 HP -> 404 / 385 / 346. The engine dealt `maxhp * layers / 8`,
+        # so it only agreed at ONE layer and over-damaged by 1.5x at two and
+        # three (poke-engine-gen3-spikes-layers.patch).
+        layers = {"spikes1layer": 1, "spikes2layers": 2, "spikes3layers": 3}[name]
+        landing = {1: "404/461", 2: "385/461", 3: "346/461"}[layers]
+        return dict(
+            p1=[_spikes_skarmory()], p2=[_blissey(), _snorlax_hazard_victim()],
+            turns=[("move spikes", "move splash")] * layers
+                  + [("move splash", "switch 2")],
+            measured=layers, setup_step=None, setup_landed=None,
+            facts=lambda L: {"landing_hp": _spikes_landing_hp(L)},
+            expect={"landing_hp": landing},
+            landmark=lambda L: _has(L, "|switch|p2a: Snorlax"),
+            landmark_desc="Snorlax switched into the hazard")
+    if name == "spikesminimum":
+        # The other end of the same formula: `clampIntRange(damage, 1)` floors
+        # the hit at 1 HP, so one layer FAINTS a 1 max HP Shedinja. The engine's
+        # integer `maxhp * layers / 8` truncated to zero and let it walk in free.
+        return dict(
+            p1=[_spikes_skarmory()], p2=[_blissey(), _shedinja()],
+            turns=[("move spikes", "move splash"), ("move splash", "switch 2")],
+            measured=1, setup_step=None, setup_landed=None,
+            facts=lambda L: {"landing_hp": _spikes_landing_hp(L),
+                             "fainted": _has(L, "|faint|p2a: Shedinja")},
+            expect={"landing_hp": "0 fnt", "fainted": True},
+            landmark=lambda L: _has(L, "|switch|p2a: Shedinja"),
+            landmark_desc="Shedinja switched into the hazard")
+
+    # --- residual deferral across a forced replacement ----------------------
+    # Shared line for the three scenarios below: permanent Sand Stream sandstorm
+    # plus a Leftovers heal on p1, so BOTH seats have a residual to watch. Abra
+    # chips Tyranitar with fixed-damage Night Shade and dies to Crunch on every
+    # damage roll, which keeps the faint on the ply the script expects.
+    _faint_p1 = [_sand_tyranitar()]
+    _faint_p2 = [_abra(), _blissey()]
+    _faint_turns = [("move splash", "move nightshade"),
+                    ("move crunch", "move nightshade"),
+                    (None, "switch 2")]
+    if name == "faintresiduals":
+        # Measured on the FAINT ply: `runAction` sees the pending switch flag,
+        # issues a `switch` request and returns with the queued `residual`
+        # action untouched, so the protocol block ends at `|faint|` — no
+        # `-weather ... [upkeep]`, no `|upkeep|`, no `|turn|`.
+        return dict(
+            p1=_faint_p1, p2=_faint_p2, turns=_faint_turns,
+            measured=1, setup_step=None, setup_landed=None,
+            facts=lambda L: {"residual_block_ran": _residual_block_ran(L),
+                             "survivor_healed": _has(L, "[from] item: Leftovers")},
+            expect={"residual_block_ran": False, "survivor_healed": False},
+            landmark=lambda L: _has(L, "|faint|p2a: Abra"),
+            landmark_desc="the victim fainted mid-turn")
+    if name == "faintresidualsdeferred":
+        # Measured on the REPLACEMENT ply: the deferred block runs here, after
+        # the switch, and applies to the Pokemon that just came in.
+        return dict(
+            p1=_faint_p1, p2=_faint_p2, turns=_faint_turns,
+            measured=2, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "residual_block_ran": _residual_block_ran(L),
+                "replacement_took_sandstorm": _residual_from(L, "Sandstorm", "p2a"),
+                "survivor_healed": _has(L, "[from] item: Leftovers"),
+                "switch_precedes_residuals":
+                    _index_of(L, "|switch|p2a") is not None
+                    and _index_of(L, _SAND_UPKEEP) is not None
+                    and _index_of(L, "|switch|p2a") < _index_of(L, _SAND_UPKEEP),
+            },
+            expect={"residual_block_ran": True,
+                    "replacement_took_sandstorm": True,
+                    "survivor_healed": True,
+                    "switch_precedes_residuals": True},
+            landmark=lambda L: _has(L, "|switch|p2a: Blissey"),
+            landmark_desc="the replacement came in")
+    if name == "faintresidualscontrol":
+        # Same line without the faint: the block runs on the move ply itself,
+        # which is what makes its absence above a deferral rather than a drop.
+        return dict(
+            p1=_faint_p1, p2=_faint_p2,
+            turns=[("move splash", "move nightshade"),
+                   ("move splash", "move nightshade")],
+            measured=1, setup_step=None, setup_landed=None,
+            facts=lambda L: {"residual_block_ran": _residual_block_ran(L),
+                             "victim_took_sandstorm": _residual_from(L, "Sandstorm", "p2a"),
+                             "survivor_healed": _has(L, "[from] item: Leftovers")},
+            expect={"residual_block_ran": True,
+                    "victim_took_sandstorm": True,
+                    "survivor_healed": True},
+            landmark=lambda L: not _has(L, "|faint|"),
+            landmark_desc="nobody fainted")
     raise ValueError(name)
 
 
 SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
-             "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol")
+             "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol",
+             "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
+             "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

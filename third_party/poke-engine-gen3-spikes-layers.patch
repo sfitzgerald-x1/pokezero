@@ -1,0 +1,31 @@
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-28 15:45:02
++++ b/src/gen3/generate_instructions.rs	2026-07-28 15:54:57
+@@ -250,8 +250,26 @@
+     let side = state.get_side(&switching_side_ref);
+     let switched_in_pkmn = side.get_active_immutable();
+     if side.side_conditions.spikes > 0 && switched_in_pkmn.is_grounded() {
++        // Gen 3 Spikes deal 1/8, 1/6 and 1/4 of max HP at one, two and three
++        // layers. Showdown expresses that as `[0, 3, 4, 6][layers] * maxhp / 24`
++        // (data/mods/gen4/moves.ts, which gen3 inherits — gen3 -> gen4, NOT
++        // gen5) and rounds the result through `clampIntRange(damage, 1)`
++        // (lib/utils.ts): FLOOR, with a hard minimum of 1 HP. `Pokemon.damage`
++        // then caps the hit at the remaining HP.
++        //
++        // Upstream used `maxhp * layers / 8`, which is right at one layer but
++        // over-damages by exactly 1.5x at two (1/4 instead of 1/6) and three
++        // (3/8 instead of 1/4) layers, and — because the floor was applied
++        // without the minimum — dealt ZERO damage to a 1 HP Shedinja instead of
++        // fainting it. Verified against the real sim (461 HP Snorlax takes
++        // 57/76/115 at 1/2/3 layers; Shedinja takes 1 and faints).
++        let numerator: i32 = match side.side_conditions.spikes {
++            1 => 3,
++            2 => 4,
++            _ => 6,
++        };
+         let dmg_amount = cmp::min(
+-            switched_in_pkmn.maxhp * side.side_conditions.spikes as i16 / 8,
++            cmp::max((switched_in_pkmn.maxhp as i32 * numerator / 24) as i16, 1),
+             switched_in_pkmn.hp,
+         );
+         let spikes_dmg_instruction = Instruction::Damage(DamageInstruction {

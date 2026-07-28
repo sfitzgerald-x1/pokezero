@@ -1,0 +1,192 @@
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-28 15:54:57
++++ b/src/gen3/generate_instructions.rs	2026-07-28 15:56:07
+@@ -2176,6 +2176,56 @@
+     }
+ }
+ 
++/// True when the ply just resolved leaves a replacement switch owed, so the
++/// whole end-of-turn residual block is deferred to the ply that resolves it.
++///
++/// Gen 3 sends the replacement out BEFORE the residual block: Showdown's
++/// `runAction` notices the pending switch flag, issues a `switch` request and
++/// returns with the queued `residual` action still on the queue, so the block
++/// runs only once the replacement is on the field — and therefore applies to
++/// the replacement too. Verified against the real sim by
++/// `scripts/gen3_switch_differential.py::faintresiduals`: the faint ply's
++/// protocol ends at `|faint|`, and `|-weather|Sandstorm|[upkeep]` plus the
++/// incoming Pokemon's `[from] Sandstorm` damage land in the NEXT protocol
++/// block, after `|switch|`.
++///
++/// `force_switch` is the engine's "this side owes a replacement" flag (already
++/// set by the pivot moves, cleared by `generate_instructions_from_switch`, and
++/// already the first thing `get_all_options` keys on). Marking a mid-turn faint
++/// with it — see `mark_pending_replacements` — is what lets the deferred block
++/// re-attach to the right ply: a faint caused BY the residual block, which has
++/// already run, never gets the flag and so is never mistaken for a pending one.
++fn end_of_turn_is_deferred(state: &State) -> bool {
++    state.side_one.force_switch
++        || state.side_two.force_switch
++        || state.side_one.get_active_immutable().hp <= 0
++        || state.side_two.get_active_immutable().hp <= 0
++}
++
++/// Flag every side that fainted this ply as owing a replacement, emitting the
++/// reversible toggle instruction so search can undo it like any other.
++///
++/// A side with nothing left to send out is skipped on purpose: the battle is
++/// over, there is no later ply for the deferred block to re-attach to, and
++/// setting the flag would make `get_all_options` offer a switch that cannot
++/// exist.
++fn mark_pending_replacements(state: &mut State, instructions: &mut StateInstructions) {
++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
++        let side = state.get_side(&side_ref);
++        if side.force_switch
++            || side.get_active_immutable().hp > 0
++            || side.visible_alive_pkmn() == 0
++        {
++            continue;
++        }
++        side.force_switch = true;
++        instructions.instruction_list.push(match side_ref {
++            SideReference::SideOne => Instruction::ToggleSideOneForceSwitch,
++            SideReference::SideTwo => Instruction::ToggleSideTwoForceSwitch,
++        });
++    }
++}
++
+ fn add_end_of_turn_instructions(
+     state: &mut State,
+     mut incoming_instructions: &mut StateInstructions,
+@@ -2183,7 +2233,8 @@
+     shed_skin_activations: [bool; 2],
+ ) {
+     state.apply_instructions(&incoming_instructions.instruction_list);
+-    if state.side_one.force_switch || state.side_two.force_switch {
++    if end_of_turn_is_deferred(state) {
++        mark_pending_replacements(state, &mut incoming_instructions);
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         return;
+     }
+@@ -2891,20 +2942,27 @@
+     let incoming = std::mem::take(instructions);
+     for base in incoming {
+         state.apply_instructions(&base.instruction_list);
+-        let eligible = [
+-            {
+-                let mon = state.side_one.get_active_immutable();
+-                mon.hp > 0
+-                    && mon.ability == Abilities::SHEDSKIN
+-                    && mon.status != PokemonStatus::NONE
+-            },
+-            {
+-                let mon = state.side_two.get_active_immutable();
+-                mon.hp > 0
+-                    && mon.ability == Abilities::SHEDSKIN
+-                    && mon.status != PokemonStatus::NONE
+-            },
+-        ];
++        // A deferred residual block resolves nothing this ply, so it must not
++        // split into Shed Skin branches — that would hand search two identical
++        // instruction sets carrying 0.33/0.67 of the probability mass.
++        let eligible = if end_of_turn_is_deferred(state) {
++            [false, false]
++        } else {
++            [
++                {
++                    let mon = state.side_one.get_active_immutable();
++                    mon.hp > 0
++                        && mon.ability == Abilities::SHEDSKIN
++                        && mon.status != PokemonStatus::NONE
++                },
++                {
++                    let mon = state.side_two.get_active_immutable();
++                    mon.hp > 0
++                        && mon.ability == Abilities::SHEDSKIN
++                        && mon.status != PokemonStatus::NONE
++                },
++            ]
++        };
+         state.reverse_instructions(&base.instruction_list);
+ 
+         let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
+@@ -2928,7 +2986,20 @@
+     }
+ }
+ 
+-fn end_of_turn_triggered(side_one_move: &MoveChoice, side_two_move: &MoveChoice) -> bool {
++fn end_of_turn_triggered(
++    state: &State,
++    side_one_move: &MoveChoice,
++    side_two_move: &MoveChoice,
++) -> bool {
++    // The replacement ply for a pending forced switch is a bare
++    // `(Switch, None)` pair, which the shape test below excludes — but it is
++    // exactly the ply a deferred residual block has to re-attach to. The flag
++    // is only ever set for a replacement that is still owed, so this cannot
++    // re-run a block that already ran (`end_of_turn_is_deferred` does the
++    // second half of the gate, after this ply's own instructions are applied).
++    if state.side_one.force_switch || state.side_two.force_switch {
++        return true;
++    }
+     !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
+         && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
+ }
+@@ -3208,7 +3279,7 @@
+                 &mut state_instructions_vec,
+                 branch_on_damage,
+             );
+-            if end_of_turn_triggered(side_one_move, side_two_move) {
++            if end_of_turn_triggered(state, side_one_move, side_two_move) {
+                 add_end_of_turn_branches(
+                     state,
+                     &mut state_instructions_vec,
+@@ -3226,7 +3297,7 @@
+                 &mut state_instructions_vec,
+                 branch_on_damage,
+             );
+-            if end_of_turn_triggered(side_one_move, side_two_move) {
++            if end_of_turn_triggered(state, side_one_move, side_two_move) {
+                 add_end_of_turn_branches(
+                     state,
+                     &mut state_instructions_vec,
+@@ -3258,7 +3329,7 @@
+                 &mut state_instructions_vec,
+                 branch_on_damage,
+             );
+-            if end_of_turn_triggered(side_one_move, side_two_move) {
++            if end_of_turn_triggered(state, side_one_move, side_two_move) {
+                 add_end_of_turn_branches(
+                     state,
+                     &mut state_instructions_vec,
+@@ -3277,7 +3348,7 @@
+                 &mut side_two_moves_first_si,
+                 branch_on_damage,
+             );
+-            if end_of_turn_triggered(side_one_move, side_two_move) {
++            if end_of_turn_triggered(state, side_one_move, side_two_move) {
+                 add_end_of_turn_branches(
+                     state,
+                     &mut side_two_moves_first_si,
+diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs	2026-07-28 15:45:02
++++ b/src/gen3/state.rs	2026-07-28 15:56:15
+@@ -544,6 +544,18 @@
+         let side_one_active = self.side_one.get_active_immutable();
+         let side_two_active = self.side_two.get_active_immutable();
+ 
++        // Both seats owe a replacement (double faint, U-turn that KOs, two
++        // pivots at once): Showdown issues both switch requests at the same
++        // boundary, and the `hp <= 0` branch below already models that as one
++        // simultaneous ply. Without this, the two force-switch tests below would
++        // serialize the replacements and hand the second seat a phantom
++        // `switch_out_move_second_saved_move` to "use" while fainted.
++        if self.side_one.force_switch && self.side_two.force_switch {
++            self.side_one.add_switches(&mut side_one_options);
++            self.side_two.add_switches(&mut side_two_options);
++            return (side_one_options, side_two_options);
++        }
++
+         if self.side_one.force_switch {
+             self.side_one.add_switches(&mut side_one_options);
+             if self.side_two.switch_out_move_second_saved_move == Choices::NONE {
