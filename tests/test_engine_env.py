@@ -340,6 +340,57 @@ class EngineEnvTest(unittest.TestCase):
         self.assertEqual(mon.species_key, "unownk")
         self.assertEqual(mon.engine_id, "unown")
 
+    def test_metadata_hp_fields_track_the_battle(self):
+        """`hp_fraction` / `fainted` feed the dataset's potential-shaping terms.
+
+        The native encoder rewrites `condition` but not these derived fields —
+        left stale they read "everyone at full HP, nobody fainted" all game and
+        silently zero `--hp-delta-return-weight` / `--faint-delta-return-weight`
+        instead of failing.
+        """
+        env = self.EngineEnv(self.config)
+        try:
+            rng = random.Random(1)
+            env.reset(seed=4242)
+            saw_damage = False
+            saw_faint = False
+            rounds = 0
+            while env.terminal() is None and rounds < 400:
+                for entry in env.observe("p1").metadata["self_team"]:
+                    fraction = entry.get("hp_fraction")
+                    self.assertIsNotNone(fraction)
+                    self.assertGreaterEqual(fraction, 0.0)
+                    self.assertLessEqual(fraction, 1.0)
+                    # The two fields must agree with each other and with the
+                    # condition string the encoder maintains.
+                    fainted = bool(entry.get("fainted"))
+                    self.assertEqual(fainted, "fnt" in str(entry.get("condition", "")))
+                    if fainted:
+                        self.assertEqual(fraction, 0.0)
+                        saw_faint = True
+                    elif fraction < 1.0:
+                        saw_damage = True
+                actions = {}
+                for player in env.requested_players():
+                    legal = [i for i, ok in enumerate(env.legal_actions(player)) if ok]
+                    actions[player] = rng.choice(legal)
+                env.step(actions)
+                rounds += 1
+            self.assertTrue(saw_damage, "no chip damage ever showed up in hp_fraction")
+            self.assertTrue(saw_faint, "no faint ever showed up in the fainted flag")
+        finally:
+            env.close()
+
+    def test_condition_parsing(self):
+        from pokezero.engine_env import _condition_hp
+
+        self.assertEqual(_condition_hp("202/232"), (202 / 232, False))
+        self.assertEqual(_condition_hp("150/300 brn"), (0.5, False))
+        self.assertEqual(_condition_hp("0 fnt"), (0.0, True))
+        self.assertEqual(_condition_hp(""), (None, False))
+        self.assertEqual(_condition_hp(None), (None, False))
+        self.assertEqual(_condition_hp("garbage"), (None, False))
+
     def test_step_rejects_missing_and_out_of_range_actions(self):
         from pokezero.engine_env import EngineEnvError
 

@@ -874,6 +874,7 @@ class EngineEnv:
         metadata = dict(row.get("observation_metadata") or {})
         metadata["battle_id"] = self._battle_id
         metadata["player_id"] = player
+        _refresh_derived_hp(metadata)
         observation = PokeZeroObservationV0(
             categorical_ids=categorical,
             numeric_features=numeric,
@@ -996,6 +997,46 @@ class EngineEnv:
                 },
             },
         }
+
+
+def _refresh_derived_hp(metadata: dict[str, Any]) -> None:
+    """Recompute ``hp_fraction`` / ``fainted`` from the leaf's ``condition``.
+
+    The native encoder rewrites each mon's ``condition`` from engine state but
+    leaves these two DERIVED fields at their root values — it never reads them
+    itself, so nothing in the tensor path noticed. The metadata does have a
+    consumer, though: ``dataset._visible_team_snapshot`` reads exactly
+    ``hp_fraction`` and ``fainted`` to build the potential-shaping terms behind
+    ``--hp-delta-return-weight`` / ``--faint-delta-return-weight``. Left stale
+    they read "everyone at full HP, nobody fainted" for the whole game, which
+    silently zeroes those shaping arms rather than failing — so they are
+    re-derived here from the field the encoder DOES maintain.
+    """
+    for key in ("self_team", "opponent_team"):
+        for entry in metadata.get(key) or ():
+            if not isinstance(entry, dict):
+                continue
+            hp_fraction, fainted = _condition_hp(entry.get("condition"))
+            entry["hp_fraction"] = hp_fraction
+            entry["fainted"] = fainted
+
+
+def _condition_hp(condition: Any) -> tuple[float | None, bool]:
+    """Parse a Showdown condition string: ``"202/232 brn"`` / ``"0 fnt"``."""
+    parts = str(condition or "").split()
+    if not parts:
+        return None, False
+    if "fnt" in parts:
+        return 0.0, True
+    numerator, _, denominator = parts[0].partition("/")
+    try:
+        current = float(numerator)
+        maximum = float(denominator)
+    except ValueError:
+        return None, False
+    if maximum <= 0:
+        return None, False
+    return current / maximum, current <= 0
 
 
 def _mon_metadata(mon: _GeneratedMon, slot: PlayerId, *, active: bool, own: bool) -> dict[str, Any]:
