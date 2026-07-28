@@ -345,6 +345,7 @@ def battle_spec_from_payload(
     current_item_overrides: Mapping[str, Mapping[str, str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
+    transformed_slots: Mapping[str, str] | None = None,
     rng: Any | None = None,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
@@ -481,6 +482,7 @@ def battle_spec_from_payload(
             },
             must_recharge=slot in (recharging_slots or ()),
             truant_loafs=slot in (truant_slots or ()),
+            transformed_active=slot in (transformed_slots or {}),
             rng=rng,
         )
         party_species[slot] = species_order
@@ -493,6 +495,9 @@ def battle_spec_from_payload(
                 "self_world_mismatch",
                 f"request team {sorted(order_ids)} != sampled world {sorted(party_species[self_player])}",
             )
+
+    if transformed_slots:
+        built_sides = _apply_transform(built_sides, transformed_slots)
 
     if self_trapped:
         _require_world_reproduces_trap(built_sides, dex=dex, self_player=self_player)
@@ -510,6 +515,83 @@ def battle_spec_from_payload(
         slot_sides={"p1": "side_one", "p2": "side_two"},
         party_species=party_species,
     )
+
+
+_TRANSFORM_MOVE_PP = 5
+
+
+def _apply_transform(
+    sides: Mapping[str, SideSpec],
+    transformed_slots: Mapping[str, str],
+) -> dict[str, SideSpec]:
+    """Re-express a publicly Transformed active as the mon it copied.
+
+    The vendored gen3 engine has no TRANSFORM volatile at all, so this used to
+    fail closed on every Ditto — the largest remaining fallback source. But
+    Transform needs no volatile to express: gen3 copies species, types, the five
+    non-HP stats, the ability and the moveset (at 5 PP), and leaves HP alone
+    (sim/pokemon.ts transformInto). Every one of those is already a field on
+    PokemonSpec, so the copy can simply be BAKED into the active's spec.
+
+    The donor is read out of the SAME sampled world rather than the dex: in
+    singles Transform targets the opposing active, so the world being built
+    already contains the exact mon that was copied, with that world's own
+    belief-sampled spread. Reading it here keeps the two sides consistent — a
+    dex lookup would invent a spread the opponent's own party contradicts.
+
+    Two things are deliberately NOT copied, because gen3 does not copy them:
+    HP/maxhp (the transformer keeps its own, which is why a transformed Ditto
+    stays frail), and the stat stages — Showdown already reports the
+    transformer's own boosts post-copy, so the payload's boost block is correct
+    as-is and re-applying the donor's would double-count.
+
+    The one thing this cannot reproduce is reversion: the engine has no notion
+    of the copy ending, so a Transformed mon that switches out and back keeps
+    the borrowed form for the rest of the search. That is bounded and strictly
+    better than the uniform-legal fallback it replaces.
+    """
+
+    updated = dict(sides)
+    for slot, target_species in transformed_slots.items():
+        side = updated.get(slot)
+        donor_side = updated.get("p2" if slot == "p1" else "p1")
+        if side is None or donor_side is None or not side.pokemon:
+            raise EngineWorldUnsupported(
+                "transform_unexpressible", f"side {slot!r} has no built side to transform"
+            )
+        target_id = _engine_species_id(normalize_id(str(target_species)))
+        donor = next(
+            (mon for mon in donor_side.pokemon if _engine_species_id(normalize_id(mon.id)) == target_id),
+            None,
+        )
+        if donor is None:
+            # The copied mon is not in this world's opposing party, so its
+            # stats/moves would have to be invented. Fail closed instead.
+            raise EngineWorldUnsupported(
+                "transform_unexpressible",
+                f"side {slot!r} copied {target_species!r}, absent from the sampled opposing party",
+            )
+        active = side.pokemon[side.active_index]
+        copied = replace(
+            active,
+            id=donor.id,
+            types=donor.types,
+            attack=donor.attack,
+            defense=donor.defense,
+            special_attack=donor.special_attack,
+            special_defense=donor.special_defense,
+            speed=donor.speed,
+            ability=donor.ability,
+            weight_kg=donor.weight_kg,
+            moves=tuple(
+                replace(move, pp=min(_TRANSFORM_MOVE_PP, move.pp), disabled=False)
+                for move in donor.moves
+            ),
+        )
+        party = list(side.pokemon)
+        party[side.active_index] = copied
+        updated[slot] = replace(side, pokemon=tuple(party))
+    return updated
 
 
 def _require_world_reproduces_trap(
@@ -619,6 +701,7 @@ def world_battle_spec(
     current_item_overrides: Mapping[str, Mapping[str, str]] | None = None,
     recharging_slots: Sequence[str] = (),
     truant_slots: Sequence[str] = (),
+    transformed_slots: Mapping[str, str] | None = None,
     rng: Any | None = None,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
@@ -646,6 +729,7 @@ def world_battle_spec(
         current_item_overrides=current_item_overrides,
         recharging_slots=recharging_slots,
         truant_slots=truant_slots,
+        transformed_slots=transformed_slots,
         rng=rng,
     )
 
@@ -729,6 +813,7 @@ def _build_side_spec(
     truant_loafs: bool = False,
     baton_passing: bool = False,
     opponent_committed_pending: bool = False,
+    transformed_active: bool = False,
     rng: Any | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
     item_overrides = dict(current_item_overrides or {})
@@ -778,6 +863,7 @@ def _build_side_spec(
             approximate_sleep_turns=approximate_sleep_turns,
             item_removed=species_id in removed_item_species,
             item_override=item_overrides.get(species_id),
+            is_transformed_active=bool(transformed_active and row is not None and bool(row.get("active"))),
         )
         if row is not None and bool(row.get("active")):
             if active_index is not None:
@@ -1046,6 +1132,7 @@ def _build_pokemon_spec(
     approximate_sleep_turns: bool = False,
     item_removed: bool = False,
     item_override: str | None = None,
+    is_transformed_active: bool = False,
 ) -> PokemonSpec:
     species_id = _engine_species_id(normalize_id(mon.species))
     info = dex.species_info(species_id)
@@ -1091,6 +1178,7 @@ def _build_pokemon_spec(
         slot=slot,
         is_self=is_self,
         self_benched_move_history=self_benched_move_history,
+        is_transformed_active=is_transformed_active,
     )
     public_gender = _gender_from_details(str(row.get("details") or "")) if row else None
 
@@ -1197,6 +1285,7 @@ def _move_specs(
     slot: str,
     is_self: bool,
     self_benched_move_history: bool = False,
+    is_transformed_active: bool = False,
 ) -> tuple[MoveSpec, ...]:
     if len(mon.moves) > _MOVE_SLOT_LIMIT:
         raise EngineWorldUnsupported(
@@ -1211,7 +1300,7 @@ def _move_specs(
             if isinstance(pp, int):
                 known_pp[normalize_id(entry["id"])] = (pp, bool(entry.get("disabled")))
 
-    if is_self and known_pp:
+    if is_self and known_pp and not is_transformed_active:
         sampled_ids = {normalize_id(move) for move in mon.moves}
         sampled_has_hp = any(m.startswith("hiddenpower") for m in sampled_ids)
         for request_move in known_pp:

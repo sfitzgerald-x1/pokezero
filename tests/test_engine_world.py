@@ -14,6 +14,7 @@ from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
     _SUPPORTED_VOLATILES,
     _apply_forecast_types,
+    _apply_transform,
     _require_world_reproduces_trap,
     _undischarged_materialization_blockers,
     battle_spec_from_payload,
@@ -598,8 +599,13 @@ class TransformAndEncoreTests(unittest.TestCase):
     "requires a built local Showdown checkout",
 )
 class DittoTransformLiveTests(unittest.TestCase):
-    """End-to-end fallback-detection edge case: a transformed Ditto must never
-    construct as a silently wrong world (base stats + [transform] moveset)."""
+    """End-to-end Transform against the REAL sim, from both seats.
+
+    A transformed Ditto must never construct as a silently wrong world (base
+    stats + the [transform] moveset). It used to fail closed to guarantee that;
+    now the copied form is baked into the active's spec instead, so the world is
+    both searchable AND correct -- these assert the second half.
+    """
 
     def test_transform_fails_closed_for_both_seats(self) -> None:
         from pokezero.dex import load_showdown_dex
@@ -631,12 +637,18 @@ class DittoTransformLiveTests(unittest.TestCase):
             result = env.step(actions)
             self.assertIsNone(result.terminal)
 
-            # Seat p1 (the transformed side itself): request now shows COPIED
-            # moves; construction from the true world must fail closed.
+            # Seat p1 (the transformed side itself): the request shows COPIED
+            # moves while the sampled world still holds Ditto's real one. That
+            # used to raise self_moveset_mismatch; the overlay now reconciles it.
             state_p1 = env.public_materialization_state("p1")
-            with self.assertRaises(EngineWorldUnsupported) as caught:
-                world_battle_spec(state_p1, override, dex=dex)
-            self.assertEqual(caught.exception.reason, "self_moveset_mismatch")
+            world_p1 = world_battle_spec(
+                state_p1, override, dex=dex, transformed_slots={"p1": "Snorlax"}
+            )
+            side_p1 = getattr(world_p1.spec, world_p1.slot_sides["p1"])
+            copied = side_p1.pokemon[side_p1.active_index]
+            self.assertEqual(copied.id, "snorlax")
+            self.assertIn("bodyslam", [m.id for m in copied.moves])
+            self.assertTrue(all(m.pp <= 5 for m in copied.moves if m.id != "none"))
 
             # Seat p2 (facing the transformed Ditto): the belief engine sees the
             # transform publicly; engine_search's signals must block the slot.
@@ -649,13 +661,23 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p2",
                 "public_materialization_state": env.public_materialization_state("p2"),
             })()
-            blocked, _encored, _removed, _overridden = policy._public_effect_signals(context)
-            self.assertIn("p1", blocked)
-            self.assertIn("transformed", blocked["p1"])
+            blocked, _encored, _removed, _overridden, transformed = (
+                policy._public_effect_signals(context)
+            )
+            # The transform is reported as an expressible signal, not a block.
+            self.assertEqual(blocked, {})
+            self.assertEqual(transformed.get("p1", "").lower(), "snorlax")
             state_p2 = env.public_materialization_state("p2")
-            with self.assertRaises(EngineWorldUnsupported) as caught2:
-                world_battle_spec(state_p2, override, dex=dex, blocked_slots=blocked)
-            self.assertEqual(caught2.exception.reason, "public_effect_blocked")
+            world_p2 = world_battle_spec(
+                state_p2, override, dex=dex, blocked_slots=blocked,
+                transformed_slots=transformed,
+            )
+            foe = getattr(world_p2.spec, world_p2.slot_sides["p1"])
+            foe_active = foe.pokemon[foe.active_index]
+            self.assertEqual(foe_active.id, "snorlax")
+            # HP stays Ditto's own -- the copy never touches it.
+            ditto_side = getattr(world_p2.spec, world_p2.slot_sides["p1"])
+            self.assertLess(foe_active.maxhp, max(m.maxhp for m in ditto_side.pokemon) + 1)
 
             # F2 (review): the block must CLEAR after the transformed Ditto
             # switches out (gen3 transform reverts on switch) and back in.
@@ -677,7 +699,7 @@ class DittoTransformLiveTests(unittest.TestCase):
                     "player_id": "p2",
                     "public_materialization_state": env.public_materialization_state("p2"),
                 })()
-                blocked_now, _, _, _ = policy._public_effect_signals(context_now)
+                blocked_now, _, _, _, _tf_now = policy._public_effect_signals(context_now)
                 belief_now = observation_p2.metadata.get("belief_view") or {}
                 actives = [m for m in belief_now.get("opponent_pokemon") or [] if m.get("active")]
                 if actives and "ditto" not in str(actives[0].get("species", "")).lower():
@@ -725,14 +747,15 @@ class DittoTransformLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _, _, _ = policy._public_effect_signals(context)
-            self.assertIn("p2", blocked)
-            self.assertIn("transformed", blocked["p2"])
-            with self.assertRaises(EngineWorldUnsupported) as caught:
-                world_battle_spec(
-                    env.public_materialization_state("p1"), override, dex=dex, blocked_slots=blocked
-                )
-            self.assertEqual(caught.exception.reason, "public_effect_blocked")
+            blocked, _, _, _, transformed = policy._public_effect_signals(context)
+            self.assertEqual(blocked, {})
+            self.assertEqual(transformed.get("p2", "").lower(), "snorlax")
+            world = world_battle_spec(
+                env.public_materialization_state("p1"), override, dex=dex,
+                blocked_slots=blocked, transformed_slots=transformed,
+            )
+            foe = getattr(world.spec, world.slot_sides["p2"])
+            self.assertEqual(foe.pokemon[foe.active_index].id, "snorlax")
         finally:
             env.close()
 
@@ -792,7 +815,7 @@ class KnockOffRemovalLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _encored, removed, _overridden = policy._public_effect_signals(context)
+            blocked, _encored, removed, _overridden, _tf = policy._public_effect_signals(context)
             self.assertEqual(blocked, {})
             self.assertEqual(removed, {"p2": ("snorlax",)})
 
@@ -874,7 +897,7 @@ class TrickSwapOverrideLiveTests(unittest.TestCase):
                 "player_id": "p1",
                 "public_materialization_state": env.public_materialization_state("p1"),
             })()
-            blocked, _encored, removed, overridden = policy._public_effect_signals(context)
+            blocked, _encored, removed, overridden, _tf = policy._public_effect_signals(context)
             self.assertEqual(blocked, {})
             self.assertEqual(removed, {})
             self.assertEqual(overridden, {
@@ -1142,6 +1165,66 @@ class SelfRequestStateFlagTests(unittest.TestCase):
         self.assertNotEqual(
             self._reason_for({"trapped": True}), "self_request_state_unsupported"
         )
+
+
+class TransformOverlayTests(unittest.TestCase):
+    """A Transformed active is re-expressed as the mon it copied.
+
+    The vendored gen3 engine has no TRANSFORM volatile, but Transform needs no
+    volatile to express: gen3 copies species, types, the five non-HP stats, the
+    ability and the moveset at 5 PP, and leaves HP alone (transformInto). All of
+    those are PokemonSpec fields, so the copy is baked into the active's spec.
+    """
+
+    def _mon(self, species, **kw):
+        base = dict(
+            id=species, level=100, hp=200, maxhp=200, attack=100, defense=100,
+            special_attack=100, special_defense=100, speed=100, types=("normal",),
+            ability="limber", item=None, moves=(MoveSpec(id="transform", pp=8),),
+        )
+        base.update(kw)
+        return PokemonSpec(**base)
+
+    def _sides(self):
+        ditto = self._mon("ditto", hp=180, maxhp=180)
+        donor = self._mon(
+            "snorlax", attack=250, defense=180, special_attack=120,
+            special_defense=220, speed=60, ability="immunity", types=("normal",),
+            moves=(MoveSpec(id="bodyslam", pp=24), MoveSpec(id="curse", pp=16)),
+        )
+        return {"p1": SideSpec(pokemon=(ditto,)), "p2": SideSpec(pokemon=(donor,))}
+
+    def test_copies_species_stats_ability_and_moves(self) -> None:
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual(copied.id, "snorlax")
+        self.assertEqual(copied.attack, 250)
+        self.assertEqual(copied.speed, 60)
+        self.assertEqual(copied.ability, "immunity")
+        self.assertEqual([m.id for m in copied.moves], ["bodyslam", "curse"])
+
+    def test_hp_is_the_transformer_s_own(self) -> None:
+        # The single most important thing Gen 3 does NOT copy -- it is why a
+        # transformed Ditto stays frail, and copying it would make the searched
+        # world wrong in the one dimension that decides KOs.
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual((copied.hp, copied.maxhp), (180, 180))
+
+    def test_copied_moves_get_five_pp(self) -> None:
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertTrue(all(move.pp == 5 for move in copied.moves))
+
+    def test_donor_side_is_left_untouched(self) -> None:
+        sides = self._sides()
+        donor_before = sides["p2"].pokemon[0]
+        self.assertEqual(_apply_transform(sides, {"p1": "Snorlax"})["p2"].pokemon[0], donor_before)
+
+    def test_absent_donor_fails_closed(self) -> None:
+        # The copied mon is not in this world's opposing party, so its stats and
+        # moves would have to be invented -- exactly the silent wrongness the
+        # constructor exists to refuse.
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            _apply_transform(self._sides(), {"p1": "Rapidash"})
+        self.assertEqual(caught.exception.reason, "transform_unexpressible")
 
 
 class TrapReproductionTests(unittest.TestCase):
