@@ -471,14 +471,31 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertAlmostEqual(self._mass(suppressed, "Damage SideTwo"), 100.0, places=4)
 
     def test_fainted_weather_suppressor_no_longer_blocks_residual(self) -> None:
+        # The suppressor faints, so the residual block it was blocking is DEFERRED
+        # past the forced replacement (poke-engine-gen3-residual-defer-on-faint.patch)
+        # and lands on the ply that resolves the switch. The ability assertion is
+        # unchanged — a fainted Air Lock holder stops suppressing the weather, so
+        # side one finally takes its sandstorm tick — it just moved one ply.
         attacker = self._mon("tauros", "intimidate", "tackle", speed=200)
         suppressor = self._mon(
             "rayquaza", "airlock", "splash", types=("dragon", "flying"), hp=1, maxhp=300
         )
-        branches = poke_engine.generate_instructions(
-            self._state(attacker, suppressor, weather="sand"), "tackle", "splash"
+        replacement = self._mon("snorlax", "immunity", "splash")
+        state = self._state(
+            attacker, suppressor, weather="sand", defender_party=(replacement,)
         )
-        self.assertAlmostEqual(self._mass(branches, "Damage SideOne: 18"), 100.0, places=4)
+
+        faint = poke_engine.generate_instructions(state, "tackle", "splash")
+        self.assertAlmostEqual(self._mass(faint, "Damage SideOne: 18"), 0.0, places=4)
+        self.assertAlmostEqual(
+            self._mass(faint, "ToggleSideTwoForceSwitch"), 100.0, places=4
+        )
+
+        replaced = state.apply_instructions(faint[0])
+        deferred = poke_engine.generate_instructions(replaced, "none", "snorlax")
+        self.assertAlmostEqual(
+            self._mass(deferred, "Damage SideOne: 18"), 100.0, places=4
+        )
 
     def test_weather_ability_replaces_finite_same_weather(self) -> None:
         lead = self._mon("tauros", "intimidate", "splash")
