@@ -73,8 +73,32 @@
 #   Showdown (scripts/gen3_switch_differential.py: faintresiduals + control);
 #   pinned by rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs.
 #   Touches the end-of-turn generation in gen3/generate_instructions.rs plus
-#   get_all_options in gen3/state.rs; authored against the spikes-patched tree,
-#   applied last.
+#   get_all_options in gen3/state.rs; authored against the spikes-patched tree.
+#   poke-engine-gen3-confusion-duration.patch — gen3 CONFUSION is a BOUNDED
+#   stochastic duration, and Baton Pass carries it. Upstream modelled confusion
+#   as permanent until switch-out (no expiry path anywhere in src/gen3/), so
+#   search saw an unbounded 50%-per-turn self-hit. Showdown rolls
+#   `time = this.random(2, 6)` once at addVolatile (data/conditions.ts
+#   `confusion.onStart`, which gen3 inherits) and gen3's onBeforeMove (the gen4
+#   mod's) decrements first, snaps out and lets the move through at zero, and only
+#   otherwise rolls the 50% self-hit — so a self-hit roll happens on `time - 1`
+#   attacking turns, uniform on {1,2,3,4}. Modelled as the same hazard ladder gen3
+#   sleep already uses (`chance_confusion_ends`, mirroring `chance_to_wake_up`)
+#   over the ALREADY-PRESENT `volatile_status_durations.confusion` counter, forked
+#   at end of turn where both outcomes are terminal. Also (a) moves the
+#   full-paralysis roll after the confusion and Attract branches to match
+#   Showdown's onBeforeMove priorities (confusion 3 > attract 2 > par 1), which the
+#   counter needs to advance on a fully-paralyzed turn, and (b) retains CONFUSION
+#   with its counter across a Baton Pass (`copyVolatileFrom` shallow-clones every
+#   volatile lacking `noCopy`; confusion has none in gen3's chain) — deliberately
+#   deferred by the batonpass-perish patch, since carrying a PERMANENT confusion
+#   would have been worse than dropping it. Verified vs real gen3 Showdown
+#   (scripts/gen3_switch_differential.py); pinned by
+#   rust/pokezero-search/tests/gen3_confusion_fidelity.rs. Touches
+#   gen3/generate_instructions.rs, gen3/state.rs and gen3/abilities.rs. Shares the
+#   end-of-turn branch site with residual-defer-on-faint (the confusion ladder
+#   forks each branch right where Shed Skin does), so it is authored against the
+#   residual-defer-patched tree and applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -104,7 +128,8 @@ for patch in \
   poke-engine-gen3-ability-fidelity.patch \
   poke-engine-gen3-batonpass-perish.patch \
   poke-engine-gen3-spikes-layers.patch \
-  poke-engine-gen3-residual-defer-on-faint.patch; do
+  poke-engine-gen3-residual-defer-on-faint.patch \
+  poke-engine-gen3-confusion-duration.patch; do
   if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
     echo "ERROR: failed to apply $patch" >&2
     exit 1
