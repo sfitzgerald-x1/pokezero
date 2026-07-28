@@ -99,7 +99,8 @@ confusion self-hit.
 `onBeforeMove` high-priority-first: flinch (8) → confusion (3) → attract (2) →
 paralysis (1). The engine's order is: flinch/taunt hard-gate in
 `cannot_use_move` (100% skip, before any status branch) → paralysis → freeze →
-sleep → confusion → **attract** (the patch) → move. Consequences:
+sleep → confusion → **attract** (the patch) → move. (Since 2026-07-28 the
+paralysis roll moved to the END of that chain — deviation 4.) Consequences:
 
 - **flinch**: a 100% "can't move" gate in BOTH sims; attract/confusion/par are
   never reached under a flinch. Exact.
@@ -107,14 +108,17 @@ sleep → confusion → **attract** (the patch) → move. Consequences:
   exact in both probability AND reason attribution (50% confusion self-hit, then
   25% attract-immobilize, 25% move — identical to Showdown's
   confusion-before-attract resolution).
-- **paralysis**: the engine resolves it *before* attract; Showdown resolves it
-  *after*. The internal immobilized-reason split therefore differs (engine:
+- **paralysis**: the engine resolved it *before* attract; Showdown resolves it
+  *after*. The internal immobilized-reason split therefore differed (engine:
   25% par / 37.5% attract; Showdown: 50% attract / 12.5% par) but the net
-  P(move) = 0.75 × 0.5 = **0.375** is identical (the two independent gates are
+  P(move) = 0.75 × 0.5 = **0.375** was identical (the two independent gates are
   commutative) and BOTH immobilized branches are empty-delta terminals, so the
-  **leaf-state distribution is exact**. Only the rendered `|cant|` reason label
-  (an events.rs concern) depends on which volatile is credited — invisible to
-  search value.
+  **leaf-state distribution was exact**. Only the rendered `|cant|` reason label
+  (an events.rs concern) depended on which volatile was credited — invisible to
+  search value. **Superseded (2026-07-28):** the confusion-duration patch moves
+  the paralysis roll to last, matching Showdown's priority order exactly, because
+  a bounded confusion counter makes the misordering stop being benign — see
+  "Confirmed deviation 4" below.
 
 **Source-leave handling (closed 2026-07-22).** Real Gen 3 Attract clears when
 the infatuation source leaves play (`onUpdate` removes the volatile when
@@ -328,3 +332,91 @@ false-CLEAN vector for real-game turns. Encore wave-1 coverage: the
 application-turn redirect and volatile persistence are validated; the
 next-turn lock is only exercised trivially (the scripted choice coincides
 with the encored move) and duration remains unmodeled.
+
+## Confirmed deviation 4: CONFUSION was permanent (and never Baton-Passed)
+
+poke-engine 0.0.47 models gen3 CONFUSION as an unbounded 50%-per-turn self-hit
+that persists until switch-out — there is **no expiry path anywhere in
+`src/gen3/`**. `VolatileStatusDurations.confusion` exists in the shared
+`src/state.rs`, is serialized as field 0 of the duration blob, and
+`increment_volatile_status_duration` already dispatches it — but no generation
+ever reads or writes it. Confirmed by the PR #874 switch-out audit.
+
+Real gen3 (`data/conditions.ts` `confusion`, whose `onStart` gen3 inherits
+unchanged through gen4 → gen5 → …, plus `data/mods/gen4/conditions.ts`'s
+`onBeforeMove`, which is the one gen3 resolves to) rolls
+`this.effectState.time = this.random(2, 6)` **once**, at `addVolatile` — uniform
+on {2,3,4,5}. Every `onBeforeMove` that actually runs decrements `time` FIRST,
+snaps out and lets the move through when it hits zero, and only otherwise emits
+`-activate` and rolls `randomChance(1, 2)` for the self-hit. So the number of
+attacking turns that carry a self-hit roll is `time - 1` — **uniform on
+{1,2,3,4}, never five**. (The gen7 change to 33% does not reach gen3: gen4's
+`onBeforeMove` shadows it.)
+
+**Impact:** systematic pessimism about any confused seat, unbounded in the
+search horizon. A confused Pokemon that never switches was priced at a
+50%-per-turn self-hit forever, so search over-valued Confuse Ray / Swagger /
+Water Pulse lines and over-valued switching out of confusion. Reachable
+everywhere in gen3 randbats.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-confusion-duration.patch`, applied last by
+`scripts/vendor_poke_engine_src.sh` (`--fuzz=0`). Modelled as a **hazard
+ladder** over the already-present duration counter — `chance_confusion_ends(n)`
+is `1 / (1 + MAX_CONFUSION_TURNS - n)`, the identical shape gen3 sleep already
+uses in `chance_to_wake_up`, because gen3 sleep is rolled from the same
+`random(2, 6)`. Given `n` attacking turns already burned, the chance this was
+the last one carrying a self-hit roll is `P(time == n+2 | time > n+1)`: 1/4,
+1/3, 1/2, forced. This is **exact, not an approximation** — it reproduces the
+uniform-on-{1,2,3,4} marginal while holding the per-turn self-hit at 50%, and
+costs one extra branch per confused turn instead of the four-way fan-out a
+roll-at-application model would need.
+
+**Where the fork is taken.** At END OF TURN (`add_end_of_turn_branches`), not at
+the start of the next attacking turn. Forced by the engine's structure: a
+snap-out branch has to CONTINUE through the move, and
+`generate_instructions_from_move` advances exactly one surviving branch, whereas
+at end of turn both outcomes are terminal. Equivalent for everything observable
+— Showdown's snap-out turn carries no self-hit roll and lets the move through,
+exactly like a turn on which the volatile is already gone. **The only residue:**
+Showdown keeps an inert `time == 1` confusion visible for one decision boundary
+longer than the engine does. That costs a one-boundary eval difference, and lets
+the engine re-confuse a Pokemon that Showdown would refuse (`addVolatile` bails
+with no `onRestart`) on exactly that boundary. Both are bounded and neither
+changes the distribution of future self-hits.
+
+**Gating.** The ladder fires only on turns the check actually ran, keyed on the
+`+1` duration instruction the confusion block emits. Showdown's `onBeforeMove`
+priority 3 is pre-empted by recharge (11), sleep and freeze (10), flinch (8),
+Disable (7) and Taunt (5), all of which leave `time` untouched; the engine
+reproduces that reachability exactly (the first four short-circuit in
+`cannot_use_move` or push their no-move branches before the confusion block).
+Gating on the counter's *value* instead would burn turns while standing still.
+
+**Paralysis reorder (rides along).** The full-paralysis roll moves out of the
+status match and after the confusion and Attract branches, so the engine now
+matches Showdown's priority chain exactly (confusion 3 → attract 2 → par 1).
+Required: rolling paralysis first meant a fully-paralyzed turn never reached the
+confusion block, so the counter advanced on only 75% of a paralyzed Pokemon's
+turns and its confusion outlasted Showdown's. It also restores the self-hit mass
+for a paralyzed + confused Pokemon to Showdown's 1/2 (it was 3/8), since a
+confusion self-hit aborts the move before paralysis is ever rolled. This
+supersedes the "leaf-state distribution is exact" note under deviation 3.
+
+**Baton Pass carry (rides along).** `copyVolatileFrom` copies every volatile
+without a `noCopy` flag and shallow-clones the volatile object; `confusion`
+carries no such flag anywhere in gen3's chain, so the remaining `time` rides the
+pass and `onStart` never re-runs — the receiver gets no fresh roll. Upstream's
+`remove_volatile_statuses_on_switch` retained only Substitute and Leech Seed.
+The batonpass-perish patch deferred this deliberately: carrying a **permanent**
+confusion would have been worse than dropping it, so the carry had to wait for
+the duration. The counter is zeroed alongside the volatile on an ordinary
+switch-out, on the Own Tempo cure (reachable now that a pass can hand a
+confusion to an Own Tempo receiver), and on a fresh application.
+
+**Verification.** Real gen3 Showdown via
+`scripts/gen3_switch_differential.py --only confusionduration
+confusiondurationcontrol confusionbatonpass confusionbatonpasscontrol`; engine
+side pinned by `rust/pokezero-search/tests/gen3_confusion_fidelity.rs`
+(11 tests). Seeds 1000-1003 of the duration scenario happen to cover all four
+legal durations (1, 2, 3 and 4 self-hit-risk turns).
