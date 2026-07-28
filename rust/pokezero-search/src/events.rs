@@ -2235,7 +2235,11 @@ fn ability_display_of_active(state: &State, side: SideReference) -> String {
 // Python surface
 // ---------------------------------------------------------------------------
 
-fn move_choice_from_str(name: &str, state: &State, side: SideReference) -> PyResult<MoveChoice> {
+pub(crate) fn move_choice_from_str(
+    name: &str,
+    state: &State,
+    side: SideReference,
+) -> PyResult<MoveChoice> {
     let side_ref = match side {
         SideReference::SideOne => &state.side_one,
         SideReference::SideTwo => &state.side_two,
