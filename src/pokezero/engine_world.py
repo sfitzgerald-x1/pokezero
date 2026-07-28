@@ -184,10 +184,18 @@ def _engine_species_id(species_id: str) -> str:
 
 
 # Showdown request flags that withhold hidden information rather than restrict the
-# action set. ``maybeTrapped``: the foe's unrevealed ability might trap us.
-# ``maybeDisabled``/``maybeLocked``: Imprison might have disabled a move (moves.ts
-# Imprison is their only producer; maybeLocked is derived from maybeDisabled). Each
-# belief world resolves these by committing to a concrete opponent hypothesis.
+# action set. Each belief world resolves them by committing to a concrete opponent
+# hypothesis.
+#
+# ``maybeTrapped`` is the one that actually fires here, and it covers more than
+# "the foe MIGHT have a trapping ability": an ability trap sets trapped='hidden'
+# (sim/pokemon.ts), and getMoveRequestData only reports ``trapped`` when the value
+# is exactly True — so a REVEALED, actively-trapping Arena Trap or Shadow Tag also
+# arrives as maybeTrapped. That is why it dominated the fallback count.
+#
+# ``maybeDisabled``/``maybeLocked`` are listed for completeness but are dead in this
+# format: Imprison is their only producer (maybeLocked is derived from maybeDisabled)
+# and no gen3 randbats set carries Imprison.
 _HIDDEN_INFORMATION_REQUEST_FLAGS = frozenset({"maybeTrapped", "maybeDisabled", "maybeLocked"})
 
 
@@ -533,7 +541,12 @@ def _require_world_reproduces_trap(
         raise EngineWorldUnsupported("payload_malformed", "trap check is missing a built side")
 
     self_volatiles = {normalize_id(str(v)) for v in self_side.volatile_statuses}
-    if self_volatiles & {"partiallytrapped", "lockedmove"}:
+    # ``mustrecharge`` is not one of Side::trapped's conditions, but it reaches the
+    # same place: the engine's option builder skips the switch branch entirely
+    # while it is set, so the world does refuse to switch. Showdown reports the
+    # hard lock as ``trapped``, so without this the recharge turn after every
+    # Hyper Beam fell back needlessly.
+    if self_volatiles & {"partiallytrapped", "lockedmove", "mustrecharge"}:
         return
 
     active = self_side.pokemon[self_side.active_index] if self_side.pokemon else None
@@ -793,10 +806,17 @@ def _build_side_spec(
         # PARTIALLYTRAPPED with no duration counter at all: it traps and deals
         # maxhp/16 per turn until the TRAPPER switches out
         # (gen3/generate_instructions.rs). So the volatile has no exact
-        # expression, and this opt-in accepts the engine's own shape — a trap
-        # that outlives its real duration, i.e. PESSIMISTIC about escaping.
+        # expression, and this opt-in accepts the engine's own shape.
         #
-        # That bias is the reason it is a named approximation rather than an
+        # The bias is ONE-SIDED IN FAVOUR OF THE TRAPPER, not simply
+        # "pessimistic": this gate applies to whichever side holds the volatile.
+        # When our mon is trapped the search under-rates escaping; when WE are
+        # the trapper (Shuckle is the pool's only Wrap user) it over-rates the
+        # lock. And the trap is UNBOUNDED, not merely long — the trapped mon has
+        # no switch option at all (Side::trapped), so a deep line can grind it
+        # down over far more turns than the real 2-5 roll allows.
+        #
+        # That is the reason it is a named approximation rather than an
         # allowlist entry: it belongs with approximate_sleep_turns and
         # approximate_substitute_health, visible in the config and attributable
         # in a run's provenance, not silently folded into "expressed exactly".
@@ -807,10 +827,13 @@ def _build_side_spec(
         #   confusion — Gen 3 runs 2-5 random turns; the engine prices the 50%
         #     self-hit but never expires it inside a search, so a searched world
         #     is PESSIMISTIC about shaking it off.
-        #   yawn — the engine counts it down through volatile_status_durations,
-        #     but the payload carries no set turn to seed that counter, so it
-        #     starts at 0 ("just yawned") and can therefore land the sleep a
-        #     turn LATE for a yawn that is already one turn old.
+        #   yawn — seeded at duration 1 above, which is EXACT at an ordinary
+        #     move boundary: Showdown applies Yawn (duration 2) mid-turn and
+        #     burns the first tick at that same turn's residual, and singles
+        #     offers no request in between, so an observable Yawn always has one
+        #     tick left. It rides here only for the residual case a mid-turn
+        #     force-switch snapshot could produce, where the real count is 2 and
+        #     the sleep would land a turn early.
         #
         # Both are still far better than the alternative they replace: without
         # them the whole decision falls back to a uniform-legal guess, which is
@@ -916,6 +939,15 @@ def _build_side_spec(
         # encores run 3-8 turns) — acceptable over short MCTS horizons.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
+
+    if "yawn" in volatiles:
+        # Seed the counter at 1, NOT the struct default of 0. Showdown applies
+        # Yawn (duration 2) during a turn's move phase and burns the first tick
+        # at that same turn's residual; in singles there is no request between
+        # those two points, so EVERY Yawn a decision boundary can observe is
+        # already one tick old. Leaving the engine's 0 would push the sleep a
+        # full turn late in the normal case, not just an edge case.
+        volatile_durations["yawn"] = 1
 
     slow_uturn_move = False
     saved_move = ""
