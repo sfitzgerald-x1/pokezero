@@ -14,6 +14,7 @@ from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
     _SUPPORTED_VOLATILES,
     _apply_forecast_types,
+    _require_world_reproduces_trap,
     _undischarged_materialization_blockers,
     battle_spec_from_payload,
     unpack_pokemon,
@@ -1135,15 +1136,81 @@ class SelfRequestStateFlagTests(unittest.TestCase):
                     self._reason_for({flag: True}), "self_request_state_unsupported"
                 )
 
-    def test_trapped_still_fails_closed(self) -> None:
-        self.assertEqual(
+    def test_trapped_is_no_longer_refused_up_front(self) -> None:
+        # trapped is now VERIFIED against the built world rather than refused
+        # on sight, so it must not short-circuit ahead of side construction.
+        self.assertNotEqual(
             self._reason_for({"trapped": True}), "self_request_state_unsupported"
         )
 
-    def test_trapped_is_not_excused_by_accompanying_maybe_flags(self) -> None:
+
+class TrapReproductionTests(unittest.TestCase):
+    """``trapped`` is discharged only when the built world traps us too.
+
+    Showdown discloses ``trapped`` when its cause is public, and the belief
+    filter carries a revealed trapping ability into every sample -- so the world
+    usually reproduces the trap and refusing to search was over-strict. It is
+    not always reproduced, though: the vendored gen3 engine models no Mean Look
+    / Block / Spider Web, and a move-trapped mon would be free to switch in
+    search. These pin the engine's own conditions (gen3/state.rs Side::trapped).
+    """
+
+    def _mon(self, **kw):
+        base = dict(
+            id="snorlax", level=100, hp=300, maxhp=300, attack=200, defense=200,
+            special_attack=150, special_defense=200, speed=100, types=("normal",),
+            ability="immunity", item=None, moves=(MoveSpec(id="bodyslam", pp=24),),
+        )
+        base.update(kw)
+        return PokemonSpec(**base)
+
+    def _check(self, *, foe_ability: str, self_types=("normal",), self_ability="immunity",
+               self_volatiles=()) -> str | None:
+        sides = {
+            "p1": SideSpec(
+                pokemon=(self._mon(types=self_types, ability=self_ability),),
+                volatile_statuses=tuple(self_volatiles),
+            ),
+            "p2": SideSpec(pokemon=(self._mon(id="dugtrio", ability=foe_ability),)),
+        }
+        try:
+            _require_world_reproduces_trap(sides, dex=_dex(), self_player="p1")
+        except EngineWorldUnsupported as error:
+            return error.reason
+        return None
+
+    def test_shadow_tag_reproduces_the_trap(self) -> None:
+        self.assertIsNone(self._check(foe_ability="shadowtag"))
+
+    def test_arena_trap_reproduces_the_trap_for_a_grounded_target(self) -> None:
+        self.assertIsNone(self._check(foe_ability="arenatrap"))
+
+    def test_arena_trap_does_not_trap_a_flyer_or_a_levitator(self) -> None:
         self.assertEqual(
-            self._reason_for({"trapped": True, "maybeTrapped": True}),
+            self._check(foe_ability="arenatrap", self_types=("flying",)),
             "self_request_state_unsupported",
+        )
+        self.assertEqual(
+            self._check(foe_ability="arenatrap", self_ability="levitate"),
+            "self_request_state_unsupported",
+        )
+
+    def test_magnet_pull_traps_only_steel(self) -> None:
+        self.assertIsNone(self._check(foe_ability="magnetpull", self_types=("steel",)))
+        self.assertEqual(
+            self._check(foe_ability="magnetpull"), "self_request_state_unsupported"
+        )
+
+    def test_partial_trap_on_our_own_side_reproduces_the_trap(self) -> None:
+        self.assertIsNone(
+            self._check(foe_ability="immunity", self_volatiles=("partiallytrapped",))
+        )
+
+    def test_move_trap_stays_fail_closed(self) -> None:
+        # Mean Look / Block / Spider Web have no engine expression at all, so a
+        # world built from them would let us switch out of a real trap.
+        self.assertEqual(
+            self._check(foe_ability="immunity"), "self_request_state_unsupported"
         )
 
 

@@ -253,6 +253,11 @@ class EngineMctsConfig:
     # escaping, but a searched world beats the uniform-legal fallback it
     # replaces (96 world failures in the 2026-07-26 depth study).
     approximate_partial_trap_turns: bool = True
+    # Documented approximation: public confusion and Yawn are searched with the
+    # engine's own clock, because the payload carries no remaining duration.
+    # Confusion never expires inside a search (pessimistic); Yawn's counter
+    # starts at 0, so an already-aged Yawn sleeps a turn late.
+    approximate_hidden_duration_volatiles: bool = True
     # Escalate any decision-level fallback to EngineSearchFallbackError.
     # For sweeps/CI that require zero fallbacks; production keeps the safe
     # uniform-legal fallback (a crash mid-collection is worse than a miss).
@@ -594,6 +599,7 @@ class EngineMctsPolicy:
                     approximate_sleep_turns=self._config.approximate_sleep_turns,
                     approximate_substitute_health=self._config.approximate_substitute_health,
                     approximate_partial_trap_turns=self._config.approximate_partial_trap_turns,
+                    approximate_hidden_duration_volatiles=self._config.approximate_hidden_duration_volatiles,
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
                     removed_item_species=removed_item_species,
