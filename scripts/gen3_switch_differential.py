@@ -56,6 +56,22 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   confusionbatonpasscontrol : same line with an ORDINARY switch -> the receiver is
                   clean, because ``Pokemon.clearVolatile()`` blanks the volatile
                   table on a normal switch-out.
+  transform     : Ditto Transforms into Machamp and then USES one of Machamp's
+                  moves. This is the divergence
+                  ``third_party/poke-engine-gen3-transform.patch`` fixes: upstream
+                  poke-engine defines ``Choices::TRANSFORM`` in the MOVES table and
+                  nowhere else, so clicking Transform produced no state change at
+                  all.
+  transformcontrol : the same line without Transform -> Ditto never acquires
+                  Machamp's moves.
+  transformsub  : the target is behind a Substitute -> Transform still lands. gen3
+                  inherits gen4's ``bypasssub`` flag and the ``substitute``
+                  bail-out inside ``transformInto`` is gated on ``gen >= 5``.
+  transformmirror : Ditto vs Ditto, both Transform -> the second one ``-fail``s
+                  (``pokemon.transformed && this.battle.gen >= 2``).
+  transformrevert : Transform, switch out, switch back, Transform again ->
+                  ``Pokemon.clearVolatile()`` restored ``baseMoveSlots`` and the
+                  base species, so Ditto has its own move again.
 
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
@@ -157,6 +173,23 @@ def _sand_tyranitar():  # permanent gen3 sandstorm + a Leftovers residual to wat
 def _abra():  # 191 max HP: dies to Crunch on any roll, chips Tyranitar meanwhile
     return FixturePokemon(species="Abra", ability="Synchronize", item="None",
                           moves=("Night Shade", "Splash"))
+
+
+def _ditto():  # the only gen3 randbats Transform carrier with a one-move set
+    # Splash is a Custom Game convenience so the control arm has something to do;
+    # the randbats set is movepool ["transform"], Limber, level 100.
+    return FixturePokemon(species="Ditto", ability="Limber", item="None",
+                          moves=("Transform", "Splash"))
+
+
+def _machamp():  # copy target: distinct species, types, stats, ability and moves
+    return FixturePokemon(species="Machamp", ability="Guts", item="None",
+                          moves=("Bulk Up", "Cross Chop", "Splash"))
+
+
+def _machamp_sub():  # copy target that hides behind a Substitute first
+    return FixturePokemon(species="Machamp", ability="Guts", item="None",
+                          moves=("Substitute", "Splash"))
 
 
 def _has(lines, needle: str) -> bool:
@@ -480,6 +513,82 @@ def _spec(name):
             },
             expect={"receiver_confused": False},
             landmark=lambda L: True, landmark_desc="")
+    if name == "transform":
+        # Ditto copies Machamp and then USES one of Machamp's moves, which is only
+        # possible if the moveset was really copied into Ditto's slots. This is the
+        # divergence `poke-engine-gen3-transform.patch` fixes: upstream defines
+        # Choices::TRANSFORM in the MOVES table and nowhere else, so clicking
+        # Transform changed nothing at all.
+        return dict(
+            p1=[_ditto()], p2=[_machamp()],
+            turns=[("move transform", "move splash"), ("move crosschop", "move splash")],
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "transformed": _has(L, "|-transform|p1a: Ditto|p2a: Machamp"),
+                "copied_move_used": _has(L, "|move|p1a: Ditto|Cross Chop"),
+            },
+            expect={"transformed": True, "copied_move_used": True},
+            landmark=lambda L: _has(L, "|move|p1a: Ditto|Transform"),
+            landmark_desc="Transform used")
+    if name == "transformcontrol":
+        # Same teams, same target, Ditto simply does not Transform: it must never
+        # acquire Machamp's moves on its own.
+        return dict(
+            p1=[_ditto()], p2=[_machamp()],
+            turns=[("move splash", "move splash"), ("move splash", "move splash")],
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "transformed": _has(L, "|-transform|"),
+                "copied_move_used": _has(L, "|move|p1a: Ditto|Cross Chop"),
+            },
+            expect={"transformed": False, "copied_move_used": False},
+            landmark=lambda L: _has(L, "|move|p1a: Ditto|Splash"),
+            landmark_desc="Ditto acted")
+    if name == "transformsub":
+        # gen3 inherits gen4's `transform: { flags: { bypasssub, ... } }` and the
+        # `volatiles['substitute']` bail-out in `transformInto` is gated on
+        # `gen >= 5`, so a Substitute does NOT stop Transform here.
+        return dict(
+            p1=[_ditto()], p2=[_machamp_sub()],
+            turns=[("move transform", "move substitute"), ("move splash", "move splash")],
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "transformed": _has(L, "|-transform|p1a: Ditto|p2a: Machamp"),
+            },
+            expect={"transformed": True},
+            landmark=lambda L: _has(L, "|-start|p2a: Machamp|Substitute"),
+            landmark_desc="Substitute was up")
+    if name == "transformmirror":
+        # `pokemon.transformed && this.battle.gen >= 2` -> the SECOND Transform in a
+        # Ditto mirror fails outright. Speed is tied so either seat may be the one
+        # that fails; the assertion is order-independent.
+        return dict(
+            p1=[_ditto()], p2=[_ditto()],
+            turns=[("move transform", "move transform")],
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "one_transformed": _has(L, "|-transform|"),
+                "other_failed": _has(L, "|-fail|p1a: Ditto") or _has(L, "|-fail|p2a: Ditto"),
+            },
+            expect={"one_transformed": True, "other_failed": True},
+            landmark=lambda L: _has(L, "|move|p1a: Ditto|Transform"),
+            landmark_desc="Transform used")
+    if name == "transformrevert":
+        # `Pokemon.clearVolatile()` ends with `setSpecies(this.baseSpecies)` and
+        # restores `baseMoveSlots`, so a Ditto that switches out and back has its
+        # own single move again — clicking `move transform` on the last boundary is
+        # only a legal choice at all if the revert happened.
+        return dict(
+            p1=[_ditto(), _snorlax()], p2=[_machamp()],
+            turns=[("move transform", "move splash"), ("switch 2", "move splash"),
+                   ("switch 2", "move splash"), ("move transform", "move splash")],
+            measured=3, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "retransformed": _has(L, "|move|p1a: Ditto|Transform")
+                                 and _has(L, "|-transform|p1a: Ditto|p2a: Machamp"),
+            },
+            expect={"retransformed": True},
+            landmark=lambda L: True, landmark_desc="")
     raise ValueError(name)
 
 
@@ -488,7 +597,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
              "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
              "confusionduration", "confusiondurationcontrol",
-             "confusionbatonpass", "confusionbatonpasscontrol")
+             "confusionbatonpass", "confusionbatonpasscontrol",
+             "transform", "transformcontrol", "transformsub", "transformmirror",
+             "transformrevert")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

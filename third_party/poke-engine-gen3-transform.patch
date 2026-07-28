@@ -1,0 +1,977 @@
+# pokezero gen3 fidelity fix: implement the TRANSFORM move (Ditto / Mew).
+#
+# Upstream poke-engine 0.0.47 defines Choices::TRANSFORM in the MOVES table and
+# nowhere else: no arm in any generation's effect dispatcher, no tests. Clicking
+# Transform in a gen3 rollout therefore produced a state change of exactly
+# nothing, which is why it dominated the engine-search world-construction
+# fallback census. Ditto (gen3 randbats: level 100, movepool ["transform"],
+# Limber) and Mew are the two carriers in the pool.
+#
+# SEMANTICS, read off the vendored Showdown's `Pokemon.transformInto`
+# (sim/pokemon.ts) evaluated at gen == 3 and pinned against the real Node sim by
+# scripts/gen3_switch_differential.py (`transform*` scenarios). Gen 3 has no
+# `transform` override of its own; it inherits gen4's
+# (`transform: { inherit: true, flags: { bypasssub, metronome, failencore } }`).
+#
+#   COPIED : species, the target's CURRENT types, the five non-HP stats, all
+#            seven boosts, the target's ability (`if (this.battle.gen > 2)
+#            this.setAbility(...)` — a Ditto that copies Flygon is `-immune` to
+#            Earthquake), and the moveset at `Math.min(5, move.pp)` PP per slot.
+#            No gen3 move has a base PP below 5, so that is exactly 5.
+#   NOT COPIED : HP, max HP, status, item.
+#   FAILS   : only when the TARGET is itself already transformed
+#            (`pokemon.transformed && this.battle.gen >= 2`). It does NOT fail
+#            against a Substitute in gen3 (that guard is `gen >= 5`, and the move
+#            carries `bypasssub`), it is not blocked by Protect (no `protect`
+#            flag), and the USER already being transformed is not a failure
+#            either (also `gen >= 5`) — so a Ditto that copied a Mew can
+#            Transform a second time without losing the record of its base form.
+#   ENDS    : on switch-out. `Pokemon.clearVolatile()` restores `baseMoveSlots`,
+#            clears `transformed` and finishes with
+#            `setSpecies(this.baseSpecies)`.
+#
+# MECHANISM. Everything is expressed through the instruction/delta system so
+# search backtracking stays exact:
+#   * species -> the existing (gen3-unused) Instruction::FormeChange
+#   * stats   -> ChangeAttack/Defense/SpecialAttack/SpecialDefense/Speed deltas
+#   * types   -> ChangeType, plus the TYPECHANGE volatile so the switch-out arm
+#                that already restores `types -> base_types` does the revert
+#   * ability -> ChangeAbility (and `ability_on_switch_out` already reverts it)
+#   * boosts  -> Boost deltas (and `reset_boosts` already zeroes them on switch)
+#   * moves   -> NEW Instruction::ChangeMoveId (a delta on the `Choices` u16
+#                discriminant that also re-resolves the slot's cached `Choice`),
+#                plus the existing DecrementPP for the 5-PP write. Upstream had
+#                no reversible move-slot instruction at all: `replace_move` is a
+#                test-only helper that mutates with no instruction.
+#   * revert  -> NEW `Pokemon::pre_transform: Option<Box<PreTransform>>` holding
+#                the transformer's own base form (species, five stats, four
+#                (move id, pp) pairs — only what is not already recoverable from
+#                `base_types` / `base_ability` / the boost reset), taken and
+#                dropped by NEW Instruction::ChangeTransformSnapshot. Both
+#                directions of that instruction are exact because it is only ever
+#                emitted where the Pokemon IS in its base form.
+#   * NEW PokemonVolatileStatus::TRANSFORMED, appended at the END of the gen3
+#     enum so no existing variant's bitset index shifts.
+# `size_of::<Instruction>()` stays 6 with align 2 (the engine's own size test).
+#
+# APPROXIMATIONS, deliberate and scoped:
+#   1. WEIGHT IS NOT COPIED. Showdown copies `weighthg`. The engine's only gen3
+#      consumer of `weight_kg` is Low Kick's weight-based base power, and Low
+#      Kick appears in ZERO of the 220 gen3 randbats sets, so the divergence is
+#      unreachable in the pool pokezero trains and evaluates on. Copying it was
+#      not free: a reversible f32 field would need either a lossy delta or a
+#      9-byte instruction payload, and the latter breaks the 6-byte Instruction
+#      size invariant.
+#   2. PP GRANULARITY follows upstream. The engine only emits DecrementPP for the
+#      move being used when that slot is under 10 PP ("most of the time pp
+#      decrement doesn't matter"), so Transform's own PP cost is invisible above
+#      that threshold. Transform's write of 5 PP into each copied slot is exact
+#      and unconditional; only the pre-existing cost-tracking threshold is
+#      approximate, and it applies to every move equally.
+#   3. MAX PP IS NOT MODELLED because the engine has no max-PP field at all.
+#      Showdown gives a copied slot `maxpp = calculatePP(move, this.ppUps[i])`,
+#      i.e. the TRANSFORMER's PP-Ups at that index; nothing downstream of the
+#      engine reads max PP, so only the (exact) current PP is represented.
+#   4. A state built from OUTSIDE the engine that carries the TRANSFORMED
+#      volatile without a snapshot (e.g. an engine-world constructor expressing
+#      an already-transformed Ditto) cannot be reverted, because its base form
+#      was never observed. That case degrades to "drop the volatile, keep the
+#      copied form" rather than panicking or half-reverting. The snapshot rides
+#      Pokemon::serialize/deserialize as an OPTIONAL trailing field, so such a
+#      constructor CAN fill it in; an untransformed Pokemon serializes
+#      byte-for-byte as it did before this patch.
+#
+# Touches src/instruction.rs, src/state.rs, src/gen3/state.rs,
+# src/gen3/choice_effects.rs, and the Python binding
+# (poke-engine-py/src/lib.rs + its .pyi), which gains an optional
+# `Pokemon.pre_transform` string carrying the PreTransform wire record. That
+# field exists for callers that CONSTRUCT an already-transformed active rather
+# than reaching it by clicking the move: without it the engine has no base form
+# to restore and falls back to approximation 4 below. Pinned by
+# rust/pokezero-search/tests/gen3_transform_fidelity.rs.
+# Authored against the confusion-patched tree (the 9-patch base); applied after
+# it. The switch-out arm sits between the CONFUSION and TYPECHANGE arms — all
+# three key off distinct fields, and TRANSFORMED's bit index is the highest so
+# its revert is emitted last within the retain loop.
+#
+# Interaction with poke-engine-gen3-residual-defer-on-faint.patch: a transformed
+# Pokemon that faints mid-turn owes a replacement, so the revert lands on the ply
+# that RESOLVES the replacement rather than the faint ply (same end state as
+# Showdown, whose faint() clears the volatile table either way). Pinned by
+# a_transformed_pokemon_that_faints_reverts_on_its_replacement.
+diff -u a/poke-engine-py/python/poke_engine/poke_engine.pyi b/poke-engine-py/python/poke_engine/poke_engine.pyi
+--- a/poke-engine-py/python/poke_engine/poke_engine.pyi
++++ b/poke-engine-py/python/poke_engine/poke_engine.pyi
+@@ -187,6 +187,11 @@
+     :type status: str
+     :param rest_turns: Rest turns remaining. Decrements from 2.
+     :type rest_turns: int
++    :param pre_transform: The Pokemon's own base form as the engine's PreTransform wire
++        string, set only while it is Transformed ("" otherwise). Callers that construct an
++        ALREADY-transformed active must supply it, or the engine cannot revert the copy on
++        switch-out.
++    :type pre_transform: str
+     :param sleep_turns: Turns spent asleep. Increments from 0.
+     :type sleep_turns: int
+     :param weight_kg: Weight in kilograms
+diff -u a/poke-engine-py/src/lib.rs b/poke-engine-py/src/lib.rs
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -17,8 +17,8 @@
+ use poke_engine::search::iterative_deepen_expectiminimax;
+ use poke_engine::state::{
+     LastUsedMove, Move, Pokemon, PokemonGender, PokemonIndex, PokemonMoves, PokemonNature,
+-    PokemonStatus, PokemonType, Side, SideConditions, SidePokemon, State, StateTerrain,
+-    StateTrickRoom, StateWeather, VolatileStatusBitset, VolatileStatusDurations,
++    PokemonStatus, PokemonType, PreTransform, Side, SideConditions, SidePokemon, State,
++    StateTerrain, StateTrickRoom, StateWeather, VolatileStatusBitset, VolatileStatusDurations,
+ };
+ use std::str::FromStr;
+ use std::time::Duration;
+@@ -597,6 +597,13 @@
+     pub terastallized: bool,
+     pub tera_type: String,
+     pub moves: Vec<PyMove>,
++    /// pokezero gen3 fidelity fix (Transform): the transformer's own base form,
++    /// as the engine's `PreTransform` wire string ("" when untransformed). A
++    /// caller that BUILDS an already-transformed active (the belief-world
++    /// constructor bakes the copied form straight into the spec) has to hand the
++    /// pre-copy form across too, or the engine has nothing to restore on
++    /// switch-out and degrades to "keep the copied form".
++    pub pre_transform: String,
+ }
+ 
+ impl From<Pokemon> for PyPokemon {
+@@ -635,6 +642,11 @@
+             weight_kg: other.weight_kg,
+             terastallized: other.terastallized,
+             tera_type: other.tera_type.to_string(),
++            pre_transform: other
++                .pre_transform
++                .as_ref()
++                .map(|pre_transform| pre_transform.serialize())
++                .unwrap_or_default(),
+             moves: other
+                 .moves
+                 .into_iter()
+@@ -688,6 +700,12 @@
+                 m2: moves_vec[2].clone().into(),
+                 m3: moves_vec[3].clone().into(),
+             },
++            // pokezero gen3 fidelity fix (Transform): "" means untransformed.
++            pre_transform: if self.pre_transform.is_empty() {
++                None
++            } else {
++                Some(Box::new(PreTransform::deserialize(&self.pre_transform)))
++            },
+         }
+     }
+ }
+@@ -720,6 +738,7 @@
+         terastallized=false,
+         tera_type="typeless".to_string(),
+         gender="none".to_string(),
++        pre_transform="".to_string(),
+     ))]
+     fn new(
+         id: String,
+@@ -746,6 +765,7 @@
+         terastallized: bool,
+         tera_type: String,
+         gender: String,
++        pre_transform: String,
+     ) -> Self {
+         if base_ability == "" {
+             base_ability = ability.clone();
+@@ -775,6 +795,7 @@
+             terastallized,
+             tera_type,
+             moves,
++            pre_transform,
+         }
+     }
+     #[staticmethod]
+diff -u a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -2,21 +2,57 @@
+ use super::damage_calc::type_effectiveness_modifier;
+ use super::generate_instructions::add_remove_status_instructions;
+ use super::items::{get_choice_move_disable_instructions, Items};
+-use super::state::{PokemonVolatileStatus, Weather};
++use super::state::{PokemonVolatileStatus, Weather, MOVE_INDICES};
+ use crate::choices::{Boost, Choice, Choices, Heal, MoveCategory, MoveTarget, StatBoosts};
+ use crate::instruction::{
+-    ApplyVolatileStatusInstruction, BoostInstruction, ChangeItemInstruction,
+-    ChangeSideConditionInstruction, ChangeStatusInstruction, ChangeSubsituteHealthInstruction,
+-    ChangeWeather, ChangeWishInstruction, DamageInstruction, HealInstruction, Instruction,
+-    RemoveVolatileStatusInstruction, SetFutureSightInstruction, SetSleepTurnsInstruction,
+-    StateInstructions,
++    ApplyVolatileStatusInstruction, BoostInstruction, ChangeAbilityInstruction,
++    ChangeItemInstruction, ChangeMoveIdInstruction, ChangeSideConditionInstruction,
++    ChangeStatInstruction, ChangeStatusInstruction, ChangeSubsituteHealthInstruction,
++    ChangeTransformSnapshotInstruction, ChangeType, ChangeWeather, ChangeWishInstruction,
++    DamageInstruction, DecrementPPInstruction, FormeChangeInstruction, HealInstruction,
++    Instruction, RemoveVolatileStatusInstruction, SetFutureSightInstruction,
++    SetSleepTurnsInstruction, StateInstructions,
+ };
++use crate::pokemon::PokemonName;
+ use crate::state::{
+     pokemon_index_iter, LastUsedMove, PokemonBoostableStat, PokemonSideCondition, PokemonStatus,
+-    PokemonType, Side, SideReference, State,
++    PokemonType, PreTransform, Side, SideReference, State,
+ };
+ use std::cmp;
+ 
++/// pokezero gen3 fidelity fix (Transform): everything Transform copies off the
++/// target, read out in one go so the target's borrow ends before the attacker is
++/// mutated.
++struct TransformTarget {
++    id: PokemonName,
++    types: (PokemonType, PokemonType),
++    ability: Abilities,
++    attack: i16,
++    defense: i16,
++    special_attack: i16,
++    special_defense: i16,
++    speed: i16,
++    moves: [Choices; 4],
++}
++
++/// pokezero gen3 fidelity fix (Transform): push one reversible stat delta and
++/// apply it to the live Pokemon, skipping the no-op case.
++fn copy_stat(
++    side_ref: &SideReference,
++    instructions: &mut StateInstructions,
++    current: &mut i16,
++    copied: i16,
++    build: fn(ChangeStatInstruction) -> Instruction,
++) {
++    if *current != copied {
++        instructions.instruction_list.push(build(ChangeStatInstruction {
++            side_ref: *side_ref,
++            amount: copied - *current,
++        }));
++        *current = copied;
++    }
++}
++
+ pub fn modify_choice(
+     state: &State,
+     attacker_choice: &mut Choice,
+@@ -782,6 +818,241 @@
+                         ));
+                     side.volatile_statuses
+                         .insert(PokemonVolatileStatus::PERISH4);
++                }
++            }
++        }
++        // pokezero gen3 fidelity fix: Transform had NO implementation at all —
++        // clicking it produced instructions for the PP decrement and nothing else,
++        // so search believed a Ditto (gen3 randbats: level 100, movepool
++        // ["transform"], Limber) stayed a 132-in-every-stat blob with one useless
++        // move. Ditto and Mew are the two gen3 randbats Transform carriers.
++        //
++        // Semantics below are read off `Pokemon.transformInto` in the vendored
++        // Showdown (sim/pokemon.ts) with gen == 3, and each one is pinned against
++        // the real Node sim by `scripts/gen3_switch_differential.py` (`transform*`
++        // scenarios). Gen 3 inherits gen4's move entry (data/mods/gen4/moves.ts:
++        // `transform: { inherit: true, flags: { bypasssub, metronome, failencore } }`);
++        // gen3 itself has no override.
++        //
++        // COPIED: species, current types, the five non-HP stats, all seven boosts,
++        // the target's ability (`if (this.battle.gen > 2) this.setAbility(...)` —
++        // verified: a Ditto that copies Flygon is `-immune` to Earthquake), and the
++        // moveset at 5 PP per slot (`pp: Math.min(5, move.pp)`; no gen3 move has a
++        // base PP below 5, so this is exactly 5).
++        // NOT COPIED: HP, max HP, status, item.
++        // FAILS only when the target is itself already transformed
++        // (`pokemon.transformed && this.battle.gen >= 2`). It does NOT fail against
++        // a Substitute in gen3 (the `volatiles['substitute']` guard is gated on
++        // `gen >= 5`, and the move carries `bypasssub`), and the USER being already
++        // transformed is not a failure either (that guard is also `gen >= 5`), so a
++        // Ditto that copied Mew can Transform again.
++        Choices::TRANSFORM => {
++            let target_already_transformed = defending_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::TRANSFORMED);
++            let user_already_transformed = attacking_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::TRANSFORMED);
++            let defender_boosts = [
++                (PokemonBoostableStat::Attack, defending_side.attack_boost),
++                (PokemonBoostableStat::Defense, defending_side.defense_boost),
++                (
++                    PokemonBoostableStat::SpecialAttack,
++                    defending_side.special_attack_boost,
++                ),
++                (
++                    PokemonBoostableStat::SpecialDefense,
++                    defending_side.special_defense_boost,
++                ),
++                (PokemonBoostableStat::Speed, defending_side.speed_boost),
++                (PokemonBoostableStat::Accuracy, defending_side.accuracy_boost),
++                (PokemonBoostableStat::Evasion, defending_side.evasion_boost),
++            ];
++            let attacker_boosts = [
++                attacking_side.attack_boost,
++                attacking_side.defense_boost,
++                attacking_side.special_attack_boost,
++                attacking_side.special_defense_boost,
++                attacking_side.speed_boost,
++                attacking_side.accuracy_boost,
++                attacking_side.evasion_boost,
++            ];
++            let defender = defending_side.get_active_immutable();
++            let target = TransformTarget {
++                id: defender.id,
++                types: defender.types,
++                ability: defender.ability,
++                attack: defender.attack,
++                defense: defender.defense,
++                special_attack: defender.special_attack,
++                special_defense: defender.special_defense,
++                speed: defender.speed,
++                moves: [
++                    defender.moves.m0.id,
++                    defender.moves.m1.id,
++                    defender.moves.m2.id,
++                    defender.moves.m3.id,
++                ],
++            };
++            let defender_fainted = defender.hp <= 0;
++            if !target_already_transformed && !defender_fainted {
++                let attacker = attacking_side.get_active();
++
++                // Only the FIRST Transform takes a snapshot: a second one must not
++                // clobber the record of the true base form.
++                if !user_already_transformed {
++                    instructions.instruction_list.push(
++                        Instruction::ChangeTransformSnapshot(ChangeTransformSnapshotInstruction {
++                            side_ref: *attacking_side_ref,
++                            taking: true,
++                        }),
++                    );
++                    let snapshot = PreTransform::capture(attacker);
++                    attacker.pre_transform = Some(Box::new(snapshot));
++                }
++
++                if attacker.id != target.id {
++                    instructions
++                        .instruction_list
++                        .push(Instruction::FormeChange(FormeChangeInstruction {
++                            side_ref: *attacking_side_ref,
++                            name_change: target.id as i16 - attacker.id as i16,
++                        }));
++                    attacker.id = target.id;
++                }
++
++                copy_stat(
++                    attacking_side_ref,
++                    instructions,
++                    &mut attacker.attack,
++                    target.attack,
++                    Instruction::ChangeAttack,
++                );
++                copy_stat(
++                    attacking_side_ref,
++                    instructions,
++                    &mut attacker.defense,
++                    target.defense,
++                    Instruction::ChangeDefense,
++                );
++                copy_stat(
++                    attacking_side_ref,
++                    instructions,
++                    &mut attacker.special_attack,
++                    target.special_attack,
++                    Instruction::ChangeSpecialAttack,
++                );
++                copy_stat(
++                    attacking_side_ref,
++                    instructions,
++                    &mut attacker.special_defense,
++                    target.special_defense,
++                    Instruction::ChangeSpecialDefense,
++                );
++                copy_stat(
++                    attacking_side_ref,
++                    instructions,
++                    &mut attacker.speed,
++                    target.speed,
++                    Instruction::ChangeSpeed,
++                );
++
++                for (move_index, copied_id) in
++                    MOVE_INDICES.iter().copied().zip(target.moves.iter().copied())
++                {
++                    let current_id = attacker.moves[&move_index].id;
++                    if current_id != copied_id {
++                        instructions.instruction_list.push(Instruction::ChangeMoveId(
++                            ChangeMoveIdInstruction {
++                                side_ref: *attacking_side_ref,
++                                move_index,
++                                id_change: (copied_id as u16).wrapping_sub(current_id as u16) as i16,
++                            },
++                        ));
++                        attacker.replace_move(move_index, copied_id);
++                    }
++                    // Showdown gives every copied slot `Math.min(5, move.pp)` PP;
++                    // an empty slot is not a slot at all over there, so the fixed
++                    // four-slot representation models it as NONE with 0 PP (which
++                    // is what keeps it out of `add_available_moves`).
++                    let copied_pp = if copied_id == Choices::NONE { 0 } else { 5 };
++                    let slot = &mut attacker.moves[&move_index];
++                    if slot.pp != copied_pp {
++                        instructions.instruction_list.push(Instruction::DecrementPP(
++                            DecrementPPInstruction {
++                                side_ref: *attacking_side_ref,
++                                move_index,
++                                amount: slot.pp - copied_pp,
++                            },
++                        ));
++                        slot.pp = copied_pp;
++                    }
++                }
++
++                if attacker.types != target.types {
++                    instructions
++                        .instruction_list
++                        .push(Instruction::ChangeType(ChangeType {
++                            side_ref: *attacking_side_ref,
++                            new_types: target.types,
++                            old_types: attacker.types,
++                        }));
++                    attacker.types = target.types;
++                }
++
++                if attacker.ability != target.ability {
++                    instructions
++                        .instruction_list
++                        .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
++                            side_ref: *attacking_side_ref,
++                            ability_change: target.ability as i16 - attacker.ability as i16,
++                        }));
++                    attacker.ability = target.ability;
++                }
++
++                for ((stat, target_boost), attacker_boost) in defender_boosts
++                    .iter()
++                    .copied()
++                    .zip(attacker_boosts.iter().copied())
++                {
++                    if target_boost != attacker_boost {
++                        instructions
++                            .instruction_list
++                            .push(Instruction::Boost(BoostInstruction {
++                                side_ref: *attacking_side_ref,
++                                stat,
++                                amount: target_boost - attacker_boost,
++                            }));
++                    }
++                }
++                // apply_boost is on State, which is borrowed by the two side
++                // handles above, so the boost writes happen through the same side.
++                attacking_side.attack_boost = defending_side.attack_boost;
++                attacking_side.defense_boost = defending_side.defense_boost;
++                attacking_side.special_attack_boost = defending_side.special_attack_boost;
++                attacking_side.special_defense_boost = defending_side.special_defense_boost;
++                attacking_side.speed_boost = defending_side.speed_boost;
++                attacking_side.accuracy_boost = defending_side.accuracy_boost;
++                attacking_side.evasion_boost = defending_side.evasion_boost;
++
++                if !user_already_transformed {
++                    for volatile_status in [
++                        PokemonVolatileStatus::TRANSFORMED,
++                        // TYPECHANGE is what the switch-out path already keys the
++                        // type revert off (gen3/state.rs); reusing it keeps a
++                        // single restore site for `types -> base_types`.
++                        PokemonVolatileStatus::TYPECHANGE,
++                    ] {
++                        if !attacking_side.volatile_statuses.contains(&volatile_status) {
++                            instructions.instruction_list.push(
++                                Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
++                                    side_ref: *attacking_side_ref,
++                                    volatile_status,
++                                }),
++                            );
++                            attacking_side.volatile_statuses.insert(volatile_status);
++                        }
++                    }
+                 }
+             }
+         }
+diff -u a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -2,8 +2,9 @@
+ use crate::choices::{Choices, MoveCategory};
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+-    ChangeSideConditionInstruction, ChangeType, ChangeVolatileStatusDurationInstruction,
+-    Instruction, RemoveVolatileStatusInstruction,
++    ChangeMoveIdInstruction, ChangeSideConditionInstruction, ChangeStatInstruction,
++    ChangeTransformSnapshotInstruction, ChangeType, ChangeVolatileStatusDurationInstruction,
++    DecrementPPInstruction, FormeChangeInstruction, Instruction, RemoveVolatileStatusInstruction,
+ };
+ use crate::state::VolatileStatusBitset;
+ use crate::state::{
+@@ -12,6 +13,32 @@
+ };
+ use core::panic;
+ 
++/// pokezero gen3 fidelity fix (Transform): the four move slots in emission order.
++pub const MOVE_INDICES: [PokemonMoveIndex; 4] = [
++    PokemonMoveIndex::M0,
++    PokemonMoveIndex::M1,
++    PokemonMoveIndex::M2,
++    PokemonMoveIndex::M3,
++];
++
++/// pokezero gen3 fidelity fix (Transform): push one reversible stat delta and
++/// apply it to the live Pokemon, skipping the no-op case.
++fn revert_stat(
++    side_ref: &SideReference,
++    instructions: &mut Vec<Instruction>,
++    current: &mut i16,
++    base: i16,
++    build: fn(ChangeStatInstruction) -> Instruction,
++) {
++    if *current != base {
++        instructions.push(build(ChangeStatInstruction {
++            side_ref: *side_ref,
++            amount: base - *current,
++        }));
++        *current = base;
++    }
++}
++
+ fn multiply_boost(boost_num: i8, stat_value: i16) -> i16 {
+     match boost_num {
+         -6 => stat_value * 2 / 8,
+@@ -183,6 +210,11 @@
+         UNBURDEN,
+         UPROAR,
+         YAWN,
++        // pokezero gen3 fidelity fix: marks a Pokemon that has used Transform.
++        // Appended at the END of the enum on purpose — the bitset is indexed by
++        // discriminant, so inserting alphabetically would shift every later
++        // variant's bit index. Serialization is by name, so ordering is free.
++        TRANSFORMED,
+     },
+     default = NONE
+ }
+@@ -753,6 +785,112 @@
+                         side.volatile_status_durations.confusion = 0;
+                         false
+                     }
++                }
++                // pokezero gen3 fidelity fix: Transform ends when the
++                // transformer leaves the field. Showdown's `Pokemon.clearVolatile()`
++                // (sim/pokemon.ts) restores `baseMoveSlots`, clears `transformed`
++                // and finishes with `setSpecies(this.baseSpecies)`, so species,
++                // stats, types and moves all snap back; verified against real gen3
++                // Showdown (`scripts/gen3_switch_differential.py`, `transform`
++                // scenario: a Ditto that copied Machamp is `Ditto` with only
++                // Transform again after switching out and back).
++                //
++                // Types, ability, boosts and per-slot disabled flags are already
++                // restored elsewhere in the switch path (the TYPECHANGE arm below,
++                // `ability_on_switch_out`, `reset_boosts`, and
++                // `re_enable_disabled_moves`), so this arm only has to undo the
++                // species, the five stats and the move slots.
++                PokemonVolatileStatus::TRANSFORMED => {
++                    let active = side.get_active();
++                    // A state built from outside the engine can carry the volatile
++                    // without a snapshot (nothing to restore from); drop the
++                    // volatile and leave the copied form in place rather than
++                    // guessing at a base form.
++                    if let Some(pre_transform) = active.pre_transform.clone() {
++                        instructions.push(Instruction::FormeChange(FormeChangeInstruction {
++                            side_ref: *side_ref,
++                            name_change: pre_transform.id as i16 - active.id as i16,
++                        }));
++                        active.id = pre_transform.id;
++
++                        revert_stat(
++                            side_ref,
++                            instructions,
++                            &mut active.attack,
++                            pre_transform.attack,
++                            Instruction::ChangeAttack,
++                        );
++                        revert_stat(
++                            side_ref,
++                            instructions,
++                            &mut active.defense,
++                            pre_transform.defense,
++                            Instruction::ChangeDefense,
++                        );
++                        revert_stat(
++                            side_ref,
++                            instructions,
++                            &mut active.special_attack,
++                            pre_transform.special_attack,
++                            Instruction::ChangeSpecialAttack,
++                        );
++                        revert_stat(
++                            side_ref,
++                            instructions,
++                            &mut active.special_defense,
++                            pre_transform.special_defense,
++                            Instruction::ChangeSpecialDefense,
++                        );
++                        revert_stat(
++                            side_ref,
++                            instructions,
++                            &mut active.speed,
++                            pre_transform.speed,
++                            Instruction::ChangeSpeed,
++                        );
++
++                        for (move_index, (base_id, base_pp)) in MOVE_INDICES
++                            .iter()
++                            .copied()
++                            .zip(pre_transform.moves.iter().copied())
++                        {
++                            let current_id = active.moves[&move_index].id;
++                            if current_id != base_id {
++                                instructions.push(Instruction::ChangeMoveId(
++                                    ChangeMoveIdInstruction {
++                                        side_ref: *side_ref,
++                                        move_index,
++                                        id_change: (base_id as u16).wrapping_sub(current_id as u16)
++                                            as i16,
++                                    },
++                                ));
++                                active.replace_move(move_index, base_id);
++                            }
++                            let slot = &mut active.moves[&move_index];
++                            if slot.pp != base_pp {
++                                instructions.push(Instruction::DecrementPP(
++                                    DecrementPPInstruction {
++                                        side_ref: *side_ref,
++                                        move_index,
++                                        amount: slot.pp - base_pp,
++                                    },
++                                ));
++                                slot.pp = base_pp;
++                            }
++                        }
++
++                        // Emitted LAST so that on reversal it is restored while the
++                        // Pokemon is still in its base form — see
++                        // ChangeTransformSnapshotInstruction.
++                        instructions.push(Instruction::ChangeTransformSnapshot(
++                            ChangeTransformSnapshotInstruction {
++                                side_ref: *side_ref,
++                                taking: false,
++                            },
++                        ));
++                        active.pre_transform = None;
++                    }
++                    false
+                 }
+                 PokemonVolatileStatus::TYPECHANGE => {
+                     let active = side.get_active();
+diff -u a/src/instruction.rs b/src/instruction.rs
+--- a/src/instruction.rs
++++ b/src/instruction.rs
+@@ -84,6 +84,16 @@
+     ChangeDamageDealtMoveCatagory(ChangeDamageDealtMoveCategoryInstruction),
+     ToggleDamageDealtHitSubstitute(ToggleDamageDealtHitSubstituteInstruction),
+     DecrementPP(DecrementPPInstruction),
++    // pokezero gen3 fidelity fix (Transform): rewrite one move slot's identity.
++    // Upstream has no reversible move-slot instruction at all — `replace_move`
++    // is a test-only helper that mutates without emitting anything — so Transform
++    // copying the target's moveset needs one. Delta on the `Choices` u16
++    // discriminant, matching the FormeChange/ChangeAbility idiom.
++    ChangeMoveId(ChangeMoveIdInstruction),
++    // pokezero gen3 fidelity fix (Transform): take/drop the pre-transform
++    // snapshot that the switch-out revert reads back. See PreTransform in
++    // state.rs for why apply/reverse are exact inverses here.
++    ChangeTransformSnapshot(ChangeTransformSnapshotInstruction),
+     ToggleTrickRoom(ToggleTrickRoomInstruction),
+     DecrementTrickRoomTurnsRemaining,
+     ToggleSideOneForceSwitch,
+@@ -313,6 +323,20 @@
+                     s.side_ref, s.move_index, s.amount
+                 )
+             }
++            Instruction::ChangeMoveId(s) => {
++                write!(
++                    f,
++                    "ChangeMoveId {:?}: {:?} {}",
++                    s.side_ref, s.move_index, s.id_change
++                )
++            }
++            Instruction::ChangeTransformSnapshot(s) => {
++                write!(
++                    f,
++                    "ChangeTransformSnapshot {:?}: taking={}",
++                    s.side_ref, s.taking
++                )
++            }
+             Instruction::ToggleTrickRoom(i) => {
+                 write!(
+                     f,
+@@ -359,6 +383,42 @@
+     pub side_ref: SideReference,
+     pub move_index: PokemonMoveIndex,
+     pub amount: i8,
++}
++
++/// pokezero gen3 fidelity fix (Transform): reversible move-slot rewrite.
++///
++/// `id_change` is a delta on the `Choices` discriminant (`#[repr(u16)]`), applied
++/// with wrapping arithmetic so that apply-then-reverse is exact for every pair of
++/// move ids regardless of sign. Applying this instruction also re-resolves the
++/// slot's cached `Move.choice` from the MOVES table, so the copied slot behaves
++/// exactly like a natively-known move.
++///
++/// Layout note: 4 bytes at align 2, which keeps `size_of::<Instruction>() == 6`
++/// (see the size test at the bottom of this file).
++#[derive(Debug, PartialEq, Clone)]
++pub struct ChangeMoveIdInstruction {
++    pub side_ref: SideReference,
++    pub move_index: PokemonMoveIndex,
++    pub id_change: i16,
++}
++
++/// pokezero gen3 fidelity fix (Transform): take (`taking: true`) or drop
++/// (`taking: false`) the active Pokemon's pre-transform snapshot.
++///
++/// Both directions are exact because the snapshot is, by construction, "this
++/// Pokemon's own base form", and this instruction is only ever emitted at a
++/// point in the list where the Pokemon *is* in its base form:
++///   * `taking: true` is the FIRST instruction Transform emits, so on apply the
++///     Pokemon is still untransformed, and on reverse every later mutation has
++///     already been undone.
++///   * `taking: false` is the LAST instruction the switch-out revert emits, so
++///     on apply the base form has already been restored, and on reverse the
++///     restore has not yet been undone.
++/// In all four cases "snapshot the live Pokemon" and "the base form" coincide.
++#[derive(Debug, PartialEq, Clone)]
++pub struct ChangeTransformSnapshotInstruction {
++    pub side_ref: SideReference,
++    pub taking: bool,
+ }
+ 
+ #[derive(Debug, PartialEq, Clone)]
+diff -u a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -601,6 +601,91 @@
+     pub m3: Move,
+ }
+ 
++/// pokezero gen3 fidelity fix (Transform): the transformer's own base form,
++/// captured the moment it first Transforms and read back when it leaves the
++/// field.
++///
++/// Only the fields Transform overwrites that are NOT already recoverable from
++/// somewhere else live here. Deliberately absent:
++///   * types    -> `Pokemon::base_types` (restored by the TYPECHANGE switch-out arm)
++///   * ability  -> `Pokemon::base_ability` (restored by `ability_on_switch_out`)
++///   * boosts   -> zeroed by `reset_boosts` on switch-out
++///   * disabled -> cleared by `re_enable_disabled_moves` on switch-out
++///   * hp/maxhp/status -> Transform never touches them
++///
++/// It is boxed and optional so an untransformed Pokemon costs one null pointer
++/// and zero allocations; only the (rare) transformed Pokemon pays.
++#[derive(Debug, Clone, PartialEq)]
++pub struct PreTransform {
++    pub id: PokemonName,
++    pub attack: i16,
++    pub defense: i16,
++    pub special_attack: i16,
++    pub special_defense: i16,
++    pub speed: i16,
++    /// (move id, current pp) per slot, in M0..M3 order.
++    pub moves: [(Choices, i8); 4],
++}
++
++impl PreTransform {
++    /// Snapshot a Pokemon that is currently in its base form.
++    pub fn capture(pkmn: &Pokemon) -> PreTransform {
++        PreTransform {
++            id: pkmn.id,
++            attack: pkmn.attack,
++            defense: pkmn.defense,
++            special_attack: pkmn.special_attack,
++            special_defense: pkmn.special_defense,
++            speed: pkmn.speed,
++            moves: [
++                (pkmn.moves.m0.id, pkmn.moves.m0.pp),
++                (pkmn.moves.m1.id, pkmn.moves.m1.pp),
++                (pkmn.moves.m2.id, pkmn.moves.m2.pp),
++                (pkmn.moves.m3.id, pkmn.moves.m3.pp),
++            ],
++        }
++    }
++
++    pub fn serialize(&self) -> String {
++        format!(
++            "{};{};{};{};{};{};{}:{};{}:{};{}:{};{}:{}",
++            self.id,
++            self.attack,
++            self.defense,
++            self.special_attack,
++            self.special_defense,
++            self.speed,
++            self.moves[0].0.to_string(),
++            self.moves[0].1,
++            self.moves[1].0.to_string(),
++            self.moves[1].1,
++            self.moves[2].0.to_string(),
++            self.moves[2].1,
++            self.moves[3].0.to_string(),
++            self.moves[3].1,
++        )
++    }
++
++    pub fn deserialize(serialized: &str) -> PreTransform {
++        let split: Vec<&str> = serialized.split(";").collect();
++        let mut moves = [(Choices::NONE, 0i8); 4];
++        for (index, slot) in moves.iter_mut().enumerate() {
++            let mut parts = split[6 + index].split(":");
++            slot.0 = Choices::from_str(parts.next().unwrap()).unwrap();
++            slot.1 = parts.next().unwrap().parse::<i8>().unwrap();
++        }
++        PreTransform {
++            id: PokemonName::from_str(split[0]).unwrap(),
++            attack: split[1].parse::<i16>().unwrap(),
++            defense: split[2].parse::<i16>().unwrap(),
++            special_attack: split[3].parse::<i16>().unwrap(),
++            special_defense: split[4].parse::<i16>().unwrap(),
++            speed: split[5].parse::<i16>().unwrap(),
++            moves,
++        }
++    }
++}
++
+ #[derive(Debug, PartialEq, Clone)]
+ pub struct SideConditions {
+     pub aurora_veil: i8,
+@@ -878,6 +963,10 @@
+     pub terastallized: bool,
+     pub tera_type: PokemonType,
+     pub moves: PokemonMoves,
++    /// pokezero gen3 fidelity fix (Transform): `Some` exactly while this Pokemon
++    /// is transformed, holding its own base form so the switch-out revert can
++    /// restore it. `None` for every untransformed Pokemon.
++    pub pre_transform: Option<Box<PreTransform>>,
+ }
+ 
+ impl Default for Pokemon {
+@@ -912,6 +1001,7 @@
+                 m2: Default::default(),
+                 m3: Default::default(),
+             },
++            pre_transform: None,
+         }
+     }
+ }
+@@ -963,6 +1053,18 @@
+ 
+ impl Pokemon {
+     pub fn serialize(&self) -> String {
++        // pokezero gen3 fidelity fix (Transform): the pre-transform snapshot is
++        // appended as an OPTIONAL trailing field so an untransformed Pokemon
++        // serializes byte-for-byte as it did before this patch, and every
++        // previously-written state string still deserializes.
++        let base = self.serialize_base();
++        match &self.pre_transform {
++            Some(pre_transform) => format!("{},{}", base, pre_transform.serialize()),
++            None => base,
++        }
++    }
++
++    fn serialize_base(&self) -> String {
+         let evs_str = format!(
+             "{};{};{};{};{};{}",
+             self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5
+@@ -1052,6 +1154,13 @@
+             },
+             terastallized: split[26].parse::<bool>().unwrap(),
+             tera_type: PokemonType::from_str(split[27]).unwrap(),
++            // pokezero gen3 fidelity fix (Transform): optional trailing field,
++            // read with the same tolerant `.get()` idiom as `gender` above so
++            // pre-patch state strings keep parsing.
++            pre_transform: split
++                .get(29)
++                .filter(|value| !value.is_empty())
++                .map(|value| Box::new(PreTransform::deserialize(value))),
+         }
+     }
+ }
+@@ -1973,9 +2082,51 @@
+                 let active = self.get_side(&instruction.side_ref).get_active();
+                 active.id = PokemonName::from(active.id as i16 + instruction.name_change);
+             }
++            Instruction::ChangeMoveId(instruction) => {
++                self.change_move_id(
++                    &instruction.side_ref,
++                    &instruction.move_index,
++                    instruction.id_change,
++                );
++            }
++            Instruction::ChangeTransformSnapshot(instruction) => {
++                self.set_transform_snapshot(&instruction.side_ref, instruction.taking);
++            }
+         }
+     }
+ 
++    /// pokezero gen3 fidelity fix (Transform): shift one move slot's id by
++    /// `id_change` and re-resolve its cached `Choice`.
++    ///
++    /// `Choices` is `#[repr(u16)]`, so the delta is applied with wrapping
++    /// arithmetic on the raw discriminant; `wrapping_add` / `wrapping_sub` are
++    /// exact inverses for every id pair, including "downward" rewrites where the
++    /// delta is negative.
++    fn change_move_id(
++        &mut self,
++        side_ref: &SideReference,
++        move_index: &PokemonMoveIndex,
++        id_change: i16,
++    ) {
++        let slot = &mut self.get_side(side_ref).get_active().moves[move_index];
++        slot.id = Choices::from((slot.id as u16).wrapping_add(id_change as u16));
++        slot.choice = MOVES.get(&slot.id).unwrap().to_owned();
++    }
++
++    /// pokezero gen3 fidelity fix (Transform): take or drop the pre-transform
++    /// snapshot. Safe in both directions because it is only ever emitted at a
++    /// point where the active Pokemon is in its base form — see
++    /// `ChangeTransformSnapshotInstruction`.
++    fn set_transform_snapshot(&mut self, side_ref: &SideReference, taking: bool) {
++        let active = self.get_side(side_ref).get_active();
++        active.pre_transform = if taking {
++            let snapshot = PreTransform::capture(active);
++            Some(Box::new(snapshot))
++        } else {
++            None
++        };
++    }
++
+     pub fn reverse_instructions(&mut self, instructions: &Vec<Instruction>) {
+         for i in instructions.iter().rev() {
+             self.reverse_one_instruction(i);
+@@ -2159,6 +2310,17 @@
+             Instruction::FormeChange(instruction) => {
+                 let active = self.get_side(&instruction.side_ref).get_active();
+                 active.id = PokemonName::from(active.id as i16 - instruction.name_change);
++            }
++            Instruction::ChangeMoveId(instruction) => {
++                self.change_move_id(
++                    &instruction.side_ref,
++                    &instruction.move_index,
++                    // negating the delta undoes the wrapping_add exactly
++                    instruction.id_change.wrapping_neg(),
++                );
++            }
++            Instruction::ChangeTransformSnapshot(instruction) => {
++                self.set_transform_snapshot(&instruction.side_ref, !instruction.taking);
+             }
+         }
+     }
