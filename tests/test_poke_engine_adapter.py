@@ -11,6 +11,7 @@ from pokezero.poke_engine_adapter import (
     PokeEngineAttractUnsupportedError,
     PokemonSpec,
     SideSpec,
+    _serialize_pre_transform,
     build_poke_engine_state,
     minimal_gen3_fixture,
     run_adapter_reversible_smoke,
@@ -406,6 +407,149 @@ class AdapterReversibleSmokeTest(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("surf", message)
         self.assertIn("charmander", message)
+
+
+def _transform_specs(*, with_snapshot: bool):
+    """A BRIDGE-BUILT transformed active: the copied form baked into the spec.
+
+    This is the shape ``engine_world._apply_transform`` produces — the Ditto is
+    already expressed as the Snorlax it copied, because nothing in the payload
+    replays the Transform for the engine to execute.
+    """
+
+    base = PokemonSpec(
+        id="ditto", level=100, types=("normal",), hp=180, maxhp=180,
+        attack=132, defense=132, special_attack=132, special_defense=132, speed=132,
+        ability="limber", moves=(MoveSpec(id="transform", pp=8),),
+    )
+    transformed = PokemonSpec(
+        id="snorlax", level=100, types=("normal",), hp=180, maxhp=180,
+        attack=250, defense=180, special_attack=120, special_defense=220, speed=60,
+        ability="immunity",
+        moves=(MoveSpec(id="bodyslam", pp=5), MoveSpec(id="curse", pp=5)),
+        pre_transform=base if with_snapshot else None,
+    )
+    reserve = PokemonSpec(
+        id="swampert", level=100, types=("water", "ground"), hp=200, maxhp=200,
+        attack=100, defense=100, special_attack=100, special_defense=100, speed=100,
+        ability="torrent", moves=(MoveSpec(id="surf", pp=16),),
+    )
+    donor = PokemonSpec(
+        id="snorlax", level=100, types=("normal",), hp=300, maxhp=300,
+        attack=250, defense=180, special_attack=120, special_defense=220, speed=60,
+        ability="immunity", moves=(MoveSpec(id="splash", pp=16),),
+    )
+    return BattleSpec(
+        side_one=SideSpec(
+            pokemon=(transformed, reserve),
+            volatile_statuses=("transformed", "typechange"),
+        ),
+        side_two=SideSpec(pokemon=(donor,)),
+    )
+
+
+class PreTransformSerializationTest(unittest.TestCase):
+    """``pre_transform`` is the base form a constructed Transform reverts to.
+
+    A Pokemon that reaches the transformed state by CLICKING Transform snapshots
+    itself inside the engine. One that is BUILT already transformed cannot — its
+    base form was never on the field — so the caller has to hand it across, or
+    the engine has nothing to restore when the transformer leaves.
+    """
+
+    def _base(self, **kw):
+        fields = dict(
+            id="ditto", level=100, types=("normal",), hp=180, maxhp=180,
+            attack=132, defense=133, special_attack=134, special_defense=135, speed=136,
+            ability="limber", moves=(MoveSpec(id="transform", pp=8),),
+        )
+        fields.update(kw)
+        return PokemonSpec(**fields)
+
+    def test_wire_format_matches_the_engine_record(self) -> None:
+        # id;attack;defense;special_attack;special_defense;speed then four
+        # "<move>:<pp>" slots. Unused slots are NONE at 0 PP so the engine does
+        # not offer them as options on the way back.
+        self.assertEqual(
+            _serialize_pre_transform(self._base(), "base"),
+            "ditto;132;133;134;135;136;transform:8;none:0;none:0;none:0",
+        )
+
+    def test_all_four_slots_are_carried(self) -> None:
+        base = self._base(moves=tuple(
+            MoveSpec(id=name, pp=pp)
+            for name, pp in (("splash", 40), ("tackle", 35), ("growl", 40), ("harden", 30))
+        ))
+        self.assertTrue(
+            _serialize_pre_transform(base, "base").endswith(
+                "splash:40;tackle:35;growl:40;harden:30"
+            )
+        )
+
+    def test_rejects_more_slots_than_the_engine_has(self) -> None:
+        base = self._base(moves=tuple(MoveSpec(id="splash", pp=40) for _ in range(5)))
+        with self.assertRaises(ValueError) as caught:
+            _serialize_pre_transform(base, "base")
+        self.assertIn("engine limit", str(caught.exception))
+
+    def test_reaches_the_built_state(self) -> None:
+        state = build_poke_engine_state(
+            _transform_specs(with_snapshot=True), module=fake_construction_module()
+        )
+        active = state.kwargs["side_one"].pokemon[0]
+        self.assertEqual(
+            active.pre_transform,
+            "ditto;132;132;132;132;132;transform:8;none:0;none:0;none:0",
+        )
+
+    def test_absent_by_default(self) -> None:
+        state = build_poke_engine_state(
+            _transform_specs(with_snapshot=False), module=fake_construction_module()
+        )
+        active = state.kwargs["side_one"].pokemon[0]
+        self.assertFalse(hasattr(active, "pre_transform"))
+
+
+class BridgeBuiltTransformRevertsTest(unittest.TestCase):
+    """The whole point, end to end against the REAL engine.
+
+    A bridge-built transformed active that leaves the field must come back as
+    itself. Without the snapshot the engine has no base form to restore and
+    degrades to "drop the volatile, keep the copied form" — the control arm here
+    pins that degradation as a real, observable difference rather than a claim.
+    """
+
+    def _switch_out(self, *, with_snapshot: bool):
+        import poke_engine
+
+        state = build_poke_engine_state(_transform_specs(with_snapshot=with_snapshot))
+        branches = list(poke_engine.generate_instructions(state, "swampert", "splash"))
+        self.assertEqual(len(branches), 1, "expected one deterministic branch")
+        after = state.apply_instructions(branches[0])
+        self.assertEqual(
+            after.reverse_instructions(branches[0]).to_string(),
+            state.to_string(),
+            "the switch-out must invert exactly",
+        )
+        # Pokemon fields are comma-separated; slot 0 of side one is the mon that
+        # just left. See Pokemon::serialize in the vendored engine's state.rs.
+        return after.to_string().split("/")[0].split("=")[0].split(",")
+
+    def setUp(self) -> None:
+        if not probe_poke_engine().ready:
+            self.skipTest("poke-engine is not installed/ready")
+
+    def test_bridge_built_transform_reverts_on_switch_out(self) -> None:
+        fields = self._switch_out(with_snapshot=True)
+        self.assertEqual(fields[0], "DITTO", "species must revert")
+        self.assertEqual(fields[13:18], ["132", "132", "132", "132", "132"], "stats must revert")
+        self.assertEqual(fields[22], "TRANSFORM;false;8", "the base moveset must come back")
+        self.assertEqual(fields[23:26], ["NONE;false;0"] * 3, "copied slots must be released")
+
+    def test_without_the_snapshot_the_copy_is_stuck(self) -> None:
+        fields = self._switch_out(with_snapshot=False)
+        self.assertEqual(fields[0], "SNORLAX", "nothing to restore from, so nothing reverts")
+        self.assertEqual(fields[13:18], ["250", "180", "120", "220", "60"])
 
 
 class RealEngineIntegrationTest(unittest.TestCase):

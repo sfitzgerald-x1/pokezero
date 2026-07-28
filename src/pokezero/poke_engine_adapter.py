@@ -85,6 +85,12 @@ class PokemonSpec:
     rest_turns: int = 0
     sleep_turns: int = 0
     weight_kg: float | None = None
+    # The Pokemon's OWN base form, set only when this spec describes an already
+    # Transformed active (the belief-world constructor bakes the copied species/
+    # stats/moves straight into the spec). The engine restores it when the
+    # transformer leaves the field; without it the copy is stuck for the rest of
+    # the search. Nested pre_transform is ignored — a base form has none.
+    pre_transform: "PokemonSpec | None" = None
 
 
 @dataclass(frozen=True)
@@ -446,6 +452,48 @@ POKEMON_STAT_FIELDS = ("attack", "defense", "special_attack", "special_defense",
 SIDE_BOOST_FIELDS = POKEMON_STAT_FIELDS + ("accuracy", "evasion")
 
 
+# Wire format of the engine's `PreTransform` record (src/state.rs), which
+# `Pokemon::deserialize` parses back:
+#   id;attack;defense;special_attack;special_defense;speed;M0;M1;M2;M3
+# with each move slot rendered "<move id>:<pp>". Ids are the same lowercase
+# strings this adapter already hands the binding for `Pokemon.id` / `Move.id`
+# (the engine's FromStr uppercases), and an unused slot is "none:0" — exactly
+# what an in-search Transform writes. Pinned by
+# tests/test_poke_engine_adapter.py::PreTransformSerializationTest.
+_PRE_TRANSFORM_MOVE_SLOTS = 4
+
+
+def _serialize_pre_transform(base: PokemonSpec, path: str) -> str:
+    """Render a base-form spec into the engine's PreTransform wire string."""
+
+    if not isinstance(base, PokemonSpec):
+        raise TypeError(f"{path} must be a PokemonSpec, got {type(base).__name__}")
+    if not base.id:
+        raise ValueError(f"{path}.id must be a non-empty species id")
+    for stat in POKEMON_STAT_FIELDS:
+        _require_positive_int(getattr(base, stat), f"{path}.{stat}")
+    if len(base.moves) > _PRE_TRANSFORM_MOVE_SLOTS:
+        raise ValueError(
+            f"{path}.moves has {len(base.moves)} slots, engine limit is "
+            f"{_PRE_TRANSFORM_MOVE_SLOTS}"
+        )
+
+    slots = []
+    for index in range(_PRE_TRANSFORM_MOVE_SLOTS):
+        if index < len(base.moves):
+            move = base.moves[index]
+            if not move.id:
+                raise ValueError(f"{path}.moves[{index}].id must be a non-empty move id")
+            slots.append(f"{move.id}:{int(move.pp)}")
+        else:
+            # An absent slot is NONE at 0 PP, which keeps it out of the engine's
+            # move enumeration on the way back.
+            slots.append("none:0")
+
+    fields = [base.id] + [str(getattr(base, stat)) for stat in POKEMON_STAT_FIELDS] + slots
+    return ";".join(fields)
+
+
 def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
     if not isinstance(member, PokemonSpec):
         raise TypeError(f"{path} must be a PokemonSpec, got {type(member).__name__}")
@@ -494,6 +542,10 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
         kwargs["rest_turns"] = member.rest_turns
     if _require_non_negative_int(member.sleep_turns, f"{path}.sleep_turns"):
         kwargs["sleep_turns"] = member.sleep_turns
+    if member.pre_transform is not None:
+        kwargs["pre_transform"] = _serialize_pre_transform(
+            member.pre_transform, f"{path}.pre_transform"
+        )
     if member.weight_kg is not None:
         weight = float(member.weight_kg)
         if weight <= 0.0:
