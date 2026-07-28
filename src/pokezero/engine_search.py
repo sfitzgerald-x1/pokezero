@@ -561,7 +561,7 @@ class EngineMctsPolicy:
             live_fold = self._advance_live_fold(context)
             if live_fold is None and self._config.leaf_eval == "model":
                 return self._fallback(context, rng, "live_fold_broken")
-        blocked_slots, encored_moves, removed_item_species, current_item_overrides = (
+        blocked_slots, encored_moves, removed_item_species, current_item_overrides, transformed_slots = (
             self._public_effect_signals(context)
         )
         if removed_item_species:
@@ -606,6 +606,7 @@ class EngineMctsPolicy:
                     current_item_overrides=current_item_overrides,
                     recharging_slots=recharging_slots,
                     truant_slots=truant_slots,
+                    transformed_slots=transformed_slots,
                     rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
@@ -1323,6 +1324,7 @@ class EngineMctsPolicy:
         dict[str, str],
         dict[str, tuple[str, ...]],
         dict[str, dict[str, str]],
+        dict[str, str],
     ]:
         """Public-information signals engine_world cannot see in the payload.
 
@@ -1355,11 +1357,12 @@ class EngineMctsPolicy:
 
         blocked: dict[str, str] = {}
         encored: dict[str, str] = {}
+        transformed: dict[str, str] = {}
         removed: dict[str, tuple[str, ...]] = {}
         overridden: dict[str, dict[str, str]] = {}
         metadata = context.observation.metadata
         if not isinstance(metadata, Mapping):
-            return blocked, encored, removed, overridden
+            return blocked, encored, removed, overridden, transformed
         self_slot = context.player_id
         opponent_slot = "p2" if context.player_id == "p1" else "p1"
         belief_view = metadata.get("belief_view")
@@ -1389,6 +1392,24 @@ class EngineMctsPolicy:
                         # it, so construction fails closed.
                         blocked[slot] = f"item mutated on {mon.get('species')} with unconfirmed current item"
 
+        # Transform is symmetric: our OWN Ditto desyncs just as hard, and worse
+        # -- the request advertises the copied moveset while the sampled world
+        # still holds Ditto's real one, which surfaced as self_moveset_mismatch
+        # rather than a transform block and was the larger half of the two.
+        for slot, rows in ((opponent_slot, opponents), (self_slot, self_rows)):
+            for mon in rows or ():
+                if not isinstance(mon, Mapping) or not mon.get("active"):
+                    continue
+                if not mon.get("transformed"):
+                    continue
+                target = str(mon.get("transform_species") or "")
+                if target:
+                    transformed[slot] = target
+                else:
+                    # Publicly transformed but the copied species was never
+                    # named: nothing to bake in, so keep failing closed.
+                    blocked[slot] = "active transformed into an unnamed species"
+
         active_species: str | None = None
         for mon in opponents or ():
             if not isinstance(mon, Mapping):
@@ -1396,9 +1417,6 @@ class EngineMctsPolicy:
             if not mon.get("active"):
                 continue
             active_species = str(mon.get("species") or "") or None
-            if mon.get("transformed"):
-                target = mon.get("transform_species") or "?"
-                blocked[opponent_slot] = f"active transformed into {target}"
         if active_species:
             events = metadata.get("recent_public_events")
             for line in reversed(list(events) if isinstance(events, Sequence) else []):
@@ -1411,7 +1429,7 @@ class EngineMctsPolicy:
                 if move is not None:
                     encored[opponent_slot] = move
                     break
-        return blocked, encored, removed, overridden
+        return blocked, encored, removed, overridden, transformed
 
     def _map_choices(
         self, context: PolicyContext, aggregated: Mapping[str, float]

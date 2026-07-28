@@ -306,7 +306,26 @@ class PublicEffectSignalTests(unittest.TestCase):
                 },
             })(),
         })()
-        return _policy()._public_effect_signals(context)
+        blocked, encored, removed, overridden, _transformed = (
+            _policy()._public_effect_signals(context)
+        )
+        return blocked, encored, removed, overridden
+
+    def _transform_signal(self, opponent_pokemon, self_pokemon=None):
+        """The transform half of the same signal bundle."""
+        belief_view = {"opponent_pokemon": opponent_pokemon}
+        if self_pokemon is not None:
+            belief_view["self_pokemon"] = self_pokemon
+        context = type("Ctx", (), {
+            "player_id": "p1",
+            "observation": type("Obs", (), {
+                "metadata": {"belief_view": belief_view, "recent_public_events": []},
+            })(),
+        })()
+        blocked, _encored, _removed, _overridden, transformed = (
+            _policy()._public_effect_signals(context)
+        )
+        return blocked, transformed
 
     def test_knock_off_removal_is_not_blocked(self) -> None:
         blocked, _encored, removed, overridden = self._signals([

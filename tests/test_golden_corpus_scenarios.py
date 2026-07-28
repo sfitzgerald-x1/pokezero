@@ -75,10 +75,21 @@ class ScenarioSweepLiveTests(unittest.TestCase):
         # Truant phases must SEARCH (the modeled path), not fall back.
         self.assertEqual(report["truant_slaking"]["fallback_decisions"], 0)
         self.assertGreater(report["truant_slaking"]["searched_decisions"], 0)
-        # Post-transform Ditto decisions must fail closed via the moveset guard.
+        # Post-transform Ditto decisions must now SEARCH. They used to fail
+        # closed through the moveset guard (the request advertises the copied
+        # moveset, the sampled world still holds Ditto's own), because the gen3
+        # engine has no TRANSFORM volatile. The copied form is baked into the
+        # active's spec instead, so the desync is reconciled rather than refused
+        # and neither the moveset guard nor a transform block should fire.
         ditto = report["ditto_transform"]
-        self.assertTrue(
-            any("self_moveset_mismatch" in reason for reason in ditto["world_failure_reasons"])
+        self.assertEqual(ditto["fallback_decisions"], 0, ditto["world_failure_reasons"])
+        self.assertGreater(ditto["searched_decisions"], 0)
+        self.assertFalse(
+            any(
+                "self_moveset_mismatch" in reason or "transform" in reason
+                for reason in ditto["world_failure_reasons"]
+            ),
+            ditto["world_failure_reasons"],
         )
         # The Baton Pass boundary must search straight through.
         self.assertEqual(report["baton_pass_boundary"]["fallback_decisions"], 0)
