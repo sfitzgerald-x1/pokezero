@@ -185,8 +185,12 @@ def materialize_search_artifacts(
     if not tables_path.is_file():
         schema = "v3" if contract.schema_version.endswith("v3") else "v2.2"
         subprocess.run(
+            # Always derive the layout from the checkpoint, never from the schema
+            # default: a region-trimmed model has a narrower transition region, so
+            # schema-default tables describe an observation it cannot consume.
             [sys.executable, str(repo / "scripts" / "export_encoder_tables.py"),
              "--showdown-root", showdown_root or "", "--observation-schema", schema,
+             "--checkpoint", contract.checkpoint_path,
              "--out", str(tables_path)],
             check=True,
         )

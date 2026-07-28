@@ -247,6 +247,17 @@ class EngineMctsConfig:
     # Documented approximation: a public Substitute is modeled at fresh
     # (maxhp/4) health, since remaining sub HP is not tracked publicly.
     approximate_substitute_health: bool = True
+    # Documented approximation: a public partial trap (Wrap and kin) is modeled
+    # with the engine's own no-duration shape, which holds the trap until the
+    # trapper switches instead of the real 2-5 turn roll. Pessimistic about
+    # escaping, but a searched world beats the uniform-legal fallback it
+    # replaces (96 world failures in the 2026-07-26 depth study).
+    approximate_partial_trap_turns: bool = True
+    # Documented approximation: public confusion and Yawn are searched with the
+    # engine's own clock, because the payload carries no remaining duration.
+    # Confusion never expires inside a search (pessimistic); Yawn's counter
+    # starts at 0, so an already-aged Yawn sleeps a turn late.
+    approximate_hidden_duration_volatiles: bool = True
     # Escalate any decision-level fallback to EngineSearchFallbackError.
     # For sweeps/CI that require zero fallbacks; production keeps the safe
     # uniform-legal fallback (a crash mid-collection is worse than a miss).
@@ -315,6 +326,30 @@ class EngineMctsConfig:
             raise ValueError("early_stop is supported only with leaf_eval='model'.")
 
 
+def _world_failure_key(error: EngineWorldUnsupported) -> str:
+    """Return a telemetry key that keeps the CAUSE while bounding cardinality.
+
+    Fallback attribution is only useful at the granularity you can act on. An
+    allowlist of reasons-that-carry-detail used to leave the rest as bare slugs,
+    which is how ``materialization_blocker`` reached 2811 failures in the
+    2026-07-26 study with no indication of WHICH blocker — the taxonomy that
+    would have named the fix on day one. So detail is now the default.
+
+    Cardinality is the reason the allowlist existed, and it is real: details
+    naming a species or a slot would mint a key per species. Rather than drop
+    those causes, strip the per-instance operand and keep the token KIND, so
+    ``item-state-removed:Zapdos`` and ``item-state-removed:Snorlax`` share one
+    actionable bucket.
+    """
+
+    detail = error.detail
+    if error.reason == "materialization_blocker":
+        _, _, tokens = detail.partition(":")
+        kinds = sorted({str(token).partition(":")[0].strip() for token in tokens.split(",") if token.strip()})
+        return f"{error.reason}: {', '.join(kinds)}" if kinds else error.reason
+    return f"{error.reason}: {detail}"
+
+
 @dataclass
 class EngineMctsStats:
     """Cumulative per-policy telemetry; every fallback is counted, never hidden."""
@@ -352,6 +387,19 @@ class EngineMctsStats:
     encode_wall_seconds: float = 0.0
     model_wall_seconds: float = 0.0
     tree_wall_seconds: float = 0.0
+    # Sub-slice of encode_wall_seconds: per-leaf FoldStateInner deep clones.
+    fold_clone_wall_seconds: float = 0.0
+    # Encode decomposition: instruction->protocol-text rendering, the fold's
+    # re-parse of that text, the observation tensor build, and action mapping.
+    render_wall_seconds: float = 0.0
+    fold_advance_wall_seconds: float = 0.0
+    tensor_wall_seconds: float = 0.0
+    action_map_wall_seconds: float = 0.0
+    # tensor_s split: engine-state row inputs, the fold's derived products
+    # (rebuilt per leaf), and the array write.
+    row_input_wall_seconds: float = 0.0
+    products_wall_seconds: float = 0.0
+    row_write_wall_seconds: float = 0.0
     lossy_renders: int = 0
     prior_fallbacks: int = 0
     early_stop_triggered_worlds: int = 0
@@ -385,6 +433,14 @@ class EngineMctsStats:
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
+            "fold_clone_wall_seconds": self.fold_clone_wall_seconds,
+            "render_wall_seconds": self.render_wall_seconds,
+            "fold_advance_wall_seconds": self.fold_advance_wall_seconds,
+            "tensor_wall_seconds": self.tensor_wall_seconds,
+            "action_map_wall_seconds": self.action_map_wall_seconds,
+            "row_input_wall_seconds": self.row_input_wall_seconds,
+            "products_wall_seconds": self.products_wall_seconds,
+            "row_write_wall_seconds": self.row_write_wall_seconds,
             "lossy_renders": self.lossy_renders,
             "prior_fallbacks": self.prior_fallbacks,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
@@ -411,6 +467,11 @@ class EngineMctsStats:
 
 class EngineMctsPolicy:
     """ContextAwarePolicy running poke-engine MCTS over belief-sampled worlds."""
+
+    # Declares the requirement the FoulPlay bridge gates on. Engine search
+    # cannot run without a materialized public state; without this the bridge
+    # passes None and every decision degrades to uniform-legal fallback.
+    requires_public_materialization_state = True
 
     def __init__(
         self,
@@ -537,6 +598,8 @@ class EngineMctsPolicy:
                     dex=self._dex,
                     approximate_sleep_turns=self._config.approximate_sleep_turns,
                     approximate_substitute_health=self._config.approximate_substitute_health,
+                    approximate_partial_trap_turns=self._config.approximate_partial_trap_turns,
+                    approximate_hidden_duration_volatiles=self._config.approximate_hidden_duration_volatiles,
                     blocked_slots=blocked_slots,
                     encored_moves=encored_moves,
                     removed_item_species=removed_item_species,
@@ -554,15 +617,7 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
                 continue
             except EngineWorldUnsupported as error:
-                key = error.reason
-                if key in (
-                    "volatile_unsupported",
-                    "hidden_power_iv_mismatch",
-                    "wish_carrier_ambiguous",
-                    "self_world_mismatch",
-                ):
-                    key = f"{error.reason}: {error.detail}"
-                self.stats.world_failure_reasons[key] += 1
+                self.stats.world_failure_reasons[_world_failure_key(error)] += 1
                 continue
             worlds.append((world, state))
 
@@ -1011,6 +1066,14 @@ class EngineMctsPolicy:
             self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
             self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
             self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
+            self.stats.fold_clone_wall_seconds += float(report.get("fold_clone_s") or 0.0)
+            self.stats.render_wall_seconds += float(report.get("render_s") or 0.0)
+            self.stats.fold_advance_wall_seconds += float(report.get("fold_advance_s") or 0.0)
+            self.stats.tensor_wall_seconds += float(report.get("tensor_s") or 0.0)
+            self.stats.action_map_wall_seconds += float(report.get("action_map_s") or 0.0)
+            self.stats.row_input_wall_seconds += float(report.get("row_input_s") or 0.0)
+            self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
+            self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
             self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
             return report

@@ -69,7 +69,22 @@ _WEATHER_IDS = {
 # ``-end``/switch. The patched Gen 3 engine prices the 50%-per-turn move
 # immobilization as a chance branch and, in singles, clears the relationship
 # when either active switches.
-_SUPPORTED_VOLATILES = frozenset({"leechseed", "flashfire", "attract"})
+# Volatiles the sampled world can express EXACTLY from public information.
+# ``destinybond`` qualifies on the vendored gen3 engine: it is a presence-only
+# volatile (gen3/choice_effects.rs clears it on any non-Destiny-Bond move, per
+# the gens 2-6 rule) that triggers on KO, so seeding it from the public
+# ``|-singlemove|` line reproduces the engine's state with no hidden component.
+# ``perish1``-``perish4`` qualify for the same reason from the other direction:
+# the counter is the ONLY state Perish Song carries, Showdown publishes it on
+# every ``|-start|<mon>|perishN`` line, and the vendored engine runs the
+# countdown itself (gen3/generate_instructions.rs decrements PERISH3 -> PERISH2
+# -> PERISH1 and faints at zero). Seeding the current count reproduces the
+# engine's state exactly, so a Perish-Song endgame is searched rather than
+# guessed — precisely the position where search matters most.
+_SUPPORTED_VOLATILES = frozenset({
+    "leechseed", "flashfire", "attract", "destinybond",
+    "perish1", "perish2", "perish3", "perish4",
+})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {
@@ -166,6 +181,62 @@ def _engine_species_id(species_id: str) -> str:
     if species_id.startswith("unown"):
         return "unown"
     return species_id
+
+
+# Showdown request flags that withhold hidden information rather than restrict the
+# action set. Each belief world resolves them by committing to a concrete opponent
+# hypothesis.
+#
+# ``maybeTrapped`` is the one that actually fires here, and it covers more than
+# "the foe MIGHT have a trapping ability": an ability trap sets trapped='hidden'
+# (sim/pokemon.ts), and getMoveRequestData only reports ``trapped`` when the value
+# is exactly True — so a REVEALED, actively-trapping Arena Trap or Shadow Tag also
+# arrives as maybeTrapped. That is why it dominated the fallback count.
+#
+# ``maybeDisabled``/``maybeLocked`` are listed for completeness but are dead in this
+# format: Imprison is their only producer (maybeLocked is derived from maybeDisabled)
+# and no gen3 randbats set carries Imprison.
+_HIDDEN_INFORMATION_REQUEST_FLAGS = frozenset({"maybeTrapped", "maybeDisabled", "maybeLocked"})
+
+
+def _undischarged_materialization_blockers(
+    blockers: Any,
+    *,
+    removed_item_species: frozenset[str],
+    item_overrides: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Return the payload blockers the caller has NOT positively expressed.
+
+    ``materializationBlockers`` is written by the payload producer, which has no
+    view of the item signals a caller derives independently from the same belief
+    engine. Two producers therefore describe one fact: a publicly itemless mon
+    arrives here both as an ``item-state-removed:<species>`` blocker AND (from a
+    caller that resolves it) in ``removed_item_species``, whose whole purpose is
+    to clear the sampled set's item. Vetoing on the blocker discarded a world the
+    caller had already made exact — the single largest fallback source in the
+    2026-07-26 depth study (2811 world failures).
+
+    A blocker is discharged ONLY by the matching positive signal for the SAME
+    species: a removal by ``removed_item_species``, a mutation by a confirmed
+    ``item_overrides`` entry. Everything else — ambiguous rows, mutations with no
+    protocol-confirmed item, Baton-Pass volatiles, unknown Leech Seed source —
+    stays fail-closed, because nothing in the caller's signals expresses it and
+    guessing would search a mechanically false world.
+    """
+
+    if not blockers:
+        return ()
+    undischarged: list[str] = []
+    for raw in blockers:
+        token = str(raw)
+        kind, _, species = token.partition(":")
+        species_id = normalize_id(species)
+        if kind == "item-state-removed" and species_id in removed_item_species:
+            continue
+        if kind == "item-state-unconfirmed" and species_id in item_overrides:
+            continue
+        undischarged.append(token)
+    return tuple(undischarged)
 
 
 class EngineWorldUnsupported(ValueError):
@@ -266,6 +337,8 @@ def battle_spec_from_payload(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
+    approximate_hidden_duration_volatiles: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
@@ -331,11 +404,35 @@ def battle_spec_from_payload(
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
-        if raised:
+        # Only flags that BIND legality may fail construction. Showdown's
+        # ``maybe*`` flags are the opposite of a constraint: they are the sim
+        # DECLINING to tell us whether we are trapped or disabled, because
+        # answering would leak the opponent's hidden ability or move set
+        # (pokemon.ts getMoveRequestData). ``maybeTrapped`` in particular fires
+        # whenever the foe's unrevealed ability could be Arena Trap, Magnet
+        # Pull, or Shadow Tag — all in the gen3 randbats pool, which made this
+        # the second-largest fallback source in the 2026-07-26 depth study.
+        #
+        # Refusing to search on a hidden-information marker is backwards for a
+        # belief searcher: each sampled world commits to a concrete opponent
+        # set, so the engine derives that world's trapped/disabled truth exactly
+        # and consistently. Sampling the hypothesis IS the designed resolution,
+        # and it strictly dominates falling back to a uniform-legal guess.
+        #
+        # ``trapped`` stays fail-closed: it is a hard, already-disclosed "you
+        # cannot switch", and a world that let us switch anyway would search
+        # illegal actions.
+        binding = [
+            flag
+            for flag in raised
+            if flag not in _HIDDEN_INFORMATION_REQUEST_FLAGS and flag != "trapped"
+        ]
+        if binding:
             raise EngineWorldUnsupported(
                 "self_request_state_unsupported",
-                f"self active request flags {raised} constrain legality beyond this construction",
+                f"self active request flags {binding} constrain legality beyond this construction",
             )
+    self_trapped = bool(isinstance(request_state, Mapping) and request_state.get("trapped"))
 
     turn = payload.get("turn")
     if not isinstance(turn, int):
@@ -367,6 +464,8 @@ def battle_spec_from_payload(
             self_benched_move_history=bool(payload.get("selfBenchedMoveHistory")),
             approximate_sleep_turns=approximate_sleep_turns,
             approximate_substitute_health=approximate_substitute_health,
+            approximate_partial_trap_turns=approximate_partial_trap_turns,
+            approximate_hidden_duration_volatiles=approximate_hidden_duration_volatiles,
             force_switch=is_self_slot and self_force_switch,
             baton_passing=is_self_slot and self_baton_passing,
             opponent_committed_pending=(not is_self_slot) and self_baton_passing,
@@ -395,6 +494,9 @@ def battle_spec_from_payload(
                 f"request team {sorted(order_ids)} != sampled world {sorted(party_species[self_player])}",
             )
 
+    if self_trapped:
+        _require_world_reproduces_trap(built_sides, dex=dex, self_player=self_player)
+
     weather, weather_turns = _weather_fields(payload)
     built_sides = _apply_forecast_types(built_sides, weather=weather)
     spec = BattleSpec(
@@ -407,6 +509,67 @@ def battle_spec_from_payload(
         spec=spec,
         slot_sides={"p1": "side_one", "p2": "side_two"},
         party_species=party_species,
+    )
+
+
+def _require_world_reproduces_trap(
+    sides: Mapping[str, SideSpec],
+    *,
+    dex: ShowdownDex,
+    self_player: str,
+) -> None:
+    """Fail closed unless the BUILT world independently traps our active.
+
+    ``trapped`` is a disclosed hard constraint: Showdown is telling us we cannot
+    switch. Refusing to search on it was over-strict, because the sampled world
+    usually reproduces the trap on its own — the flag is disclosed precisely
+    when its cause is public, and the belief filter carries a revealed trapping
+    ability into every sample. But it is not ALWAYS reproduced: the vendored
+    gen3 engine models no Mean Look / Block / Spider Web, so a move-trapped mon
+    would be free to switch in search and the tree would explore illegal lines.
+
+    So this verifies instead of assuming, by transcribing the engine's own
+    ``Side::trapped`` conditions (gen3/state.rs): a partial trap or locked move
+    on us, Shadow Tag on the foe, Arena Trap against a grounded target, or
+    Magnet Pull against a Steel type. If none holds, the trap has a cause the
+    world cannot express and construction fails closed as before.
+    """
+
+    foe_player = "p2" if self_player == "p1" else "p1"
+    self_side, foe_side = sides.get(self_player), sides.get(foe_player)
+    if self_side is None or foe_side is None:
+        raise EngineWorldUnsupported("payload_malformed", "trap check is missing a built side")
+
+    self_volatiles = {normalize_id(str(v)) for v in self_side.volatile_statuses}
+    # ``mustrecharge`` is not one of Side::trapped's conditions, but it reaches the
+    # same place: the engine's option builder skips the switch branch entirely
+    # while it is set, so the world does refuse to switch. Showdown reports the
+    # hard lock as ``trapped``, so without this the recharge turn after every
+    # Hyper Beam fell back needlessly.
+    if self_volatiles & {"partiallytrapped", "lockedmove", "mustrecharge"}:
+        return
+
+    active = self_side.pokemon[self_side.active_index] if self_side.pokemon else None
+    foe_active = foe_side.pokemon[foe_side.active_index] if foe_side.pokemon else None
+    if active is None or foe_active is None:
+        raise EngineWorldUnsupported("payload_malformed", "trap check is missing an active mon")
+
+    foe_ability = normalize_id(str(foe_active.ability or ""))
+    types = {str(t).lower() for t in (active.types or ())}
+    if foe_ability == "shadowtag":
+        return
+    if foe_ability == "magnetpull" and "steel" in types:
+        return
+    if foe_ability == "arenatrap":
+        # The engine's grounded test: Flying types and Levitate are exempt.
+        ability = normalize_id(str(active.ability or ""))
+        if "flying" not in types and ability != "levitate":
+            return
+
+    raise EngineWorldUnsupported(
+        "self_request_state_unsupported",
+        "self active request flags ['trapped'] constrain legality beyond this construction "
+        f"(sampled world does not trap: foe ability {foe_ability!r})",
     )
 
 
@@ -448,6 +611,8 @@ def world_battle_spec(
     dex: ShowdownDex,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
+    approximate_hidden_duration_volatiles: bool = False,
     blocked_slots: Mapping[str, str] | None = None,
     encored_moves: Mapping[str, str] | None = None,
     removed_item_species: Mapping[str, Sequence[str]] | None = None,
@@ -473,6 +638,8 @@ def world_battle_spec(
         dex=dex,
         approximate_sleep_turns=approximate_sleep_turns,
         approximate_substitute_health=approximate_substitute_health,
+        approximate_partial_trap_turns=approximate_partial_trap_turns,
+        approximate_hidden_duration_volatiles=approximate_hidden_duration_volatiles,
         blocked_slots=blocked_slots,
         encored_moves=encored_moves,
         removed_item_species=removed_item_species,
@@ -551,6 +718,8 @@ def _build_side_spec(
     self_benched_move_history: bool,
     approximate_sleep_turns: bool = False,
     approximate_substitute_health: bool = False,
+    approximate_partial_trap_turns: bool = False,
+    approximate_hidden_duration_volatiles: bool = False,
     force_switch: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
@@ -562,11 +731,18 @@ def _build_side_spec(
     opponent_committed_pending: bool = False,
     rng: Any | None = None,
 ) -> tuple[SideSpec, tuple[str, ...]]:
-    blockers = side_payload.get("materializationBlockers")
-    if blockers:
-        raise EngineWorldUnsupported("materialization_blocker", f"{slot}: {', '.join(map(str, blockers))}")
-
     item_overrides = dict(current_item_overrides or {})
+    blockers = _undischarged_materialization_blockers(
+        side_payload.get("materializationBlockers"),
+        removed_item_species=removed_item_species,
+        item_overrides=item_overrides,
+    )
+    if blockers:
+        raise EngineWorldUnsupported(
+            "materialization_blocker",
+            f"{slot}: {', '.join(blockers)}",
+        )
+
     conflicted = sorted(removed_item_species & set(item_overrides))
     if conflicted:
         # One signal says "publicly holds nothing", the other "publicly holds
@@ -624,6 +800,45 @@ def _build_side_spec(
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    if approximate_partial_trap_turns:
+        # Gen 3 Wrap/Bind/Clamp/Fire Spin/Whirlpool run 2-5 RANDOM turns, and
+        # the public replay never sees the roll. The vendored engine models
+        # PARTIALLYTRAPPED with no duration counter at all: it traps and deals
+        # maxhp/16 per turn until the TRAPPER switches out
+        # (gen3/generate_instructions.rs). So the volatile has no exact
+        # expression, and this opt-in accepts the engine's own shape.
+        #
+        # The bias is ONE-SIDED IN FAVOUR OF THE TRAPPER, not simply
+        # "pessimistic": this gate applies to whichever side holds the volatile.
+        # When our mon is trapped the search under-rates escaping; when WE are
+        # the trapper (Shuckle is the pool's only Wrap user) it over-rates the
+        # lock. And the trap is UNBOUNDED, not merely long — the trapped mon has
+        # no switch option at all (Side::trapped), so a deep line can grind it
+        # down over far more turns than the real 2-5 roll allows.
+        #
+        # That is the reason it is a named approximation rather than an
+        # allowlist entry: it belongs with approximate_sleep_turns and
+        # approximate_substitute_health, visible in the config and attributable
+        # in a run's provenance, not silently folded into "expressed exactly".
+        supported = supported | {"partiallytrapped"}
+    if approximate_hidden_duration_volatiles:
+        # Two more public volatiles whose REMAINING duration is not public, and
+        # whose engine model does not match the Gen 3 rule either:
+        #   confusion — Gen 3 runs 2-5 random turns; the engine prices the 50%
+        #     self-hit but never expires it inside a search, so a searched world
+        #     is PESSIMISTIC about shaking it off.
+        #   yawn — seeded at duration 1 above, which is EXACT at an ordinary
+        #     move boundary: Showdown applies Yawn (duration 2) mid-turn and
+        #     burns the first tick at that same turn's residual, and singles
+        #     offers no request in between, so an observable Yawn always has one
+        #     tick left. It rides here only for the residual case a mid-turn
+        #     force-switch snapshot could produce, where the real count is 2 and
+        #     the sleep would land a turn early.
+        #
+        # Both are still far better than the alternative they replace: without
+        # them the whole decision falls back to a uniform-legal guess, which is
+        # wrong about every move rather than about one effect's clock.
+        supported = supported | {"confusion", "yawn"}
     if "encore" in volatiles:
         supported = supported | {"encore"}
     if must_recharge:
@@ -724,6 +939,15 @@ def _build_side_spec(
         # encores run 3-8 turns) — acceptable over short MCTS horizons.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
+
+    if "yawn" in volatiles:
+        # Seed the counter at 1, NOT the struct default of 0. Showdown applies
+        # Yawn (duration 2) during a turn's move phase and burns the first tick
+        # at that same turn's residual; in singles there is no request between
+        # those two points, so EVERY Yawn a decision boundary can observe is
+        # already one tick old. Leaving the engine's 0 would push the sleep a
+        # full turn late in the normal case, not just an edge case.
+        volatile_durations["yawn"] = 1
 
     slow_uturn_move = False
     saved_move = ""

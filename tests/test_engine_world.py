@@ -12,7 +12,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
+    _SUPPORTED_VOLATILES,
     _apply_forecast_types,
+    _require_world_reproduces_trap,
+    _undischarged_materialization_blockers,
     battle_spec_from_payload,
     unpack_pokemon,
     unpack_team,
@@ -1022,6 +1025,209 @@ class BatonPassBoundaryTests(unittest.TestCase):
         with self.assertRaises(EngineWorldUnsupported) as caught:
             battle_spec_from_payload(payload, _override(), dex=self.dex, rng=_random.Random(1))
         self.assertEqual(caught.exception.reason, "pending_baton_pass")
+
+
+class MaterializationBlockerDischargeTests(unittest.TestCase):
+    """A payload blocker the CALLER has positively expressed is not a blocker.
+
+    The payload producer and the search caller derive item state from the same
+    belief engine but describe it differently: the producer emits a fail-closed
+    ``item-state-*`` token, the caller emits ``removed_item_species`` /
+    ``current_item_overrides`` that make the world exact. Vetoing on the token
+    discarded worlds the caller had already resolved.
+    """
+
+    def test_removal_token_is_discharged_by_removed_item_species(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax",),
+                removed_item_species=frozenset({"snorlax"}),
+                item_overrides={},
+            ),
+            (),
+        )
+
+    def test_removal_token_still_blocks_without_the_caller_signal(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax",),
+                removed_item_species=frozenset(),
+                item_overrides={},
+            ),
+            ("item-state-removed:Snorlax",),
+        )
+
+    def test_discharge_is_species_scoped_not_blanket(self) -> None:
+        # Resolving one mon's item must not excuse another mon's unresolved one.
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-removed:Snorlax", "item-state-removed:Zapdos"),
+                removed_item_species=frozenset({"snorlax"}),
+                item_overrides={},
+            ),
+            ("item-state-removed:Zapdos",),
+        )
+
+    def test_unconfirmed_mutation_is_discharged_only_by_a_confirmed_override(self) -> None:
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-unconfirmed:Gengar",),
+                removed_item_species=frozenset(),
+                item_overrides={"gengar": "choiceband"},
+            ),
+            (),
+        )
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                ("item-state-unconfirmed:Gengar",),
+                removed_item_species=frozenset(),
+                item_overrides={},
+            ),
+            ("item-state-unconfirmed:Gengar",),
+        )
+
+    def test_non_item_blockers_are_never_discharged(self) -> None:
+        # Nothing in the caller's item signals expresses a Baton-Passed volatile
+        # or an unknown Leech Seed source, so these must stay fail-closed.
+        blockers = ("baton-pass:confusion", "leechseed-source-unknown", "item-state-ambiguous:Unown")
+        self.assertEqual(
+            _undischarged_materialization_blockers(
+                blockers, removed_item_species=frozenset({"unown"}), item_overrides={}
+            ),
+            blockers,
+        )
+
+
+class SelfRequestStateFlagTests(unittest.TestCase):
+    """Hidden-information request flags must not wall a belief searcher.
+
+    Showdown's ``maybe*`` flags mean "we decline to tell you", not "you may not".
+    Each sampled world commits to a concrete opponent hypothesis and derives the
+    truth itself, so refusing to search on them forfeits exactly the positions
+    where hidden information matters. ``trapped`` is a real disclosed constraint
+    and must still fail closed.
+    """
+
+    def _payload_with_flags(self, flags: dict[str, bool]) -> dict:
+        return {
+            "turn": 3,
+            "selfPlayer": "p1",
+            "selfRequestKind": "move",
+            "selfActiveRequestState": flags,
+            "sides": {"p1": {}, "p2": {}},
+        }
+
+    def _reason_for(self, flags: dict[str, bool]) -> str | None:
+        # The flag gate runs before any team/side work, so an empty override is
+        # enough to reach it: a non-flag payload defect surfaces as some OTHER
+        # reason, which is exactly what these assertions distinguish.
+        packed = pack_team((_SWAMPERT,))
+        override = BattleStartOverride(player_teams={"p1": packed, "p2": packed})
+        try:
+            battle_spec_from_payload(self._payload_with_flags(flags), override, dex=_dex())
+        except EngineWorldUnsupported as error:
+            return error.reason
+        return None
+
+    def test_maybe_flags_do_not_raise_self_request_state_unsupported(self) -> None:
+        for flag in ("maybeTrapped", "maybeDisabled", "maybeLocked"):
+            with self.subTest(flag=flag):
+                self.assertNotEqual(
+                    self._reason_for({flag: True}), "self_request_state_unsupported"
+                )
+
+    def test_trapped_is_no_longer_refused_up_front(self) -> None:
+        # trapped is now VERIFIED against the built world rather than refused
+        # on sight, so it must not short-circuit ahead of side construction.
+        self.assertNotEqual(
+            self._reason_for({"trapped": True}), "self_request_state_unsupported"
+        )
+
+
+class TrapReproductionTests(unittest.TestCase):
+    """``trapped`` is discharged only when the built world traps us too.
+
+    Showdown discloses ``trapped`` when its cause is public, and the belief
+    filter carries a revealed trapping ability into every sample -- so the world
+    usually reproduces the trap and refusing to search was over-strict. It is
+    not always reproduced, though: the vendored gen3 engine models no Mean Look
+    / Block / Spider Web, and a move-trapped mon would be free to switch in
+    search. These pin the engine's own conditions (gen3/state.rs Side::trapped).
+    """
+
+    def _mon(self, **kw):
+        base = dict(
+            id="snorlax", level=100, hp=300, maxhp=300, attack=200, defense=200,
+            special_attack=150, special_defense=200, speed=100, types=("normal",),
+            ability="immunity", item=None, moves=(MoveSpec(id="bodyslam", pp=24),),
+        )
+        base.update(kw)
+        return PokemonSpec(**base)
+
+    def _check(self, *, foe_ability: str, self_types=("normal",), self_ability="immunity",
+               self_volatiles=()) -> str | None:
+        sides = {
+            "p1": SideSpec(
+                pokemon=(self._mon(types=self_types, ability=self_ability),),
+                volatile_statuses=tuple(self_volatiles),
+            ),
+            "p2": SideSpec(pokemon=(self._mon(id="dugtrio", ability=foe_ability),)),
+        }
+        try:
+            _require_world_reproduces_trap(sides, dex=_dex(), self_player="p1")
+        except EngineWorldUnsupported as error:
+            return error.reason
+        return None
+
+    def test_shadow_tag_reproduces_the_trap(self) -> None:
+        self.assertIsNone(self._check(foe_ability="shadowtag"))
+
+    def test_arena_trap_reproduces_the_trap_for_a_grounded_target(self) -> None:
+        self.assertIsNone(self._check(foe_ability="arenatrap"))
+
+    def test_arena_trap_does_not_trap_a_flyer_or_a_levitator(self) -> None:
+        self.assertEqual(
+            self._check(foe_ability="arenatrap", self_types=("flying",)),
+            "self_request_state_unsupported",
+        )
+        self.assertEqual(
+            self._check(foe_ability="arenatrap", self_ability="levitate"),
+            "self_request_state_unsupported",
+        )
+
+    def test_magnet_pull_traps_only_steel(self) -> None:
+        self.assertIsNone(self._check(foe_ability="magnetpull", self_types=("steel",)))
+        self.assertEqual(
+            self._check(foe_ability="magnetpull"), "self_request_state_unsupported"
+        )
+
+    def test_partial_trap_on_our_own_side_reproduces_the_trap(self) -> None:
+        self.assertIsNone(
+            self._check(foe_ability="immunity", self_volatiles=("partiallytrapped",))
+        )
+
+    def test_move_trap_stays_fail_closed(self) -> None:
+        # Mean Look / Block / Spider Web have no engine expression at all, so a
+        # world built from them would let us switch out of a real trap.
+        self.assertEqual(
+            self._check(foe_ability="immunity"), "self_request_state_unsupported"
+        )
+
+
+class SupportedVolatileTests(unittest.TestCase):
+    """Volatiles the vendored gen3 engine reproduces exactly are searchable."""
+
+    def test_destiny_bond_and_perish_counters_are_exact(self) -> None:
+        # Presence-only in the engine (Destiny Bond) or a fully public counter the
+        # engine decrements itself (Perish Song) — no hidden component to guess.
+        for volatile in ("destinybond", "perish1", "perish2", "perish3", "perish4"):
+            with self.subTest(volatile=volatile):
+                self.assertIn(volatile, _SUPPORTED_VOLATILES)
+
+    def test_partial_trap_is_an_opt_in_approximation_not_an_exact_volatile(self) -> None:
+        # The engine has no duration counter for it, so it must never be treated
+        # as exactly expressible — it is gated behind a named approximation.
+        self.assertNotIn("partiallytrapped", _SUPPORTED_VOLATILES)
 
 
 if __name__ == "__main__":

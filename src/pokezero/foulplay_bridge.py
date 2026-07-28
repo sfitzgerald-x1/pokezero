@@ -3281,7 +3281,13 @@ async def _handle_decision_boundary(
                 pokezero_player,
                 set_source=belief_set_source,
             )
-            if isinstance(policy, RootPUCTSearchPolicy)
+            # Capability, not identity: ANY policy that consumes a materialized
+            # public state needs one. Gating on isinstance(RootPUCTSearchPolicy)
+            # silently handed EngineMctsPolicy a None, so engine-MCTS fell back
+            # to uniform-legal on every decision and played random moves while
+            # reporting no error (0/20 vs the raw policy's 10/20).
+            if getattr(policy, "requires_public_materialization_state", False)
+            or isinstance(policy, RootPUCTSearchPolicy)
             else None
         )
         pokezero_context = PolicyContext(

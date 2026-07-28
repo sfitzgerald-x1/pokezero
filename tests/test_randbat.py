@@ -12,6 +12,7 @@ from pokezero.belief import PublicBattleBeliefEngine
 from pokezero.randbat import (
     Gen3RandbatSource,
     _audit_source_paths,
+    _enumerate_move_sets,
     _source_hash,
     load_gen3_randbat_source_cached,
 )
@@ -649,3 +650,44 @@ console.log(JSON.stringify({role: set.role, ability: set.ability, item: set.item
         text=True,
     )
     return json.loads(result.stdout)
+
+
+class Gen3HiddenPowerCullTest(unittest.TestCase):
+    """A short movepool is still subject to Showdown's one-Hidden-Power cull.
+
+    Gen 3 derives Hidden Power's type from the IV spread, so a set can carry
+    exactly one. Pools of four moves or fewer used to be returned verbatim as a
+    single set, which produced Unown sets holding both HP Bug and HP Fighting —
+    an IV spread can satisfy only one of those, so world construction then died
+    with hidden_power_iv_mismatch on the other.
+    """
+
+    _KW = dict(
+        role="Generalist", species="Unown", abilities=("levitate",),
+        move_metadata={}, species_metadata={},
+    )
+
+    def test_short_pool_with_two_hidden_powers_splits_into_alternatives(self) -> None:
+        sets = _enumerate_move_sets(
+            ["hiddenpowerbug", "hiddenpowerfighting"], **self._KW
+        )
+        self.assertEqual(
+            sorted(sets), [("hiddenpowerbug",), ("hiddenpowerfighting",)]
+        )
+
+    def test_non_hidden_power_moves_are_kept_in_every_alternative(self) -> None:
+        sets = _enumerate_move_sets(
+            ["protect", "hiddenpowerice", "hiddenpowergrass"], **self._KW
+        )
+        self.assertEqual(len(sets), 2)
+        for combo in sets:
+            self.assertIn("protect", combo)
+            self.assertEqual(
+                sum(1 for move in combo if move.startswith("hiddenpower")), 1
+            )
+
+    def test_single_hidden_power_pool_is_unchanged(self) -> None:
+        self.assertEqual(
+            _enumerate_move_sets(["protect", "hiddenpowerice"], **self._KW),
+            (("protect", "hiddenpowerice"),),
+        )

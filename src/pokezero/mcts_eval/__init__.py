@@ -20,6 +20,11 @@ from .manifest import (
     SearchConfig,
     default_lattice,
 )
+from .frontier import (
+    FrontierRow,
+    build_frontier,
+    render_markdown,
+)
 from .resolver import (
     CheckpointContract,
     ContractError,

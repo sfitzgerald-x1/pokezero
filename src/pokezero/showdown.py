@@ -2557,6 +2557,10 @@ _OTHER_SLOT = {"p1": "p2", "p2": "p1"}
 # only reachable member (Grudge/Rage are -singlemove emitters but their moves are not in
 # the gen3 randbats pool); Focus Punch's focus is ``-singleturn`` and is NOT tracked here.
 _SINGLEMOVE_VOLATILES = frozenset({"destinybond", "grudge"})
+# Perish Song's countdown is ONE value announced as successive ``-start perishN``
+# (Showdown never emits an ``-end`` between the ticks), so these are mutually
+# exclusive and the newest replaces the rest.
+_PERISH_COUNTERS = frozenset({"perish0", "perish1", "perish2", "perish3", "perish4"})
 # Gen 3 stall moves (spec v3 change 3): all three set ``stallingMove: true`` and share the ONE
 # ``stall`` volatile (``data/moves.ts`` protect 13960 / detect 3523 / endure 4802). Pool
 # reachability in ``data/random-battles/gen3/sets.json``: protect (43 species) and endure (4)
@@ -2581,6 +2585,21 @@ def _is_stall_singleturn(tag: str) -> bool:
     return _normalize_identifier(tag.split(":", 1)[-1]) in {"protect", "endure"}
 
 
+def _is_confusion_self_hit(parts: Sequence[str]) -> bool:
+    """True for ``|-activate|<mon>|confusion``, the Gen 3 hit-yourself line.
+
+    This is the only way a Gen 3 action is consumed without a ``move`` or
+    ``cant`` line, which makes it the one blind spot in the single-move
+    expiry rule.
+    """
+
+    return (
+        len(parts) >= 4
+        and parts[1] == "-activate"
+        and _side_condition_identifier(parts[3]) == "confusion"
+    )
+
+
 def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> None:
     """Track active-mon volatile statuses per Showdown slot.
 
@@ -2596,10 +2615,20 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
     slot = _slot_from_ident(parts[2])
     if slot not in volatiles:
         return
-    if event_type in {"move", "cant"}:
+    if event_type in {"move", "cant"} or _is_confusion_self_hit(parts):
         # The sim removes single-move volatiles silently before the mon's next action
         # (onBeforeMove / onMoveAborted); a successful re-click re-arms via the
         # following |-singlemove| line.
+        #
+        # ``move``/``cant`` are not the whole story: MoveAborted fires on EVERY
+        # consumed action, and the Gen 3 confusion self-hit is the one path that
+        # emits neither line — just ``-activate|MON|confusion`` plus the damage
+        # (mods/gen4/conditions.ts). Without this arm a confused Destiny Bond
+        # user keeps the volatile forever, and since destinybond became a
+        # searchable volatile that phantom is seeded into every sampled world,
+        # pricing a KO-revenge that cannot happen. Every other Gen 3 abort
+        # (sleep, freeze, paralysis, flinch, recharge, Attract) does emit
+        # ``cant`` and is already covered above.
         volatiles[slot] -= _SINGLEMOVE_VOLATILES
         return
     if len(parts) < 4:
@@ -2621,6 +2650,15 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
     if name not in TRACKED_VOLATILES:
         return
     if event_type == "-start":
+        if name in _PERISH_COUNTERS:
+            # Perish Song announces its countdown as successive ``-start perishN``
+            # with no ``-end`` between them, so a plain add ACCUMULATES: a mon one
+            # turn from fainting carried {perish3, perish2, perish1} at once. The
+            # counter is a single value, so the newest announcement replaces the
+            # previous one. (The engine happened to survive the pile-up by
+            # decrementing every counter in lockstep and checking PERISH1 first,
+            # but that is an ordering coincidence, not the contract.)
+            volatiles[slot] -= _PERISH_COUNTERS
         volatiles[slot].add(name)
     else:
         volatiles[slot].discard(name)

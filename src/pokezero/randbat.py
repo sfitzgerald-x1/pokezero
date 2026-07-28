@@ -544,6 +544,22 @@ def _build_variants_for_species(
     return tuple(variants)
 
 
+def _hidden_power_alternatives(pool: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """Split a pool carrying several Hidden Powers into one set per HP type.
+
+    Gen 3 ties Hidden Power's type to the IV spread, so a set can carry exactly
+    one. Showdown enforces that by culling the rest from the movepool before it
+    picks moves; the enumeration mirrors that here, keeping every non-HP move in
+    each alternative. Pools with zero or one Hidden Power are returned unchanged.
+    """
+
+    hidden_powers = [move for move in pool if _normalize_move(move).startswith("hiddenpower")]
+    if len(hidden_powers) <= 1:
+        return (pool,)
+    others = tuple(move for move in pool if move not in set(hidden_powers))
+    return tuple(others + (hidden_power,) for hidden_power in hidden_powers)
+
+
 def _enumerate_move_sets(
     movepool: Sequence[str],
     *,
@@ -556,7 +572,15 @@ def _enumerate_move_sets(
 ) -> tuple[tuple[str, ...], ...]:
     unique_pool = tuple(_stable_unique(movepool))
     if len(unique_pool) <= 4:
-        return (unique_pool,)
+        # A pool that already fits in four slots is the set — but "fits" is not
+        # the same as "legal". Showdown's cullMovePool keeps at most ONE Hidden
+        # Power, so a short pool carrying several HP types describes several
+        # ALTERNATIVE sets, not one set holding all of them. Returning it
+        # verbatim built Unown sets with both HP Bug and HP Fighting, whose
+        # single IV spread cannot satisfy both moves at once — the spread is
+        # derived from one HP type, so world construction then failed with
+        # hidden_power_iv_mismatch on the other.
+        return _hidden_power_alternatives(unique_pool)
     candidates = [
         combo
         for combo in itertools.combinations(unique_pool, 4)

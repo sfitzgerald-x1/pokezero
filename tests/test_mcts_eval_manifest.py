@@ -266,3 +266,98 @@ class EngineMctsPolicyModeTest(unittest.TestCase):
             f"-w{config.engine_worlds}-local",
             cell.config_id,
         )
+
+
+class MaterializationGateTest(unittest.TestCase):
+    """The FoulPlay bridge must decide by CAPABILITY, not by policy class.
+
+    Gating on isinstance(RootPUCTSearchPolicy) handed EngineMctsPolicy a None
+    materialization state, so engine search fell back to uniform-legal on every
+    decision — 0/20 against the raw policy's 10/20, with no error raised. A
+    silent capability mismatch is the most expensive kind of bug in a strength
+    study because it reads as a scientific result.
+    """
+
+    def test_engine_policy_declares_the_requirement(self) -> None:
+        from pokezero.engine_search import EngineMctsPolicy
+
+        self.assertTrue(
+            getattr(EngineMctsPolicy, "requires_public_materialization_state", False),
+            "EngineMctsPolicy must declare it needs a materialized public state",
+        )
+
+    def test_bridge_gates_on_capability_not_class(self) -> None:
+        import inspect
+
+        from pokezero import foulplay_bridge
+
+        source = inspect.getsource(foulplay_bridge)
+        gate = source[source.index("public_materialization_state = ("):][:1200]
+        self.assertIn("requires_public_materialization_state", gate)
+
+
+class TrimmedEncoderTablesTest(unittest.TestCase):
+    """Region-trimmed checkpoints must get tables matching THEIR width.
+
+    The exporter derived its layout from the schema default (87 tokens), so a
+    trimmed 39-token checkpoint produced tables the model could not consume and
+    the root/leaf contract check refused the run — trimmed models could not go
+    through the crate at all.
+    """
+
+    def _specs(self):
+        import dataclasses
+        import sys
+
+        sys.path.insert(0, "scripts")
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3, observation_spec_for_schema
+
+        full = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
+        return full, dataclasses.replace(full, transition_token_count=16)
+
+    def test_layout_follows_the_trimmed_spec(self) -> None:
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        full, trimmed = self._specs()
+        default_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        trimmed_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        self.assertEqual(default_layout["token_count"], full.token_count)
+        self.assertEqual(trimmed_layout["token_count"], trimmed.token_count)
+        self.assertLess(trimmed_layout["token_count"], default_layout["token_count"])
+
+    def test_offsets_before_the_transition_tail_are_unchanged(self) -> None:
+        # The transition region is the LAST block, so trimming it must not move
+        # any earlier token offset — that is what keeps the tables valid.
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        _, trimmed = self._specs()
+        default_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        trimmed_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        self.assertEqual(default_layout["token_offsets"], trimmed_layout["token_offsets"])
+
+    def test_trimmed_tables_satisfy_the_contract_guard(self) -> None:
+        # End to end: tables built from a trimmed spec must pass the same
+        # root/leaf validation that rejected the schema-default ones.
+        import json
+        import tempfile
+
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        _, trimmed = self._specs()
+        layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        contract = _contract(
+            token_count=trimmed.token_count,
+            transition_token_count=trimmed.transition_token_count,
+            numeric_feature_count=layout["numeric_feature_count"],
+            categorical_feature_count=layout["categorical_feature_count"],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tables.json"
+            path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
+            validate_encoder_tables(contract, path)  # must not raise

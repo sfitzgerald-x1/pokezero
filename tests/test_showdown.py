@@ -1975,6 +1975,41 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(theirs.self_active_volatiles, ("destinybond",))
 
+    def test_destiny_bond_expires_on_a_confusion_self_hit(self) -> None:
+        # The Gen 3 confusion self-hit consumes the action but emits NEITHER
+        # |move| nor |cant| -- only |-activate|MON|confusion plus the damage. It
+        # is the one MoveAborted path with no line the expiry rule keyed on, so
+        # a confused Destiny Bond user used to keep the volatile forever. That
+        # matters because destinybond is a SEARCHABLE volatile: the phantom is
+        # seeded into every sampled world and prices a KO-revenge that cannot
+        # happen.
+        confused = self._destiny_bond_replay(
+            [
+                "|turn|2",
+                "|-activate|p2a: Charizard|confusion",
+                "|-damage|p2a: Charizard|80/100",
+            ]
+        )
+        self.assertEqual(confused.self_active_volatiles, ())
+
+    def test_perish_counter_replaces_rather_than_accumulates(self) -> None:
+        # Showdown announces the countdown as successive |-start|MON|perishN with
+        # no -end between ticks. Adding each one left a mon one turn from
+        # fainting holding {perish3, perish2, perish1} simultaneously; the
+        # counter is a single value.
+        replay = self._destiny_bond_replay(
+            [
+                "|turn|2",
+                "|-start|p2a: Charizard|perish3",
+                "|turn|3",
+                "|-start|p2a: Charizard|perish2",
+                "|turn|4",
+                "|-start|p2a: Charizard|perish1",
+            ]
+        )
+        perish = tuple(v for v in replay.self_active_volatiles if v.startswith("perish"))
+        self.assertEqual(perish, ("perish1",))
+
     def test_volatiles_cleared_on_end_and_switch(self) -> None:
         ended = self._replay_with(
             [
