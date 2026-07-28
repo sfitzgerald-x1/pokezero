@@ -47,7 +47,17 @@
 #   the engine believed Baton Pass escapes Perish Song. Verified vs real gen3
 #   Showdown (scripts/gen3_switch_differential.py); pinned by
 #   rust/pokezero-search/tests/gen3_switch_fidelity.rs. Touches gen3/state.rs only
-#   (no overlap with the other patches); applied last.
+#   (no overlap with the other patches).
+#   poke-engine-gen3-spikes-layers.patch — gen3 Spikes deal 1/8, 1/6 and 1/4 of
+#   max HP at one, two and three layers. Showdown computes
+#   `[0, 3, 4, 6][layers] * maxhp / 24` (data/mods/gen4/moves.ts, inherited by
+#   gen3 — gen3 -> gen4, NOT gen5) and rounds through `clampIntRange(damage, 1)`:
+#   floor, minimum 1 HP. Upstream used `maxhp * layers / 8`, which over-damages by
+#   exactly 1.5x at two and three layers and dealt ZERO to a 1 HP Shedinja.
+#   Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+#   spikes2layers/spikes3layers); pinned by
+#   rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs. Touches the
+#   switch routine in gen3/generate_instructions.rs only; applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -75,7 +85,8 @@ for patch in \
   poke-engine-gen3-struggle-typeless.patch \
   poke-engine-gen3-rapidspin-fidelity.patch \
   poke-engine-gen3-ability-fidelity.patch \
-  poke-engine-gen3-batonpass-perish.patch; do
+  poke-engine-gen3-batonpass-perish.patch \
+  poke-engine-gen3-spikes-layers.patch; do
   if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
     echo "ERROR: failed to apply $patch" >&2
     exit 1
