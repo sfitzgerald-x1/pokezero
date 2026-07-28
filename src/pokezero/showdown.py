@@ -2535,9 +2535,31 @@ _BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
     "confusion", "leechseed", "substitute", "taunt", "curse", "ingrain", "lockon",
     "grudge", "focusenergy", "charge", "bide", "uproar", "magiccoat", "snatch",
     "mudsport", "watersport", "rage", "partiallytrapped", "perishsong",
+    # Perish Song lives on the mon as its COUNTER (``perish3`` ... ``perish1``),
+    # never as ``perishsong`` -- the sim announces ``|-start|<mon>|perishN``. The
+    # id-only entry therefore matched nothing and the intersection below silently
+    # DROPPED a Baton-Passed countdown, losing a public fact rather than blocking
+    # on it. Misdreavus is the pool's Perish Song user and also its Mean Look
+    # user, so the passed countdown is exactly the line that decides those games.
+    "perish0", "perish1", "perish2", "perish3",
 })
+
+# The transferred volatiles a sampled world can actually MATERIALIZE. Anything
+# transferred but absent here becomes a ``baton-pass:<id>`` blocker.
+#
+# This list lagged the constructor: Substitute, confusion and the Perish counters
+# all became expressible (the first two as named approximations, Perish exactly),
+# but a Baton Pass still walled on them. That mattered -- Baton Pass is on 25
+# species in the pool and Substitute on 75, so BP+Sub is one of the most common
+# lines in the format and it was falling back to a uniform-legal guess.
+#
+# Still blocked, because nothing expresses them: taunt, curse, lockon, grudge,
+# charge, bide, uproar, magiccoat, snatch, rage -- and ``perish0``, whose mon
+# faints on the same tick the engine has no counterpart for.
 _DIRECT_MATERIALIZATION_VOLATILES = frozenset({
     "focusenergy", "ingrain", "leechseed", "mudsport", "watersport",
+    "substitute", "confusion", "partiallytrapped",
+    "perish1", "perish2", "perish3",
 })
 
 
