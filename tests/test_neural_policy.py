@@ -8421,9 +8421,47 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
             self.skipTest("requires torch")
         tensors, _ = self._tensors(filled=8)
         with self.assertRaises(ValueError):
-            neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=0)
+            neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=-1)
         with self.assertRaises(ValueError):
             neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=999)
+
+    def test_k_zero_masks_the_whole_transition_region(self) -> None:
+        # k=0 is VALID (it used to raise): a zero-history arm — transition_token_budget=0, e.g.
+        # the k0-enthalf variant — reads no transition tokens at all, so a mixed-history matchup
+        # must be able to mask the region away entirely. Distinct from "no truncation".
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        tensors, offset = self._tensors(filled=8)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=0)
+        self.assertFalse(torch.any(out["attention_mask"][0, 0, offset:]))
+        self.assertTrue(torch.all(out["numeric_features"][0, 0, offset:] == 0))
+        self.assertTrue(torch.all(out["categorical_ids"][0, 0, offset:] == 0))
+        # the non-transition prefix is untouched
+        self.assertTrue(torch.all(out["attention_mask"][0, 0, :offset]))
+        self.assertTrue(torch.all(out["numeric_features"][0, 0, :offset] == 7.0))
+
+    def test_truncated_frame_is_position_independent(self) -> None:
+        # The load-bearing property for --mixed-history: a truncated frame keeps the surviving
+        # tokens at HIGH region indices, while an encode-time budget frame writes them at indices
+        # 0..k-1. Those are only interchangeable because the transition region is
+        # permutation-invariant (no per-index positional embedding, one shared token type).
+        # Assert the surviving token MULTISET is identical under both layouts, so a mixed-history
+        # matchup feeds each arm exactly the tokens its trained budget would have encoded.
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        keep = 3
+        tensors, offset = self._tensors(filled=8)
+        out = neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=keep)
+        region_att = out["attention_mask"][0, 0, offset:]
+        surviving = torch.nonzero(region_att, as_tuple=False).flatten().tolist()
+        self.assertEqual(surviving, [5, 6, 7])  # the newest 3, sitting high
+        # payload identity: chronological ranks 6,7,8 (1-indexed) — the newest three
+        ranks = sorted(out["numeric_features"][0, 0, offset + i, 0].item() for i in surviving)
+        self.assertEqual(ranks, [6.0, 7.0, 8.0])
+        # an encode-time budget=3 frame would hold the SAME ranks at indices 0..2; the sets match,
+        # so permutation-invariance is the only thing needed to make them equivalent.
 
     def test_v3_tensor_shape_uses_64_token_capacity(self) -> None:
         if not torch_available():
@@ -8437,7 +8475,7 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
             .tolist()
         )
         self.assertEqual(attended, list(range(48, 64)))
-        with self.assertRaisesRegex(ValueError, r"1\.\.64"):
+        with self.assertRaisesRegex(ValueError, r"0\.\.64"):
             neural_policy_module.truncate_history_tensors(tensors, keep_recent_k=65)
 
     def test_policy_forward_matches_manual_truncation(self) -> None:

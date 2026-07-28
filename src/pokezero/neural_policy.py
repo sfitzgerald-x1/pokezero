@@ -1288,9 +1288,11 @@ def truncate_history_tensors(
             "attention_mask does not contain a transition-history region after "
             f"offset {start}."
         )
-    if keep_recent_k < 1 or keep_recent_k > transition_token_capacity:
+    # k=0 is legitimate: a zero-history arm (transition_token_budget=0) reads no transition
+    # tokens at all, so the whole region is masked. It is NOT the same as "no truncation".
+    if keep_recent_k < 0 or keep_recent_k > transition_token_capacity:
         raise ValueError(
-            f"history_mask_k must be in 1..{transition_token_capacity}, got {keep_recent_k}."
+            f"history_mask_k must be in 0..{transition_token_capacity}, got {keep_recent_k}."
         )
     numeric = tensors["numeric_features"].clone()
     categorical = tensors["categorical_ids"].clone()
@@ -1605,9 +1607,9 @@ class TransformerSoftmaxPolicy:
                 if schema_version is not None
                 else TRANSITION_TOKEN_COUNT
             )
-            if not 0 < self.history_mask_k <= transition_token_capacity:
+            if not 0 <= self.history_mask_k <= transition_token_capacity:
                 raise ValueError(
-                    f"history_mask_k must be in 1..{transition_token_capacity}, "
+                    f"history_mask_k must be in 0..{transition_token_capacity}, "
                     f"got {self.history_mask_k}."
                 )
         if self.policy_id is None:
