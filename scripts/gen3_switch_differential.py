@@ -37,10 +37,33 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   after ``|switch|``. The divergence
                   ``third_party/poke-engine-gen3-residual-defer-on-faint.patch``
                   fixes; ``faintresidualscontrol`` is the same line with no faint.
+  confusionduration : Confuse Ray, then the victim attacks every turn -> confusion
+                  ENDS, after between one and four turns that carried a self-hit
+                  roll, and never activates again. This is the divergence
+                  ``third_party/poke-engine-gen3-confusion-duration.patch`` fixes:
+                  upstream had no expiry path at all, so search saw a permanent
+                  50%-per-turn self-hit. Showdown rolls
+                  ``time = this.random(2, 6)`` once at ``addVolatile`` and gen3's
+                  ``onBeforeMove`` (the gen4 mod's) decrements it before the
+                  self-hit roll, so ``-activate|...|confusion`` fires ``time - 1``
+                  times -- uniform on {1,2,3,4} -- and then ``-end``.
+  confusiondurationcontrol : same line without Confuse Ray -> no confusion at all.
+  confusionbatonpass : a confused Smeargle Baton Passes into Snorlax -> the
+                  RECEIVER is confused, and burns the passer's REMAINING duration
+                  (``copyVolatileFrom`` shallow-clones every volatile lacking
+                  ``noCopy``; ``confusion`` has none anywhere in gen3's chain, and
+                  ``onStart`` never re-runs so there is no fresh roll).
+  confusionbatonpasscontrol : same line with an ORDINARY switch -> the receiver is
+                  clean, because ``Pokemon.clearVolatile()`` blanks the volatile
+                  table on a normal switch-out.
 
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
-seed. Everything else is deterministic.
+seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
+confusion check on the Baton Pass turn can snap out (nothing left to carry, caught
+by ``setup_landed``) or self-hit (the pass never happens, so the scripted
+force-switch boundary never arrives -- ``tolerate_desync`` turns that strict
+boundary error into a skip rather than a crash). Everything else is deterministic.
 
 Usage:
     .venv/bin/python scripts/gen3_switch_differential.py \
@@ -55,7 +78,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from pokezero.local_showdown import LocalShowdownConfig
+from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownError
 from pokezero.showdown_fixture import FixturePokemon, run_multi_turn_fixture
 
 
@@ -84,6 +107,16 @@ def _snorlax():  # Baton Pass receiver
 def _misdreavus():  # inert opponent (Levitate, no residual interference)
     return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
                           moves=("Splash", "Confuse Ray"))
+
+
+def _blissey_confusable():  # confusion victim: no Own Tempo, no Substitute, no recovery
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Splash",))
+
+
+def _smeargle_bp():  # Baton Pass carrier, no Perish Song (confusion is the payload)
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Baton Pass", "Splash"))
 
 
 def _cacturne():  # Leech Seed setter
@@ -135,6 +168,23 @@ def _spikes_cleared(lines) -> bool:
     return any(
         line.startswith("|-sideend|p2") and "Spikes" in line for line in lines
     )
+
+
+def _count(lines, prefix: str) -> int:
+    return sum(1 for line in lines if line.startswith(prefix))
+
+
+def _activates_after_end(lines, seat: str) -> bool:
+    """True if `seat` took another confusion check after ``-end|...|confusion``."""
+    end = f"|-end|{seat}|confusion"
+    activate = f"|-activate|{seat}|confusion"
+    seen_end = False
+    for line in lines:
+        if line.startswith(end):
+            seen_end = True
+        elif seen_end and line.startswith(activate):
+            return True
+    return False
 
 
 def _residual_from(lines, source: str, seat: str) -> bool:
@@ -362,24 +412,106 @@ def _spec(name):
                     "survivor_healed": True},
             landmark=lambda L: not _has(L, "|faint|"),
             landmark_desc="nobody fainted")
+    if name == "confusionduration":
+        # p1 Misdreavus (faster) confuses p2 Blissey, which then attacks every
+        # turn for seven more boundaries. Showdown emits one `-activate` per turn
+        # that carried a self-hit roll and then exactly one `-end`; a permanent
+        # confusion would still be activating at the end of the script.
+        return dict(
+            p1=[_misdreavus()], p2=[_blissey_confusable()],
+            turns=[("move confuseray", "move splash")]
+                  + [("move splash", "move splash")] * 7,
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "risk_turns": _count(L, "|-activate|p2a: Blissey|confusion"),
+                "ends": _count(L, "|-end|p2a: Blissey|confusion"),
+                "activates_after_end": _activates_after_end(L, "p2a: Blissey"),
+            },
+            # `risk_turns` is `time - 1` for `time ~ Uniform{2,3,4,5}`; the
+            # per-seed value is checked against the window by run_scenario's
+            # `expect_in` rather than pinned to one number.
+            expect={"ends": 1, "activates_after_end": False},
+            expect_in={"risk_turns": (1, 2, 3, 4)},
+            landmark=lambda L: _has(L, "|-start|p2a: Blissey|confusion"),
+            landmark_desc="confusion applied")
+    if name == "confusiondurationcontrol":
+        return dict(
+            p1=[_misdreavus()], p2=[_blissey_confusable()],
+            turns=[("move splash", "move splash")] * 8,
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {"any_confusion": _has(L, "confusion")},
+            expect={"any_confusion": False},
+            landmark=lambda L: True, landmark_desc="")
+    if name == "confusionbatonpass":
+        # p2 Misdreavus (faster) confuses p1 Smeargle, which Baton Passes into
+        # Snorlax. The volatile rides the pass, so the RECEIVER shows the rest of
+        # the duration: `-activate` and/or `-end` under Snorlax's name.
+        return dict(
+            p1=[_smeargle_bp(), _snorlax()], p2=[_misdreavus()],
+            turns=[("move splash", "move confuseray"), ("move batonpass", "move splash"),
+                   ("switch 2", None)] + [("move splash", "move splash")] * 6,
+            measured=None,
+            # The pass turn's own confusion check may snap the passer out, leaving
+            # nothing to carry; `-activate` on that step means it is still on.
+            setup_step=1,
+            setup_landed=lambda L: _has(L, "|-activate|p1a: Smeargle|confusion"),
+            tolerate_desync=True,
+            seeds=(1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009),
+            facts=lambda L: {
+                "receiver_confused": _has(L, "|-activate|p1a: Snorlax|confusion")
+                                     or _has(L, "|-end|p1a: Snorlax|confusion"),
+            },
+            expect={"receiver_confused": True},
+            landmark=lambda L: _has(L, "[from] Baton Pass"),
+            landmark_desc="Baton Pass resolved")
+    if name == "confusionbatonpasscontrol":
+        # Same line, ORDINARY switch: `Pokemon.clearVolatile()` drops confusion, so
+        # the receiver is clean. A switch also cannot be aborted by a self-hit, so
+        # this control needs neither the desync tolerance nor the seed widening.
+        return dict(
+            p1=[_smeargle_bp(), _snorlax()], p2=[_misdreavus()],
+            turns=[("move splash", "move confuseray"), ("switch 2", "move splash")]
+                  + [("move splash", "move splash")] * 6,
+            measured=None, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-start|p1a: Smeargle|confusion"),
+            facts=lambda L: {
+                "receiver_confused": _has(L, "|-activate|p1a: Snorlax|confusion")
+                                     or _has(L, "|-end|p1a: Snorlax|confusion"),
+            },
+            expect={"receiver_confused": False},
+            landmark=lambda L: True, landmark_desc="")
     raise ValueError(name)
 
 
 SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "leechseed", "leechseedcontrol", "partialtrap", "partialtrapcontrol",
              "spikes1layer", "spikes2layers", "spikes3layers", "spikesminimum",
-             "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol")
+             "faintresiduals", "faintresidualsdeferred", "faintresidualscontrol",
+             "confusionduration", "confusiondurationcontrol",
+             "confusionbatonpass", "confusionbatonpasscontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
     spec = _spec(name)
     notes: list[str] = []
     asserted = 0
+    seeds = spec.get("seeds") or seeds
     for seed in seeds:
-        result = run_multi_turn_fixture(
-            p1_team=spec["p1"], p2_team=spec["p2"], turns=spec["turns"],
-            seed=seed, config=config,
-        )
+        try:
+            result = run_multi_turn_fixture(
+                p1_team=spec["p1"], p2_team=spec["p2"], turns=spec["turns"],
+                seed=seed, config=config,
+            )
+        except LocalShowdownError as exc:
+            # A scripted boundary that never arrives is a desynchronized
+            # trajectory, which the fixture refuses to paper over. For scenarios
+            # whose setup move can be aborted mid-script (a confusion self-hit
+            # eating a Baton Pass), that is the same "setup missed" case the
+            # setup_landed gate handles, just surfaced one layer earlier.
+            if not spec.get("tolerate_desync"):
+                raise
+            notes.append(f"  seed {seed}: setup aborted mid-script, skipped ({exc})")
+            continue
         steps = result.steps
         if spec["setup_step"] is not None:
             setup_lines = steps[spec["setup_step"]].protocol_lines
@@ -399,6 +531,11 @@ def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
             if facts[key] != want:
                 return False, notes + [
                     f"  seed {seed}: {key}={facts[key]!r}, ground truth {want!r}"
+                ]
+        for key, allowed in spec.get("expect_in", {}).items():
+            if facts[key] not in allowed:
+                return False, notes + [
+                    f"  seed {seed}: {key}={facts[key]!r}, ground truth one of {allowed!r}"
                 ]
         asserted += 1
     if asserted == 0:

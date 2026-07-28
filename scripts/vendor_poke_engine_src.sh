@@ -8,75 +8,10 @@
 # The vendored tree is fetched, never committed: third_party/poke-engine-src/ is
 # gitignored. Re-run this script after a clean checkout before building the crate.
 #
-# Patches applied (third_party/), IN ORDER:
-#   poke-engine-gen3-residual-order.patch — gen3 end-of-turn residual order fix
-#   (see setup_poke_engine.sh header and docs/engine_fidelity_findings.md).
-#   poke-engine-gen3-attract.patch — gen3 Attract 50% move-immobilization fix
-#   (see setup_poke_engine.sh header and docs/engine_fidelity_findings.md);
-#   authored against the residual-patched tree, applied AFTER residual-order.
-#   poke-engine-gen3-struggle-typeless.patch — gen3 Struggle is TYPELESS (neutral
-#   vs all types incl. Ghost, no STAB), per real Gen II+ mechanics; upstream
-#   defines Struggle as Normal-type, which wrongly made gen3 Struggle immune vs
-#   Ghost and resisted by Rock/Steel. Compile-time gated so gen1 stays Normal;
-#   authored against the attract-patched tree, applied AFTER attract.
-#   poke-engine-gen3-rapidspin-fidelity.patch — gen3 Rapid Spin / Protect fidelity.
-#   (1) Protect leak: the move-id-keyed post-hit handlers (choice_hazard_clear,
-#   choice_special_effect) survived remove_effects_for_protect() (which leaves
-#   move_id intact), so a Protect-blocked Rapid Spin still stripped the spinner's
-#   own Spikes, and Seismic Toss/Super Fang/Endeavor etc. still dealt fixed damage
-#   THROUGH Protect. before_move now returns a blocked_by_protect bool threaded to
-#   those handlers, which early-return when blocked (never gated on damage/hit_sub,
-#   so a spin that connects on a Substitute STILL clears). (2) A connecting Rapid
-#   Spin now also frees the user from Leech Seed and partial-trapping (Wrap/Bind/
-#   Fire Spin/Clamp/Whirlpool) — previously unmodelled. Verified vs real gen3
-#   Showdown (scripts/rapidspin_differential.py). Touches generate_instructions.rs
-#   + choice_effects.rs only (no overlap with the other patches); authored against
-#   the struggle-patched tree, applied AFTER struggle-typeless.
-#   poke-engine-gen3-ability-fidelity.patch — full Gen 3 randbats ability audit
-#   corrections. Includes exact chance branches and status/volatile immunity,
-#   recoil/Wonder Guard/Sturdy, Forecast/weather suppression, gender-aware Cute
-#   Charm, Intimidate through Substitute, Gen 3 Lightning Rod singles semantics,
-#   and speed-tie isolation.
-#   Authored against the rapidspin-patched tree.
-#   poke-engine-gen3-batonpass-perish.patch — gen3 Baton Pass carries the Perish
-#   Song counter. Showdown copies every volatile without a `noCopy` flag
-#   (sim/pokemon.ts copyVolatileFrom) and the perish volatiles carry none in gen3
-#   (which inherits gen4 -> gen5; neither mod overrides them), so the count rides
-#   the pass and the RECEIVER faints at perish0. Upstream's
-#   remove_volatile_statuses_on_switch retained only Substitute and Leech Seed, so
-#   the engine believed Baton Pass escapes Perish Song. Verified vs real gen3
-#   Showdown (scripts/gen3_switch_differential.py); pinned by
-#   rust/pokezero-search/tests/gen3_switch_fidelity.rs. Touches gen3/state.rs only
-#   (no overlap with the other patches).
-#   poke-engine-gen3-spikes-layers.patch — gen3 Spikes deal 1/8, 1/6 and 1/4 of
-#   max HP at one, two and three layers. Showdown computes
-#   `[0, 3, 4, 6][layers] * maxhp / 24` (data/mods/gen4/moves.ts, inherited by
-#   gen3 — gen3 -> gen4, NOT gen5) and rounds through `clampIntRange(damage, 1)`:
-#   floor, minimum 1 HP. Upstream used `maxhp * layers / 8`, which over-damages by
-#   exactly 1.5x at two and three layers and dealt ZERO to a 1 HP Shedinja.
-#   Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
-#   spikes2layers/spikes3layers); pinned by
-#   rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs. Touches the
-#   switch routine in gen3/generate_instructions.rs only.
-#   poke-engine-gen3-residual-defer-on-faint.patch — gen3 resolves a forced
-#   replacement BEFORE the end-of-turn residual block. Showdown's runAction sees
-#   the pending switch flag, issues a `switch` request and returns with the
-#   queued `residual` action untouched, so the block runs only once the
-#   replacement is on the field — and applies to the replacement too. Upstream
-#   ran the residuals in the same instruction set as the faint (and, for a slow
-#   pivot, dropped them entirely), so an incoming Pokemon never took sand/hail/
-#   status damage on the turn it came in and the weather/screen counters ticked
-#   on the wrong side of the switch. The deferral is marked with the existing
-#   per-side `force_switch` flag via its existing reversible toggle instruction,
-#   which is what keeps a faint caused BY the residual block — already run — from
-#   being mistaken for a pending one and double-applying. Verified vs real gen3
-#   Showdown (scripts/gen3_switch_differential.py: faintresiduals + control);
-#   pinned by rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs.
-#   Touches the end-of-turn generation in gen3/generate_instructions.rs plus
-#   get_all_options in gen3/state.rs; authored against the spikes-patched tree,
-#   applied last.
-#   --fuzz=0 so a version bump fails loudly instead of applying hunks at
-#   shifted locations.
+# Patches applied: third_party/poke-engine-gen3-patches.txt is the single source
+# of truth for the list AND its order, shared with the other builder so the two
+# can never drift (they did once — see that file's header). Per-patch rationale
+# lives there and in docs/engine_fidelity_findings.md.
 #
 # Requires: uv, rsync. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
 set -euo pipefail
@@ -96,21 +31,15 @@ tar xzf "$DL_DIR"/poke_engine-"$VERSION".tar.gz -C "$DL_DIR"
 SRC="$DL_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-for patch in \
-  poke-engine-gen3-residual-order.patch \
-  poke-engine-gen3-attract.patch \
-  poke-engine-gen3-struggle-typeless.patch \
-  poke-engine-gen3-rapidspin-fidelity.patch \
-  poke-engine-gen3-ability-fidelity.patch \
-  poke-engine-gen3-batonpass-perish.patch \
-  poke-engine-gen3-spikes-layers.patch \
-  poke-engine-gen3-residual-defer-on-faint.patch; do
+PATCH_LIST="$REPO/third_party/poke-engine-gen3-patches.txt"
+while IFS= read -r patch <&3; do
+  case "$patch" in ''|'#'*) continue ;; esac
   if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
     echo "ERROR: failed to apply $patch" >&2
     exit 1
   fi
   echo "      $patch: applied"
-done
+done 3< "$PATCH_LIST"
 
 echo "[3/3] install into $DEST"
 # Keep the destination directory stable. Finder can recreate .DS_Store between

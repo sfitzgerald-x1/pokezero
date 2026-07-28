@@ -1,0 +1,126 @@
+# poke-engine gen3 patch set — SINGLE SOURCE OF TRUTH for the patch list and its order.
+#
+# Read by BOTH builders:
+#   scripts/vendor_poke_engine_src.sh — vendors the Rust source into
+#     third_party/poke-engine-src/ for the native pokezero-search crate.
+#   scripts/setup_poke_engine.sh      — builds the Python wheel that the
+#     wheel-driven harnesses import (pokezero.engine_fidelity,
+#     scripts/engine_fidelity_multiturn.py, scripts/rapidspin_differential.py).
+#
+# They used to carry separate hand-maintained lists and DID drift: the wheel
+# builder sat on the first five patches while the vendored source grew to eight,
+# so every wheel-driven harness was silently measuring an older gen3 engine than
+# the one the search crate links. Add a patch HERE and both builders pick it up.
+#
+# Format: one patch filename per line, relative to third_party/, in APPLY ORDER.
+# Blank lines and `#` comments are ignored. Order is load-bearing — each patch is
+# authored against the tree the ones above it leave behind — and both builders
+# apply with `--fuzz=0`, so a version bump fails loudly instead of applying hunks
+# at shifted locations.
+#
+# Rationale for each fix lives in docs/engine_fidelity_findings.md; the summaries
+# below say what the patch touches and what it is authored against.
+
+# gen3 end-of-turn residual order: Leftovers (5) + Shed Skin (5.3), then Leech
+# Seed (8), then poison/toxic/burn damage (9/10), then threshold berries + Rain
+# Dish + Speed Boost (10+). Upstream ran ALL items/abilities after status damage,
+# netting residuals against the Leftovers heal.
+poke-engine-gen3-residual-order.patch
+
+# gen3 Attract (infatuation) 50%-per-turn move immobilization. Upstream accepts
+# the ATTRACT volatile but wholly ignores it (zero behavioral references in
+# gen3); adds the 50/50 chance branch mirroring the confusion self-hit so search
+# prices it. Authored against the residual-patched tree.
+poke-engine-gen3-attract.patch
+
+# gen3 Struggle is TYPELESS (neutral vs all types incl. Ghost, no STAB), per real
+# Gen II+ mechanics; upstream defines Struggle as Normal-type, which wrongly made
+# gen3 Struggle immune vs Ghost and resisted by Rock/Steel. Compile-time gated so
+# gen1 stays Normal. Authored against the attract-patched tree.
+poke-engine-gen3-struggle-typeless.patch
+
+# gen3 Rapid Spin / Protect fidelity. (1) Protect leak: the move-id-keyed
+# post-hit handlers (choice_hazard_clear, choice_special_effect) survived
+# remove_effects_for_protect() (which leaves move_id intact), so a
+# Protect-blocked Rapid Spin still stripped the spinner's own Spikes, and Seismic
+# Toss/Super Fang/Endeavor etc. still dealt fixed damage THROUGH Protect.
+# before_move now returns a blocked_by_protect bool threaded to those handlers,
+# which early-return when blocked (never gated on damage/hit_sub, so a spin that
+# connects on a Substitute STILL clears). (2) A connecting Rapid Spin now also
+# frees the user from Leech Seed and partial-trapping (Wrap/Bind/Fire Spin/Clamp/
+# Whirlpool) — previously unmodelled. Verified vs real gen3 Showdown
+# (scripts/rapidspin_differential.py). Touches generate_instructions.rs +
+# choice_effects.rs only. Authored against the struggle-patched tree.
+poke-engine-gen3-rapidspin-fidelity.patch
+
+# Full Gen 3 randbats ability audit corrections: exact chance branches and
+# status/volatile immunity, recoil/Wonder Guard/Sturdy, Forecast/weather
+# suppression, gender-aware Cute Charm, Intimidate through Substitute, Gen 3
+# Lightning Rod singles semantics, and speed-tie isolation. Authored against the
+# rapidspin-patched tree.
+poke-engine-gen3-ability-fidelity.patch
+
+# gen3 Baton Pass carries the Perish Song counter. Showdown copies every volatile
+# without a `noCopy` flag (sim/pokemon.ts copyVolatileFrom) and the perish
+# volatiles carry none in gen3 (which inherits gen4 -> gen5; neither mod
+# overrides them), so the count rides the pass and the RECEIVER faints at
+# perish0. Upstream's remove_volatile_statuses_on_switch retained only Substitute
+# and Leech Seed, so the engine believed Baton Pass escapes Perish Song. Verified
+# vs real gen3 Showdown (scripts/gen3_switch_differential.py); pinned by
+# rust/pokezero-search/tests/gen3_switch_fidelity.rs. Touches gen3/state.rs only.
+poke-engine-gen3-batonpass-perish.patch
+
+# gen3 Spikes deal 1/8, 1/6 and 1/4 of max HP at one, two and three layers.
+# Showdown computes `[0, 3, 4, 6][layers] * maxhp / 24` (data/mods/gen4/moves.ts,
+# inherited by gen3 — gen3 -> gen4, NOT gen5) and rounds through
+# `clampIntRange(damage, 1)`: floor, minimum 1 HP. Upstream used
+# `maxhp * layers / 8`, which over-damages by exactly 1.5x at two and three
+# layers and dealt ZERO to a 1 HP Shedinja. Verified vs real gen3 Showdown
+# (scripts/gen3_switch_differential.py: spikes2layers/spikes3layers); pinned by
+# rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs. Touches the switch
+# routine in gen3/generate_instructions.rs only.
+poke-engine-gen3-spikes-layers.patch
+
+# gen3 resolves a forced replacement BEFORE the end-of-turn residual block.
+# Showdown's runAction sees the pending switch flag, issues a `switch` request
+# and returns with the queued `residual` action untouched, so the block runs only
+# once the replacement is on the field — and applies to the replacement too.
+# Upstream ran the residuals in the same instruction set as the faint (and, for a
+# slow pivot, dropped them entirely), so an incoming Pokemon never took sand/hail/
+# status damage on the turn it came in and the weather/screen counters ticked on
+# the wrong side of the switch. The deferral is marked with the existing per-side
+# `force_switch` flag via its existing reversible toggle instruction, which is
+# what keeps a faint caused BY the residual block — already run — from being
+# mistaken for a pending one and double-applying. Verified vs real gen3 Showdown
+# (scripts/gen3_switch_differential.py: faintresiduals + control); pinned by
+# rust/pokezero-search/tests/gen3_hazard_residual_fidelity.rs. Touches the
+# end-of-turn generation in gen3/generate_instructions.rs plus get_all_options in
+# gen3/state.rs. Authored against the spikes-patched tree.
+poke-engine-gen3-residual-defer-on-faint.patch
+
+# gen3 CONFUSION is a BOUNDED stochastic duration, and Baton Pass carries it.
+# Upstream modelled confusion as permanent until switch-out (no expiry path
+# anywhere in src/gen3/), so search saw an unbounded 50%-per-turn self-hit.
+# Showdown rolls `time = this.random(2, 6)` once at addVolatile
+# (data/conditions.ts `confusion.onStart`, which gen3 inherits) and gen3's
+# onBeforeMove (the gen4 mod's) decrements first, snaps out and lets the move
+# through at zero, and only otherwise rolls the 50% self-hit — so a self-hit roll
+# happens on `time - 1` attacking turns, uniform on {1,2,3,4}. Modelled as the
+# same hazard ladder gen3 sleep already uses (`chance_confusion_ends`, mirroring
+# `chance_to_wake_up`) over the ALREADY-PRESENT
+# `volatile_status_durations.confusion` counter, forked at end of turn where both
+# outcomes are terminal. Also (a) moves the full-paralysis roll after the
+# confusion and Attract branches to match Showdown's onBeforeMove priorities
+# (confusion 3 > attract 2 > par 1), which the counter needs to advance on a
+# fully-paralyzed turn, and (b) retains CONFUSION with its counter across a Baton
+# Pass (`copyVolatileFrom` shallow-clones every volatile lacking `noCopy`;
+# confusion has none in gen3's chain) — deliberately deferred by the
+# batonpass-perish patch, since carrying a PERMANENT confusion would have been
+# worse than dropping it. Verified vs real gen3 Showdown
+# (scripts/gen3_switch_differential.py); pinned by
+# rust/pokezero-search/tests/gen3_confusion_fidelity.rs. Touches
+# gen3/generate_instructions.rs, gen3/state.rs and gen3/abilities.rs. Shares the
+# end-of-turn branch site with residual-defer-on-faint (the confusion ladder
+# forks each branch right where Shed Skin does), so it is authored against the
+# residual-defer-patched tree and applied last.
+poke-engine-gen3-confusion-duration.patch

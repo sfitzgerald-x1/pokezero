@@ -1,0 +1,450 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -7,9 +7,9 @@
+ };
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+-    BoostInstruction, ChangeAbilityInstruction, ChangeStatusInstruction, ChangeType, ChangeWeather,
+-    DamageInstruction, HealInstruction, Instruction, RemoveVolatileStatusInstruction,
+-    StateInstructions,
++    BoostInstruction, ChangeAbilityInstruction, ChangeStatusInstruction, ChangeType,
++    ChangeVolatileStatusDurationInstruction, ChangeWeather, DamageInstruction, HealInstruction,
++    Instruction, RemoveVolatileStatusInstruction, StateInstructions,
+ };
+ use crate::pokemon::PokemonName;
+ use crate::state::{
+@@ -391,6 +391,26 @@
+     };
+     if let Some(volatile) = cured_volatile {
+         if attacking_side.volatile_statuses.contains(&volatile) {
++            // pokezero gen3 fidelity fix: keep the confusion duration counter in
++            // lockstep with the volatile. Reachable now that Baton Pass carries
++            // CONFUSION — an Own Tempo receiver can be handed a confusion with a
++            // partly-burned counter, and Showdown's `owntempo.onUpdate` clears it
++            // on arrival. A leaked counter would start that side's NEXT confusion
++            // mid-ladder.
++            if volatile == PokemonVolatileStatus::CONFUSION
++                && attacking_side.volatile_status_durations.confusion != 0
++            {
++                instructions
++                    .instruction_list
++                    .push(Instruction::ChangeVolatileStatusDuration(
++                        ChangeVolatileStatusDurationInstruction {
++                            side_ref: *side_ref,
++                            volatile_status: volatile,
++                            amount: -1 * attacking_side.volatile_status_durations.confusion,
++                        },
++                    ));
++                attacking_side.volatile_status_durations.confusion = 0;
++            }
+             attacking_side.volatile_statuses.remove(&volatile);
+             instructions
+                 .instruction_list
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -42,6 +42,7 @@
+ 
+ pub const BASE_CRIT_CHANCE: f32 = 1.0 / 16.0;
+ pub const MAX_SLEEP_TURNS: i8 = 4;
++pub const MAX_CONFUSION_TURNS: i8 = 4;
+ pub const HIT_SELF_IN_CONFUSION_CHANCE: f32 = 1.0 / 2.0;
+ pub const ATTRACT_IMMOBILIZE_CHANCE: f32 = 1.0 / 2.0;
+ pub const CONSECUTIVE_PROTECT_CHANCE: f32 = 1.0 / 2.0;
+@@ -70,6 +71,78 @@
+     }
+ }
+ 
++/// pokezero gen3 fidelity fix: CONFUSION is a BOUNDED stochastic duration, not a
++/// permanent volatile. Showdown rolls `this.effectState.time = this.random(2, 6)`
++/// once, at `addVolatile` (data/conditions.ts `confusion.onStart`; gen3 inherits
++/// gen4 -> gen5 -> ... and no mod in that chain overrides `onStart`), so
++/// `time` is uniform on {2,3,4,5}. gen3's `onBeforeMove` is the gen4 mod's
++/// (data/mods/gen4/conditions.ts): it decrements FIRST, snaps out when the
++/// counter reaches zero and lets the move through, and only otherwise rolls the
++/// 50% self-hit. The mon therefore takes a self-hit roll on `time - 1` attacking
++/// turns — uniform on {1,2,3,4} — and never more than four.
++///
++/// `turns_confused` counts attacking turns on which the confusion check has
++/// already run (the `volatile_status_durations.confusion` counter, incremented
++/// in `generate_instructions_from_existing_status_conditions`). Conditioned on
++/// having survived `n` such turns, the chance this was the last one is
++/// `1 / (1 + MAX_CONFUSION_TURNS - n)` — 1/4, 1/3, 1/2, 1 — the identical
++/// hazard ladder gen3 sleep already uses above, because gen3 sleep is rolled
++/// from the same `random(2, 6)` shape. The ladder is exact, not an
++/// approximation: it reproduces the uniform-on-{1,2,3,4} marginal exactly while
++/// keeping the per-turn self-hit chance at 50%, and it costs one extra branch
++/// per confused turn instead of the four-way fan-out a roll-at-application
++/// model would need.
++///
++/// Note on WHEN this fires: the ladder is evaluated at END OF TURN
++/// (`add_end_of_turn_branches`) rather than at the start of the next attacking
++/// turn. That is forced by the engine's single-surviving-branch structure — a
++/// snap-out branch has to CONTINUE through the move, and only one branch can,
++/// whereas at end of turn both branches are terminal. The two are equivalent for
++/// everything observable: Showdown's snap-out turn carries no self-hit roll and
++/// lets the move through, exactly like a turn on which the engine already
++/// dropped the volatile. The only residue is that Showdown keeps an inert
++/// `time == 1` confusion visible for one decision boundary longer, which the
++/// engine has already cleared; see docs/engine_fidelity_findings.md.
++fn chance_confusion_ends(turns_confused: i8) -> f32 {
++    if turns_confused <= 0 {
++        0.0
++    } else if turns_confused >= MAX_CONFUSION_TURNS {
++        1.0
++    } else {
++        1.0 / (1 + MAX_CONFUSION_TURNS - turns_confused) as f32
++    }
++}
++
++/// Drop CONFUSION from `side_ref` and zero its duration counter, maintaining the
++/// invariant the ladder relies on: `volatile_status_durations.confusion` is 0
++/// whenever the CONFUSION volatile is absent.
++fn end_confusion(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
++    let side = state.get_side(side_ref);
++    let duration = side.volatile_status_durations.confusion;
++    if duration != 0 {
++        instructions
++            .instruction_list
++            .push(Instruction::ChangeVolatileStatusDuration(
++                ChangeVolatileStatusDurationInstruction {
++                    side_ref: *side_ref,
++                    volatile_status: PokemonVolatileStatus::CONFUSION,
++                    amount: -duration,
++                },
++            ));
++        side.volatile_status_durations.confusion = 0;
++    }
++    instructions
++        .instruction_list
++        .push(Instruction::RemoveVolatileStatus(
++            RemoveVolatileStatusInstruction {
++                side_ref: *side_ref,
++                volatile_status: PokemonVolatileStatus::CONFUSION,
++            },
++        ));
++    side.volatile_statuses
++        .remove(&PokemonVolatileStatus::CONFUSION);
++}
++
+ fn set_last_used_move_as_switch(
+     side: &mut Side,
+     new_pokemon_index: PokemonIndex,
+@@ -415,6 +488,29 @@
+             volatile_status: volatile_status.volatile_status,
+         });
+ 
++        // pokezero gen3 fidelity fix: a freshly applied CONFUSION starts at the
++        // bottom of the duration ladder. Showdown re-rolls `time` from scratch in
++        // `onStart` (and never restarts an active confusion — `addVolatile`
++        // bails, which the `active_volatiles.contains` guard above already
++        // reproduces). The engine's own paths keep the counter at 0 whenever the
++        // volatile is absent, so this only ever fires for a State handed in from
++        // outside — a deserialized state string or a Python-built state — where
++        // the counter could otherwise strand a new confusion mid-ladder.
++        if volatile_status.volatile_status == PokemonVolatileStatus::CONFUSION
++            && side.volatile_status_durations.confusion != 0
++        {
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::ChangeVolatileStatusDuration(
++                    ChangeVolatileStatusDurationInstruction {
++                        side_ref: target_side,
++                        volatile_status: PokemonVolatileStatus::CONFUSION,
++                        amount: -1 * side.volatile_status_durations.confusion,
++                    },
++                ));
++            side.volatile_status_durations.confusion = 0;
++        }
++
+         side.volatile_statuses
+             .insert(volatile_status.volatile_status);
+         incoming_instructions.instruction_list.push(ins);
+@@ -1399,15 +1495,6 @@
+     let attacker_ability = attacking_side.get_active_immutable().ability;
+     let attacker_active = attacking_side.get_active();
+     match attacker_active.status {
+-        PokemonStatus::PARALYZE => {
+-            // Fully-Paralyzed Branch
+-            let mut fully_paralyzed_instruction = incoming_instructions.clone();
+-            fully_paralyzed_instruction.update_percentage(0.25);
+-            final_instructions.push(fully_paralyzed_instruction);
+-
+-            // Non-Paralyzed Branch
+-            incoming_instructions.update_percentage(0.75);
+-        }
+         PokemonStatus::FREEZE => {
+             let mut still_frozen_instruction = incoming_instructions.clone();
+             still_frozen_instruction.update_percentage(0.80);
+@@ -1620,6 +1707,34 @@
+         .contains(&PokemonVolatileStatus::CONFUSION)
+         && attacker_ability != Abilities::OWNTEMPO
+     {
++        // pokezero gen3 fidelity fix (confusion duration): burn one attacking
++        // turn off the bounded counter. Showdown's `confusion.onBeforeMove`
++        // decrements `time` on every turn the handler actually runs, and the
++        // handler is pre-empted by everything at a higher onBeforeMove priority
++        // — recharge (11), sleep and freeze (10), flinch (8), Disable (7),
++        // Taunt (5). The engine reproduces that reachability exactly: recharge,
++        // flinch, Disable and Taunt short-circuit in `cannot_use_move` before
++        // this function is entered, and the sleep/freeze arms above push their
++        // "no move" branches to `final_instructions` without falling through
++        // here. Attract (2) and paralysis (1) are LOWER priority than confusion
++        // (3) and are resolved after this block, so a fully-paralyzed or
++        // infatuation-immobilized turn still burns a confusion turn — as it does
++        // in Showdown.
++        //
++        // The increment goes on `incoming_instructions` BEFORE the self-hit
++        // clone so BOTH outcomes carry it: hitting yourself does not end
++        // confusion and does not skip the decrement.
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::ChangeVolatileStatusDuration(
++                ChangeVolatileStatusDurationInstruction {
++                    side_ref: *attacking_side_ref,
++                    volatile_status: PokemonVolatileStatus::CONFUSION,
++                    amount: 1,
++                },
++            ));
++        attacking_side.volatile_status_durations.confusion += 1;
++
+         let mut hit_yourself_instruction = incoming_instructions.clone();
+         hit_yourself_instruction.update_percentage(HIT_SELF_IN_CONFUSION_CHANCE);
+ 
+@@ -1658,20 +1773,13 @@
+     // chance-node machinery price it exactly, as they already do for full
+     // paralysis and the confusion self-hit. Unlike confusion there is no
+     // self-damage: the immobilized branch is an empty-delta terminal (the move
+-    // never executes), identical in shape to the fully-paralyzed branch pushed by
+-    // the PARALYZE arm above.
++    // never executes), identical in shape to the fully-paralyzed branch pushed
++    // below.
+     //
+     // Ordering: Showdown gen3 resolves Attract's onBeforeMove at priority 2
+     // (data/moves.ts `attract` condition), which runs AFTER confusion (priority 3)
+-    // and BEFORE paralysis (priority 1). Placing this check right after the
+-    // CONFUSION branch reproduces the confusion->attract split exactly. Paralysis
+-    // is resolved earlier in this function (engine convention: the status match
+-    // runs first), so for a mon that is BOTH paralyzed and attracted the engine's
+-    // internal immobilized-reason split differs from Showdown's, but the net
+-    // "move executes" probability is identical (multiplication is commutative) and
+-    // both immobilized branches carry the same empty delta -> the leaf-state
+-    // distribution is exact; only the rendered cant-reason label (an events.rs
+-    // concern) depends on which volatile is credited.
++    // and BEFORE paralysis (priority 1). Placing this check between the CONFUSION
++    // branch and the paralysis branch reproduces that chain exactly.
+     //
+     // Acts on volatile presence alone: Showdown only applies `attract` to a valid
+     // infatuation target, so its presence already implies a valid source/gender.
+@@ -1689,6 +1797,32 @@
+         final_instructions.push(immobilized_instruction);
+ 
+         incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
++    }
++
++    // Full paralysis. Showdown resolves `par.onBeforeMove` at priority 1 — the
++    // LOWEST of the move-time immobilizers — so it is rolled only on the branch
++    // where confusion (3) and Attract (2) already let the move through.
++    //
++    // pokezero gen3 fidelity fix: this used to be the PARALYZE arm of the status
++    // match at the top of this function, i.e. rolled FIRST. With confusion
++    // modelled as a permanent volatile that misordering was invisible in the leaf
++    // distribution (both immobilized branches carry an empty delta and the net
++    // "move executes" probability is order-independent), which is why the Attract
++    // patch documented it as benign. It stops being benign once confusion carries
++    // a bounded counter: rolling paralysis first means a fully-paralyzed turn
++    // never reaches the confusion block, so the counter advances on only 75% of a
++    // paralyzed Pokemon's turns and its confusion outlasts Showdown's. Rolling it
++    // last also fixes the self-hit mass for a paralyzed + confused Pokemon
++    // (Showdown 1/2, engine-before 3/8), since a confusion self-hit aborts the
++    // move in Showdown before paralysis is ever rolled.
++    if attacking_side.get_active_immutable().status == PokemonStatus::PARALYZE {
++        // Fully-Paralyzed Branch
++        let mut fully_paralyzed_instruction = incoming_instructions.clone();
++        fully_paralyzed_instruction.update_percentage(0.25);
++        final_instructions.push(fully_paralyzed_instruction);
++
++        // Non-Paralyzed Branch
++        incoming_instructions.update_percentage(0.75);
+     }
+ 
+     if attacking_side.side_conditions.protect > 0 {
+@@ -2625,6 +2759,21 @@
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::CONFUSION)
+                 {
++                    // Fatigue confusion starts at the bottom of the duration
++                    // ladder, same as any other source; see the note in
++                    // `get_instructions_from_volatile_statuses`.
++                    if side.volatile_status_durations.confusion != 0 {
++                        incoming_instructions.instruction_list.push(
++                            Instruction::ChangeVolatileStatusDuration(
++                                ChangeVolatileStatusDurationInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::CONFUSION,
++                                    amount: -1 * side.volatile_status_durations.confusion,
++                                },
++                            ),
++                        );
++                        side.volatile_status_durations.confusion = 0;
++                    }
+                     incoming_instructions
+                         .instruction_list
+                         .push(Instruction::ApplyVolatileStatus(
+@@ -2981,9 +3130,112 @@
+             }
+             branch.update_percentage(probability);
+             add_end_of_turn_instructions(state, &mut branch, first_move_side, activation);
+-            instructions.push(branch);
++            add_confusion_expiry_branches(state, branch, instructions);
++        }
++    }
++}
++
++/// pokezero gen3 fidelity fix: resolve the bounded CONFUSION duration for any
++/// side whose confusion check ran this turn, forking `branch` on the hazard
++/// ladder in `chance_confusion_ends`.
++///
++/// This is the only point in the turn where a snap-out can be modelled without
++/// restructuring move generation: the branch is complete, so BOTH outcomes are
++/// terminal and can simply be pushed. Doing it at the start of the next
++/// attacking turn instead would need a snap-out branch that CONTINUES through
++/// the move, and `generate_instructions_from_move` advances exactly one
++/// surviving branch. The two placements are equivalent for everything
++/// observable — see `chance_confusion_ends`.
++///
++/// A turn only burns a confusion turn if the CHECK ran, so the ladder is gated
++/// on the `+1` duration instruction the confusion block emits — the marker is
++/// carried by both of that block's outcomes (self-hit and move-goes-through) and
++/// by nothing else, since every other write to this counter is a reset to zero.
++/// Gating on the counter's VALUE instead would be wrong: the counter persists
++/// across turns, so a Pokemon that spent the turn asleep, flinched, recharging
++/// or Taunted — none of which reach `confusion.onBeforeMove` in Showdown, all of
++/// which leave `time` untouched — would keep rolling the ladder while standing
++/// still. A fainted Pokemon is skipped too: its volatiles are cleared when it is
++/// replaced.
++///
++/// Composition with the residual deferral (residual-defer-on-faint patch): the
++/// marker rides the instruction list, NOT the residual block, so the ladder
++/// tracks the ply the confusion check actually happened on. On a ply that defers
++/// its residuals the marker is present and the ladder fires exactly once, right
++/// where it would have without the deferral; the replacement ply that re-attaches
++/// the deferred block is a bare `(Switch, None)` pair whose instruction list
++/// starts empty, so it carries no marker and cannot fire the ladder a second
++/// time. Pinned by `confusion_ladder_fires_once_when_residuals_are_deferred`.
++fn add_confusion_expiry_branches(
++    state: &mut State,
++    branch: StateInstructions,
++    instructions: &mut Vec<StateInstructions>,
++) {
++    let mut checked = [false; 2];
++    for instruction in &branch.instruction_list {
++        if let Instruction::ChangeVolatileStatusDuration(change) = instruction {
++            if change.volatile_status == PokemonVolatileStatus::CONFUSION && change.amount == 1 {
++                checked[change.side_ref as usize] = true;
++            }
++        }
++    }
++    if checked == [false, false] {
++        instructions.push(branch);
++        return;
++    }
++
++    state.apply_instructions(&branch.instruction_list);
++    let mut chances = [0.0f32; 2];
++    for (index, side_ref) in [SideReference::SideOne, SideReference::SideTwo]
++        .iter()
++        .enumerate()
++    {
++        let side = state.get_side_immutable(side_ref);
++        if checked[index]
++            && side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::CONFUSION)
++            && side.get_active_immutable().hp > 0
++        {
++            chances[index] = chance_confusion_ends(side.volatile_status_durations.confusion);
++        }
++    }
++    state.reverse_instructions(&branch.instruction_list);
++
++    if chances == [0.0, 0.0] {
++        instructions.push(branch);
++        return;
++    }
++
++    // Independent per side: up to two 2-way forks, collapsing to an in-place
++    // rewrite whenever a side's chance is exactly 1.0 (the counter reached
++    // MAX_CONFUSION_TURNS, so Showdown's `time` is guaranteed to hit 0 next).
++    let mut pending = vec![branch];
++    for (index, side_ref) in [SideReference::SideOne, SideReference::SideTwo]
++        .iter()
++        .enumerate()
++    {
++        let chance = chances[index];
++        if chance == 0.0 {
++            continue;
+         }
++        let mut next = Vec::with_capacity(pending.len() * 2);
++        for base in pending {
++            let mut expired = base.clone();
++            if chance < 1.0 {
++                let mut survived = base;
++                survived.update_percentage(1.0 - chance);
++                next.push(survived);
++                expired.update_percentage(chance);
++            }
++            state.apply_instructions(&expired.instruction_list);
++            end_confusion(state, side_ref, &mut expired);
++            state.reverse_instructions(&expired.instruction_list);
++            next.push(expired);
++        }
++        pending = next;
+     }
++    instructions.extend(pending);
+ }
+ 
+ fn end_of_turn_triggered(
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -719,6 +719,41 @@
+                 | PokemonVolatileStatus::PERISH2
+                 | PokemonVolatileStatus::PERISH3
+                 | PokemonVolatileStatus::PERISH4 => baton_passing,
++                // pokezero gen3 fidelity fix: Baton Pass carries CONFUSION, and
++                // carries it WITH its remaining duration. Same `copyVolatileFrom`
++                // rule as the perish counter above — `confusion` carries no
++                // `noCopy` flag anywhere in gen3's chain (base data/conditions.ts,
++                // and neither the gen4 nor the gen6 override adds one) — and the
++                // copy is a shallow spread of the volatile object, so the
++                // `time` counter rides across untouched and `onStart` never
++                // re-runs (no fresh duration roll for the receiver).
++                //
++                // This is deliberately stacked on the duration model: carrying a
++                // PERMANENT confusion would have been worse than dropping it,
++                // which is why the switch-out patch that fixed the perish counter
++                // left this one alone.
++                //
++                // A plain switch-out still drops it (`Pokemon.clearVolatile()`),
++                // and the counter has to be zeroed with it: the hazard ladder in
++                // `chance_confusion_ends` reads the counter as "attacking turns
++                // already burned", so a leaked value would start the next
++                // confusion on that side mid-ladder and `reverse_instructions`
++                // would desync. Mirrors the LOCKEDMOVE / YAWN / TAUNT arms below.
++                PokemonVolatileStatus::CONFUSION => {
++                    if baton_passing {
++                        true
++                    } else {
++                        instructions.push(Instruction::ChangeVolatileStatusDuration(
++                            ChangeVolatileStatusDurationInstruction {
++                                side_ref: *side_ref,
++                                volatile_status: *pkmn_volatile_status,
++                                amount: -1 * side.volatile_status_durations.confusion,
++                            },
++                        ));
++                        side.volatile_status_durations.confusion = 0;
++                        false
++                    }
++                }
+                 PokemonVolatileStatus::TYPECHANGE => {
+                     let active = side.get_active();
+                     if active.base_types != active.types {
