@@ -37,7 +37,17 @@
 #   recoil/Wonder Guard/Sturdy, Forecast/weather suppression, gender-aware Cute
 #   Charm, Intimidate through Substitute, Gen 3 Lightning Rod singles semantics,
 #   and speed-tie isolation.
-#   Authored against the rapidspin-patched tree and applied last.
+#   Authored against the rapidspin-patched tree.
+#   poke-engine-gen3-batonpass-perish.patch — gen3 Baton Pass carries the Perish
+#   Song counter. Showdown copies every volatile without a `noCopy` flag
+#   (sim/pokemon.ts copyVolatileFrom) and the perish volatiles carry none in gen3
+#   (which inherits gen4 -> gen5; neither mod overrides them), so the count rides
+#   the pass and the RECEIVER faints at perish0. Upstream's
+#   remove_volatile_statuses_on_switch retained only Substitute and Leech Seed, so
+#   the engine believed Baton Pass escapes Perish Song. Verified vs real gen3
+#   Showdown (scripts/gen3_switch_differential.py); pinned by
+#   rust/pokezero-search/tests/gen3_switch_fidelity.rs. Touches gen3/state.rs only
+#   (no overlap with the other patches); applied last.
 #   --fuzz=0 so a version bump fails loudly instead of applying hunks at
 #   shifted locations.
 #
@@ -64,7 +74,8 @@ for patch in \
   poke-engine-gen3-attract.patch \
   poke-engine-gen3-struggle-typeless.patch \
   poke-engine-gen3-rapidspin-fidelity.patch \
-  poke-engine-gen3-ability-fidelity.patch; do
+  poke-engine-gen3-ability-fidelity.patch \
+  poke-engine-gen3-batonpass-perish.patch; do
   if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
     echo "ERROR: failed to apply $patch" >&2
     exit 1

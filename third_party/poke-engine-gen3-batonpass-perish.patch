@@ -1,0 +1,27 @@
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -689,6 +689,24 @@
+             let should_retain = match pkmn_volatile_status {
+                 PokemonVolatileStatus::SUBSTITUTE => baton_passing,
+                 PokemonVolatileStatus::LEECHSEED => baton_passing,
++                // pokezero gen3 fidelity fix: Baton Pass carries the Perish Song
++                // counter to the incoming Pokemon. Showdown copies every volatile
++                // that is not flagged `noCopy` (sim/pokemon.ts copyVolatileFrom);
++                // the perish volatiles carry no such flag in gen3 (which inherits
++                // gen4 -> gen5; neither mod overrides them), so the count follows
++                // the switch and the RECEIVER faints when it reaches perish0.
++                // Upstream retained only Substitute and Leech Seed, so a Baton
++                // Pass wrongly wiped the count — i.e. the engine believed Baton
++                // Pass escapes Perish Song, which inverts the whole point of the
++                // perish-trap line. Verified against real gen3 Showdown: a
++                // Perish-Songed Smeargle that Baton Passes into Snorlax emits
++                // `-start <receiver> perish0` and then `faint <receiver>`.
++                // Reachable in gen3 randbats (Misdreavus carries Perish Song; 25
++                // species carry Baton Pass).
++                PokemonVolatileStatus::PERISH1
++                | PokemonVolatileStatus::PERISH2
++                | PokemonVolatileStatus::PERISH3
++                | PokemonVolatileStatus::PERISH4 => baton_passing,
+                 PokemonVolatileStatus::TYPECHANGE => {
+                     let active = side.get_active();
+                     if active.base_types != active.types {
