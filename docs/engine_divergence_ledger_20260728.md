@@ -631,19 +631,24 @@ for k in 0 1 2 3 4 5 6 7; do
   PYTHONPATH=src .venv/bin/python scripts/engine_transition_differential.py \
     --showdown-root "$SHOWDOWN" \
     --games 1250 \
-    --seed-start $((1000000 + k * 100000)) \
+    --seed-start $((2000000 + k * 100000)) \
     --keep-repro 100 \
     --json "acceptance_shard_${k}.json" &
 done
 wait
 ```
 
-Shard *k* consumes seeds `1000000 + k*100000` .. `+1249`, i.e. blocks
-`1000000-1001249`, `1100000-1101249`, … `1700000-1701249`. The 100k stride
-(rather than a contiguous 1000000-1009999 span) leaves each shard 98,750 unused
-seeds for re-runs after a fix without ever colliding with a prior acceptance
-attempt. Conservative alternative: **6 shards × 1667 games**, ~1.3–1.6 h. Either way the
+Shard *k* consumes seeds `2000000 + k*100000` .. `+1249`, i.e. blocks
+`2000000-2001249`, `2100000-2101249`, … `2700000-2701249`. The 100k stride
+(rather than a contiguous span) leaves each shard 98,750 unused seeds for
+re-runs after a fix without ever colliding with a prior acceptance attempt.
+Conservative alternative: **6 shards × 1667 games**, ~1.3–1.6 h. Either way the
 run fits comfortably under 2 h, which is the point.
+
+> **Base moved from 1,000,000 to 2,000,000.** The hardening pass (Appendix A)
+> itself burned 1200000-1200299, which sits inside what would have been shard 2.
+> Reserving `>= 2,000,000` keeps the acceptance block pristine; measurement and
+> fix-development runs should stay **below** it.
 
 Aggregate the shards by summing `boundaries_measured`,
 `transitions_matched`, `transitions_diverged`, `engine_errors` and the
@@ -672,10 +677,198 @@ appear in the acceptance run, or the run is no longer fresh-seed:
 | 7000–7099 | historical `engine_search` bench seeds (pre-existing) |
 
 **Seeds burned during fix development must be added to this table.** The fixes
-for D1/D2/D3 are in flight on `scott/engine-gen3-divergence-fixes` (PR #874) and
-its stacked children `scott/engine-gen3-spikes-residuals`,
-`scott/engine-gen3-transform`, `scott/engine-gen3-confusion-duration`. To keep
-this simple: **fix development should stay below seed 1,000,000**, which
-reserves the entire `>= 1,000,000` space as a pristine acceptance block. If any
-fix branch has already used seeds at or above 1,000,000, shift the shard bases
-to `2000000 + k*100000` instead.
+for D1/D2/D3 landed on `scott/engine-gen3-divergence-fixes` (PR #874) and its
+stacked children; any seeds those branches consumed belong here too. Appendix A
+adds its own (listed at the end of that appendix, including 1200000-1200299).
+Rule going forward: **measurement and fix development stay below seed
+2,000,000**, reserving `>= 2,000,000` as the pristine acceptance block.
+
+---
+
+# Appendix A — hardening pass (same day, after PRs #874–#878 merged)
+
+Branch `scott/differential-hardening`. Everything above is the pre-fix baseline
+at `941c86d` with 5 gen3 patches; this appendix re-measures against `84f60f4`
+with **11** gen3 patches, resolves the three rows the engine fixes did not touch
+(D9/D10/D11), and closes the harness gaps the baseline run exposed.
+
+Rebuild provenance: `vendor_poke_engine_src.sh` + `setup_poke_engine.sh` both
+driven from the shared `third_party/poke-engine-gen3-patches.txt`, then
+`maturin build --release`. Gates: **275 engine tests OK**, crate builds clean.
+
+## A.1 D1/D2/D3 confirmed fixed in live games
+
+300 fresh games (seeds 1200000–1200299) against `84f60f4`, support-based gating
+on, **1679 games/h**, **0 harness errors**, 22,938 of 23,574 full-round
+boundaries measured (**97.30 %**):
+
+| Metric | Pre-fix baseline | Post-fix (this run) |
+| --- | --- | --- |
+| measured fraction of full rounds | 71.0 % strict / 98.0 % approx | **97.3 %** |
+| divergent transitions per game | 4.65 strict / 8.16 approx | **2.14** |
+| divergence rate per measured boundary | 7.94 % strict / 10.21 % approx | **2.80 %** |
+
+Per-class, normalised per measured boundary — the apples-to-apples column
+against §3.2.2:
+
+| Class | Pre-fix (strict) | Post-fix | Change |
+| --- | --- | --- | --- |
+| `faint_ply_residual_deferral` (**D2**) | 5.39 % | **0.275 %** | **−95 %** |
+| `spikes_entry_damage` (**D1**) | 0.37 % | **0.070 %** | **−81 %** |
+| `status_support` | 1.03 % | 1.225 % | — (now measured over 3.4x more sleep boundaries) |
+| `status_residual` | 0.50 % | 0.650 % | — |
+| `damage_band` | 0.41 % | 0.419 % | flat (D11 band residue) |
+| `boost_delta_support` | 0.10 % | 0.083 % | — |
+| `crit_roll_band` | 0.07 % | 0.052 % | — |
+| `faint_boundary` | 0.06 % | 0.026 % | — |
+
+D1 and D2 are the two classes that moved, by 81 % and 95 %, which is the fix
+landing. **They did not go to exactly zero** — the classes are protocol-evidence
+buckets, not causal attributions, so any divergence that happens to occur on a
+faint ply or a Spikes ply still lands in them. The residue is now the same order
+as the other classes rather than 52–68 % of all divergence.
+
+`public_effect_blocked` (Transform) world failures are **gone** from the skip
+histogram entirely, confirming the D3 fix; `self_moveset_mismatch` (285) is the
+remaining Transform/Mimic-shaped skip.
+
+## A.2 D8 RESOLVED — support-based validation for hidden-counter mechanics
+
+**The old bar was wrong in principle.** Strict mode demanded that the
+constructed world reproduce a counter no observer can see. gen3 Showdown rolls
+sleep duration privately (`data/mods/gen3/conditions.ts` `slp.onStart`:
+`this.effectState.time = this.random(2, 6)`), and the engine does not even store
+"turns remaining" — it models wake-up as a hazard conditioned on turns already
+slept, `chance_to_wake_up(t) = 1/(1 + MAX_SLEEP_TURNS - t)` with
+`MAX_SLEEP_TURNS = 4`
+(`third_party/poke-engine-src/src/gen3/generate_instructions.rs:44-71`), which
+reproduces the uniform 1–4 turn duration exactly. Requiring counter-state match
+threw away 27.5 % of boundaries to measure nothing.
+
+**The new bar.** For hidden-counter mechanics only, build one world per legal
+counter assignment and require the realized transition to lie in the **union of
+those worlds' branch supports with nonzero probability**. Applies to exactly two
+mechanics, both counter-hidden and bounded:
+
+| Mechanic | Swept domain | Why hidden |
+| --- | --- | --- |
+| Sleep | `sleep_turns` 0..4, plus `rest_turns` 1..2 (Rest is a separate fixed-duration engine path) | duration rolled privately at `slp.onStart` |
+| Confusion | bounded duration since PR #875; snap-out count is private | same shape |
+
+Everything else keeps **exact** gating — damage, status application, hazards,
+screens, weather, boosts and faints are all publicly observable and their
+divergence bar is unchanged.
+
+**Before/after, 150 games on identical seeds (981000–981149):**
+
+| Metric | Before (fail-closed) | After (support-based) |
+| --- | --- | --- |
+| full-round boundaries | 12,807 | 12,807 |
+| **measured** | 9,171 — **71.61 %** | 12,601 — **98.39 %** |
+| `status_unsupported` skips | **3,453** | **0** |
+| boundaries gated exact | 9,171 | 9,171 |
+| boundaries gated support-based | 0 | 3,430 |
+| transitions matched | 8,927 | 12,241 |
+| transitions diverged | 194 | 290 |
+
+**+26.8 points of coverage**, 3,430 boundaries recovered. The recovered
+boundaries are not a free pass: they diverge at 96/3,430 = **2.80 %**, slightly
+*above* the 2.12 % rate of the exactly-gated ones, so the weaker bar is still
+catching real disagreement rather than waving boundaries through.
+`--no-hidden-counter-support` reproduces the old behaviour for A/B.
+
+## A.3 D9 / D10 / D11 verdicts
+
+New instrument: `scripts/gen3_duration_differential.py`. Each scenario reads the
+gen3 rule out of the **vendored** simulator first — house rule: *gen3 inherits
+gen4, not gen5*.
+
+| Row | Mechanic | Verdict | Rate / evidence | Repro |
+| --- | --- | --- | --- | --- |
+| **D9** | Encore duration | **CONFIRMED** | Showdown ends Encore after **3, 4, 5 or 6** turns (60/60 samples span the full documented range); the engine's `ENCORE` volatile **never expires** — still present after 12 turns. 100 % divergence on any trajectory that outlives the shortest roll. | `--scenario encore --seeds 60 --seed-start 991000` |
+| **D10** | Wish heal amount | **CANNOT-REPRODUCE** — the claim had the generations backwards | Showdown healed exactly **201 = recipient maxhp/2** (403 max) in 6/6 unclamped samples. Engine healed **200 = recipient maxhp/2** (400 max). They agree. | `--scenario wish --seeds 10` |
+| **D11** | Sub-band damage bias | **CANNOT-REPRODUCE** | Across 4 matchups (n = 40–57 each) the engine's representative roll sits within **±1 %** of Showdown's sampled mean: +0.50 %, +0.99 %, −0.48 %, −0.77 %. Max |bias| **0.0099**. | `--scenario damage --seeds 60` |
+
+### D9 detail
+
+gen3 Encore is `durationCallback() { return this.random(3, 7); }`
+(`data/mods/gen3/moves.ts`) = 3–6 turns. Measured Showdown lock lengths: `{3, 4,
+5, 6}` over 60 seeds — the full distribution. The engine applies the volatile
+and never removes it; `volatile_status_durations.encore` stays 0. This is a
+**real, unfixed divergence** and is the only confirmed engine bug left on this
+ledger. It stays largely latent in search only because `engine_world` fails
+Encore closed at construction (`encore_move_unknown`), i.e. the engine is
+protected from the bug by refusing to express the state at all.
+
+*Measurement trap worth recording:* the first revision of this scenario let p1
+attack, every battle ended by step 5, and only the shortest (3-turn) Encores
+were ever observed — the measured distribution collapsed to a single value and
+looked like a clean rule. p1 must be harmless for the duration to be observable.
+
+### D10 detail — the inherited claim was wrong
+
+`docs/engine_fidelity_findings.md` recorded "poke-engine ignores the `wish`
+tuple's amount and heals the RESOLVING ACTIVE's maxhp/2; gen3 heals by the
+CASTER's maxhp/2". The first half is true, the second is the **gen5+** rule:
+
+* base `data/moves.ts` `wish.condition.onStart` → `this.effectState.hp = source.maxhp / 2` (caster) — gen5+;
+* `data/mods/gen4/moves.ts` `wish.condition.onEnd` → `this.heal(target.baseMaxhp / 2)` (**recipient**) — and **gen3 inherits gen4**.
+
+So the engine's behaviour is correct for gen3. It does store a caster-based
+amount (`SetWish SideTwo: 100` for a 200-max caster) and then ignore it, healing
+`Heal SideTwo: 200` for the 400-max recipient — inert bookkeeping, right answer.
+The differential pins both sims at recipient/2. **D10 is struck from the ledger.**
+
+### D11 detail — and a warning about how it is measured
+
+No systematic sub-band bias exists. But the first revision of this scenario
+reported biases of **+12 % to +39 %**, which were entirely an artifact: the
+engine branch's post-state HP is a **net** figure (damage minus the end-of-turn
+Leftovers heal) while Showdown's `|-damage|` line is **gross**, so every
+Leftovers holder manufactured a fake ~maxhp/16 bias. Making every fixture mon
+itemless collapsed the bias to ≤1 %.
+
+That is the same failure mode D11 warns about, pointed the other way: a net-HP
+comparison can invent bias as easily as it can hide it. The acceptance-run
+caveat stands — "0 divergent transitions" still means "0 outside a ±16 % band"
+until the matcher compares per-damage-source instead of net HP.
+
+## A.4 Harness hardening
+
+* **JSONL checkpointing** (`--checkpoint PATH`): one record per completed game,
+  written and flushed as it finishes, so a supervisor kill loses at most the
+  in-flight game. This is the §3.5 fix — Run A lost 1 h 40 m of work.
+* **`--resume`**: skips seeds already present in the checkpoint and folds their
+  counters into the final report.
+* **`--merge-from A.jsonl B.jsonl …`**: aggregates any number of shards into one
+  report with the **same schema** the single-process path emits, de-duplicating
+  seeds and warning if shards overlap. This is the aggregator for the 8×1250
+  acceptance run in §5.1.
+* Torn final lines (hard kill mid-write) are discarded with a warning rather
+  than failing the load.
+* **Harness defects from §3.2.1 are fixed**, taking `engine_errors` to **0**:
+  `recharge` now maps to the engine's `"none"` choice (a MUSTRECHARGE seat has
+  no submittable move), `struggle` is a counted skip (it is engine-internal,
+  never a choice string), and switch targets resolve against the **built
+  state's** `pkmn.id` rather than `EngineWorld.party_species` — the two disagree
+  for cosmetic Unown formes (`unownb` vs the collapsed `unown`).
+
+## A.5 What is left
+
+| Row | Status after this pass |
+| --- | --- |
+| D1, D2, D3 | fixed on `main`, confirmed absent in live games |
+| D4, D5, D6 | already cannot-reproduce |
+| D7 | closed by PR #880 + #884 |
+| **D8** | **resolved** — support-based validation, 71.6 % → 98.4 % coverage |
+| **D9** | **CONFIRMED, unfixed** — Encore never expires. Engine-lane fix; the bar is a duration counter and expiry, mirroring the CONFUSION work in PR #875. |
+| **D10** | **struck** — claim was the gen5 rule; engine is correct for gen3 |
+| **D11** | **cannot-reproduce** — no bias beyond ±1 %; the ±16 % band caveat on the acceptance claim still stands |
+
+Only **D9** requires engine work. The acceptance criterion is unchanged: 0
+divergent transitions over 10,000 fresh-seed games, now measurable over ~98 % of
+full-round boundaries instead of ~71 %.
+
+Seeds burned by this appendix (add to §5.2): 970000–970005, 971000–971002,
+980000–980024, 981000–981149, 990000–990059 (wish/damage), 991000–991059
+(encore), 1200000–1200299.
