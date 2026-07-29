@@ -9,6 +9,7 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod encoder;
+pub mod envstep;
 pub mod events;
 pub mod fold;
 pub mod leaf;
@@ -89,22 +90,30 @@ fn move_display(side: &Side, choice: &MoveChoice) -> String {
     }
 }
 
+/// Index of one branch sampled in proportion to the engine's own `percentage`
+/// weights. Split out from [`sample_branch`] so callers that need to REPORT
+/// which branch was realized (the env stepper) share the selection rule with
+/// callers that only need the branch itself (search).
+pub(crate) fn sample_branch_index(rng: &mut StdRng, branches: &[StateInstructions]) -> usize {
+    let total: f32 = branches.iter().map(|b| b.percentage).sum();
+    if total <= 0.0 {
+        return 0;
+    }
+    let mut roll = rng.random_range(0.0..total);
+    for (index, branch) in branches.iter().enumerate() {
+        if roll < branch.percentage {
+            return index;
+        }
+        roll -= branch.percentage;
+    }
+    branches.len() - 1
+}
+
 fn sample_branch<'a>(
     rng: &mut StdRng,
     branches: &'a [StateInstructions],
 ) -> &'a StateInstructions {
-    let total: f32 = branches.iter().map(|b| b.percentage).sum();
-    if total <= 0.0 {
-        return &branches[0];
-    }
-    let mut roll = rng.random_range(0.0..total);
-    for branch in branches {
-        if roll < branch.percentage {
-            return branch;
-        }
-        roll -= branch.percentage;
-    }
-    branches.last().expect("non-empty branches")
+    &branches[sample_branch_index(rng, branches)]
 }
 
 fn json_escape(s: &str) -> String {
@@ -349,6 +358,9 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
     m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    m.add_function(wrap_pyfunction!(envstep::env_options, m)?)?;
+    m.add_function(wrap_pyfunction!(envstep::env_step, m)?)?;
+    m.add_function(wrap_pyfunction!(envstep::env_battle_over, m)?)?;
     m.add_class::<encoder::NativeEncoder>()?;
     m.add_class::<leaf::PyLeafEncoder>()?;
     m.add_class::<fold::PyFoldState>()?;

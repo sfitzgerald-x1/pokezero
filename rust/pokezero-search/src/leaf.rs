@@ -35,6 +35,7 @@ use std::collections::HashMap;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Encode sub-phase counters (nanoseconds). Global + relaxed: the leaf-pricing
 /// closure has no per-search context to thread, and these are diagnostics, not
@@ -576,7 +577,7 @@ fn line_slot_of_ident(ident: &str) -> Option<usize> {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct LeafContext {
-    pub(crate) tables: Tables,
+    pub(crate) tables: Arc<Tables>,
     root: Value,
     /// True when the acting seat is p1 (engine side one).
     self_is_p1: bool,
@@ -615,7 +616,22 @@ impl LeafContext {
         ctx_json: &str,
         root_state: &State,
     ) -> PyResult<Self> {
-        let tables = Tables::from_json(tables_json)?;
+        Self::with_tables(Arc::new(Tables::from_json(tables_json)?), root_inputs_json, ctx_json, root_state)
+    }
+
+    /// Re-root over ALREADY-PARSED tables.
+    ///
+    /// The tables artifact is ~475 KB of dex/vocab JSON and parsing it costs
+    /// ~3 ms — two orders of magnitude more than an encode. A caller that
+    /// re-roots often (an environment refreshing its public-information
+    /// surface as the opponent reveals mons) must not pay that again, so the
+    /// parsed tables are shared rather than rebuilt.
+    pub(crate) fn with_tables(
+        tables: Arc<Tables>,
+        root_inputs_json: &str,
+        ctx_json: &str,
+        root_state: &State,
+    ) -> PyResult<Self> {
         let root: Value = serde_json::from_str(root_inputs_json)
             .map_err(|e| err(format!("root inputs JSON: {e}")))?;
         let md = root
@@ -826,12 +842,34 @@ impl LeafContext {
     /// leaf's battle turn (root turn + completed simulated turns);
     /// `self_order` the evolved self-team display order (None = root order);
     /// `meta` the evolved line-driven metadata (None = root values).
+    ///
+    /// `engine_authoritative` says the engine's option surface at this state
+    /// IS the request — which is true exactly when the state was reached by
+    /// the engine's own transitions rather than reconstructed. It does two
+    /// things:
+    ///
+    /// 1. Reads options from `root_get_all_options` (the DECISION-POINT
+    ///    surface, which honors `force_trapped` and the slow-uturn /
+    ///    Baton-Pass mid-turn shape) instead of the interior
+    ///    `get_all_options`.
+    /// 2. Drops the fresh-switch-in move widening. That widening exists
+    ///    because a world CONSTRUCTED from a materialization payload seeds
+    ///    benched mons with their last stint's stale disabled bits, so the
+    ///    engine under-reports a fresh switch-in's moves; a natively-evolved
+    ///    state has no such staleness, and the widening would instead
+    ///    over-report — marking legal the moves a Baton-Pass-committed seat,
+    ///    an Encored seat, or a PP-exhausted slot cannot actually pick.
+    ///
+    /// Search leaves are interior nodes over constructed worlds and must stay
+    /// on `false` — that is also what the root-parity and prior-mapping gates
+    /// are calibrated against. An engine-as-environment driver passes `true`.
     pub(crate) fn leaf_row_inputs(
         &self,
         state: &State,
         turn: i64,
         self_order: Option<&[String]>,
         meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
     ) -> PyResult<Value> {
         let meta = meta.unwrap_or(&self.root_meta);
         let mut row = self.root.clone();
@@ -1184,7 +1222,11 @@ impl LeafContext {
         }
 
         // --- action candidates + legal mask (engine option surface) ---
-        let (s1_options, s2_options) = state.get_all_options();
+        let (s1_options, s2_options) = if engine_authoritative {
+            state.root_get_all_options()
+        } else {
+            state.get_all_options()
+        };
         let self_options = if self_is_p1 { &s1_options } else { &s2_options };
         let self_team_order = md
             .get("self_team")
@@ -1209,6 +1251,7 @@ impl LeafContext {
             &self_team_order,
             self_force_switch,
             meta,
+            engine_authoritative,
         )?;
         md.insert("action_candidates".into(), candidates);
 
@@ -1282,10 +1325,13 @@ impl LeafContext {
         self_team_order: &[(String, bool)],
         force_switch_shape: bool,
         meta: &LeafMeta,
+        engine_authoritative: bool,
     ) -> PyResult<(Value, Value)> {
         let action_count = self.tables.layout_action_count();
         let move_action_count = self.tables.layout_move_action_count();
-        let fresh_switch_in = meta.fresh_active[self_engine];
+        // See `leaf_row_inputs`: the widening below is a correction for
+        // CONSTRUCTED worlds only.
+        let fresh_switch_in = meta.fresh_active[self_engine] && !engine_authoritative;
 
         // Engine move surface of the active mon, engine slot order. A
         // recharging active (MUSTRECHARGE volatile) presents the production
@@ -1508,6 +1554,7 @@ impl LeafContext {
         Ok((Value::Array(candidates), Value::Array(payload_moves)))
     }
 
+    /// See [`LeafContext::leaf_row_inputs`] for `engine_authoritative`.
     pub(crate) fn encode_leaf(
         &self,
         state: &State,
@@ -1515,6 +1562,7 @@ impl LeafContext {
         turn: i64,
         self_order: Option<&[String]>,
         meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
     ) -> PyResult<EncodedArrays> {
         // tensor_s is 75% of encode, so split its three parts: building the row
         // inputs from engine state, materializing the fold's derived products
@@ -1522,7 +1570,7 @@ impl LeafContext {
         // arrays. Timers are process-global because encode_leaf is called from
         // the leaf-pricing closure, which has no per-search context.
         let t0 = std::time::Instant::now();
-        let row = self.leaf_row_inputs(state, turn, self_order, meta)?;
+        let row = self.leaf_row_inputs(state, turn, self_order, meta, engine_authoritative)?;
         ROW_INPUT_NANOS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let t1 = std::time::Instant::now();
         let products = fold.products();
@@ -1557,6 +1605,7 @@ impl LeafContext {
         options: &[MoveChoice],
         self_order: Option<&[String]>,
         meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
         let meta = meta.unwrap_or(&self.root_meta);
         let self_side = side_ref_for(state, self.self_is_p1);
@@ -1587,6 +1636,7 @@ impl LeafContext {
             &team_flags,
             force_switch_shape,
             meta,
+            engine_authoritative,
         )?;
         let candidates = candidates.as_array().expect("action_surface returns an array");
         let legal_action_index = |predicate: &dyn Fn(&Map<String, Value>) -> bool| {
@@ -1772,6 +1822,31 @@ impl PyLeafEncoder {
         })
     }
 
+    /// A new encoder with different root inputs over the SAME parsed tables.
+    ///
+    /// Constructing an encoder is dominated by parsing the ~475 KB tables
+    /// artifact (~3 ms, vs ~200 µs for an encode), so a caller that must
+    /// re-root whenever its public-information surface changes — an
+    /// environment learning which opponent Pokemon have been revealed — would
+    /// otherwise spend most of its time re-parsing a constant. The tables are
+    /// immutable after construction and are shared, not copied.
+    fn rebased(
+        &self,
+        root_inputs_json: &str,
+        ctx_json: &str,
+        root_state_str: &str,
+    ) -> PyResult<Self> {
+        let root_state = parse_state(root_state_str)?;
+        Ok(PyLeafEncoder {
+            ctx: LeafContext::with_tables(
+                Arc::clone(&self.ctx.tables),
+                root_inputs_json,
+                ctx_json,
+                &root_state,
+            )?,
+        })
+    }
+
     /// Encode a leaf observation: ENGINE-STATE columns from `state_str`,
     /// FOLD columns from `fold`, WORLD-CONSTANT columns from the root row
     /// inputs. `lines` are the branch's synthesized protocol lines from the
@@ -1781,7 +1856,14 @@ impl PyLeafEncoder {
     /// (`state_str` = the root state, `fold` = the root fold, `turn` = the
     /// root turn, no lines) this must reproduce the golden observation — the
     /// root-parity gate.
-    #[pyo3(signature = (state_str, fold, turn, lines = None))]
+    ///
+    /// `engine_authoritative = true` builds the action block from
+    /// `root_get_all_options` instead of `get_all_options`. Search leaves are
+    /// interior nodes and leave it `false` (the default keeps the search path
+    /// byte-identical); an engine-as-environment caller, whose every encode is
+    /// a real decision point, passes `true` so `force_trapped` and the
+    /// slow-uturn/Baton-Pass shapes mask correctly.
+    #[pyo3(signature = (state_str, fold, turn, lines = None, engine_authoritative = false))]
     fn encode_leaf(
         &self,
         py: Python<'_>,
@@ -1789,6 +1871,7 @@ impl PyLeafEncoder {
         fold: &PyFoldState,
         turn: i64,
         lines: Option<Vec<String>>,
+        engine_authoritative: bool,
     ) -> PyResult<Py<PyDict>> {
         let state = parse_state(state_str)?;
         let (order, meta) = self.branch_context(lines.as_deref());
@@ -1798,6 +1881,7 @@ impl PyLeafEncoder {
             turn,
             order.as_deref(),
             meta.as_ref(),
+            engine_authoritative,
         )?;
         encoded_to_dict(py, &encoded)
     }
@@ -1808,16 +1892,23 @@ impl PyLeafEncoder {
     /// force-trapped / slow-uturn aware — else `get_all_options`). This is
     /// the exact map the model-prior wiring uses; the mapping-assertion test
     /// checks it against recorded request masks.
-    #[pyo3(signature = (state_str, lines = None, root = false))]
+    /// `engine_authoritative` implies `root` and additionally drops the
+    /// fresh-switch-in widening — see [`LeafContext::leaf_row_inputs`]. It
+    /// must be set by callers that will submit the returned display back to
+    /// the engine, so the map and the engine agree on what is playable; the
+    /// prior-mapping gates compare against recorded SHOWDOWN request masks
+    /// over constructed worlds and leave it `false`.
+    #[pyo3(signature = (state_str, lines = None, root = false, engine_authoritative = false))]
     fn self_action_map(
         &self,
         state_str: &str,
         lines: Option<Vec<String>>,
         root: bool,
+        engine_authoritative: bool,
     ) -> PyResult<Vec<(String, Option<usize>)>> {
         let state = parse_state(state_str)?;
         let (order, meta) = self.branch_context(lines.as_deref());
-        let (s1_options, s2_options) = if root {
+        let (s1_options, s2_options) = if root || engine_authoritative {
             state.root_get_all_options()
         } else {
             state.get_all_options()
@@ -1832,9 +1923,13 @@ impl PyLeafEncoder {
         } else {
             &state.side_two
         };
-        let map = self
-            .ctx
-            .self_action_map(&state, &options, order.as_deref(), meta.as_ref())?;
+        let map = self.ctx.self_action_map(
+            &state,
+            &options,
+            order.as_deref(),
+            meta.as_ref(),
+            engine_authoritative,
+        )?;
         Ok(options
             .iter()
             .zip(map)
@@ -1845,18 +1940,19 @@ impl PyLeafEncoder {
     /// The rewritten row-inputs JSON for a leaf state (divergence debugging:
     /// diff this against the root inputs to see exactly which state fields
     /// the engine recompute changed).
-    #[pyo3(signature = (state_str, turn, lines = None))]
+    #[pyo3(signature = (state_str, turn, lines = None, engine_authoritative = false))]
     fn leaf_inputs_json(
         &self,
         state_str: &str,
         turn: i64,
         lines: Option<Vec<String>>,
+        engine_authoritative: bool,
     ) -> PyResult<String> {
         let state = parse_state(state_str)?;
         let (order, meta) = self.branch_context(lines.as_deref());
-        let row = self
-            .ctx
-            .leaf_row_inputs(&state, turn, order.as_deref(), meta.as_ref())?;
+        let row =
+            self.ctx
+                .leaf_row_inputs(&state, turn, order.as_deref(), meta.as_ref(), engine_authoritative)?;
         serde_json::to_string(&row).map_err(|e| err(format!("serialize leaf inputs: {e}")))
     }
 }
