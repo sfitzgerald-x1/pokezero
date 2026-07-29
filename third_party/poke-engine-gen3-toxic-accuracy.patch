@@ -1,0 +1,39 @@
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-28 23:30:41
++++ b/src/gen3/choice_effects.rs	2026-07-28 23:34:48
+@@ -174,14 +174,27 @@
+                 attacker_choice.base_power *= 2.0;
+             }
+         }
+-        Choices::TOXIC => {
+-            if attacking_side
+-                .get_active_immutable()
+-                .has_type(&PokemonType::POISON)
+-            {
+-                attacker_choice.accuracy = 100.0;
+-            }
+-        }
++        // pokezero gen3 fidelity fix: a Poison-type using Toxic does NOT bypass
++        // the accuracy roll in gen3. Upstream applied the never-miss rule
++        // unconditionally, so a Poison-type Toxic was priced as guaranteed
++        // poison — one branch at 100% instead of the 85/15 split.
++        //
++        // Showdown gates that rule on GENERATION 8, not 6, in two places
++        // (sim/battle-actions.ts:622 and :726):
++        //
++        // ```text
++        // this.battle.gen >= 8 && move.id === 'toxic' && pokemon.hasType('Poison')
++        // ```
++        //
++        // and the base move data flags it as living there rather than in the
++        // move: "// No Guard-like effect for Poison-type users implemented in
++        // Scripts#tryMoveHit". Gen 3 therefore rolls Toxic's accuracy like any
++        // other status move. The accuracy itself (85, from gen4's override of
++        // the base 90 — gen3 inherits gen4) was already right in the MOVES
++        // table; only this bypass was wrong, so the whole fix is deleting the
++        // arm. Every other imperfect-accuracy status move in the gen3 pool was
++        // audited at the same time and branches correctly (see the patch-list
++        // entry's table).
+         Choices::WEATHERBALL => match state.weather.weather_type {
+             _ if !state.weather_is_active(&state.weather.weather_type) => {}
+             Weather::SUN => {
