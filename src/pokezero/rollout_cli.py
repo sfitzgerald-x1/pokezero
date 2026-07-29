@@ -25,7 +25,15 @@ from .collection import (
     policy_from_spec,
     policy_spec_with_showdown_root,
 )
-from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig, training_cache_paths_byte_size
+from .dataset import (
+    BELIEF_FIDELITY_DEGENERATE,
+    BELIEF_FIDELITY_FULL,
+    COLLECTION_ENV_ENGINE,
+    COLLECTION_ENV_SHOWDOWN,
+    MAX_ACTIVE_TRAINING_CACHE_GB,
+    TrajectoryDatasetConfig,
+    training_cache_paths_byte_size,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
@@ -247,7 +255,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "only for per-game team generation; records are schema-identical either way. "
             "SMOKE-GRADE: the engine backend carries no belief candidate sets (see "
             "pokezero.engine_env), so its belief/uncertainty columns are degenerate — use it "
-            "for throughput measurement, not for training data, until that is closed."
+            "for throughput measurement, not for training data, until that is closed. Shards "
+            "record which backend wrote them (metadata collection_env / belief_fidelity), and "
+            "concat_training_caches REFUSES to merge engine shards with Showdown ones, so "
+            "smoke data cannot reach a training run by accident."
         ),
     )
     collect_selfplay_cache.add_argument(
@@ -511,16 +522,21 @@ def _selfplay_env_factory(
     policy_specs: "tuple[str, ...]",
     opponent_pool_entries: "tuple[OpponentPoolEntry, ...] | None",
 ):
-    """The env factory for --env, with the engine backend's preconditions checked.
+    """The env factory for --env, plus the provenance its shards must be stamped with.
+
+    Returns ``(factory, collection_env, belief_fidelity)``. The provenance is
+    decided by the SAME branch that picks the env class, so the stamp cannot
+    drift from the backend that actually ran.
 
     The observation spec and feature masks have already been resolved (and
     latched against every checkpoint) on ``env_config`` by this point, so the
     engine backend inherits exactly the contract the Showdown backend would
     have written — which is what makes the two backends' shards
-    schema-identical.
+    schema-identical. That is precisely why the shards need the stamp: nothing
+    in the arrays tells them apart.
     """
     if getattr(args, "env_backend", "showdown") != "engine":
-        return lambda: LocalShowdownEnv(env_config)
+        return (lambda: LocalShowdownEnv(env_config)), COLLECTION_ENV_SHOWDOWN, BELIEF_FIDELITY_FULL
 
     from .engine_env import EngineEnv, EngineEnvConfig
 
@@ -545,7 +561,9 @@ def _selfplay_env_factory(
         observation_spec=env_config.observation_spec,
         feature_masks=env_config.feature_masks,
     )
-    return lambda: EngineEnv(engine_config)
+    # Degenerate belief columns are the engine backend's known residual (see
+    # pokezero.engine_env): revealed facts only, opponent uncertainty pinned at 1.0.
+    return (lambda: EngineEnv(engine_config)), COLLECTION_ENV_ENGINE, BELIEF_FIDELITY_DEGENERATE
 
 
 def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
@@ -641,7 +659,7 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
     )
-    env_factory = _selfplay_env_factory(
+    env_factory, collection_env, belief_fidelity = _selfplay_env_factory(
         args, env_config, (current_policy, *opponent_policies), opponent_pool_entries
     )
     cache_paths: list[Path] = []
@@ -667,6 +685,8 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         worker_count=args.workers,
         training_cache_feature_masks=env_config.feature_masks,
         training_cache_observation_schema=env_config.observation_spec.schema_version,
+        training_cache_collection_env=collection_env,
+        training_cache_belief_fidelity=belief_fidelity,
     )
     _print_metrics(metrics.to_dict())
     if opponent_pool_entries is not None:

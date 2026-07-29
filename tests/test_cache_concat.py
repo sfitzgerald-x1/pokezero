@@ -18,9 +18,16 @@ import unittest
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import (
+    BELIEF_FIDELITY_DEGENERATE,
+    BELIEF_FIDELITY_FULL,
+    BELIEF_FIDELITY_KEY,
+    COLLECTION_ENV_ENGINE,
+    COLLECTION_ENV_KEY,
+    COLLECTION_ENV_SHOWDOWN,
     TrajectoryDatasetConfig,
     concat_training_caches,
     write_training_cache_from_rollouts,
+    write_training_cache_streaming,
 )
 from pokezero.env import TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
@@ -163,6 +170,193 @@ class ConcatOracleTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 concat_training_caches((cache_a,), merged)
             shutil.rmtree(merged)
+
+
+def write_env_cache(
+    root: Path,
+    name: str,
+    records,
+    *,
+    config: TrajectoryDatasetConfig,
+    collection_env: str,
+    belief_fidelity: str,
+) -> Path:
+    """A cache stamped with an explicit collection environment."""
+    jsonl = root / f"{name}.jsonl"
+    with jsonl.open("w", encoding="utf-8") as handle:
+        for record in records:
+            write_rollout_record(handle, record)
+    cache = root / name
+    write_training_cache_streaming(
+        jsonl,
+        cache,
+        config=config,
+        collection_env=collection_env,
+        belief_fidelity=belief_fidelity,
+    )
+    return cache
+
+
+def strip_provenance(cache: Path) -> Path:
+    """Make a cache look like a pre-provenance production shard."""
+    path = cache / "metadata.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata.pop(COLLECTION_ENV_KEY, None)
+    metadata.pop(BELIEF_FIDELITY_KEY, None)
+    path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return cache
+
+
+def metadata_of(cache: Path) -> dict:
+    return json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
+
+
+@unittest.skipUnless(NUMPY, "requires numpy")
+class CollectionEnvProvenanceTests(unittest.TestCase):
+    """collection_env is a fail-closed concat gate; belief_fidelity is recorded only.
+
+    The engine-env backend writes shards that are schema-identical to Showdown's,
+    so nothing in the arrays can catch a mix. The stamp is the only guard, and the
+    back-compat rule is load-bearing: every production shard predates the field,
+    so a MISSING key must behave exactly like "showdown".
+    """
+
+    def setUp(self) -> None:
+        self.config = TrajectoryDatasetConfig(window_size=1)
+        self._temp = tempfile.TemporaryDirectory()
+        self.root = Path(self._temp.name)
+        self.addCleanup(self._temp.cleanup)
+
+    def showdown_cache(self, name: str, seed: int) -> Path:
+        return write_env_cache(
+            self.root,
+            name,
+            [rollout_record(seed)],
+            config=self.config,
+            collection_env=COLLECTION_ENV_SHOWDOWN,
+            belief_fidelity=BELIEF_FIDELITY_FULL,
+        )
+
+    def engine_cache(self, name: str, seed: int) -> Path:
+        return write_env_cache(
+            self.root,
+            name,
+            [rollout_record(seed)],
+            config=self.config,
+            collection_env=COLLECTION_ENV_ENGINE,
+            belief_fidelity=BELIEF_FIDELITY_DEGENERATE,
+        )
+
+    # -- stamping ---------------------------------------------------------
+
+    def test_writers_stamp_both_provenance_fields(self) -> None:
+        showdown = metadata_of(self.showdown_cache("stamp-showdown", 1))
+        engine = metadata_of(self.engine_cache("stamp-engine", 2))
+        self.assertEqual(showdown[COLLECTION_ENV_KEY], COLLECTION_ENV_SHOWDOWN)
+        self.assertEqual(showdown[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_FULL)
+        self.assertEqual(engine[COLLECTION_ENV_KEY], COLLECTION_ENV_ENGINE)
+        self.assertEqual(engine[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_DEGENERATE)
+
+    def test_default_stamp_is_showdown(self) -> None:
+        cache = write_cache(self.root, "default", [rollout_record(1)], config=self.config)
+        metadata = metadata_of(cache)
+        self.assertEqual(metadata[COLLECTION_ENV_KEY], COLLECTION_ENV_SHOWDOWN)
+        self.assertEqual(metadata[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_FULL)
+
+    def test_unknown_env_rejected_at_write(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown collection_env"):
+            write_env_cache(
+                self.root,
+                "bogus",
+                [rollout_record(1)],
+                config=self.config,
+                collection_env="shodown",
+                belief_fidelity=BELIEF_FIDELITY_FULL,
+            )
+
+    # -- the four concat cases --------------------------------------------
+
+    def test_showdown_plus_showdown_concatenates(self) -> None:
+        a = self.showdown_cache("sd-a", 1)
+        b = self.showdown_cache("sd-b", 2)
+        merged = self.root / "merged-sd-sd"
+        concat_training_caches((a, b), merged)
+        metadata = metadata_of(merged)
+        self.assertEqual(metadata[COLLECTION_ENV_KEY], COLLECTION_ENV_SHOWDOWN)
+        self.assertEqual(metadata[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_FULL)
+
+    def test_legacy_unstamped_plus_showdown_concatenates(self) -> None:
+        """The back-compat rule: every shard in production today has no key."""
+        legacy = strip_provenance(self.showdown_cache("legacy", 1))
+        self.assertNotIn(COLLECTION_ENV_KEY, metadata_of(legacy))
+        fresh = self.showdown_cache("fresh", 2)
+        merged = self.root / "merged-legacy-sd"
+        concat_training_caches((legacy, fresh), merged)
+        metadata = metadata_of(merged)
+        # Normalized on the way out too: a merge of legacy Showdown shards is a
+        # Showdown shard and says so, even when the FIRST part was unstamped.
+        self.assertEqual(metadata[COLLECTION_ENV_KEY], COLLECTION_ENV_SHOWDOWN)
+        self.assertEqual(metadata[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_FULL)
+
+    def test_legacy_plus_legacy_concatenates(self) -> None:
+        a = strip_provenance(self.showdown_cache("legacy-a", 1))
+        b = strip_provenance(self.showdown_cache("legacy-b", 2))
+        merged = self.root / "merged-legacy-legacy"
+        concat_training_caches((a, b), merged)
+        self.assertEqual(metadata_of(merged)[COLLECTION_ENV_KEY], COLLECTION_ENV_SHOWDOWN)
+
+    def test_engine_plus_engine_concatenates(self) -> None:
+        a = self.engine_cache("eng-a", 1)
+        b = self.engine_cache("eng-b", 2)
+        merged = self.root / "merged-eng-eng"
+        concat_training_caches((a, b), merged)
+        metadata = metadata_of(merged)
+        self.assertEqual(metadata[COLLECTION_ENV_KEY], COLLECTION_ENV_ENGINE)
+        self.assertEqual(metadata[BELIEF_FIDELITY_KEY], BELIEF_FIDELITY_DEGENERATE)
+
+    def test_engine_plus_showdown_fails_closed(self) -> None:
+        engine = self.engine_cache("mix-eng", 1)
+        showdown = self.showdown_cache("mix-sd", 2)
+        with self.assertRaises(ValueError) as caught:
+            concat_training_caches((showdown, engine), self.root / "merged-mixed")
+        message = str(caught.exception)
+        # The message must name both paths and both env values — a bare
+        # "not concatenable" would send the reader hunting through shard dirs.
+        self.assertIn(str(showdown), message)
+        self.assertIn(str(engine), message)
+        self.assertIn(COLLECTION_ENV_SHOWDOWN, message)
+        self.assertIn(COLLECTION_ENV_ENGINE, message)
+        self.assertFalse((self.root / "merged-mixed").exists())
+
+    def test_showdown_plus_engine_fails_closed_in_either_order(self) -> None:
+        engine = self.engine_cache("order-eng", 1)
+        showdown = self.showdown_cache("order-sd", 2)
+        with self.assertRaisesRegex(ValueError, COLLECTION_ENV_KEY):
+            concat_training_caches((engine, showdown), self.root / "merged-order")
+
+    def test_legacy_plus_engine_fails_closed(self) -> None:
+        """Legacy normalizes to showdown, so it must refuse engine too."""
+        legacy = strip_provenance(self.showdown_cache("legacy-mix", 1))
+        engine = self.engine_cache("legacy-mix-eng", 2)
+        with self.assertRaisesRegex(ValueError, COLLECTION_ENV_ENGINE):
+            concat_training_caches((legacy, engine), self.root / "merged-legacy-eng")
+
+    def test_belief_fidelity_is_recorded_not_gated(self) -> None:
+        """Same env, differing fidelity: merges (not a gate), records null (not a lie)."""
+        a = self.engine_cache("fid-a", 1)
+        b = write_env_cache(
+            self.root,
+            "fid-b",
+            [rollout_record(2)],
+            config=self.config,
+            collection_env=COLLECTION_ENV_ENGINE,
+            belief_fidelity=BELIEF_FIDELITY_FULL,
+        )
+        merged = self.root / "merged-fidelity"
+        concat_training_caches((a, b), merged)
+        metadata = metadata_of(merged)
+        self.assertEqual(metadata[COLLECTION_ENV_KEY], COLLECTION_ENV_ENGINE)
+        self.assertIsNone(metadata[BELIEF_FIDELITY_KEY])
 
 
 if __name__ == "__main__":

@@ -33,6 +33,8 @@ from .collection import (
     write_rollout_record,
 )
 from .dataset import (
+    DEFAULT_BELIEF_FIDELITY,
+    DEFAULT_COLLECTION_ENV,
     MAX_ACTIVE_TRAINING_CACHE_BYTES,
     CacheRootByteBudget,
     TrajectoryDatasetConfig,
@@ -581,6 +583,8 @@ def collect_selfplay_rollouts(
     training_cache_paths_out: list[Path] | None = None,
     training_cache_feature_masks=None,
     training_cache_observation_schema=None,
+    training_cache_collection_env: str = DEFAULT_COLLECTION_ENV,
+    training_cache_belief_fidelity: str = DEFAULT_BELIEF_FIDELITY,
     games: int,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -643,6 +647,8 @@ def collect_selfplay_rollouts(
             paths_out=training_cache_paths_out,
             feature_masks=training_cache_feature_masks,
             observation_schema=training_cache_observation_schema,
+            collection_env=training_cache_collection_env,
+            belief_fidelity=training_cache_belief_fidelity,
         )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_setup")
     collection_start = perf_counter()
@@ -836,12 +842,16 @@ class _TrainingCacheChunkWriter:
         paths_out: list[Path] | None,
         feature_masks=None,
         observation_schema: str | None = None,
+        collection_env: str = DEFAULT_COLLECTION_ENV,
+        belief_fidelity: str = DEFAULT_BELIEF_FIDELITY,
     ) -> None:
         self._output_path = output_path
         self._chunk_games = chunk_games
         self._dataset_config = dataset_config or TrajectoryDatasetConfig()
         self._feature_masks = feature_masks
         self._observation_schema = observation_schema
+        self._collection_env = collection_env
+        self._belief_fidelity = belief_fidelity
         self._max_cache_root_bytes = max_cache_root_bytes
         self._cache_root = cache_root or (output_path if chunk_games is not None else output_path.parent)
         self._paths_out = paths_out
@@ -851,6 +861,8 @@ class _TrainingCacheChunkWriter:
             config=self._dataset_config,
             feature_masks=self._feature_masks,
             observation_schema=self._observation_schema,
+            collection_env=self._collection_env,
+            belief_fidelity=self._belief_fidelity,
         )
         # One amortized cap budget across all chunk flushes: re-walks the cache root only every N
         # writes / T seconds instead of an O(files) rglob on every flush (the per-flush x per-pod
@@ -920,6 +932,8 @@ class _TrainingCacheChunkWriter:
             config=self._dataset_config,
             feature_masks=self._feature_masks,
             observation_schema=self._observation_schema,
+            collection_env=self._collection_env,
+            belief_fidelity=self._belief_fidelity,
         )
 
     def _next_output_path(self) -> Path:
