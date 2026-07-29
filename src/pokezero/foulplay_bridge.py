@@ -2393,11 +2393,15 @@ def _build_policy(
 
         return EngineMctsPolicy(
             dex=load_showdown_dex_cached(config.showdown_root),
-            set_source=(
-                load_gen3_randbat_source_cached(config.showdown_root)
-                if belief_set_source_env_enabled()
-                else None
-            ),
+            # Always attached, NOT env-gated. The candidate-set source is what
+            # the belief sampler draws determinized opponent teams from, so
+            # engine-mcts cannot construct a single world without it -- passing
+            # None is not a degraded mode, it is an AttributeError on the first
+            # decision (determinization._gen3_randbat_belief_start_override_result
+            # calls set_source.supports). The env flip point governs whether the
+            # belief FEATURES are in the observation, which is a separate
+            # question from whether the searcher can sample worlds at all.
+            set_source=load_gen3_randbat_source_cached(config.showdown_root),
             policy_id=f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}",
             config=EngineMctsConfig(
                 leaf_eval="model",
