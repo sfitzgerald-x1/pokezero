@@ -495,6 +495,14 @@ def _solarbeam_release_damage(lines) -> int:
     return 0
 
 
+def _after_faint(lines, needle: str, faint_needle: str = "|faint|p2a: Aipom") -> bool:
+    """True if `needle` appears strictly after the fatal residual entry resolved."""
+    for index, line in enumerate(lines):
+        if faint_needle in line:
+            return any(needle in later for later in lines[index + 1:])
+    return False
+
+
 def _has(lines, needle: str) -> bool:
     return any(needle in line for line in lines)
 
@@ -1143,6 +1151,53 @@ def _spec(name):
                     "damaged": True},
             landmark=lambda L: _has(L, "|move|p1a: Exeggutor|Solar Beam"),
             landmark_desc="Solar Beam used")
+    if name in ("residualwin", "residualwincontrol"):
+        # p1 Toxics p2's Pokemon and stalls; p2 burns p1 first, so p1 has residuals of
+        # its own QUEUED behind the victim's tick — the faster victim's entries resolve
+        # first, then p1's Leftovers heal and burn tick, then `upkeep`.
+        #
+        # `Battle.fieldEvent` runs `this.faintMessages(); if (this.ended) return;` after
+        # every residual entry, so once the toxic tick ends the battle none of p1's
+        # residuals fire and no `upkeep` is emitted — verified in the measured step:
+        #
+        #     |-damage|p2a: Aipom|0 fnt|[from] psn
+        #     |faint|p2a: Aipom
+        #     |win|PokeZero p1        <- and nothing after
+        #
+        # The control gives the victim a living reserve so the identical faint does NOT
+        # end the battle, and p1's residuals all fire. That is what makes the measured
+        # facts about battle-END rather than merely about fainting.
+        control = name == "residualwincontrol"
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                             moves=("Toxic", "Splash"))
+        victim = FixturePokemon(species="Aipom", ability="Pickup", item="None",
+                                moves=("Will-O-Wisp", "Splash"))
+        spare = FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                               moves=("Splash",))
+        turns = [("move toxic", "move willowisp")] + [("move splash", "move splash")] * 5
+        if control:
+            # The faint lands on the 6th boundary; p2 then owes a replacement and p1
+            # waits, which the fixture requires be scripted explicitly.
+            turns = turns + [(None, "switch 2")]
+        return dict(
+            p1=[lax], p2=([victim, spare] if control else [victim]),
+            turns=turns, measured=None, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Aipom|tox")
+                                   and _has(L, "|-status|p1a: Snorlax|brn"),
+            facts=lambda L: {
+                "victim_fainted": _has(L, "|faint|p2a: Aipom"),
+                "battle_ended": _has(L, "|win|"),
+                "heal_after_the_faint": _after_faint(L, "item: Leftovers"),
+                "burn_after_the_faint": _after_faint(L, "[from] brn"),
+                "upkeep_after_the_faint": _after_faint(L, "|upkeep"),
+            },
+            expect={"victim_fainted": True,
+                    "battle_ended": not control,
+                    "heal_after_the_faint": control,
+                    "burn_after_the_faint": control,
+                    "upkeep_after_the_faint": control},
+            landmark=lambda L: _has(L, "|faint|p2a: Aipom"),
+            landmark_desc="the victim fainted")
     if name == "perishladder":
         return dict(
             p1=_perish_p1, p2=_perish_p2, turns=_perish_turns,
@@ -1583,6 +1638,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "lastmoveparaencore", "lastmoveconfusionencore",
              "lastmoveflinchencore", "lastmoveexecutedcontrol",
              "solarbeamrelease", "solarbeamcontrol",
+             "residualwin", "residualwincontrol",
              "whirlwindprotect", "roarprotect", "whirlwinddrag",
              "whirlwindsub",
              "flailladder", "reversalladder", "flailladdercontrol",
