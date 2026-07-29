@@ -820,6 +820,50 @@ poke-engine-gen3-residual-speed-order.patch
 # rust/pokezero-search/tests/gen3_rest_fidelity.rs. Touches
 # gen3/choice_effects.rs only; applied before the fixture refresh.
 poke-engine-gen3-rest-fullhp.patch
+# gen3 Pain Split clamps to each mon's OWN maxhp.
+#
+# `painsplit.onHit` (data/moves.ts — no gen mod in the chain overrides Pain
+# Split, so gen3 inherits the base) averages the two HP values and assigns each
+# side through `Pokemon#sethp`:
+#
+#     const averagehp = Math.floor((targetHP + pokemon.hp) / 2) || 1;
+#     target.sethp(target.hp - (targetHP - averagehp));
+#     pokemon.sethp(averagehp);
+#
+# and `sethp` (sim/pokemon.ts:1656) is where the clamping lives:
+#
+#     if (!this.hp) return 0;          // fainted: no-op
+#     d = trunc(d); if (d < 1) d = 1;  // floor at 1, NOT 0
+#     if (this.hp > this.maxhp) this.hp = this.maxhp;   // clamp, per mon
+#
+# So the average floors ONCE, is floored at 1, and is then clamped against each
+# Pokemon's own maximum. Upstream assigned the raw average to BOTH actives, so
+# the mon with the smaller maxhp came out ABOVE its maximum: hp > maxhp, a
+# corrupt state that every later damage/heal/faint check then reads. That is 12
+# of the 15 remaining Pain Split residue rows.
+#
+# Verified against the real sim: a full 271-max Weezing splitting with a full
+# 341-max Groudon averages 306 — Groudon lands on 306/341 UNCLAMPED (306 < 341)
+# and Weezing on 271/271 CLAMPED, where upstream gave Weezing 306/271.
+#
+# SCOPE NOTE, so the #915 audit table is not read as contradicted: that audit
+# verdicted this arm "correct as-is", and that verdict STANDS. It was about
+# Substitute routing — Pain Split correctly skips behind a sub, matching
+# Showdown's `getDamage`-returns-nothing failure — and it covered the guard set,
+# not the assignment arithmetic underneath it, which is where this bug lives.
+# The sub-skip behaviour is re-pinned alongside the clamp so the two cannot drift
+# apart.
+#
+# Reachability: Pain Split is on 4 of 393 sets (Dusclops, Misdreavus, Swalot,
+# Weezing) — the second most reachable arm in choice_special_effect after Seismic
+# Toss.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# painsplitclamp / painsplitcontrol); pinned by
+# rust/pokezero-search/tests/gen3_painsplit_fidelity.rs. Touches
+# gen3/choice_effects.rs only; applied before the fixture refresh.
+poke-engine-gen3-painsplit-clamp.patch
+
 
 
 # Each updated expectation carries a one-line rationale in the fixture itself.

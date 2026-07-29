@@ -354,6 +354,20 @@ def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
                           moves=("Splash",))
 
 
+def _splitter():
+    """Weezing: 271 max HP at level 100, and a real Pain Split carrier (4 sets)."""
+
+    return FixturePokemon(species="Weezing", ability="Levitate", item="None",
+                          moves=("Pain Split", "Splash"))
+
+
+def _big_target():
+    """341 max HP, comfortably above the average so it does NOT clamp."""
+
+    return FixturePokemon(species="Groudon", ability="Drought", item="None",
+                          moves=("Splash", "Seismic Toss"))
+
+
 def _rester():
     """Xatu: the repro species, and a real Rest carrier in the pool (55 sets)."""
 
@@ -786,6 +800,15 @@ def _damage_climbs(lines, seat: str, *, factor: float) -> bool:
     if len(hits) < 2:
         return False
     return hits[-1] >= hits[0] * factor
+
+
+def _sethp_value(lines, actor: str):
+    """The ``cur/max`` a `-sethp ... [from] move: Pain Split` line reports."""
+
+    for line in lines:
+        if line.startswith(f"|-sethp|{actor}") and "Pain Split" in line:
+            return line.split("|")[3].split(" ")[0]
+    return None
 
 
 def _index_of(lines, prefix: str):
@@ -2119,6 +2142,35 @@ def _spec(name):
                     else {"rest_failed": False, "slept": True, "toxic_landed": False}),
             landmark=lambda L: _has(L, "|move|p1a: Xatu|Rest"),
             landmark_desc="Rest was used")
+    # --- Pain Split clamps to each mon's own maxhp ---------------------------
+    if name in ("painsplitclamp", "painsplitcontrol"):
+        # `painsplit.onHit` averages the two HP values and assigns each through
+        # `Pokemon#sethp`, which CLAMPS to that mon's own maxhp. With a full
+        # 271-max Weezing and a full 341-max Groudon the average is 306: Groudon
+        # lands on 306/341 unclamped, Weezing on 271/271 clamped. Upstream
+        # assigned the raw average to both, putting Weezing at 306/271 — hp above
+        # maxhp, a corrupt state every later check reads.
+        #
+        # The control chips Weezing first so the average falls below BOTH maxima
+        # and nothing clamps, which is what separates "the clamp works" from
+        # "the average happens to be small".
+        clamps = name.endswith("clamp")
+        turns = ([("move painsplit", "move splash")] if clamps
+                 else [("move splash", "move seismictoss"),
+                       ("move splash", "move seismictoss"),
+                       ("move painsplit", "move splash")])
+        return dict(
+            p1=[_splitter()], p2=[_big_target()],
+            turns=turns,
+            measured=0 if clamps else 2, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "user_hp": _sethp_value(L, "p1a: Weezing"),
+                "target_hp": _sethp_value(L, "p2a: Groudon"),
+            },
+            expect=({"user_hp": "271/271", "target_hp": "306/341"} if clamps
+                    else {"user_hp": "206/271", "target_hp": "206/341"}),
+            landmark=lambda L: _has(L, "|move|p1a: Weezing|Pain Split"),
+            landmark_desc="Pain Split resolved")
     raise ValueError(name)
 
 
@@ -2159,7 +2211,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "residualspeedpara", "residualspeedparacontrol",
              "residualspeedtie", "residualspeedsand", "residualspeedleech",
              "residualsuborder", "residualberrybeforestatus",
-             "restfullhp", "restdamagedcontrol")
+             "restfullhp", "restdamagedcontrol",
+             "painsplitclamp", "painsplitcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
