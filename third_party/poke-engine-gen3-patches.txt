@@ -141,7 +141,8 @@ poke-engine-gen3-confusion-duration.patch
 # all) and ChangeTransformSnapshot, backed by a new Pokemon::pre_transform record
 # of the transformer's base form, so every mutation inverts exactly and
 # size_of::<Instruction>() stays 6. Deliberate approximations (weight not copied
-# — its only gen3 consumer is Low Kick, absent from all 220 gen3 randbats sets;
+# — its only gen3 consumer is Low Kick, absent from all 393 gen3 randbats sets
+# across the pool's 220 species;
 # max PP not modelled — the engine has no such field) are spelled out in the
 # patch header. Verified vs real gen3 Showdown
 # (scripts/gen3_switch_differential.py: transform + 4 more); pinned by

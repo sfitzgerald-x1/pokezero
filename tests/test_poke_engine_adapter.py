@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import sys
 from types import ModuleType, SimpleNamespace
@@ -7,6 +8,7 @@ import unittest
 
 from pokezero.poke_engine_adapter import (
     BattleSpec,
+    PokeEngineTransformRevertUnsupportedError,
     MoveSpec,
     PokeEngineAttractUnsupportedError,
     PokemonSpec,
@@ -14,6 +16,7 @@ from pokezero.poke_engine_adapter import (
     _serialize_pre_transform,
     build_poke_engine_state,
     minimal_gen3_fixture,
+    require_pre_transform_support,
     run_adapter_reversible_smoke,
 )
 from pokezero.poke_engine_backend import PokeEngineUnavailableError, probe_poke_engine
@@ -409,6 +412,20 @@ class AdapterReversibleSmokeTest(unittest.TestCase):
         self.assertIn("charmander", message)
 
 
+@contextlib.contextmanager
+def _stubbed_pre_transform_probe():
+    """Neutralise the pre_transform capability probe for fake-module tests."""
+
+    import pokezero.poke_engine_adapter as adapter
+
+    original = adapter.require_pre_transform_support
+    adapter.require_pre_transform_support = lambda engine=None: None
+    try:
+        yield
+    finally:
+        adapter.require_pre_transform_support = original
+
+
 def _transform_specs(*, with_snapshot: bool):
     """A BRIDGE-BUILT transformed active: the copied form baked into the spec.
 
@@ -446,6 +463,78 @@ def _transform_specs(*, with_snapshot: bool):
         ),
         side_two=SideSpec(pokemon=(donor,)),
     )
+
+
+class BaseIdentityTest(unittest.TestCase):
+    """``base_ability`` / ``base_types`` are the identity a revert restores.
+
+    ``None`` means "same as the current value", which is what every
+    untransformed Pokemon wants. Only a spec describing an already-Transformed
+    active needs them to differ, because there the CURRENT identity is the
+    donor's while the base identity is still the transformer's own.
+    """
+
+    # Everything an untransformed spec sent the binding before base identity
+    # existed. Pinned as a set so a future field cannot be added silently.
+    _CONSTRUCTION_KWARGS = {
+        "id", "level", "types", "hp", "maxhp", "attack", "defense",
+        "special_attack", "special_defense", "speed", "status", "moves",
+    }
+
+    def _mon(self, **kw):
+        fields = dict(
+            id="gengar", level=100, types=("ghost", "poison"), hp=250, maxhp=250,
+            attack=200, defense=180, special_attack=250, special_defense=175, speed=220,
+            ability="levitate", moves=(MoveSpec(id="shadowball", pp=24),),
+        )
+        fields.update(kw)
+        return PokemonSpec(**fields)
+
+    def _built(self, mon):
+        state = build_poke_engine_state(
+            BattleSpec(side_one=SideSpec(pokemon=(mon,)), side_two=SideSpec(pokemon=(mon,))),
+            module=fake_construction_module(),
+        )
+        return state.kwargs["side_one"].pokemon[0]
+
+    def test_existing_specs_gain_base_types_and_nothing_else(self) -> None:
+        # The byte-identity claim, made precise: no construction kwarg moved
+        # except the one this change adds, and base_ability is still left for the
+        # binding to default to `ability`.
+        built = self._built(self._mon(ability=None))
+        sent = {key for key in vars(built) if key != "kind"}
+        self.assertEqual(sent, self._CONSTRUCTION_KWARGS | {"base_types"})
+        self.assertNotIn("base_ability", sent)
+
+    def test_base_types_defaults_to_the_real_types(self) -> None:
+        # The binding's own default is a flat ("normal", "typeless") — wrong for
+        # every non-Normal Pokemon. Nothing in the gen3 build READ base_types
+        # until Transform's switch-out revert, which is why it went unnoticed.
+        built = self._built(self._mon())
+        self.assertEqual(built.types, ("ghost", "poison"))
+        self.assertEqual(built.base_types, ("ghost", "poison"))
+
+    def test_single_type_base_is_padded_like_types(self) -> None:
+        built = self._built(self._mon(id="ditto", types=("normal",)))
+        self.assertEqual(built.base_types, ("normal", "typeless"))
+
+    def test_explicit_base_identity_is_passed_through(self) -> None:
+        built = self._built(self._mon(base_ability="limber", base_types=("normal",)))
+        self.assertEqual(built.ability, "levitate")
+        self.assertEqual(built.types, ("ghost", "poison"))
+        self.assertEqual(built.base_ability, "limber")
+        self.assertEqual(built.base_types, ("normal", "typeless"))
+
+    def test_untransformed_specs_are_their_own_base_in_the_real_engine(self) -> None:
+        # The invariant the default exists to hold, asserted on the serialized
+        # bytes rather than on the kwargs.
+        if not probe_poke_engine().ready:
+            self.skipTest("poke-engine is not installed/ready")
+        serialized = build_poke_engine_state(minimal_gen3_fixture()).to_string()
+        for side in serialized.split("/")[:2]:
+            fields = side.split("=")[0].split(",")
+            self.assertEqual(fields[2:4], fields[4:6], "types must be their own base")
+            self.assertEqual(fields[8], fields[9], "ability must be its own base")
 
 
 class PreTransformSerializationTest(unittest.TestCase):
@@ -493,9 +582,14 @@ class PreTransformSerializationTest(unittest.TestCase):
         self.assertIn("engine limit", str(caught.exception))
 
     def test_reaches_the_built_state(self) -> None:
-        state = build_poke_engine_state(
-            _transform_specs(with_snapshot=True), module=fake_construction_module()
-        )
+        # The fake module records kwargs instead of round-tripping them, so it
+        # cannot satisfy the capability probe; stub the probe the way
+        # tests/test_engine_world.py does for move-trapping. The REAL probe runs
+        # against a real wheel in BridgeBuiltTransformRevertsTest below.
+        with _stubbed_pre_transform_probe():
+            state = build_poke_engine_state(
+                _transform_specs(with_snapshot=True), module=fake_construction_module()
+            )
         active = state.kwargs["side_one"].pokemon[0]
         self.assertEqual(
             active.pre_transform,
@@ -538,6 +632,12 @@ class BridgeBuiltTransformRevertsTest(unittest.TestCase):
     def setUp(self) -> None:
         if not probe_poke_engine().ready:
             self.skipTest("poke-engine is not installed/ready")
+        # A wheel predating the Transform patch rejects `pre_transform` outright,
+        # which would surface here as a TypeError ERROR rather than a skip.
+        try:
+            require_pre_transform_support()
+        except PokeEngineTransformRevertUnsupportedError as exc:
+            self.skipTest(str(exc))
 
     def test_bridge_built_transform_reverts_on_switch_out(self) -> None:
         fields = self._switch_out(with_snapshot=True)
