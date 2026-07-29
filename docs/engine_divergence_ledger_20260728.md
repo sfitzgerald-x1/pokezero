@@ -909,13 +909,26 @@ replaces it with a **per-damage-source** comparison:
 
 **Exact vs roll-scaled.** Every deterministic component — status residuals,
 weather chip, Leftovers, Leech Seed, hazards, move heals — must match **to the
-HP point**. Only components that inherit the damage roll are tolerated, and not
-by a band: gen3 computes `floor(base * random(85,100) / 100)` and
-`poke_engine.calculate_damage` returns the base for non-crit and crit, so the
-legal set is **enumerable exactly** and membership is checked. Where that
-pre-state calculation cannot be trusted (a same-turn stat change moves the base)
-it falls back to a window scoped to the roll-scaled component alone — never to
-net HP. `--matcher banded` keeps the old behaviour for continuity.
+HP point**, with no tolerance of any kind.
+
+Roll-scaled components (direct move damage, recoil, drain, confusion self-hit)
+are accepted when they are, in order: **equal** to the engine's value, **or** a
+member of the enumerated legal roll set (gen3 computes
+`floor(base * random(85,100) / 100)` and `poke_engine.calculate_damage` returns
+the base, so the set is enumerable), **or within ±9 % of the engine's
+representative roll**.
+
+> **That third rung is a band, and the earlier wording here ("membership is
+> checked, not proximity") over-claimed.** The legal set is computed from the
+> PRE-state with an assumed move order, so it is unreliable whenever the turn
+> reorders or a same-turn stat change moves the base — it therefore never
+> vetoes, only accepts. What is genuinely gone is the **net-HP** band: every
+> remaining tolerance is scoped to one roll-scaled component, and no
+> deterministic component gets any tolerance at all. This is the second
+> over-claim of this shape (the first was A.2's D8 scope); the standing
+> correction is to **describe the implemented predicate, not the intended one**.
+
+`--matcher banded` keeps the old behaviour for continuity.
 
 ### Old vs new on the same 150-game seed set (981000–981149)
 

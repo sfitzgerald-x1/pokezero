@@ -273,11 +273,24 @@ def engine_choice_for_action(
 #
 # EXACT vs ROLL-SCALED. Everything that is a deterministic fraction — status
 # residuals, weather chip, Leftovers, Leech Seed, hazards, move heals — must
-# match to the HP point. Only components that inherit the damage roll are
-# tolerated, and even then not by a band: gen3 computes
-# `floor(base * random(85,100) / 100)`, and `poke_engine.calculate_damage`
-# returns the base (the 100 % roll) for non-crit and crit, so the legal set is
-# enumerable exactly and membership is checked, not proximity.
+# match to the HP point.
+#
+# Roll-scaled components (direct move damage, recoil, drain, confusion self-hit)
+# are accepted when they are, IN ORDER:
+#   1. equal to the engine's value, OR
+#   2. a member of the enumerated legal roll set — gen3 computes
+#      `floor(base * random(85,100) / 100)` and `poke_engine.calculate_damage`
+#      returns the base for non-crit and crit, so the set is enumerable, OR
+#   3. within +/-9 % of the engine's representative roll.
+#
+# Rung 3 is a band, and saying otherwise would be an over-claim: the legal set is
+# computed from the PRE-state with an assumed move order, so it is unreliable
+# whenever the turn reorders or a same-turn stat change moves the base, and it
+# therefore never VETOES — it can only accept. The honest description of the
+# predicate is "equal, or in the enumerated legal set, or within +/-9 % of the
+# engine's representative roll". What is genuinely gone is the NET-HP band: every
+# tolerance here is scoped to a single roll-scaled component, and no deterministic
+# component gets any tolerance at all.
 # ---------------------------------------------------------------------------------------------
 
 # Components that scale with the damage roll; everything else must be exact.
@@ -1318,10 +1331,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--matcher",
         choices=("strict", "banded"),
         default="strict",
-        help="strict (default): compare per-damage-source components, each attributed "
-             "component exact except roll-scaled ones which are checked for membership "
-             "in the engine's legal roll set. banded: the legacy +/-16%%-of-net-HP band, "
-             "kept for continuity with the pre-hardening numbers.",
+        help="strict (default): compare per-damage-source components. Deterministic "
+             "components (residuals, weather, items, hazards, move heals) must match "
+             "exactly; roll-scaled ones (move damage, recoil, drain, confusion) are "
+             "accepted if equal, or in the enumerated legal roll set, or within +/-9%% of "
+             "the engine's representative roll — component-scoped, never net-HP. "
+             "banded: the legacy +/-16%%-of-net-HP band, kept for continuity with the "
+             "pre-hardening numbers.",
     )
     parser.add_argument(
         "--no-hidden-counter-support",
