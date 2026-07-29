@@ -569,7 +569,18 @@ def _public_opponent_team_index_constraints(
                     if public_action is not None and public_action.kind == "switch"
                     else None
                 )
-                if switch_species is None:
+                if switch_species is None and public_action is None:
+                    # Only reach for the rolling public-event window when the
+                    # round captured NO opponent action at all. `recent_public_events`
+                    # is a fixed-size window that still carries switch/drag lines
+                    # from earlier rounds, so scanning it whenever the captured
+                    # action merely isn't a switch binds a STALE species to this
+                    # round's switch slot. The reachable case is a switch the
+                    # opponent chose and did not get: Pursuit KOs the switcher, so
+                    # the recorded action index is a switch while the captured
+                    # public action is the move — and the window then re-reads the
+                    # PREVIOUS switch-in and pins it to the wrong party index.
+                    # A captured non-switch action is positive evidence; trust it.
                     switch_species = _public_switch_after_decision_round(
                         own_observations,
                         opponent_slot=opponent_slot,
@@ -592,7 +603,24 @@ def _public_opponent_team_index_constraints(
                     )
                     active_species = switch_species
                     active_position = 0
-                    continue
+                    # Deliberately NOT `continue`: fall through to the
+                    # reconciliation below so the modelled permutation is checked
+                    # against the species actually active at the next boundary.
+                    # One recorded switch action is not necessarily the round's
+                    # only party mutation — a Roar/Whirlwind drag, or a faint
+                    # replacement resolved in the same chunk, moves the opponent's
+                    # party AGAIN after the switch we just decoded. Skipping the
+                    # check left `current_order` describing a party Showdown had
+                    # already moved on from, and every later switch index then
+                    # decoded against the wrong permutation, surfacing one or two
+                    # switches later as a bogus "constraints are inconsistent"
+                    # bail on perfectly consistent public data. The reconciliation
+                    # repairs the permutation when the newly active species is
+                    # already pinned, and otherwise drops `active_position` to
+                    # None, which stops collecting rather than collecting wrong.
+                    # In the ordinary single-mutation round it is a no-op: the
+                    # switched-in species is the one active at the next boundary
+                    # and is already sitting at the active position.
 
         if next_active is None:
             continue

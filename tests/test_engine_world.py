@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import unittest
@@ -24,8 +25,33 @@ from pokezero.engine_world import (  # noqa: E402
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
-from pokezero.poke_engine_adapter import MoveSpec, PokemonSpec, SideSpec  # noqa: E402
+from pokezero.poke_engine_adapter import (  # noqa: E402
+    MoveSpec,
+    PokemonSpec,
+    PokeEngineMoveTrapUnsupportedError,
+    SideSpec,
+)
 from pokezero.showdown_fixture import FixturePokemon, pack_pokemon, pack_team  # noqa: E402
+
+
+@contextlib.contextmanager
+def _move_trap_support(probe):
+    """Swap the module-level move-trap capability probe for the duration.
+
+    The real probe asks the installed native wheel whether it round-trips the
+    TRAPPED volatile. These tests are about the WIRING either side of it, so they
+    stub it; ``tests/test_engine_move_trap_wiring.py`` runs the real probe
+    against a wheel built from the current patch list.
+    """
+
+    import pokezero.engine_world as engine_world
+
+    original = engine_world.require_move_trap_support
+    engine_world.require_move_trap_support = probe
+    try:
+        yield
+    finally:
+        engine_world.require_move_trap_support = original
 
 
 def _dex() -> ShowdownDex:
@@ -480,6 +506,62 @@ class BattleSpecConstructionTests(unittest.TestCase):
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertIn("attract", world.spec.side_one.volatile_statuses)
         self.assertIn("attract", world.spec.side_two.volatile_statuses)
+
+    def test_trapped_volatile_is_supported_when_the_wheel_has_the_patch(self) -> None:
+        # Showdown's move-trap (Mean Look / Spider Web / Block). Like flashfire
+        # and attract this is a pure allow-list pass-through — the gen3 trap has
+        # no duration and no residual, it simply lasts until the trapper leaves —
+        # but it is gated on the installed wheel actually carrying
+        # poke-engine-gen3-move-trapping.patch, so the probe is stubbed here and
+        # exercised for real against the patched wheel in
+        # tests/test_engine_move_trap_wiring.py.
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["volatiles"] = ["trapped"]
+        payload["sides"]["p2"]["volatiles"] = ["trapped"]
+        with _move_trap_support(lambda engine=None: None):
+            world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertIn("trapped", world.spec.side_one.volatile_statuses)
+        self.assertIn("trapped", world.spec.side_two.volatile_statuses)
+
+    def test_move_trap_satisfies_the_request_trap_check_instead_of_falling_back(self) -> None:
+        # The whole point of the wiring. A Mean Look / Spider Web turn discloses
+        # ``trapped: true`` on OUR request, and _require_world_reproduces_trap
+        # used to find no modelled cause for it — no trapping ability, no
+        # partial trap — and raise self_request_state_unsupported, which fell the
+        # entire root back to a non-search choice. The volatile is the cause, so
+        # the check must now pass on it alone. The control below (same payload,
+        # volatile removed) still fails closed, so this is the volatile doing the
+        # work rather than the check going soft.
+        payload = _payload(self.dex)
+        payload["selfActiveRequestState"] = {"trapped": True}
+        payload["sides"]["p1"]["volatiles"] = ["trapped"]
+        with _move_trap_support(lambda engine=None: None):
+            world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertIn("trapped", world.spec.side_one.volatile_statuses)
+
+        payload["sides"]["p1"]["volatiles"] = []
+        self._assert_reason(payload, "self_request_state_unsupported")
+
+    def test_trapped_volatile_fails_loud_on_a_wheel_without_the_patch(self) -> None:
+        # The stale-wheel path. An unpatched binding resolves the unknown TRAPPED
+        # token to NONE and drops it silently, which would be strictly worse than
+        # the fallback this replaces: search would hand the trapped seat its
+        # switch options back. Construction must fail closed and name the patch.
+        def _stale(engine=None):
+            raise PokeEngineMoveTrapUnsupportedError(
+                "the installed engine dropped the TRAPPED volatile instead of "
+                "round-tripping it. Rebuild with scripts/setup_poke_engine.sh "
+                "(third_party/poke-engine-gen3-move-trapping.patch)."
+            )
+
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["trapped"]
+        with _move_trap_support(_stale):
+            with self.assertRaises(PokeEngineMoveTrapUnsupportedError) as caught:
+                battle_spec_from_payload(payload, _override(), dex=self.dex)
+        message = str(caught.exception)
+        self.assertIn("move-trapping.patch", message)
+        self.assertIn("setup_poke_engine.sh", message)
 
     def test_other_unsupported_volatiles_still_fail_closed(self) -> None:
         payload = _payload(self.dex)
