@@ -1,0 +1,356 @@
+{
+ "note": "single-component REAL findings only; multi-component slots excluded (sorted-magnitude pairing is unreliable there)",
+ "findings": [
+  {
+   "seed": 1500080,
+   "step": 11,
+   "slot": "p2",
+   "move": "mirrorcoat",
+   "observed": 14,
+   "engine": 118,
+   "ratio": 0.119
+  },
+  {
+   "seed": 1500180,
+   "step": 35,
+   "slot": "p2",
+   "move": "earthquake",
+   "observed": 30,
+   "engine": 125,
+   "ratio": 0.24
+  },
+  {
+   "seed": 1500062,
+   "step": 9,
+   "slot": "p1",
+   "move": "fearow",
+   "observed": 18,
+   "engine": 67,
+   "ratio": 0.269
+  },
+  {
+   "seed": 1500028,
+   "step": 44,
+   "slot": "p2",
+   "move": "shadowball",
+   "observed": 18,
+   "engine": 53,
+   "ratio": 0.34
+  },
+  {
+   "seed": 1500051,
+   "step": 117,
+   "slot": "p2",
+   "move": "icebeam",
+   "observed": 26,
+   "engine": 69,
+   "ratio": 0.377
+  },
+  {
+   "seed": 1500204,
+   "step": 83,
+   "slot": "p2",
+   "move": "hiddenpowerice70",
+   "observed": 18,
+   "engine": 39,
+   "ratio": 0.462
+  },
+  {
+   "seed": 1500191,
+   "step": 20,
+   "slot": "p1",
+   "move": "hiddenpowerice70",
+   "observed": 16,
+   "engine": 34,
+   "ratio": 0.471
+  },
+  {
+   "seed": 1500222,
+   "step": 17,
+   "slot": "p2",
+   "move": "hiddenpowerfighting70",
+   "observed": 119,
+   "engine": 233,
+   "ratio": 0.511
+  },
+  {
+   "seed": 1500206,
+   "step": 45,
+   "slot": "p2",
+   "move": "headbutt",
+   "observed": 13,
+   "engine": 25,
+   "ratio": 0.52
+  },
+  {
+   "seed": 1500040,
+   "step": 70,
+   "slot": "p2",
+   "move": "icebeam",
+   "observed": 16,
+   "engine": 29,
+   "ratio": 0.552
+  },
+  {
+   "seed": 1500074,
+   "step": 12,
+   "slot": "p2",
+   "move": "return",
+   "observed": 27,
+   "engine": 43,
+   "ratio": 0.628
+  },
+  {
+   "seed": 1500025,
+   "step": 98,
+   "slot": "p1",
+   "move": "hiddenpowerghost70",
+   "observed": 58,
+   "engine": 90,
+   "ratio": 0.644
+  },
+  {
+   "seed": 1500025,
+   "step": 7,
+   "slot": "p1",
+   "move": "crosschop",
+   "observed": 31,
+   "engine": 48,
+   "ratio": 0.646
+  },
+  {
+   "seed": 1500074,
+   "step": 32,
+   "slot": "p2",
+   "move": "return",
+   "observed": 28,
+   "engine": 43,
+   "ratio": 0.651
+  },
+  {
+   "seed": 1500164,
+   "step": 67,
+   "slot": "p1",
+   "move": "crosschop",
+   "observed": 54,
+   "engine": 82,
+   "ratio": 0.659
+  },
+  {
+   "seed": 1500051,
+   "step": 124,
+   "slot": "p2",
+   "move": "surf",
+   "observed": 69,
+   "engine": 103,
+   "ratio": 0.67
+  },
+  {
+   "seed": 1500030,
+   "step": 82,
+   "slot": "p1",
+   "move": "rockslide",
+   "observed": 58,
+   "engine": 86,
+   "ratio": 0.674
+  },
+  {
+   "seed": 1500057,
+   "step": 38,
+   "slot": "p1",
+   "move": "sleeptalk",
+   "observed": 80,
+   "engine": 97,
+   "ratio": 0.825
+  },
+  {
+   "seed": 1500267,
+   "step": 77,
+   "slot": "p2",
+   "move": "hiddenpowerground70",
+   "observed": 63,
+   "engine": 70,
+   "ratio": 0.9
+  },
+  {
+   "seed": 1500221,
+   "step": 13,
+   "slot": "p2",
+   "move": "aerialace",
+   "observed": 102,
+   "engine": 113,
+   "ratio": 0.903
+  },
+  {
+   "seed": 1500051,
+   "step": 95,
+   "slot": "p2",
+   "move": "surf",
+   "observed": 137,
+   "engine": 151,
+   "ratio": 0.907
+  },
+  {
+   "seed": 1500115,
+   "step": 36,
+   "slot": "p1",
+   "move": "silverwind",
+   "observed": 176,
+   "engine": 194,
+   "ratio": 0.907
+  },
+  {
+   "seed": 1500123,
+   "step": 79,
+   "slot": "p1",
+   "move": "fireblast",
+   "observed": 78,
+   "engine": 86,
+   "ratio": 0.907
+  },
+  {
+   "seed": 1500126,
+   "step": 13,
+   "slot": "p2",
+   "move": "doubleedge",
+   "observed": 88,
+   "engine": 97,
+   "ratio": 0.907
+  },
+  {
+   "seed": 1500024,
+   "step": 9,
+   "slot": "p2",
+   "move": "return",
+   "observed": 101,
+   "engine": 111,
+   "ratio": 0.91
+  },
+  {
+   "seed": 1500229,
+   "step": 3,
+   "slot": "p2",
+   "move": "psychic",
+   "observed": 134,
+   "engine": 147,
+   "ratio": 0.912
+  },
+  {
+   "seed": 1500164,
+   "step": 67,
+   "slot": "p2",
+   "move": "sleeptalk",
+   "observed": 97,
+   "engine": 106,
+   "ratio": 0.915
+  },
+  {
+   "seed": 1500201,
+   "step": 16,
+   "slot": "p1",
+   "move": "thunderbolt",
+   "observed": 205,
+   "engine": 224,
+   "ratio": 0.915
+  },
+  {
+   "seed": 1500123,
+   "step": 79,
+   "slot": "p2",
+   "move": "surf",
+   "observed": 204,
+   "engine": 213,
+   "ratio": 0.958
+  },
+  {
+   "seed": 1500028,
+   "step": 173,
+   "slot": "p1",
+   "move": "surf",
+   "observed": 111,
+   "engine": 100,
+   "ratio": 1.11
+  },
+  {
+   "seed": 1500028,
+   "step": 66,
+   "slot": "p1",
+   "move": "surf",
+   "observed": 75,
+   "engine": 67,
+   "ratio": 1.119
+  },
+  {
+   "seed": 1500063,
+   "step": 73,
+   "slot": "p2",
+   "move": "hiddenpowerghost70",
+   "observed": 34,
+   "engine": 30,
+   "ratio": 1.133
+  },
+  {
+   "seed": 1500207,
+   "step": 27,
+   "slot": "p1",
+   "move": "spikes",
+   "observed": 25,
+   "engine": 22,
+   "ratio": 1.136
+  },
+  {
+   "seed": 1500107,
+   "step": 20,
+   "slot": "p2",
+   "move": "fireblast",
+   "observed": 9,
+   "engine": 7,
+   "ratio": 1.286
+  },
+  {
+   "seed": 1500127,
+   "step": 57,
+   "slot": "p1",
+   "move": "hiddenpowerfire70",
+   "observed": 8,
+   "engine": 6,
+   "ratio": 1.333
+  },
+  {
+   "seed": 1500063,
+   "step": 3,
+   "slot": "p2",
+   "move": "machpunch",
+   "observed": 138,
+   "engine": 94,
+   "ratio": 1.468
+  },
+  {
+   "seed": 1500174,
+   "step": 43,
+   "slot": "p2",
+   "move": "sleeptalk",
+   "observed": 106,
+   "engine": 52,
+   "ratio": 2.038
+  },
+  {
+   "seed": 1500231,
+   "step": 109,
+   "slot": "p1",
+   "move": "sleeptalk",
+   "observed": 58,
+   "engine": 18,
+   "ratio": 3.222
+  },
+  {
+   "seed": 1500121,
+   "step": 67,
+   "slot": "p2",
+   "move": "hiddenpowerfire70",
+   "observed": 171,
+   "engine": 23,
+   "ratio": 7.435
+  }
+ ]
+}
