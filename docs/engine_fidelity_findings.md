@@ -420,3 +420,95 @@ confusiondurationcontrol confusionbatonpass confusionbatonpasscontrol`; engine
 side pinned by `rust/pokezero-search/tests/gen3_confusion_fidelity.rs`
 (11 tests). Seeds 1000-1003 of the duration scenario happen to cover all four
 legal durations (1, 2, 3 and 4 self-hit-risk turns).
+
+## Confirmed deviation 5: ENCORE never expired
+
+poke-engine 0.0.47 applies the gen3 ENCORE volatile and enforces the lock, but
+**never expires it**. `VolatileStatusDurations.encore` exists in the shared
+`src/state.rs` and is serialized, and `increment_volatile_status_duration`
+dispatches it — but the only code that advances it lives in
+`src/genx/generate_instructions.rs` behind
+`#[cfg(any(feature = "gen5", ..., feature = "gen9"))]`, which never compiles for
+a gen3 build. So a gen3 Encore locked its victim for the rest of the battle.
+Confirmed by the differential lane (D9, seeds 991000-991059: 3/4/5/6-turn ends
+across 60 samples).
+
+Real gen3 overrides the duration explicitly. `data/mods/gen3/moves.ts` gives
+`encore.condition.durationCallback() { return this.random(3, 7); }` — uniform on
+{3,4,5,6}. **This is the gen3-inherits-gen4-not-gen5 trap in its sharpest form**:
+gen4's own override says `this.random(4, 9)` = {4..8}, and gen5-gen8 do not
+define `encore` at all, so reading either neighbour gives the wrong window. Every
+other handler (`onStart`, `onOverrideAction`, `onResidual`, `onEnd`,
+`onDisableMove`, `noCopy`) comes unchanged from base `data/moves.ts`; gen4
+contributes only `duration: undefined` (killing base's `duration: 3`) and the
+residual ordering.
+
+Unlike confusion this rides Showdown's **generic** duration machinery, not an
+`onBeforeMove` counter: `sim/battle.ts` decrements `handler.state.duration` once
+per turn in the RESIDUAL phase and calls `end` at zero. The tick therefore lands
+whether or not the encored Pokemon moved, and the engine's end-of-turn block is
+that same point in the turn — so unlike the confusion ladder there is no timing
+approximation at all.
+
+**Impact:** an encored seat was modelled as locked forever. Search under-valued
+every line that plays through an Encore and over-valued Encore as an attack.
+Reachable: 16 gen3 randbats species carry Encore.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-encore-duration.patch`, applied last of the
+behaviour patches. Hazard ladder over the existing counter,
+`chance_encore_ends(n) = 0` while `n < 3`, else `1 / (1 + MAX_ENCORE_TURNS - n)`:
+
+| n (ticks burned, incl. this one) | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| P(end) | 0 | 0 | 1/4 | 1/3 | 1/2 | 1 |
+
+which multiplies out to a uniform marginal, with nothing surviving a seventh:
+
+    P(3) = 1/4;  P(4) = 3/4 · 1/3 = 1/4;
+    P(5) = 3/4 · 2/3 · 1/2 = 1/4;  P(6) = 3/4 · 2/3 · 1/2 · 1 = 1/4
+
+**The `onStart` compensation.** `encore.onStart` ends with
+`if (!this.queue.willMove(target)) this.effectState.duration!++`. The residual
+tick at the end of the application turn is free when the target has already
+moved — it burns a turn on which the target was never locked — so Showdown hands
+one back. The net invariant is that **the victim is locked for exactly `duration`
+turns regardless of speed order**, which is why the roll of {3,4,5,6} reads as
+"Encore lasts 3-6 turns". Counting up instead of down, the patch reproduces this
+by seeding the counter at `-1` when the encorer moved second and `0` when it
+moved first, so the counter always means "locked turns elapsed". Pinned on both
+sides: `the_application_turn_seeds_the_counter_by_move_order`, and the
+differential pair `encoreduration` (span 3-6) vs `encoredurationslow` (span 4-7,
+the same seeds shifted by exactly one).
+
+**PP early termination.** The same `onResidual` ends Encore the moment the
+encored move hits 0 PP. Modelled, because the engine's own option filter drops
+0-PP moves — without it an encored Pokemon whose locked move is exhausted has no
+legal move at all and falls through to "No Move". Showdown decrements the
+duration *before* running `onResidual` and `continue`s if it hit zero, so the PP
+check is skipped on the final turn; the patch checks PP first instead, which is
+outcome-equivalent (both end Encore, both emit the same `-end`).
+
+**No Baton Pass carry.** The condition carries `noCopy: true`, so — the opposite
+of confusion — Encore is not passed. The switch-out arm drops it and zeroes the
+counter, mirroring the LOCKEDMOVE / YAWN / TAUNT arms.
+
+**Not fixed here (application-time, separate divergence):** Showdown fails Encore
+outright when the target's last move carries `failencore` — in gen3 that is
+Encore, Mimic, Mirror Move, Sketch, Struggle and Transform — and when the target's
+last move is not in its move slots or already has 0 PP. The engine only checks
+that the target's `last_used_move` is a move at all, so it will happily Encore a
+Struggle. Bounded and orthogonal to duration.
+
+**Caller-contract note.** `engine_world` does **not** fail Encore closed, contrary
+to the D9 ledger row: it supports the volatile and declines only when the locked
+move cannot be derived (`encore_move_unknown`). It seeds
+`volatile_durations["encore"] = 1`, which was inert before this patch and is live
+after it — the value now means "one locked turn already elapsed", a deliberate
+floor. Deriving the true elapsed count from observation history is follow-up work
+and only becomes measurable once the wheel carries this patch.
+
+**Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
+--only encoreduration encoreoutlivesshortest encoredurationslow
+encoredurationcontrol`; engine side pinned by
+`rust/pokezero-search/tests/gen3_encore_fidelity.rs` (9 tests).

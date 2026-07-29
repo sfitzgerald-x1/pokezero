@@ -1085,11 +1085,24 @@ def _build_side_spec(
                 "encore_move_unknown",
                 f"side {slot!r} is encored but the locked move cannot be determined",
             )
-        # The engine restricts the side to last_used_move while ENCORE is set
-        # (verified empirically); it does not decrement the duration, so the
-        # mon is modeled as locked for the search horizon. Conservative for an
-        # OPPONENT's encore; pessimistic for our own near expiry (real gen3
-        # encores run 3-8 turns) — acceptable over short MCTS horizons.
+        # The engine restricts the side to last_used_move while ENCORE is set.
+        #
+        # The duration IS now modelled, as of
+        # third_party/poke-engine-gen3-encore-duration.patch: gen3 Showdown rolls
+        # `this.random(3, 7)` (data/mods/gen3/moves.ts), so an Encore lasts 3-6
+        # locked turns — not the 3-8 this comment used to claim, which came from
+        # gen4's `this.random(4, 9)` and is the wrong side of the
+        # gen3-inherits-gen4 boundary. The engine burns one tick per end-of-turn
+        # and expires the volatile on a hazard ladder.
+        #
+        # The counter means "locked turns already elapsed", so seeding it at 1
+        # says this Encore has been running for one turn. That stays a deliberate
+        # floor: the true elapsed count is not observable from the request, and
+        # under-counting keeps the lock modelled for at least as long as it really
+        # lasts rather than freeing the mon early. Deriving the real value from
+        # observation history is follow-up work, and it only becomes measurable
+        # once the wheel carries the patch — same sequencing as the move-trap
+        # wiring.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
 
