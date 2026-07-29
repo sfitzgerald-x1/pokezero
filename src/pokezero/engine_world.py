@@ -1079,6 +1079,21 @@ def _build_side_spec(
     toxic_stage = side_payload.get("toxicStage")
     if isinstance(toxic_stage, int) and toxic_stage > 0:
         side_conditions["toxic_count"] = toxic_stage
+    # Consecutive-Protect decay. The engine prices the NEXT stall attempt at
+    # CONSECUTIVE_PROTECT_CHANCE ** side_conditions.protect (0.5 ** k), and only
+    # branches at all when k > 0 — so an unseeded world says "this is a first
+    # Protect" and returns a single 100%-success branch. Showdown's gen3 ladder
+    # is 1, 1/2, 1/4, 1/8 by attempt, so k is exactly the count of consecutive
+    # SUCCESSFUL stall uses immediately preceding this decision, with no offset.
+    #
+    # Publicly derivable, so this leaks nothing: the parser builds the count from
+    # `-singleturn` (success) and resets it on a failed stall, any non-stall
+    # move, `cant`, switch-out/drag or faint — the five public mirrors of
+    # Showdown deleting the volatile. Same justification as the two-turn charge
+    # state, which is likewise announced before it is used.
+    stall_counter = side_payload.get("stallCounter")
+    if isinstance(stall_counter, int) and stall_counter > 0:
+        side_conditions["protect"] = stall_counter
 
     wish = (0, 0)
     if wish_set_turn is not None:

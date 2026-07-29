@@ -2037,6 +2037,12 @@ def _public_materialization_payload(
             # The parser's observation feature advances the toxic value at a new turn. The
             # simulator state at the request boundary is one residual behind that feature.
             "toxicStage": _materialization_toxic_stage(replay, player),
+            # Consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3
+            # shares one `stall` volatile). The parser already derives this from
+            # public protocol alone; the engine prices the NEXT attempt at
+            # 0.5 ** count, so the count passes through with NO boundary offset
+            # (unlike toxicStage above, whose feature runs one residual ahead).
+            "stallCounter": int(replay.stall_counter.get(player, 0)),
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
