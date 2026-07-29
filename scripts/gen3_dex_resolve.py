@@ -6,12 +6,19 @@ hand. `Dex.mod('gen3')` applies the whole inheritance chain the simulator
 actually uses; a hand-walked chain is a guess that happens to be right most of
 the time, which is the worst kind.
 
-The inheritance-chain trap has produced four wrong reads in this program:
+The inheritance-chain trap has produced five wrong reads in this program:
 
   * Spikes      — the layer fractions live in the gen4 mod, not base
   * burn        — the residual fraction changed at gen6, so base is wrong for gen3
   * Flail       — gen3 has its OWN override; the gen4 ladder is not it
   * Thunder Wave — gen6 declares a value BELOW gen3 in the chain
+  * Rest (PP)   — gen8 declares it; neither gen3 nor base carries the value
+  * stall       — gen4's `inherit: true` resolves to GEN5's full definition, not
+                  base, so the Protect decay ladder is x2 (1/2, 1/4, 1/8) and not
+                  x3. Both base and gen5 define the same three callbacks, so the
+                  callback NAMES below are identical either way and do not
+                  discriminate — this probe cannot yet close that trap. Reporting
+                  the surviving callback's source mod would.
 
 Each cost a wrong claim in a hand-off before it was caught. None would have
 happened against a resolved read.
