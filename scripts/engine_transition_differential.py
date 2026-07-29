@@ -50,6 +50,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import random
 import sys
@@ -90,6 +91,9 @@ from pokezero.local_showdown import (  # noqa: E402
 )
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 from pokezero.randbat import Gen3RandbatSource, canonical_gen3_randbat_species_id  # noqa: E402
+
+# Engine "no action" choice string (waiting seat / MUSTRECHARGE).
+_ENGINE_NO_MOVE = "none"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
@@ -168,7 +172,6 @@ def engine_choice_for_action(
     action_index: int,
     candidates: Sequence[Mapping[str, Any]],
     engine_side: Any,
-    party_species: Sequence[str],
 ) -> str:
     """Translate one seat's chosen action index into an engine choice string.
 
@@ -202,10 +205,17 @@ def engine_choice_for_action(
             if len(typed) == 1:
                 return typed[0]
             raise UnmappableChoice("hidden_power_ambiguous")
-        # Struggle / recharge and other pseudo-moves are engine-legal without a
-        # party move slot; pass them through and let the engine reject.
-        if move_id in {"struggle", "recharge"}:
-            return move_id
+        if move_id == "recharge":
+            # A recharging seat carries MUSTRECHARGE, under which the engine's own
+            # option surface offers only "No Move" — the recharge is not a
+            # submittable move id (passing "recharge" raises "Invalid move for sN").
+            return _ENGINE_NO_MOVE
+        if move_id == "struggle":
+            # Struggle is engine-INTERNAL: gen3 MoveChoice::from_string resolves
+            # only ids present on the active's move list, and the engine
+            # substitutes Struggle itself when nothing else is usable. There is no
+            # choice string for it, so the boundary is not drivable by this harness.
+            raise UnmappableChoice("struggle_not_submittable")
         raise UnmappableChoice(f"move_not_in_engine_set:{move_id}")
     if kind == "switch":
         pokemon = candidate.get("pokemon")
@@ -217,9 +227,15 @@ def engine_choice_for_action(
         if not species:
             raise UnmappableChoice("blank_switch_species")
         # gen3 ``MoveChoice::from_string`` (third_party/poke-engine-src/src/gen3/
-        # state.rs:51) resolves a switch from the BARE species id — the
-        # ``"switch <species>"`` form raises ValueError("Invalid move for sN").
-        party = [normalize_id(s) for s in party_species]
+        # state.rs:51) resolves a switch by matching ``pkmn.id`` on the BUILT
+        # state, and it takes the BARE species id — the ``"switch <species>"``
+        # form raises ValueError("Invalid move for sN").
+        #
+        # Resolve against the built party's real ids, NOT ``EngineWorld.
+        # party_species``: the two disagree for cosmetic Unown formes, where the
+        # world reports ``unownb`` while the engine stores the collapsed
+        # ``unown``. Species clause keeps the collapsed key unique per team.
+        party = [normalize_id(str(mon.id)) for mon in engine_side.pokemon]
         if species in party:
             return species
         canonical = canonical_gen3_randbat_species_id(species)
@@ -228,6 +244,88 @@ def engine_choice_for_action(
             return matches[0]
         raise UnmappableChoice("switch_species_not_in_party")
     raise UnmappableChoice(f"unknown_kind:{kind}")
+
+
+# ---------------------------------------------------------------------------------------------
+# Hidden-counter mechanics: support-based validation instead of exact-state gating.
+#
+# WHY. Some gen3 counters are genuinely not public. The clearest is sleep:
+# Showdown rolls `this.effectState.time = this.random(2, 6)` once, privately
+# (pokemon-showdown/data/mods/gen3/conditions.ts `slp.onStart`), so the mon is
+# unable to act for 1-4 attempted turns. The engine does NOT store "turns
+# remaining"; it models wake-up as a HAZARD conditioned on turns already slept —
+# `chance_to_wake_up(turns_asleep) = 1/(1 + MAX_SLEEP_TURNS - turns_asleep)` with
+# `MAX_SLEEP_TURNS = 4` (third_party/poke-engine-src/src/gen3/generate_instructions.rs:44-71),
+# which reproduces Showdown's uniform 1-4 duration exactly given the elapsed count.
+#
+# Demanding an exact counter match for such a mechanic is wrong IN PRINCIPLE: the
+# harness is asking the world constructor to reproduce a number no observer can
+# see. Strict mode therefore used to fail the whole boundary closed
+# (`status_unsupported`), discarding 27.5% of full-round boundaries — the D8
+# coverage ceiling in docs/engine_divergence_ledger_20260728.md.
+#
+# WHAT REPLACES IT. For hidden-counter mechanics only, the bar becomes
+# SUPPORT-BASED: build one world per legal hidden-counter assignment and accept
+# the boundary if the realized Showdown transition lies in the UNION of those
+# worlds' branch supports with nonzero probability. That still fails a genuine
+# mechanic error (a wake outside the legal window, a wrong post-wake effect, a
+# wrong damage roll) because no legal counter value can produce it, while no
+# longer punishing the engine for not knowing a private number.
+#
+# WHICH MECHANICS. Exactly two, both counter-hidden and both bounded:
+#   * SLEEP  — `sleep_turns` swept 0..MAX_SLEEP_TURNS, plus `rest_turns` 1..2 for
+#     a Rest-induced sleep (a separate engine code path with a fixed duration).
+#   * CONFUSION — bounded duration since PR #875; the engine rolls the snap-out
+#     the same way and the remaining count is private.
+# Everything else keeps EXACT gating. In particular damage, status application,
+# hazards, screens, weather, boosts and faints are all publicly observable and
+# are NOT relaxed — the divergence bar for observable mechanics is unchanged.
+# ---------------------------------------------------------------------------------------------
+
+# third_party/poke-engine-src/src/gen3/generate_instructions.rs:44
+MAX_SLEEP_TURNS = 4
+# gen3 Rest: asleep for two attempted turns; the engine panics outside 0..2
+# (generate_instructions.rs:1699), so the sweep stays inside the legal domain.
+MAX_REST_TURNS = 2
+# Fail-closed reasons that are purely "a hidden counter is unknown".
+HIDDEN_COUNTER_REASONS = frozenset({"status_unsupported", "volatile_unsupported"})
+# Guard rail: a pathological cross-product must never explode the boundary cost.
+MAX_HIDDEN_COUNTER_WORLDS = 64
+
+
+def _sleep_counter_variants(spec: Any) -> list[Any]:
+    """Every legal (sleep_turns, rest_turns) assignment for the asleep actives.
+
+    Returns one BattleSpec per assignment; the cross product across both sides is
+    capped by ``MAX_HIDDEN_COUNTER_WORLDS``. A side whose active is not asleep
+    contributes exactly one (unchanged) variant, so the common case is cheap.
+    """
+
+    def side_variants(side: Any) -> list[Any]:
+        active = side.pokemon[side.active_index]
+        if str(getattr(active, "status", "none")).lower() != "sleep":
+            return [side]
+        variants = []
+        for sleep_turns in range(0, MAX_SLEEP_TURNS + 1):
+            party = list(side.pokemon)
+            party[side.active_index] = dataclasses.replace(
+                active, sleep_turns=sleep_turns, rest_turns=0
+            )
+            variants.append(dataclasses.replace(side, pokemon=tuple(party)))
+        for rest_turns in range(1, MAX_REST_TURNS + 1):
+            party = list(side.pokemon)
+            party[side.active_index] = dataclasses.replace(
+                active, sleep_turns=0, rest_turns=rest_turns
+            )
+            variants.append(dataclasses.replace(side, pokemon=tuple(party)))
+        return variants
+
+    one = side_variants(spec.side_one)
+    two = side_variants(spec.side_two)
+    specs = [
+        dataclasses.replace(spec, side_one=a, side_two=b) for a in one for b in two
+    ]
+    return specs[:MAX_HIDDEN_COUNTER_WORLDS]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -348,7 +446,7 @@ def _active_maxhp_by_slot(state: Any, slot_sides: Mapping[str, str]) -> dict[str
 
 def evaluate_boundary(
     *,
-    state: Any,
+    states: Sequence[Any],
     slot_sides: Mapping[str, str],
     choices: Mapping[str, str],
     pre_features: TurnFeatures,
@@ -360,19 +458,27 @@ def evaluate_boundary(
 
     side_one_choice = choices["p1"] if slot_sides["p1"] == "side_one" else choices["p2"]
     side_two_choice = choices["p2"] if slot_sides["p2"] == "side_two" else choices["p1"]
-    branches = poke_engine.generate_instructions(state, side_one_choice, side_two_choice)
 
+    # Union of branch support across the hidden-counter candidates. With a single
+    # candidate (the normal case) this is exactly the old exact-world check;
+    # with several it is the support-based bar documented above. Zero-probability
+    # branches are never admitted: only branches the engine actually enumerates.
     rows: list[dict[str, Any]] = []
-    for branch in branches:
-        applied = state.apply_instructions(branch)
-        rows.append(
-            {
-                "percentage": float(branch.percentage),
-                "features": engine_features_by_slot(applied, slot_sides),
-                "boost_deltas": engine_boost_deltas_by_slot(state, applied, slot_sides),
-                "maxhp": _active_maxhp_by_slot(applied, slot_sides),
-            }
-        )
+    for state in states:
+        for branch in poke_engine.generate_instructions(
+            state, side_one_choice, side_two_choice
+        ):
+            if float(branch.percentage) <= 0.0:
+                continue
+            applied = state.apply_instructions(branch)
+            rows.append(
+                {
+                    "percentage": float(branch.percentage),
+                    "features": engine_features_by_slot(applied, slot_sides),
+                    "boost_deltas": engine_boost_deltas_by_slot(state, applied, slot_sides),
+                    "maxhp": _active_maxhp_by_slot(applied, slot_sides),
+                }
+            )
 
     # A REGULAR switch clears stat stages with no protocol echo (Showdown emits
     # nothing; the engine emits reset_boosts instructions), so a side whose
@@ -425,7 +531,12 @@ def run_game(
     keep_repro: int,
     repros: list[dict[str, Any]],
     approximate_sleep: bool,
+    hidden_counter_support: bool,
 ) -> Counter:
+    """Run one game. Divergence repros are appended to ``repros`` (capped by
+    ``keep_repro``); the caller owns whether that list is per-game (checkpoint
+    records) or run-global (the final report)."""
+
     counts: Counter = Counter()
     env.reset(seed=seed, format_id="gen3randombattle")
     true_teams = _true_teams_from_bridge_snapshot(env.snapshot().bridge_snapshot)
@@ -463,6 +574,7 @@ def run_game(
                 cumulative=cumulative,
                 counts=counts,
                 approximate_sleep=approximate_sleep,
+                hidden_counter_support=hidden_counter_support,
             )
         else:
             counts["skip:single_seat_boundary"] += 1
@@ -494,7 +606,7 @@ def run_game(
         }
         try:
             verdict, misses, branch_count = evaluate_boundary(
-                state=prepared["state"],
+                states=prepared["states"],
                 slot_sides=prepared["slot_sides"],
                 choices=prepared["choices"],
                 pre_features=prepared["pre_features"],
@@ -521,7 +633,7 @@ def run_game(
                         "step": steps,
                         "error": f"{type(error).__name__}: {error}",
                         "choices": prepared["choices"],
-                        "engine_state": prepared["state"].to_string(),
+                        "engine_state": prepared["states"][0].to_string(),
                     }
                 )
             continue
@@ -536,7 +648,7 @@ def run_game(
                     "seed": seed,
                     "step": steps,
                     "choices": prepared["choices"],
-                    "engine_state": prepared["state"].to_string(),
+                    "engine_state": prepared["states"][0].to_string(),
                     "pre_features": _features_payload(prepared["pre_features"]),
                     "observed": _features_payload(observed),
                     "observed_boost_deltas": observed_boost_deltas(step_lines),
@@ -563,6 +675,7 @@ def _prepare_boundary(
     cumulative: Sequence[str],
     counts: Counter,
     approximate_sleep: bool,
+    hidden_counter_support: bool,
 ) -> dict[str, Any] | None:
     """Build the engine world + resolve both choices, or return None with a counted skip."""
 
@@ -578,7 +691,9 @@ def _prepare_boundary(
     # payload cannot carry (engine_search.EngineMctsPolicy._public_effect_signals):
     # reused verbatim so the differential builds the same world the live searcher
     # would. It needs only ``observation.metadata`` + ``player_id``.
-    blocked, encored, removed, overridden = flags_policy._public_effect_signals(context)
+    blocked, encored, removed, overridden, transformed = flags_policy._public_effect_signals(
+        context
+    )
 
     candidates_by_slot: dict[str, Sequence[Mapping[str, Any]]] = {}
     recharging: list[str] = []
@@ -606,29 +721,61 @@ def _prepare_boundary(
     except Exception:  # noqa: BLE001
         truant = []
 
-    try:
-        world = world_battle_spec(
+    def _build(*, approximate: bool, hidden_volatiles: bool) -> Any:
+        return world_battle_spec(
             mstate,
             override,
             dex=dex,
-            approximate_sleep_turns=approximate_sleep,
+            approximate_sleep_turns=approximate,
             approximate_substitute_health=True,
+            approximate_hidden_duration_volatiles=hidden_volatiles,
             blocked_slots=blocked,
             encored_moves=encored,
             removed_item_species=removed,
             current_item_overrides=overridden,
             recharging_slots=tuple(recharging),
             truant_slots=tuple(truant),
+            transformed_slots=transformed,
         )
-        state = build_poke_engine_state(world.spec, module=poke_engine)
+
+    world = None
+    specs: list[Any] = []
+    gating = "exact"
+    try:
+        world = _build(approximate=approximate_sleep, hidden_volatiles=False)
+        specs = [world.spec]
     except EngineWorldUnsupported as error:
-        counts[f"skip:world_unsupported:{error.reason}"] += 1
-        return None
+        if not (hidden_counter_support and error.reason in HIDDEN_COUNTER_REASONS):
+            counts[f"skip:world_unsupported:{error.reason}"] += 1
+            return None
+        # Hidden counter: sweep its legal domain and validate against the union
+        # of supports instead of refusing the boundary outright.
+        try:
+            world = _build(approximate=True, hidden_volatiles=True)
+        except EngineWorldUnsupported as inner:
+            counts[f"skip:world_unsupported:{inner.reason}"] += 1
+            return None
+        specs = _sleep_counter_variants(world.spec)
+        gating = "support"
+        counts[f"hidden_counter_support:{error.reason}"] += 1
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as error:  # noqa: BLE001
         counts[f"skip:world_error:{type(error).__name__}"] += 1
         return None
+
+    states: list[Any] = []
+    for spec in specs:
+        try:
+            states.append(build_poke_engine_state(spec, module=poke_engine))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # noqa: BLE001 — an illegal counter combination
+            continue
+    if not states:
+        counts["skip:world_error:no_constructible_candidate"] += 1
+        return None
+    state = states[0]
 
     sides = _sides_by_slot(state, world.slot_sides)
     choices: dict[str, str] = {}
@@ -638,7 +785,6 @@ def _prepare_boundary(
                 action_index=actions[slot],
                 candidates=candidates_by_slot[slot],
                 engine_side=sides[slot],
-                party_species=world.party_species[slot],
             )
         except UnmappableChoice as error:
             counts[f"skip:unmappable_choice:{error.reason}"] += 1
@@ -653,17 +799,136 @@ def _prepare_boundary(
         return None
 
     counts["boundaries_measured"] += 1
+    counts[f"gating:{gating}"] += 1
     return {
-        "state": state,
+        "states": states,
         "slot_sides": world.slot_sides,
         "choices": choices,
         "pre_features": pre_features,
+        "gating": gating,
     }
 
 
 # ---------------------------------------------------------------------------------------------
 # Runner.
 # ---------------------------------------------------------------------------------------------
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Checkpointing: one JSONL record per completed game, appended as it finishes.
+#
+# A 2000-game run was lost to a supervisor kill because the report was only
+# serialised at exit (docs/engine_divergence_ledger_20260728.md §3.5). With
+# --checkpoint the run is restartable and shardable: --resume skips seeds already
+# present, and --merge-from aggregates any number of shard files into one report
+# with the SAME schema the single-process path emits.
+# ---------------------------------------------------------------------------------------------
+
+CHECKPOINT_SCHEMA = "engine-transition-differential/1"
+
+
+def checkpoint_record(
+    *, seed: int, counts: Mapping[str, int], repros: Sequence[Mapping[str, Any]], seconds: float
+) -> dict[str, Any]:
+    return {
+        "schema": CHECKPOINT_SCHEMA,
+        "seed": int(seed),
+        "seconds": round(float(seconds), 3),
+        "counters": {str(k): int(v) for k, v in counts.items()},
+        "repros": list(repros),
+    }
+
+
+def append_checkpoint(handle: Any, record: Mapping[str, Any]) -> None:
+    """Append one record and flush, so a kill loses at most the in-flight game."""
+
+    handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    handle.flush()
+
+
+def load_checkpoint(path: Path) -> list[dict[str, Any]]:
+    """Read a checkpoint file, tolerating a truncated final line from a hard kill."""
+
+    records: list[dict[str, Any]] = []
+    if not path.exists():
+        return records
+    with path.open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # Only the last line may be a torn write; anything earlier is corruption.
+                print(
+                    f"warning: {path}: discarding unparseable line {line_number} "
+                    "(torn write from an interrupted run?)",
+                    file=sys.stderr,
+                )
+                continue
+            if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
+                records.append(dict(record))
+    return records
+
+
+def build_report(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    elapsed: float | None,
+    approximate_sleep: bool | None,
+    keep_repro: int,
+    sources: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Aggregate per-game records into the report schema (live and merge paths)."""
+
+    totals: Counter = Counter()
+    repros: list[dict[str, Any]] = []
+    seeds: list[int] = []
+    total_seconds = 0.0
+    for record in records:
+        totals.update({str(k): int(v) for k, v in (record.get("counters") or {}).items()})
+        seeds.append(int(record.get("seed", -1)))
+        total_seconds += float(record.get("seconds") or 0.0)
+        for repro in record.get("repros") or ():
+            if len(repros) < keep_repro:
+                repros.append(dict(repro))
+
+    games = len(records)
+    measured = totals["boundaries_measured"]
+    diverged = totals["transition:diverged"] + totals["engine_error"]
+    wall = elapsed if elapsed is not None else total_seconds
+    report: dict[str, Any] = {
+        "games": games,
+        "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
+        "approximate_sleep_turns": approximate_sleep,
+        "gating_exact": totals["gating:exact"],
+        "gating_support_based": totals["gating:support"],
+        "elapsed_seconds": round(wall, 2) if wall else None,
+        "games_per_hour": round(games / wall * 3600, 1) if wall else None,
+        "boundaries_full_round": totals["boundaries_full_round"],
+        "boundaries_measured": measured,
+        "transitions_matched": totals["transition:matched"],
+        "transitions_diverged": totals["transition:diverged"],
+        "engine_errors": totals["engine_error"],
+        "divergent_transitions_per_game": round(diverged / games, 4) if games else None,
+        "measured_fraction_of_full_rounds": (
+            round(measured / totals["boundaries_full_round"], 4)
+            if totals["boundaries_full_round"]
+            else None
+        ),
+        "divergence_classes": {
+            key.split(":", 1)[1]: value
+            for key, value in sorted(totals.items())
+            if key.startswith("divergence_class:")
+        },
+        "counters": dict(sorted(totals.items())),
+        "repros": repros,
+    }
+    if sources:
+        report["merged_from"] = list(sources)
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -682,7 +947,94 @@ def main(argv: Sequence[str] | None = None) -> int:
              "(default: strict — a publicly-asleep mon with an unknown counter is a "
              "counted SKIP, never a guessed world)",
     )
+    parser.add_argument(
+        "--no-hidden-counter-support",
+        action="store_true",
+        help="legacy strict behaviour: fail a boundary closed when a hidden counter "
+             "(sleep / confusion duration) is unknown, instead of validating the "
+             "realized transition against the union of the counter's legal branch "
+             "support. Use only to reproduce the pre-hardening coverage number.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="append one JSONL record per completed game to this path (crash-safe; "
+             "pairs with --resume and --merge-from)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="with --checkpoint: skip seeds already recorded and fold their counters "
+             "into the final report",
+    )
+    parser.add_argument(
+        "--merge-from",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="aggregate these checkpoint files into one report and exit (no games run). "
+             "Use to combine acceptance-run shards.",
+    )
+    parser.add_argument(
+        "--repros-per-game",
+        type=int,
+        default=8,
+        help="per-game cap on repros written to the checkpoint (keeps shard files small)",
+    )
     args = parser.parse_args(argv)
+
+    # --- merge mode: pure aggregation, no simulator ---
+    if args.merge_from:
+        records: list[dict[str, Any]] = []
+        for path in args.merge_from:
+            loaded = load_checkpoint(path)
+            print(f"{path}: {len(loaded)} games", flush=True)
+            records.extend(loaded)
+        seen: set[int] = set()
+        deduped: list[dict[str, Any]] = []
+        for record in records:
+            seed = int(record.get("seed", -1))
+            if seed in seen:
+                continue
+            seen.add(seed)
+            deduped.append(record)
+        if len(deduped) != len(records):
+            print(
+                f"warning: dropped {len(records) - len(deduped)} duplicate seeds across shards "
+                "(shards should use disjoint seed ranges)",
+                file=sys.stderr,
+            )
+        report = build_report(
+            deduped,
+            elapsed=None,
+            approximate_sleep=None,
+            keep_repro=args.keep_repro,
+            sources=[str(p) for p in args.merge_from],
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
+        if args.json:
+            Path(args.json).write_text(json.dumps(report, indent=2))
+            print(f"-> {args.json}")
+        return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
+
+    if args.resume and not args.checkpoint:
+        parser.error("--resume requires --checkpoint")
+
+    done_records: list[dict[str, Any]] = []
+    done_seeds: set[int] = set()
+    if args.checkpoint and args.resume:
+        done_records = load_checkpoint(args.checkpoint)
+        done_seeds = {int(r["seed"]) for r in done_records}
+        print(f"resume: {len(done_seeds)} games already in {args.checkpoint}", flush=True)
+
+    todo = [
+        args.seed_start + offset
+        for offset in range(args.games)
+        if (args.seed_start + offset) not in done_seeds
+    ]
+    if not todo:
+        print("resume: nothing left to run", flush=True)
 
     dex = load_showdown_dex(args.showdown_root)
     env = LocalShowdownEnv(
@@ -694,72 +1046,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         config=EngineMctsConfig(worlds=1, search_time_ms=1),
     )
 
-    totals: Counter = Counter()
-    repros: list[dict[str, Any]] = []
+    records = list(done_records)
     started = time.perf_counter()
-    games_done = 0
+    handle = None
     try:
-        for offset in range(args.games):
-            seed = args.seed_start + offset
-            totals.update(
-                run_game(
-                    env=env,
-                    flags_policy=flags_policy,
-                    seed=seed,
-                    dex=dex,
-                    max_steps=args.max_steps,
-                    keep_repro=args.keep_repro,
-                    repros=repros,
-                    approximate_sleep=args.approximate_sleep,
-                )
+        if args.checkpoint:
+            args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            handle = args.checkpoint.open("a")
+        for index, seed in enumerate(todo, start=1):
+            game_started = time.perf_counter()
+            game_repros: list[dict[str, Any]] = []
+            counts = run_game(
+                env=env,
+                flags_policy=flags_policy,
+                seed=seed,
+                dex=dex,
+                max_steps=args.max_steps,
+                keep_repro=args.repros_per_game,
+                repros=game_repros,
+                approximate_sleep=args.approximate_sleep,
+                hidden_counter_support=not args.no_hidden_counter_support,
             )
-            games_done += 1
-            if args.progress_every and games_done % args.progress_every == 0:
+            record = checkpoint_record(
+                seed=seed,
+                counts=counts,
+                repros=game_repros,
+                seconds=time.perf_counter() - game_started,
+            )
+            records.append(record)
+            if handle is not None:
+                append_checkpoint(handle, record)
+            if args.progress_every and index % args.progress_every == 0:
                 elapsed = time.perf_counter() - started
+                running = build_report(
+                    records, elapsed=None, approximate_sleep=None, keep_repro=0
+                )
                 print(
-                    f"[{games_done}/{args.games}] {elapsed:.0f}s "
-                    f"({games_done / elapsed * 3600:.0f} games/h) "
-                    f"measured={totals['boundaries_measured']} "
-                    f"matched={totals['transition:matched']} "
-                    f"diverged={totals['transition:diverged']}",
+                    f"[{index}/{len(todo)}] {elapsed:.0f}s "
+                    f"({index / elapsed * 3600:.0f} games/h) "
+                    f"measured={running['boundaries_measured']} "
+                    f"matched={running['transitions_matched']} "
+                    f"diverged={running['transitions_diverged']}",
                     flush=True,
                 )
     finally:
+        if handle is not None:
+            handle.close()
         env.close()
 
     elapsed = time.perf_counter() - started
-    measured = totals["boundaries_measured"]
-    diverged = totals["transition:diverged"] + totals["engine_error"]
-    report = {
-        "games": games_done,
-        "seed_start": args.seed_start,
-        "approximate_sleep_turns": bool(args.approximate_sleep),
-        "elapsed_seconds": round(elapsed, 2),
-        "games_per_hour": round(games_done / elapsed * 3600, 1) if elapsed else None,
-        "boundaries_full_round": totals["boundaries_full_round"],
-        "boundaries_measured": measured,
-        "transitions_matched": totals["transition:matched"],
-        "transitions_diverged": totals["transition:diverged"],
-        "engine_errors": totals["engine_error"],
-        "divergent_transitions_per_game": round(diverged / games_done, 4) if games_done else None,
-        "measured_fraction_of_full_rounds": (
-            round(measured / totals["boundaries_full_round"], 4)
-            if totals["boundaries_full_round"]
-            else None
-        ),
-        "divergence_classes": {
-            key.split(":", 1)[1]: value
-            for key, value in sorted(totals.items())
-            if key.startswith("divergence_class:")
-        },
-        "counters": dict(sorted(totals.items())),
-        "repros": repros,
-    }
+    report = build_report(
+        records,
+        # Only the games run in THIS process contribute to the wall clock; a
+        # resumed run's throughput would otherwise be nonsense.
+        elapsed=elapsed if len(records) == len(todo) else None,
+        approximate_sleep=bool(args.approximate_sleep),
+        keep_repro=args.keep_repro,
+    )
     print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
         print(f"-> {args.json}")
-    return 1 if diverged else 0
+    return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
 
 
 if __name__ == "__main__":
