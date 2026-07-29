@@ -213,6 +213,24 @@ poke-engine-gen3-state-roundtrip.patch
 # BEHAVIOUR patches (the test-only fixture refresh below is the only one after).
 poke-engine-gen3-move-trapping.patch
 
+# `get_all_options` must never return an EMPTY option vector: MCTS indexes
+# straight into it (`Node::maximize_ucb_for_side` returns index 0 for an empty
+# slice, `Node::expand` then panics "index out of bounds: the len is 0 but the
+# index is 0" and the whole search dies). Every exit guards `len() == 0` except
+# the two `force_switch` branches, which call `add_move_from_choice` — a no-op
+# when the saved move is absent from the current active's slots — and return
+# early, skipping the guard. So a side owing a forced replacement while the other
+# side carries a `switch_out_move_second_saved_move` its active does not know
+# handed back `[]`. Reachable because engine_world samples a pending Baton Pass
+# commitment into that field; only ever fired on INTERIOR tree nodes, because
+# root_get_all_options already guards its own exits. An unsatisfiable commitment
+# means NO ACTION this boundary, not NO OPTION, so those branches now fall back to
+# MoveChoice::None like every other exit. Pinned by
+# rust/pokezero-search/tests/gen3_terminal_options.rs. Touches the two
+# force_switch branches of gen3/state.rs only; authored against the
+# move-trapping-patched tree.
+poke-engine-gen3-terminal-options.patch
+
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
 # list, because its expectations are the behaviour every patch above it leaves
