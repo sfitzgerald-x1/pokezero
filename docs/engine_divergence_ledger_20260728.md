@@ -3065,3 +3065,201 @@ Worth naming precisely: a refusal-with-evidence from the implementing lane is th
 control that caught this, and it is the same control that caught §J.3. Neither
 was caught by review of the reasoning; both were caught by someone trying to
 build the thing and finding it did not hold.
+
+---
+
+# Appendix R — Cycle four (27 patches): the fourth hold
+
+Run: 300 games, `--matcher strict`, seeds 1,500,000–1,500,299, `build_check =
+gated`, `acceptance_eligible = true`, fingerprint `32a9b325db5f2655`. Both wheels
+(`poke_engine` and `pokezero_search`) were rebuilt from a wiped vendor tree into
+the measuring interpreter's own prefix before the run, per the #930 reviewer's
+stale-wheel warning; the #930 behaviour was independently probed in the built
+wheel (fast side's whole residual block resolves before the slow side's) rather
+than assumed from the patch count.
+
+## R.1 ACCEPTANCE VERDICT: NOT MET — run not started (fourth hold)
+
+193 rows remain outside the adjudicated limit classes. The acceptance criterion is
+*0 divergent transitions over 10,000 fresh-seed games*; an 8x1250 run from seed
+2,000,000 would have produced a failing artifact, and the standing rule is that
+the acceptance artifact must be a pass. The run was not started. **Seed block
+2,000,000+ remains entirely unconsumed** — the invariant of §J.7 still holds after
+four cycles.
+
+## R.2 Headline numbers, against cycle three
+
+| metric | c3 (26 patches) | c4 (27 patches) |
+|---|---|---|
+| boundaries measured | 23,335 | 23,335 |
+| coverage (measured / full rounds) | 0.978 | **0.978** |
+| transitions diverged | 306 | **240** |
+| outside limit classes | 259 | **193** |
+| in limit classes | 47 | 47 |
+| harness errors | 0 | 0 |
+| `unclassified` | 0 | 0 |
+| gating exact / support | 21,258 / 2,077 | 20,478 / 2,857 |
+| games/hour (single process) | 1,474 | 1,508 |
+
+Outside-limit residue fell 25.5% (259 -> 193), the first real drop of the program.
+
+## R.3 Zero regressions — established by row-level diff, not by totals
+
+c3 and c4 ran identical seeds over identical boundaries, so rows are comparable by
+`(seed, step)` key. The full transition matrix:
+
+| rows | c3 class | c4 class |
+|---|---|---|
+| 33 | `roll_scaled_component` | matched |
+| 22 | `component_extra_in_engine:itemleftovers` | matched |
+| 4 | `component_missing_in_engine:leechseed` | matched |
+| 2 | `component_missing_in_engine:heal` | matched |
+| 2 | `component_missing_in_engine:itemleftovers` | matched |
+| 1 | `component_missing_in_engine:psn` | matched |
+| 1 | `component_extra_in_engine:itemleftovers,psn` | matched |
+| 1 | `component_missing_in_engine:itemleftovers,movewish,sandstorm` | matched |
+| 1 | `roll_scaled_component` | `component_missing_in_engine:heal` |
+| 1 | `component_mismatch:sandstorm|brn,itemleftovers` | `component_mismatch:sandstorm|brn` |
+| 1 | `component_extra_in_engine:itemleftovers` | `component_mismatch:heal|leechseed` |
+
+**No row moved from matched to diverged.** Both apparently-new classes are
+re-labelled survivors of rows that already diverged in c3 — one component of a
+two-component miss was fixed, exposing the remainder. There are zero new
+divergent boundaries.
+
+## R.4 Prediction scorecard
+
+Registered before measurement (`c4_predictions.json`).
+
+| id | prediction | outcome |
+|---|---|---|
+| P1 | `extra:itemleftovers` family extinct | **refuted** — 33 -> 9, not 0 |
+| P2a | 15.4% slice reduction | **exceeded** — actual 25.5% |
+| P2b | reduction concentrated in that family | **refuted** — family gave 24 of 66; the largest single mover was `roll_scaled_component` (-34) |
+| P2c | zero new classes | **refuted literally, upheld in substance** — 2 new class labels, 0 new divergent rows (§R.3) |
+| P3 | plain-Rest rows clear under `3 - k` | **upheld** |
+| P4 | Rest+Sleep-Talk rows move to *declined*; coverage drops | **refuted, favourably** — they moved to *support-based gating*, not declined: 780 boundaries shifted exact -> support and coverage held at 0.978. Retiring the false-exact Rest clock cost **zero** coverage |
+| P5 | ordering corrections move rows in unpredicted classes | **upheld** — attributed by the §R.3 row diff, not by narrative |
+
+Four of seven predictions were wrong. Recording them before the run is what makes
+that legible.
+
+## R.5 Attribution caveat: cycle four moved TWO variables
+
+Cycle four is not a clean read on #930. Between the c3 and c4 measurements, main
+gained both the engine patch (`dffcdda`) **and** three `src/` world-construction
+commits on the Rest/Sleep-Talk clock (`46204b9`, `5e7cfa4`, `4cca974`). The
+exact -> support gating shift of 780 boundaries is attributable to the latter, not
+to residual ordering — a residual-order patch cannot change how a hidden counter
+is gated. The 66 fixed rows are therefore a joint effect and are not claimed for
+#930 alone.
+
+## R.6 Mechanism decomposition of the 193 survivors
+
+| rows | share | signature |
+|---|---|---|
+| 120 | 62.2% | not yet attributed |
+| 41 | 21.2% | **Pain Split `-sethp` — harness bug (§R.7)** |
+| 21 | 10.9% | straddles the lethal threshold (engine branch faints, Showdown's roll does not) |
+| 11 | 5.7% | both sides capped lethal |
+
+Of the 120 unattributed, 14 are the Rest full-HP engine bug of §R.8.
+
+## R.7 CONFIRMED HARNESS BUG: the observation side is blind to `|-sethp|`
+
+`damage_components` accepts only `-damage` and `-heal`
+(`scripts/engine_transition_differential.py:394`). Showdown expresses Pain Split
+as `|-sethp|...|[from] move: Pain Split`, so the HP change is dropped from the
+observation entirely and its effect is absorbed into the next attributed delta.
+
+Seed 1500008 step 101, Dusclops (132/209) Pain Split vs Wigglytuff (125/407):
+
+```
+|-sethp|p2a: Wigglytuff|128/407|[from] move: Pain Split|[silent]
+|-sethp|p1a: Dusclops|128/209|[from] move: Pain Split
+|-heal|p2a: Wigglytuff|153/407|[from] item: Leftovers
+|-heal|p1a: Dusclops|141/209|[from] item: Leftovers
+```
+
+The true Leftovers heals are +13 (128->141) and +25 (128->153). The harness
+reported +9 and +28 — the deltas from the *pre-state* HP, with Pain Split's
+-4/+3 folded in. The engine emitted exactly +13 and +25. **The engine is correct
+and the instrument is wrong.** The signature is unmistakable in the residue: the
+class carries impossible values such as `('itemleftovers', -73)` — a negative
+Leftovers heal.
+
+All 86 `-sethp` lines across the population are Pain Split; no other gen3 move in
+the pool reaches this tag. 43 of the 240 divergent rows contain one, 41 of them
+outside the limit classes. This is harness-side and is mine to fix; it requires no
+engine change.
+
+## R.8 CONFIRMED ENGINE BUG: gen3 Rest succeeds at full HP
+
+Showdown's `rest` resolves through `Dex.mod('gen3')` with an `onTry` callback that
+fails the move on either of two conditions:
+
+```js
+if (source.status === 'slp' || source.hasAbility('comatose')) return false;
+if (source.hp === source.maxhp) { ... }
+```
+
+The engine implements only the first:
+
+```rust
+// third_party/poke-engine-src/src/gen3/choice_effects.rs:782
+Choices::REST => {
+    let active_index = attacking_side.active_index;
+    let active_pkmn = attacking_side.get_active();
+    if active_pkmn.status != PokemonStatus::SLEEP {
+```
+
+There is no `hp == maxhp` guard, so a full-HP Rest puts the user to sleep instead
+of failing. Seed 1500004 step 86: Xatu at 246/246 uses Rest. Showdown emits
+`|-fail|p2a: Xatu|heal`, leaving Xatu statusless, so the incoming Toxic lands and
+poison ticks. The engine emits `ChangeStatus SideTwo-P3: NONE -> SLEEP` +
+`SetRestTurns 0 -> 3`, which blocks the Toxic entirely — a *status-level*
+divergence, not a damage-roll one, and one that changes the legal action set on
+every subsequent turn.
+
+14 of the 240 rows are this bug, and **14 of 14 are the full-HP case with zero
+asleep-user cases** — the existing guard cannot catch any of them. All 14 sit in
+`component_missing_in_engine:psn`, where the missing poison tick is the visible
+symptom of the suppressed status.
+
+This contradicts the working assumption that #930 was the last engine change of
+the program.
+
+## R.9 Sample-before-reclassify, applied again
+
+A single replay of `component_missing_in_engine:itemleftovers` (26 rows) showed
+roll-divergent lethality, and the tempting move was to widen the limit class. The
+required sample of 14 split 3 Pain Split / 8 plain / 3 observed-faint, and the
+programmatic threshold test over the full class split it 4 / 6 / 11 / 5 across
+four signatures. **No widening drafted.** The one-row narrative would have
+mis-adjudicated at least 11 rows into a limit class they do not belong to.
+
+Note also that the naive test was itself wrong in an instructive way: keying
+"roll-divergent lethality" off a faint *in the observation* misses the common
+case, where the engine's branch faints the target and Showdown's roll leaves it
+alive (seed 1500099 step 5: engine crit 290 = exactly lethal, Showdown crit 287,
+target survives at 3 HP and takes its Leftovers tick). The threshold is straddled
+from either side.
+
+## R.10 Recommended fix order
+
+1. **Pain Split `-sethp`** (harness, mine) — up to 41 of 193 rows, ~21%. Teach
+   `damage_components` the tag and attribute it to `movepainsplit`; confirm the
+   mapper labels the engine's paired Damage/Heal identically, or the rows will
+   re-appear as an attribution mismatch instead.
+2. **gen3 Rest full-HP failure** (engine, build lane) — 14 rows, and the only
+   *status-level* divergence currently known. Highest severity per row: it
+   silently changes the action set for the rest of the battle.
+3. **Re-measure**, then attribute the remaining ~106.
+
+Steps 1 and 2 are independent and can run in parallel.
+
+## R.11 Artifacts
+
+- report `reports/c4.json`, checkpoint `reports/c4.jsonl`, log `reports/c4.log`
+- pre-registered predictions `reports/c4_predictions.json`
+- triage `reports/c4_tri_roll.json` (116/116 rows, population guard satisfied)
