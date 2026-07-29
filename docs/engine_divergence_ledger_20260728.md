@@ -1384,3 +1384,138 @@ belt-and-braces manual check.
 
 Remaining blockers before acceptance: PP-ordering, locked-move PP, and the Flail
 fix. Sleep Talk needs a probe before it can be called either way.
+
+---
+
+# Appendix E — Sleep Talk verdict, and the acceptance-run plan
+
+Branch `scott/sleeptalk-probe`, off #897. 19-patch engine.
+
+## E.1 Ground truth, read from the vendored simulator
+
+gen3 overrides Sleep Talk (`data/mods/gen3/moves.ts` `sleeptalk.onHit`). Its
+candidate list keeps a slot when `moveid && !flags['nosleeptalk'] &&
+!flags['charge']`, then samples **uniformly**. Two gen3-specific details:
+
+* **`charge` (two-turn) moves are excluded** — Solar Beam, Fly, Dig, Sky Attack,
+  Razor Wind, Skull Bash;
+* a sampled slot at **0 PP** emits `|cant|<mon>|nopp|<move>` and the turn does
+  nothing — gen3 does **not** resample.
+
+poke-engine (`State::get_sleep_talk_choices`, `src/state.rs:1014`) keeps every
+slot except Sleep Talk and NONE: no `nosleeptalk` test, no `charge` test, no PP
+test.
+
+## E.2 Probe results (`scripts/gen3_sleeptalk_probe.py`)
+
+**Fan-out weights are CORRECT.** With no excluded move in the set the engine
+splits exactly uniformly, matching gen3:
+
+| case | gen3 callable | engine called | engine shares |
+| --- | --- | --- | --- |
+| `sleeptalk, bodyslam, curse, rest` | bodyslam, curse, rest (33.33 % each) | same 3 | 33.33 / 33.33 / 33.33 — **ok** |
+| `sleeptalk, bodyslam, solarbeam, rest` | bodyslam, rest (50 % each) | + **solarbeam** | 33.33 each — **MISMATCH** |
+| `sleeptalk, solarbeam, fly, rest` | rest (100 %) | + **solarbeam, fly** | 33.33 each — **MISMATCH** |
+
+**Showdown differential confirms the exclusion**: a sleeping Snorlax with
+Sleep Talk + Solar Beam + Body Slam + Rest, 60 seeds, called `bodyslam` 62x and
+`rest` 58x — **Solar Beam never once**, exactly as `flags['charge']` prescribes.
+
+**But it is UNREACHABLE on the randbats distribution.** Across **1,682**
+gen3 randbats variants, **70** carry Sleep Talk and **0** pair it with a
+gen3-excluded move.
+
+## E.3 Verdict
+
+| Question | Answer |
+| --- | --- |
+| Is the engine's Sleep Talk call fan-out wrong? | **Yes, in source** — it omits the `charge` and `nosleeptalk` exclusions and the 0-PP rule |
+| Do the branch weights diverge? | **No** — uniform 1/n is correct whenever the candidate sets agree |
+| Is it reachable in gen3 randbats? | **No** — 0 of 1,682 variants |
+| Does it explain the co-occurring residue rows? | **No** |
+
+So this is a **latent** engine divergence: real, source-confirmed, empirically
+demonstrated, and off-distribution. It belongs in the engine lane as low
+priority (it would matter for `gen3customgame` or a pool change), and it is
+**not** an acceptance blocker.
+
+**Re-triage of the co-occurring rows.** 19 divergent rows in the 1350000-1350059
+census involve Sleep Talk: 14 `roll_scaled_component`, 5 other. Their shape is
+`observed=[('', -78)] engine=[]` — Showdown's call dealt damage and the engine's
+branch has none. Since the fan-out and weights are correct and the exclusion bug
+is unreachable, these are **not** a Sleep Talk defect; they are the called
+move's damage failing to match, which is the same "engine is missing damage"
+family as the confirmed variable-BP bug. They should be re-checked after the
+variable-BP fixes land rather than tracked as a Sleep Talk item.
+
+**Matcher accounting: no change needed.** Sleep Talk's branching is already
+handled correctly — each call is its own branch and the matcher takes the union,
+exactly as with hidden counters. The probe found no accounting defect.
+
+## E.4 Review fixes folded in
+
+* **Triage population guard (MEDIUM).** `triage_roll_components.py` quoted
+  shares of a class computed over whatever rows it was handed. The first run
+  covered 64 of 86 rows — capped by `--repros-per-game` — and produced
+  confident percentages over an incomplete population; that got a narrative in
+  the write-up instead of a guard. It now reads the class total from the
+  census's `divergence_classes` and **refuses**, printing the regeneration
+  flags; `--allow-partial` opts into a deliberate sample and relabels the shares
+  as sample-scoped. Verified both directions.
+* **Stamp write no longer swallowed (LOW).** Both builders called the
+  fingerprint writer with `|| true`. A missing or stale stamp is exactly the
+  state the gate exists to catch, so the `|| true` is removed — a failed stamp
+  now fails the build.
+
+## E.5 Note for the final re-measurement: Flail
+
+The #897 hand-off cited the gen4 ladder. Review corrected it: **gen3 overrides
+gen4** with a 48-scale and thresholds `<2, <5, <10, <17, <33`. The
+variable-BP lane holds the correction; any re-measurement note referencing
+Flail must cite **gen3's own override**, not gen4's. The confirmed finding
+itself is unchanged — the engine deals 0 at every HP fraction.
+
+## E.6 The acceptance run
+
+**Blocked on:** PP-ordering, locked-move PP, and the variable-BP family. Once
+those merge, the final re-measurement is 300 games strict on the full patch set
+with the freshness gate live, producing the acceptance-readiness residue table.
+
+**Bar.** Zero divergent transitions outside the named, adjudicated limit
+classes. As of this appendix those are:
+
+| Limit class | Why it is not a divergence |
+| --- | --- |
+| `limit:roll_divergent_lethality` | Showdown's roll left the mon alive to be killed by a residual and the engine's did not (or vice versa) — two different stochastic outcomes cannot be aligned component-wise |
+| `limit:world_sample_drag_target` | Whirlwind/Roar drag a random target; the engine fans out over its own world's reserve, so hazard arithmetic can land on a different mon |
+
+Any class added to that table needs a mechanism, a repro, and adjudication —
+never a label alone.
+
+**Run plan.** 8 shards x 1250 games from seed **2,000,000** (the reserved
+pristine block; every measurement seed to date is below it):
+
+```bash
+for k in 0 1 2 3 4 5 6 7; do
+  PYTHONPATH=src .venv/bin/python scripts/engine_transition_differential.py \
+    --showdown-root "$SHOWDOWN" --matcher strict \
+    --games 1250 --seed-start $((2000000 + k * 100000)) \
+    --keep-repro 5000 --repros-per-game 300 \
+    --checkpoint "acceptance_shard_${k}.jsonl" \
+    --json "acceptance_shard_${k}.json" &
+done
+wait
+
+PYTHONPATH=src .venv/bin/python scripts/engine_transition_differential.py \
+  --merge-from acceptance_shard_*.jsonl --json acceptance_merged.json
+```
+
+Checkpointed so a supervisor kill costs one game, not a shard; `--resume` picks
+each shard back up. The freshness gate runs at every shard's startup and refuses
+a stale engine. `--repros-per-game 300` so the residue population is complete
+and the triage guard passes. Expect ~1.1-1.5 h wall clock at 8-way concurrency.
+
+**Read the merged report as:** `transitions_diverged` minus the adjudicated
+`limit:*` classes must be **0**, with `measured_fraction_of_full_rounds` and
+`unclassified` (which must be 0) reported alongside — a run that skips a third
+of its boundaries, or cannot name a class, has not earned the number.
