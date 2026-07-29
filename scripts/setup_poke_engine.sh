@@ -34,6 +34,14 @@ while IFS= read -r patch <&3; do
   echo "      $patch: applied"
 done 3< "$PATCH_LIST"
 
+# Installed from the sdist ROOT, never from poke-engine-py/. The root pyproject
+# sets `python-source = "python"` and `module-name = "poke_engine.poke_engine"`,
+# which is what ships poke-engine-py's PYTHON half alongside the compiled
+# extension. That half defines `monte_carlo_tree_search`, the entrypoint
+# pokezero.engine_search calls; an install carrying only the extension imports
+# cleanly, exposes the native `mcts`, and then dies mid-search on a bare
+# AttributeError. tests/test_engine_search_no_panic.py probes for it and skips
+# with this command rather than failing.
 echo "[3/3] build + install (gen3 features) into $PYTHON"
 uv pip install --python "$PYTHON" --no-cache --force-reinstall "$SRC" \
   --config-settings="build-args=--features poke-engine/gen3 --no-default-features"
