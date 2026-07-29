@@ -413,6 +413,14 @@ def main(argv=None) -> int:
         "fallback_reasons": dict(search.stats.fallback_reasons),
         "world_failure_reasons": dict(search.stats.world_failure_reasons),
         "search_wall_per_decision": round(search_wall / max(1, search_decisions), 4),
+        # Full policy stats payload, which carries the reached-depth aggregates
+        # (depth_reached_samples / _sum / _max / _histogram). A depth ladder is
+        # uninterpretable without them: whether the CAP was binding is the
+        # difference between "depth does not help" and "the sims budget never let
+        # the tree reach the cap".
+        "policy_stats": (
+            search.stats.to_payload() if hasattr(search.stats, "to_payload") else {}
+        ),
         "wall_s": round(time.perf_counter() - started, 1),
         "results": results,
         "per_game": per_game,
