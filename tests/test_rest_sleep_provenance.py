@@ -373,6 +373,51 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
+    def test_a_sleep_talk_user_retires_its_rest_clock(self) -> None:
+        """gen3 refunds Sleep Talk / Snore turns, so k stops meaning "attempts elapsed".
+
+        A sleepUsable move emits ``|cant|...|slp`` and THEN acts, and gen3 banks the turn
+        as ``skippedTime``, handing it back at the next switch-in
+        (``slp.onSwitchIn``: ``time += skippedTime``). Measured at the sim, one Rest by a
+        Sleep Talk user that pivots emits FOUR cants rather than two
+        (``--only restsleeptalkrefund``). Rather than keep counting a number that no
+        longer tracks the clock, the entry is retired and the mon falls back to the
+        pre-existing sleep handling — a declined world, never a wrong one.
+        """
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_snore_retires_it_too(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+        ])
+        self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_an_ordinary_sleeping_turn_keeps_the_clock(self) -> None:
+        # The control: only sleepUsable moves accrue skippedTime, so an ordinary Rest
+        # is untouched by this rule and stays exactly gated.
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+
+    def test_the_other_seats_sleep_talk_does_not_retire_this_ones_clock(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p1a: Snorlax|Sleep Talk|p1a: Snorlax",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+
     def test_an_induced_sleeper_is_never_annotated(self) -> None:
         rows = self._annotate(_LEADS + [
             "|move|p1a: Snorlax|Hypnosis|p2a: Skarmory",

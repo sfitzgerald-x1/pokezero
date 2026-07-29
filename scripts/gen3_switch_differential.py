@@ -523,6 +523,15 @@ def _clause_second_target():  # the mon the measured Hypnosis is aimed at
                           moves=("Splash",))
 
 
+def _rest_talker():
+    # Rest + Sleep Talk on one set is not a contrivance: it is the gen3 randbats
+    # Dunsparce "Bulky Setup" role (rest + sleeptalk in the movepool), which is where
+    # this was first observed. Splash is the only other move, so Sleep Talk always
+    # calls it and nothing dies mid-script.
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Rest", "Sleep Talk", "Splash"))
+
+
 def _machamp_sub():  # copy target that hides behind a Substitute first
     return FixturePokemon(species="Machamp", ability="Guts", item="None",
                           moves=("Substitute", "Splash"))
@@ -1773,6 +1782,39 @@ def _spec(name):
             expect={"cants_before_wake": 2, "woke": True, "acted_after_waking": True},
             landmark=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
             landmark_desc="Rest landed and started the clock")
+    if name == "restsleeptalkrefund":
+        # Why the tracker RETIRES a Rest once a sleepUsable move is selected. Sleep Talk
+        # emits |cant| like any other sleeping turn and THEN acts, and gen3 banks that
+        # turn as `skippedTime`, refunding it on the next switch-in
+        # (slp.onSwitchIn: time += skippedTime). So the public |cant| count keeps rising
+        # while the sim hands the clock back, and ONE Rest emits FOUR cants instead of
+        # two -- at which point k no longer means "attempts elapsed" and 3 - k would
+        # build a mon that is awake in the world and asleep in the battle.
+        return dict(
+            p1=[_clause_hypnotist()], p2=[_rest_talker(), _clause_second_target()],
+            turns=[("move seismictoss", "move splash"),   # chip, so Rest can land
+                   ("move splash", "move rest"),
+                   ("move splash", "move sleeptalk"),     # cant #1, skippedTime 1
+                   ("move splash", "move sleeptalk"),     # cant #2, skippedTime 2
+                   ("move splash", "switch 2"),           # pivot out
+                   ("move splash", "switch 2"),           # back in -> time += 2
+                   ("move splash", "move splash"),        # cant #3
+                   ("move splash", "move splash"),        # cant #4
+                   ("move splash", "move splash"),        # wakes
+                   ("move splash", "move splash")],
+            measured=None, setup_step=1,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
+            facts=lambda L: {
+                "cants_before_wake": _rest_cants_before_wake(L, "p2a: Snorlax")[0],
+                "woke": _rest_cants_before_wake(L, "p2a: Snorlax")[1],
+                # The line that makes the count untrustworthy: a |cant| turn on which the
+                # Pokemon nevertheless moved.
+                "acted_while_cant": _has(L, "|move|p2a: Snorlax|Sleep Talk"),
+            },
+            # FOUR, against the two a Rest actually costs -- the refund, made visible.
+            expect={"cants_before_wake": 4, "woke": True, "acted_while_cant": True},
+            landmark=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
+            landmark_desc="Rest landed and started the clock")
     raise ValueError(name)
 
 
@@ -1808,7 +1850,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "seismictossghost",
              "toxicmiss", "toxichit",
              "hypnosisrestclause", "hypnosisrestclausecontrol",
-             "restattemptclock")
+             "restattemptclock", "restsleeptalkrefund")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
