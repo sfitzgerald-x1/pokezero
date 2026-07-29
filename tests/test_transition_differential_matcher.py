@@ -210,3 +210,77 @@ class LengthMismatch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PainSplitSetHp(unittest.TestCase):
+    """`|-sethp|` must be consumed, or Pain Split corrupts the NEXT component.
+
+    Showdown expresses Pain Split as two `-sethp` lines — the target's first and
+    `[silent]`, then the user's — and it is the only move in the gen3 randbats
+    pool that emits the tag (reachable on dusclops, misdreavus, swalot,
+    weezing). While the extractor accepted only `-damage`/`-heal`, the HP change
+    was dropped and its magnitude was absorbed into the next attributed delta on
+    that slot, so the instrument manufactured impossible components and charged
+    them to the engine.
+    """
+
+    # The verbatim Showdown slice from seed 1500008 step 101, the row that
+    # exposed the gap. Dusclops (p1) at 132/209 Pain Splits Wigglytuff (p2) at
+    # 125/407; both land on 128, then both tick Leftovers.
+    SLICE = [
+        "|move|p2a: Wigglytuff|Double-Edge|p1a: Dusclops",
+        "|-immune|p1a: Dusclops",
+        "|move|p1a: Dusclops|Pain Split|p2a: Wigglytuff",
+        "|-sethp|p2a: Wigglytuff|128/407|[from] move: Pain Split|[silent]",
+        "|-sethp|p1a: Dusclops|128/209|[from] move: Pain Split",
+        "|-heal|p2a: Wigglytuff|153/407|[from] item: Leftovers",
+        "|-heal|p1a: Dusclops|141/209|[from] item: Leftovers",
+    ]
+
+    def test_end_to_end_pin_seed_1500008_step_101(self):
+        got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
+        # Pain Split is deterministic: floor((132 + 125) / 2) = 128 for both.
+        self.assertEqual(got["p1"], [("movepainsplit", -4), ("itemleftovers", 13)])
+        self.assertEqual(got["p2"], [("movepainsplit", 3), ("itemleftovers", 25)])
+
+    def test_the_leftovers_ticks_are_the_TRUE_amounts(self):
+        """The regression this fixes, stated as the number that was wrong.
+
+        The engine emitted +13/+25 and was called divergent for it. Before the
+        fix the harness reported +9/+28 — the deltas from the PRE-STEP HP, with
+        Pain Split's -4/+3 silently folded in.
+        """
+        got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
+        lefties = {
+            slot: [d for src, d in got[slot] if src == "itemleftovers"]
+            for slot in ("p1", "p2")
+        }
+        self.assertEqual(lefties, {"p1": [13], "p2": [25]})
+        self.assertNotIn(9, lefties["p1"])
+        self.assertNotIn(28, lefties["p2"])
+
+    def test_the_silent_target_line_is_NOT_skipped(self):
+        """Showdown marks the target's half `[silent]`; it still moves HP."""
+        got = damage_components(self.SLICE, {"p1": 132, "p2": 125})
+        self.assertIn(("movepainsplit", 3), got["p2"])
+
+    def test_pain_split_is_compared_EXACTLY_not_roll_scaled(self):
+        exact, rolled = _split_components([("movepainsplit", -4)])
+        self.assertEqual(dict(exact), {("movepainsplit", -4): 1})
+        self.assertEqual(rolled, [])
+
+    def test_a_four_point_disagreement_on_pain_split_FAILS(self):
+        """Being deterministic, Pain Split gets no roll tolerance at all."""
+        self.assertFalse(
+            roll_components_agree(
+                [("movepainsplit", -4)], [("movepainsplit", -8)], None
+            )
+        )
+
+    def test_untagged_sethp_does_not_fall_into_the_roll_scaled_bucket(self):
+        got = damage_components(
+            ["|-sethp|p1a: Dusclops|128/209"], {"p1": 132}
+        )
+        self.assertEqual(got["p1"], [("sethp", -4)])
+        exact, rolled = _split_components(got["p1"])
+        self.assertEqual(rolled, [])

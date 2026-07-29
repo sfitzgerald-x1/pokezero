@@ -1662,6 +1662,25 @@ fn render_move_phase(
     }
     for ins in tail {
         match ins {
+            // Pain Split is not damage: Showdown expresses BOTH halves as
+            // `|-sethp|..|[from] move: Pain Split` (target first and
+            // `[silent]`, then the user). It is the only move in the pool that
+            // emits the tag. Rendering it bare made the engine path disagree
+            // with the sim on a deterministic quantity, and — because
+            // `fold.rs` keys its Pain Split self-cost branch on exactly
+            // `-sethp` + that `[from]` payload — meant `self_hp_cost` was
+            // never charged on the engine-as-environment path at all.
+            Instruction::Damage(damage)
+                if damage.side_ref == defender && choice.move_id == Choices::PAINSPLIT =>
+            {
+                sim.apply(ins);
+                let condition = sim.hp_condition(defender);
+                out.lines.push(format!(
+                    "|-sethp|{defender_ident}|{condition}|[from] move: Pain Split|[silent]"
+                ));
+                defender_hits += 1;
+                note_faint!(defender);
+            }
             Instruction::Damage(damage) if damage.side_ref == defender => {
                 let (pre_hp, _max) = sim.active_hp(defender);
                 sim.apply(ins);
@@ -1752,9 +1771,19 @@ fn render_move_phase(
                         "|-damage|{attacker_ident}|{condition}|[from] Recoil|[of] {defender_ident}"
                     ));
                     note_faint!(side);
+                } else if choice.move_id == Choices::PAINSPLIT {
+                    // The user's half, rendered as the sim does: `-sethp` with
+                    // the move tag and NO `[silent]`. This is the line
+                    // `fold.rs` charges `self_hp_cost` from.
+                    sim.apply(ins);
+                    let condition = sim.hp_condition(side);
+                    out.lines.push(format!(
+                        "|-sethp|{attacker_ident}|{condition}|[from] move: Pain Split"
+                    ));
+                    note_faint!(side);
                 } else if matches!(
                     choice.move_id,
-                    Choices::SUBSTITUTE | Choices::BELLYDRUM | Choices::CURSE | Choices::PAINSPLIT
+                    Choices::SUBSTITUTE | Choices::BELLYDRUM | Choices::CURSE
                 ) {
                     // Genuine self-costs (the fold SHOULD count these, and
                     // the real protocol renders them bare).
@@ -3431,4 +3460,108 @@ mod tests {
         }
         assert!(saw_p2_damage, "fixture must produce side-two damage lines");
     }
+
+    /// Pain Split renders as the sim renders it: TWO `-sethp` lines carrying an
+    /// IDENTICAL `[from] move: Pain Split` payload, the target's `[silent]` and
+    /// the user's not.
+    ///
+    /// Transcribed from the sim (`data/moves.ts`, the only `-sethp` emitter in
+    /// the pool; no gen3/4/5 mod overrides it):
+    ///
+    /// ```text
+    /// |-sethp|p2a: Wigglytuff|128/407|[from] move: Pain Split|[silent]
+    /// |-sethp|p1a: Dusclops|128/209|[from] move: Pain Split
+    /// ```
+    ///
+    /// The pairing is the load-bearing part. The differential compares
+    /// components by their normalized `[from]` source, so if the two halves
+    /// were tagged differently — or one were left bare, as they both were
+    /// before this — the rows come back as attribution mismatches instead of
+    /// matching. `fold.rs` keys its Pain Split `self_hp_cost` branch on the
+    /// same tag, so a bare render also silently skipped that charge on the
+    /// engine-as-environment path.
+    ///
+    /// One known and deliberate difference from the sim: the engine emits the
+    /// USER's half first and the sim emits the TARGET's first (the engine's own
+    /// instruction order, kept per the positional-attribution rule). This is
+    /// not load-bearing — the two halves land on different slots, and the
+    /// differential compares components per slot, so cross-slot order cannot
+    /// affect a verdict.
+    #[test]
+    fn pain_split_renders_paired_sethp_with_identical_attribution() {
+        let fixture = MINIMAL.trim().replace("EMBER", "PAINSPLIT");
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        // Asymmetric HP, or Pain Split moves nothing and emits no lines.
+        state.side_one.get_active().maxhp = 209;
+        state.side_one.get_active().hp = 132;
+        state.side_two.get_active().maxhp = 407;
+        state.side_two.get_active().hp = 125;
+        let s1 = MoveChoice::from_string("painsplit", &state.side_one).unwrap();
+        let s2 = MoveChoice::from_string("tackle", &state.side_two).unwrap();
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        assert!(!branches.is_empty());
+        for branch in &branches {
+            let rendered = render_branch_events(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+                &ctx(),
+            );
+            let sethp: Vec<&String> = rendered
+                .lines
+                .iter()
+                .filter(|l| l.starts_with("|-sethp|"))
+                .collect();
+            assert_eq!(
+                sethp.len(),
+                2,
+                "both halves must be -sethp. Rendered: {:?}",
+                rendered.lines
+            );
+
+            // The pairing pin: one identical [from] payload across both halves.
+            let tags: Vec<String> = sethp
+                .iter()
+                .map(|l| l.split("[from]").nth(1).unwrap().trim().to_string())
+                .map(|t| t.trim_end_matches("|[silent]").trim().to_string())
+                .collect();
+            assert_eq!(
+                tags,
+                vec!["move: Pain Split".to_string(), "move: Pain Split".to_string()],
+                "the two halves must carry the SAME attribution: {sethp:?}"
+            );
+
+            // Target silent, user visible — exactly the sim's split.
+            let silent: Vec<bool> = sethp.iter().map(|l| l.contains("[silent]")).collect();
+            assert_eq!(
+                silent.iter().filter(|s| **s).count(),
+                1,
+                "exactly one half is [silent]: {sethp:?}"
+            );
+            assert!(
+                sethp.iter().any(|l| l.contains("p2a") && l.contains("[silent]")),
+                "the TARGET's half is the silent one: {sethp:?}"
+            );
+
+            // And neither half may still be rendered as bare damage. Scoped to
+            // the Pain Split window — a later bare `-damage` is the OPPONENT's
+            // move landing, which is correctly bare.
+            let window: Vec<&String> = rendered
+                .lines
+                .iter()
+                .skip_while(|l| !l.contains("|painsplit|"))
+                .skip(1)
+                .take_while(|l| !l.starts_with("|move|"))
+                .collect();
+            assert!(
+                !window
+                    .iter()
+                    .any(|l| l.starts_with("|-damage|") && !l.contains("[from]")),
+                "no bare -damage may survive inside the Pain Split window: {window:?}"
+            );
+        }
+    }
+
 }
