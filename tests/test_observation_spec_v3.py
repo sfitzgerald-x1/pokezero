@@ -460,6 +460,83 @@ class SleepClauseTrackerTest(unittest.TestCase):
         self.assertFalse(opponent_view.self_sleep_clause_blocks)
         self.assertTrue(opponent_view.opponent_sleep_clause_blocks)
 
+    # --- Rest-sleep provenance (attempt count, not elapsed turns) ---------------
+
+    def _replay(self, lines):
+        return parse_showdown_replay(lines, battle_id="rest-provenance")
+
+    @staticmethod
+    def _key(slot: str, name: str) -> str:
+        return f"{slot}:{name.lower()}"
+
+    def test_rest_records_a_zero_attempt_count(self) -> None:
+        replay = self._replay(_LEADS + [
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+        ])
+        self.assertEqual(
+            replay.rest_sleep_counts.get(self._key("p2", "Skarmory")), 0
+        )
+
+    def test_induced_sleep_records_no_rest_count(self) -> None:
+        """Provenance is a partition: an induced sleeper never enters the Rest map."""
+        replay = self._replay(self._INDUCED)
+        self.assertEqual(replay.rest_sleep_counts, {})
+
+    def test_each_failed_attempt_burns_one_rest_turn(self) -> None:
+        replay = self._replay(_LEADS + [
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+            "|cant|p2a: Skarmory|slp",
+            "|cant|p2a: Skarmory|slp",
+        ])
+        self.assertEqual(
+            replay.rest_sleep_counts.get(self._key("p2", "Skarmory")), 2
+        )
+
+    def test_benched_turns_do_not_burn_rest_turns(self) -> None:
+        """The whole reason this counts attempts and not turns.
+
+        gen3's sleep timer ticks only in ``slp.onBeforeMove``, so a benched
+        Rest-sleeper's Rest does not advance. Switching out and sitting through
+        other turns must leave the count exactly where it was.
+        """
+        replay = self._replay(_LEADS + [
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+            "|cant|p2a: Skarmory|slp",
+            "|switch|p2a: Blissey|Blissey, F|100/100",
+            "|turn|2",
+            "|move|p1a: Snorlax|Body Slam|p2a: Blissey",
+            "|turn|3",
+            "|move|p1a: Snorlax|Body Slam|p2a: Blissey",
+            "|turn|4",
+        ])
+        # One attempt burned before it left; the bench turns add nothing, and the
+        # provenance itself survives the switch.
+        self.assertEqual(
+            replay.rest_sleep_counts.get(self._key("p2", "Skarmory")), 1
+        )
+
+    def test_waking_clears_the_provenance(self) -> None:
+        replay = self._replay(_LEADS + [
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+            "|cant|p2a: Skarmory|slp",
+            "|-curestatus|p2a: Skarmory|slp",
+        ])
+        self.assertEqual(replay.rest_sleep_counts, {})
+
+    def test_aromatherapy_clears_the_provenance(self) -> None:
+        """Heal Bell / Aromatherapy wakes benched mons with one position-less line."""
+        replay = self._replay(_LEADS + [
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+            "|switch|p2a: Blissey|Blissey, F|100/100",
+            "|-cureteam|p2a: Blissey|[from] move: Aromatherapy",
+        ])
+        self.assertEqual(replay.rest_sleep_counts, {})
+
     def test_rest_does_not_engage_the_clause(self) -> None:
         lines = _LEADS + [
             "|move|p2a: Skarmory|Rest|p2a: Skarmory",
