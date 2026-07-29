@@ -91,9 +91,16 @@ pairing it changes character in a way worth stating before the run:
 
 Seeds are disjoint from everything already burned — the pre-fix grids
 (600000–600099, 500000–500279), the fix-development bench seeds, and every prior
-MCTS reservation. Both the new reservation and a retroactive record of the
-previously unregistered blocks are filed in the private repo; they validate
-against the in-house `assert_seed_ranges_are_unreserved`.
+MCTS reservation.
+
+The seed registry is **not in this repo**. Both the machine-readable band files
+and `assert_seed_ranges_are_unreserved`, which rejects a requested range that
+overlaps any protected band, live in the private deploy repo alongside the job
+specs — cluster-side artifacts stay on that side of the line. The acceptance
+bands were checked against it before launch (25 previously protected bands, no
+overlap), and the blocks the pre-registry campaigns consumed were retro-filed at
+the same time so they cannot be reused: they produced the published §4/§9/§11
+numbers, and this run has to be independent of exactly them.
 
 ## 5. Build provenance
 
