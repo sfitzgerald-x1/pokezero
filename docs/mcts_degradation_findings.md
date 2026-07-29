@@ -12,6 +12,32 @@ three are refuted, including this document's own original conclusion.
 **Every strength number in §4, §7 and §9 was produced by an engine that played
 one of its two seats backwards. Treat them as void, not as a baseline.**
 
+> ### The §4 ladders are ARTEFACTS. Do not reason from their slopes.
+>
+> This is stronger than "the levels are void", and it is the thing most likely to
+> be re-cited by accident, so it is stated here rather than left in §13.5.
+>
+> §4.1's *monotone decay with depth* and §4.2's *more simulations is worse* are
+> **not properties of search**. Every cell averaged a working p1 seat with an
+> anti-optimising p2 seat (§11), and the ladders measure how fast the inverted
+> seat collapsed as search intensity gave the inverted value more leverage. On
+> the p1 seat alone, over those same recordings, **more search was better** —
+> 0.400 → 0.540 across `d4` s512→s8192.
+>
+> What the fixed build shows instead (§13, §14): both axes are **FLAT**, not
+> rising. `d4-s1024` scores 0.615 and `d6-s4096` scores 0.601, and their paired
+> per-seed delta is −0.014 [−0.066, +0.038] — 6× the simulations and 1.5× the
+> depth buy nothing measurable. Search beats its own prior by +0.115, and then
+> stops improving.
+>
+> So: the downward slopes were an artefact; the upward slope people might expect
+> in their place has **not** been demonstrated between these two cells; and the
+> §4.3 "depth past 6 is inert" observation was never about orientation at all
+> (visit dilution — it reproduces on a mirror-symmetric fixture with a
+> handcrafted evaluator). The depth and simulation ladders are being re-run
+> properly on the fixed build; until that lands, the only defensible statements
+> about the depth axis are the two cells in §13 and §14.
+
 **Date:** 2026-07-28, revised 2026-07-29 after the falsifying re-bench (§9),
 then again 2026-07-29 with §10 (orientation audit) and §11 (the seat split)
 **Checkpoint:** `v3hist-k64-enthalf-5m-20260723` @ `iteration-2657` (= 4.25M games)
@@ -874,3 +900,94 @@ staged `d6-s4096` config exists for this and is owner-gated.
 - **Telemetry.** #939 single-counts model-mode s/decision. This campaign's wall
   figures are not comparable to the pre-#939 grid without saying so; strength scores
   are unaffected.
+
+---
+
+## 14. The intensity probe: the seat gap is gone, and the residual was probably noise
+
+**Date:** 2026-07-29. Same build, seeds, control and pairing as §13
+(`d6-s4096-b64-w4`, 220 within-seed mirrored pairs on seeds 7800000–7800219 —
+the acceptance band, reused deliberately so the *cell* comparison is paired as
+well as the seat comparison). The raw-vs-raw control is the same 440 games,
+reused unchanged: it is depth- and sims-independent by construction.
+
+**Predictions were registered before the data**
+(`docs/mcts_intensity_probe_predictions.md`, committed before launch). §13.4 left
+a residual seat asymmetry of +0.152 [+0.018, +0.282] with four candidates that
+disagreed about how it should move at 6× the simulations and 1.5× the depth.
+
+### 14.1 Result
+
+| cell | p1 seat | p2 seat | seat gap | pooled pair mean | fallback p1 / p2 |
+|---|---|---|---|---|---|
+| control (raw v raw) | 0.448 [0.383, 0.514] | 0.552 [0.486, 0.617] | −0.105 | 0.500 [0.500, 0.500] | 0 / 0 |
+| `d4-s1024` (§13) | 0.639 [0.573, 0.699] | 0.591 [0.525, 0.654] | +0.048 | 0.615 [0.572, 0.658] | 1.79% / 1.25% |
+| **`d6-s4096`** | **0.602** [0.536, 0.665] | **0.600** [0.534, 0.662] | **+0.002** | **0.601** [0.560, 0.642] | 1.15% / 1.18% |
+
+**At the highest search intensity measured, the two seats are 0.602 and 0.600.**
+A gap of two thousandths, against +0.34 to +0.59 in the pre-fix cells. That is
+the strongest single piece of evidence that the orientation fix is complete.
+
+### 14.2 Adjudication against the registered predictions
+
+Difference-in-differences against the control's own seat gap, paired per seed:
+
+| cell | DiD | bootstrap 95% | |
+|---|---|---|---|
+| `d4-s1024` | +0.1523 | [+0.0182, +0.2818] | excludes 0 |
+| `d6-s4096` | +0.1068 | [−0.0364, +0.2500] | **contains 0** |
+
+- **H1 (opponent-side priors stay uniform) — REFUTED.** It predicted the DiD
+  **grows** past +0.25 with intensity, because more of a deeper tree is
+  opponent-modelled. It fell, from +0.152 to +0.107, and the interval no longer
+  excludes zero. The point estimate moved the wrong way at 6× the simulations.
+  The uniform-opponent design remains a real modelling gap — the model's
+  `opponent_action_logits` head is still discarded — but it is **not** the source
+  of the seat residual.
+- **H2 (seat-dependent fallback) — REFUTED, and independently.** H2 required the
+  DiD to track the per-seat fallback gap. Measured gaps: **−0.0054** at
+  `d4-s1024` (p2 falls back *less*) and **+0.0004** at `d6-s4096`. Both are
+  under half a percentage point, one has the wrong sign against a positive DiD,
+  and total fallback *fell* from ~1.5% to ~1.2% while the DiD also fell. No
+  tracking of any kind. (Worth noting separately: the pre-fix `d6-s4096` shards
+  ran fallback as high as **21.7%**; on the fixed build the same cell sits at
+  1.2%. The orientation fix collapsed fallback too.)
+- **H0 (noise) — not excluded, and now the leading reading.** Two cells, point
+  estimates +0.152 and +0.107, wide overlapping intervals, one excluding zero and
+  one not. That is what a single small-or-zero effect estimated noisily looks
+  like.
+- **H3 (belief/world-construction asymmetry) — survives, but is not
+  distinguished from H0.** +0.107 sits inside its pre-registered flat band
+  [+0.05, +0.25], and the two cells' estimates are statistically
+  indistinguishable from each other. H3's band overlaps H0's, so this probe
+  cannot separate them. Not refuted, not confirmed.
+
+**Verdict on §13.4's residual: most likely noise.** It is not retracted outright
+— H3 remains live and the d4 interval did exclude zero — but it should no longer
+be treated as a second defect awaiting a fix. Anyone reopening it needs a design
+that separates H3 from H0, which means either far more pairs or a construction
+that makes the asymmetry a first-order effect.
+
+### 14.3 Is more search worth more? No — flat
+
+Paired per-seed pair-score delta, `d6-s4096` minus `d4-s1024` on identical
+battles:
+
+```
+-0.0136   bootstrap95 [-0.0659, +0.0375]   contains 0
+```
+
+6× the simulations and 1.5× the depth buy **nothing measurable**. The
+pre-registration named the falsifiable branch here: a *negative* paired delta
+would have been a new finding — real negative returns to search, no longer
+explainable by the seat inversion. It is not negative. It is flat.
+
+Both cells clear the §8 bar on their own: `d4-s1024` 0.615 [0.572, 0.658] and
+`d6-s4096` 0.601 [0.560, 0.642], both intervals entirely above 0.500.
+
+### 14.4 What this means for §4
+
+§4.2's headline — "an 8× simulation budget costs ~5× wall time and *loses*
+strength" — was the seat inversion. On the fixed build that slope is gone. But
+nothing replaced it with an upward slope: between `d4-s1024` and `d6-s4096` the
+axis is **flat**. See the caveat at the top of this document.

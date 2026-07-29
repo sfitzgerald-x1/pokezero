@@ -4926,9 +4926,322 @@ a stash) to replay the row at the base build. A count-level comparison would hav
 "12 cleared, expected 11" and invited a hand-wave about noise; the identity diff named the
 row, and the replay named the cause.
 
+## Z4.7 Three corrections from the #958 verification
+
+### (i) Full-frame clearance was 16, not 12
+
+Z4.6 counted only the **outside-limits** frame (108 -> 96). The full frame cleared **16**:
+the 12 named there plus four more that sat in the **limit bucket**, and so were invisible to
+a population defined as outside-limits:
+
+| row | where it sat |
+| --- | --- |
+| 1500000/11 | limit bucket |
+| 1500138/88 | limit bucket |
+| 1500294/71 | limit bucket |
+| 1500297/14 | limit bucket |
+
+Verified: none of the four is among the c9 decomposition's 108, and all four are absent from
+the post-fix run. The Encore mechanism therefore accounted for **16** rows across the whole
+frame, against a documented family of 11.
+
+Standing lesson, and it is the same shape as the 12th row: **a population definition is a
+lens, not a census.** "Outside-limits" was the right frame for adjudicating the 108, and the
+wrong frame for measuring a fix's reach. Report clearance against the full frame and the
+sub-population separately, because a fix does not know which bucket a row was filed in.
+
+### (ii) Erratum 2 was FALSE — and it was my transcription, not the artifact
+
+Z4.5 recorded that 1500242/60's committed branch table "lists 7 of 15 branches while claiming
+`branches_truncated: 0`". **The artifact says no such thing.** Read directly out of
+`reports/c9_capped_lethal_walk.json`, row index 8, candidate 0:
+
+```
+branches:            <list len 7>
+branches_truncated:  8            <- 7 + 8 = 15, correct and self-consistent
+```
+
+The `0` came from the **#957 merge note**, and I carried it into the ledger without opening
+the file it described. There was no artifact defect. Erratum 2 is withdrawn; the only real
+erratum from that verification is erratum 1 (the walk artifact serialized by a slightly
+earlier walker iteration).
+
+**The transcription-chain lesson, which is worth more than the erratum was.** I have a
+standing rule about replaying before narrating and a standing rule about verifying provenance
+at source, and I applied neither here, because the claim arrived in a *review note* rather
+than in a tool result — and review prose reads like conclusion, not evidence. It is neither:
+**a merge note is upstream data.** It is written by someone reading the same artifacts, at
+speed, and it can be wrong in exactly the ways an artifact cannot (an artifact at least
+disagrees with itself loudly). The rule generalizes past this ledger:
+
+> Verify against the artifact, not the note. Prose that summarizes evidence is not evidence,
+> whoever wrote it — including a reviewer, including me.
+
+This is the fourth entry in this ledger where a **partial truth positioned where a reader
+looks for the whole one** cost something: the class label (U.2), the unenforced comment and
+the half-true "latches with the schema" note (encoder vocab), the function name, and now a
+merge note. The failure mode is identical every time and the defence is always the same one:
+open the thing being described.
+
+### (iii) The Fake Out pin is an ENGINE-BEHAVIOR pin
+
+Z4.2 lists Fake Out under the consumer survey, which is right, but the pin itself was
+described alongside the parser pins as though it were of a kind with them. It is not, and the
+distinction matters for what a future failure would mean:
+
+* **6 parser pins** — the seeding **discriminators**. They fix what the world is allowed to
+  claim it knows: executed-vs-immobilized, caller-vs-callee, switch-vs-unknown. A failure
+  there means the world is describing history wrongly.
+* **1 engine-behavior pin** (Fake Out) — fixes what the ENGINE does once correctly seeded.
+  Nothing about the parser changes if it breaks; it would mean the engine's Fake Out handling
+  moved underneath a now-populated field.
+
+Same file, different failure meaning. Worth keeping legible because the seeding pins are
+stable-by-construction while the behavior pin tracks an engine the vendored patch stack keeps
+editing.
+
 ---
 
-# Appendix Z5 — Cycle eleven: mechanism-2 stat-modifier flooring (patches 34-35), and what the family label got right and wrong
+# Appendix Z5 — Patch 34: self-destruct is gated on the move actually executing
+
+Branch `scott/engine-gen3-explosion-blocked-residuals`. **Vendored patch 34**
+(`poke-engine-gen3-explosion-selfdestruct-gate.patch`), fixture-refresh still last at 35.
+Fingerprint `5b29e611468d3baa930984d5b8557280835e72f1ce38d8dc3c6b183e15c344dc`; the
+unpatched comparison build is `9ecfacadc938c0da`.
+
+## Z5.1 The documented WHY was the symptom again
+
+The brief carried this as *"when the engine's branch has the move BLOCKED (frz/slp/par cant),
+it drops the WHOLE end-of-turn residual block"*. **It does not, and it never did.** One
+control settles it — an ordinary blocked move, same paralyzed mon, same Leftovers:
+
+```
+TACKLE,    p2 paralyzed, 25% blocked branch:  ['Heal SideTwo: 19']      <- residuals fine
+EXPLOSION, p2 paralyzed, 25% blocked branch:  ['Damage SideTwo: 89']    <- user is DEAD
+```
+
+The engine applied Explosion's self-faint in `choice_before_move`, which runs at
+`generate_instructions.rs:2245` — **before** the immobilizers are rolled at `:2258`. So the
+blocked branch killed its own user, and residuals then correctly did not run, because the mon
+was dead. The missing Leftovers tick was real; its cause was one step upstream of where the
+family name pointed.
+
+Showdown, verified at source: `selfdestruct` lives in `useMoveInner`
+(`sim/battle-actions.ts:501`, guarded `gen !== 4`), and `runMove` calls `useMove` only after
+the `BeforeMove` gate returns true. **An immobilized Pokemon never explodes.**
+
+The fix relocates the faint to immediately after the status-condition gate — the blocked
+branches were already pushed to `final_instructions` by that call and never reach it. Position
+within the surviving branch is unchanged: still before damage (gen3 faints the user first),
+still firing through Protect (Showdown's faint precedes `tryMoveHit`), DAMP guard preserved,
+and Sleep Talk's callee still reaches it because the gate is skipped for it.
+
+**This is the third consecutive assignment whose documented WHY named a downstream symptom**
+(encore-redirect -> missing world seed; boundary-truncation -> Encore misfiling; residual-drop
+-> pre-gate self-KO). The common shape: a residual/HP-component signature is the most VISIBLE
+part of a divergence and the least diagnostic, because every upstream cause that changes who
+is alive at end-of-turn produces the same missing tick. **Read the branch that is wrong, not
+the component that is missing.**
+
+## Z5.2 Pins: 2 fail unpatched, 4 pass both ways
+
+| pin | unpatched | patched |
+| --- | --- | --- |
+| `the_blocked_branch_no_longer_kills_its_own_user` | **FAIL** | pass |
+| `the_blocked_branch_keeps_its_end_of_turn_residuals` | **FAIL** | pass |
+| `an_ordinary_blocked_move_keeps_its_residuals` | pass | pass |
+| `the_firing_branch_still_faints_the_user_and_still_skips_residuals` | pass | pass |
+| `damp_still_prevents_the_faint` | pass | pass |
+| `a_healthy_user_still_explodes` | pass | pass |
+
+The third row is the load-bearing control and the reason it is written at all: it encodes the
+refutation, so a future reader who takes the family name at face value and re-adds residuals
+to blocked branches will find the premise already disproved in the test file rather than
+rediscovering it from a census.
+
+## Z5.3 Differential: predicted 2, cleared 4 — the family was under-counted again
+
+300 games, seeds 1500000-1500299, strict matcher. Prediction recorded before the run
+(`reports/c10_explosion_prediction.md`). Post-#958 baseline: 96 outside-limits.
+
+| | predicted | actual |
+| --- | --- | --- |
+| named rows (1500074/57, 1500188/33) | clear | **both clear** |
+| other families | zero change | **two more cleared** |
+| outside-limits | 96 -> 94 | 96 -> **92** |
+| newly divergent | 0 | **0** |
+
+The two extra rows were checked on the **unpatched** build rather than assumed, per the
+prediction's own instruction. Both are the same signature:
+
+| row | c9 family | what it actually is |
+| --- | --- | --- |
+| 1500188/57 | `matcher_accounting_best_branch` | `p2: explosion` + `\|cant\|p2a: Swalot\|par` |
+| 1500286/38 | `matcher_overreport_legal_roll` | `p2: explosion` + `\|cant\|p2a: Regirock\|par` |
+
+So the family is **4**, not 2, and the two strays were filed by downstream symptom — a
+branch-accounting mismatch — rather than by cause, exactly as 1500285/14 was filed as
+boundary truncation in the Encore family.
+
+**Both of the last two fixes have under-counted their own family in the same direction, for
+the same reason.** A mechanism that changes *which branch is right* shows up in whatever
+class the matcher lands in once the right branch is missing — residual truncation, branch
+accounting, legal-roll overreport. Those class names describe the matcher's experience, not
+the engine's error. **Predicting from family labels therefore systematically under-predicts;
+predict from the mechanism's signature instead** (here: any boundary pairing a self-destruct
+move with an incapacitating status), and identity-diff the full frame to catch the rest.
+
+The first count-level comparison here was *also* misleading in a second way worth recording:
+the default report retains only 25 repros of 130+ divergences, so an identity diff computed
+from `repros` silently compared two truncated samples and reported "0 cleared, 0 new". The
+re-run with `--repros-per-game 40` is what produced the table above. **A diff over a truncated
+set is not a diff.**
+
+## Z5.4 Artifacts
+
+- `reports/c10_explosion_prediction.md` — prediction, pre-registered
+- patch: `third_party/poke-engine-gen3-explosion-selfdestruct-gate.patch` (34 of 35;
+  fixture-refresh last)
+- pins: `rust/pokezero-search/tests/gen3_selfdestruct_gate.rs`
+
+---
+
+# Appendix Z6 — Live typechange reaches the world; and retention becomes verifiable
+
+Branch `scott/engine-world-kecleon-typechange`. **No vendored patch** — parser payload +
+`engine_world` only. Engine 34 patches, fingerprint `5b29e611468d3baa…`, unchanged by this
+change.
+
+## Z6.1 The parser knew for months; only the observation path listened
+
+`live_type_override` has been produced since the v3 observation work
+(`showdown.py::_update_live_type_override`), and exactly one consumer existed:
+`_apply_live_type_override`, on the **observation** path. The world was still assembled from
+base Pokédex types, so a Kecleon whose Color Change had retyped it arrived at the engine as
+plain Normal.
+
+This is the same shape as the `last_used_move` gap (Z4) — a publicly-observed fact the parser
+already derived and the world silently dropped — and it is now the second instance. Worth
+naming as a class: **a parser field with exactly one consumer is a latent world gap.** The
+obs path and the world path read the same protocol for different purposes, and a field added
+for one of them does not reach the other by default.
+
+**Wrong in both directions from one field**, which is why the two replayed rows look unrelated
+until you notice they share a cause:
+
+| row | direction | Showdown | engine |
+| --- | --- | --- | --- |
+| 1500074/12 | Kecleon **attacks** (Return) | 27 — no Normal STAB | 43 (43 / 1.5 = 28.7) |
+| 1500191/20 | Kecleon **is hit** (HP Ice) | 16, `-resisted` | 34, neutral |
+
+Both fall out of one `types` field, so one seeding fixes both.
+
+## Z6.2 Precedence, and why the observed arm goes last
+
+Three arms can retype the active mon. Applied **transform -> forecast -> typechange**:
+
+| arm | source | kind |
+| --- | --- | --- |
+| `_apply_transform` | the donor's types | derived from a rule |
+| `_apply_forecast_types` | public weather | derived from a rule |
+| `_apply_live_typechange` | an observed `typechange` line | **OBSERVED** |
+
+**Observation beats derivation.** The first two reconstruct what the types *should* be from a
+rule; the third is the sim stating what they *are*. Showdown reaches the same answer by a
+different route: Color Change's `onAfterMoveSecondary` calls `setType(type)`
+(`data/abilities.ts:554-562`), and since every arm mutates `pokemon.types` in event order,
+whichever fired most recently wins. Applying the observation last reproduces that **without
+modelling the ordering** — which matters, because the ordering is the part most likely to be
+got wrong later.
+
+`setType` REPLACES rather than appends, so a retyped mon is mono-type even if it was
+dual-typed. Pinned, because "add a type" is the plausible misreading and it would leave the
+old type resisting things it no longer resists.
+
+**Only the `type:` form is consumed.** `forme:` (Castform Forecast) is deliberately left to
+`_apply_forecast_types`, which already derives the same answer from the same public weather.
+Consuming it here too would give Castform **two writers that must agree** — precisely the
+shape that let the encoder-vocabulary bug live for months. Forecast is `onUpdate`, so the
+derived arm cannot lag the observation. Pinned as a deliberate non-consumption so a future
+reader does not "complete" the handler and reintroduce the second writer.
+
+## Z6.3 Retention provenance: the payload now records it (carry from the #959 verification)
+
+The #959 clearance numbers had no committed artifact, and the committed
+`c10_encore_differential.json` showed 25 repros with no record of which flags produced them.
+Fixed mechanically rather than by assertion — and building the fix surfaced *why* the original
+diff went wrong:
+
+**`--repros-per-game` and `--keep-repro` are different knobs, and only one of them is what a
+diff depends on.** `run_game` takes `--repros-per-game` (what each game retains, hence what
+lands in the checkpoint); `build_report` takes `--keep-repro` (what the aggregated report
+carries). A run invoked with `--repros-per-game 40` and no `--keep-repro` still writes a
+report truncated to the `--keep-repro` default. That is exactly what happened in Z5.3: the
+identity diff silently compared two 25-row samples of 130+ divergences and reported "0
+cleared, 0 new" from a real 4-row change.
+
+`build_report` now emits:
+
+```json
+"repro_retention": {
+  "repros_per_game": 40, "keep_repro": 500,
+  "repros_retained": 131, "transitions_diverged": 131, "repros_complete": true
+}
+```
+
+`repros_complete` is the field a future identity diff should check before trusting
+`report["repros"]`. Known limit, recorded rather than papered over: on the `--merge-from`
+path `repros_per_game` is `null`, because the per-game flag is not recoverable from checkpoint
+records — `repros_complete` remains valid there and is the load-bearing field.
+
+`reports/c10_explosion_differential.json` is committed with this PR, rebuilt from #959's
+retained checkpoint so it carries the full 131-row set. It independently reproduces that PR's
+headline: **92 outside-limits**.
+
+## Z6.4 Differential: predicted >= 4, cleared exactly 4 — and the refinement that matters
+
+300 games, seeds 1500000-1500299, strict matcher, 34 patches. Prediction pre-registered
+(`reports/c10_kecleon_prediction.md`).
+
+| | predicted | actual |
+| --- | --- | --- |
+| named rows | 4 clear (floor) | **4/4** |
+| more, by mechanism signature | expected | **none** |
+| outside-limits | 92 -> 88 or better | 92 -> **88** |
+| newly divergent | 0 | **0** |
+
+**Both retention blocks report `repros_complete: true`** (127 of 127 and 131 of 131), so this
+identity diff is over the FULL divergent set on both sides and that is checkable from the
+committed artifacts rather than asserted here. It is the first diff in this program for which
+that is true.
+
+**I predicted more than 4 and was wrong, and the reason refines the Z5.3 lesson rather than
+contradicting it.** The Encore and Explosion mechanisms both changed **branch structure** —
+who is alive, which move executed — so once the right branch was missing the matcher filed
+those rows wherever its accounting broke (`measurement_boundary_residual_truncation`,
+`matcher_accounting_best_branch`, `matcher_overreport_legal_roll`), scattering the family.
+This mechanism changes only a **magnitude inside an otherwise-correct branch**: the right
+branch is present, its damage number is wrong. Nothing gets re-filed, so the family stayed
+exactly where c9 put it — all four in `roll_scaled_component`.
+
+So the sharpened rule:
+
+> **Structural mechanisms scatter across matcher classes and under-count; magnitude
+> mechanisms do not.** Before predicting from a family label, ask whether the mechanism
+> changes which branch is right or only what a number inside it says.
+
+That is a cheap test and it would have called both of the previous two cycles correctly, and
+this one too.
+
+## Z6.5 Artifacts
+
+- `reports/c10_kecleon_prediction.md` — pre-registered
+- `reports/c10_kecleon_differential.json` — 127 rows, `repros_complete: true`
+- `reports/c10_explosion_differential.json` — #959's missing artifact, 131 rows, reproduces 92
+- pins: `tests/test_engine_world_live_typechange.py` (9)
+---
+
+# Appendix Z7 — Cycle eleven: mechanism-2 stat-modifier flooring (patches 35-36), and what the family label got right and wrong
 
 Fix-lane worktree, branch `scott/engine-gen3-stat-modifier-flooring`, based on main at
 #958 (33 patches). Baseline build verified at the c9/c10 fingerprint
@@ -4936,7 +5249,7 @@ Fix-lane worktree, branch `scott/engine-gen3-stat-modifier-flooring`, based on m
 9/9); all six `mechanism2_stat_modifier_flooring` rows regenerated from seed and
 replayed through `scripts/replay_residue.py` before any design.
 
-## Z5.1 Derivation: where gen3 Showdown puts the stat modifiers (all vendored-source citations)
+## Z7.1 Derivation: where gen3 Showdown puts the stat modifiers (all vendored-source citations)
 
 - `getDamage` (sim/battle-actions.ts:1589-1726) computes
   `attack = attacker.calculateStat(attackStat, atkBoosts)` — boost stages floor AT THE
@@ -4971,7 +5284,7 @@ Every stat-side rule above was probed live (gen3customgame fixtures,
 `pokezero.showdown_fixture`, seeds 1-10 each) and agrees with the in-house sim-exact
 oracle `pokezero.gen3_damage` (itself live-sim cross-checked in tests/test_gen3_damage.py).
 
-## Z5.2 The architectural difference, and patch 34
+## Z7.2 The architectural difference, and patch 34
 
 The engine applied ALL of these as f32 multipliers on `choice.base_power`
 (gen3/items.rs `item_modify_attack_being_used` / `item_modify_attack_against`,
@@ -4987,7 +5300,7 @@ both. Proof-row arithmetic (recorded states, replayed this cycle):
   `floor(floor(257/1.5)*1.5)=256 -> max 118`; engine 120. Observed 101 below the
   engine's legal floor 102.
 
-`poke-engine-gen3-stat-modifier-flooring.patch` (slot 34) adds the fixed-point
+`poke-engine-gen3-stat-modifier-flooring.patch` (slot 35) adds the fixed-point
 stat-modifier chains to gen3/damage_calc.rs (`gen3_offensive_stat_modifiers` /
 `gen3_defensive_stat_modifiers`, applied to the normal AND crit stat variants inside
 `get_attacking_and_defending_stats`) and deletes the relocated BP arms. Guts now reads
@@ -5016,7 +5329,7 @@ subsumed, its pins still pass. Folded in, each sim-cited and pinned:
   the signature (burned Guts users are rare); the stat pipeline makes burn just another
   Guts status (live probe: burned == paralyzed max 172 on the probe stats).
 
-## Z5.3 The family label: 4/6 right, 2/6 wrong — and the wrong ones are two different things
+## Z7.3 The family label: 4/6 right, 2/6 wrong — and the wrong ones are two different things
 
 Replay-first decomposition of the six `mechanism2_stat_modifier_flooring` rows:
 
@@ -5033,11 +5346,11 @@ types) and applies only the net (data/mods/gen3/scripts.ts:88-104); patch 33's
 transcription applied the two types as independent steps, so a net-neutral (0.5, 2)
 pair with the resist FIRST in the type tuple floors an odd value: engine
 `floor(29/2)*2 = 28` where the sim leaves 29. Observed 29 = the sim's exact 100% roll.
-`poke-engine-gen3-type-effectiveness-netting.patch` (slot 35) nets the exponent in
+`poke-engine-gen3-type-effectiveness-netting.patch` (slot 36) nets the exponent in
 common_pkmn_damage_calc; only (2x, 0.5x) pairs change, and only when the resisted type
 leads the tuple and the pre-type value is odd.
 
-## Z5.4 Pins, build chain and gates
+## Z7.4 Pins, build chain and gates
 
 `tests/test_engine_stat_modifier_fidelity.py`: 14 divergence pins + 4 controls, every
 divergence pin's sim value transcribed from live probe runs (roll sets in the
@@ -5054,7 +5367,7 @@ unpatched branch value — and the 4 controls pass. On the 35-patch build: 18/18
 The fixture-refresh patch stays LAST and needed no extension: no upstream expectation
 moved.
 
-## Z5.5 Prediction and the identity diff (registered BEFORE the run)
+## Z7.5 Prediction and the identity diff (registered BEFORE the run)
 
 Per the standing rule (two prior fixes under-counted by trusting family labels), the
 prediction was made by MECHANISM SIGNATURE: all 96 surviving outside-limits rows
@@ -5080,7 +5393,7 @@ It is the netting mechanism; the scan missed it because Silver Wind was absent f
 scan's move-type table — a marker-coverage miss, found by the identity diff and
 diagnosed by arithmetic, the same healthy direction as cycle ten's 12th row.
 
-## Z5.6 Honest coverage statement
+## Z7.6 Honest coverage statement
 
 - The three surviving marker candidates keep their labels: a marker on a boundary move
   does not make the modifier's fixed-point floor the row's divergence (the shift only
@@ -5105,7 +5418,7 @@ diagnosed by arithmetic, the same healthy direction as cycle ten's 12th row.
   condition) is not modelled. Choice Specs (not a gen3 item) kept its arm, moved
   stat-side for uniformity.
 
-## Z5.7 Artifacts
+## Z7.7 Artifacts
 
 - `third_party/poke-engine-gen3-stat-modifier-flooring.patch` (34) and
   `third_party/poke-engine-gen3-type-effectiveness-netting.patch` (35), fixture-refresh
