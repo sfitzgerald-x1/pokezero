@@ -1682,3 +1682,66 @@ divergent, now clean.
 **Acceptance bar unchanged.** No new limit class, no engine change. These
 boundaries now pass or fail on the same strict per-component basis as every
 other boundary.
+
+## F.6 Two corrections to F.5 and the freshness gate
+
+### The mtime half of the gate was unsatisfiable
+
+maturin stamps extension modules with the reproducible-build epoch **315561600**
+(1980-01-01), and archive-extracting installers preserve it. Such a file's mtime
+carries **no** provenance — but the gate compared it against source mtimes and
+reported a *freshly built* engine as STALE, permanently. The operator's only
+escape was `--skip-build-check`, i.e. the gate trained the exact habit it exists
+to prevent. (It never fired locally because `uv pip install --force-reinstall`
+rewrites mtimes; it reproduces on any archive-extracting install path.)
+
+Fixed with a three-step ladder, failure direction unchanged:
+
+| artifact timestamp | treated as |
+| --- | --- |
+| >= 2000-01-01 | real install time — compared as before |
+| pre-2000, but the wheel's `dist-info/RECORD` is dated | RECORD's mtime (real **install** time) |
+| pre-2000 and RECORD undated | **unknown provenance** — never "old"; freshness rests on the content fingerprint, which is exact and timestamp-independent |
+
+Verified in all three states. A pre-2000 stamp is now evidence of *nothing*
+rather than evidence of staleness, and an honest rebuild can satisfy the gate.
+
+### F.5's containment was described more narrowly than it is implemented
+
+F.5 said the reclassification applies to "the called move's damage". **It does
+not.** The implemented predicate is: any `-damage` line inside a
+Sleep-Talk-flagged branch whose source fell through to the mapper's generic
+`residual` tag. Nothing in the rendered stream identifies which line the callee
+produced — that is the very reason the branch is flagged.
+
+The two descriptions coincide in practice because every other gen3 residual the
+mapper emits is *named* (psn / brn / Sandstorm / Hail / Leech Seed /
+partialtrap); the fall-through is reachable only for a residual with no cause
+branch, and both candidates are absent from the pool — Nightmare in **0 of 393**
+sets, and all 5 Curse users are non-Ghost, so Ghost-Curse never occurs. So the
+broader predicate is **latent, not exercised**.
+
+That is a reason to state it accurately, not a reason to leave it unstated —
+this is the same recurring lesson as A.2's D8 scope and B.1's roll-window
+wording: **describe the implemented predicate, not the intended one.** The
+containment boundary is now pinned rather than merely observed:
+`test_named_residual_is_NOT_reclassified` asserts a named `psn`/`Sandstorm`
+residual inside a flagged branch keeps its exact comparison, and
+`test_unattributed_HEAL_is_not_reclassified` asserts the scope is `-damage` only.
+19 tests.
+
+### Interim reading on the 20-patch build (variable-BP merged)
+
+Not the final re-measurement — PP-ordering and locked-move PP are still
+outstanding — but the gate now passes at 20 patches and Flail is fixed:
+
+| attacker HP | Flail damage, pre-#20 | post-#20 |
+| --- | --- | --- |
+| 300/300 | 0 | 52 |
+| 150/300 | 0 | 99 |
+| 60/300 | 0 | 241 |
+| 20/300 | 0 | 300 |
+
+Census, seeds 1350000-1350059, `acceptance_eligible: true`:
+**128 / 5,310 = 2.41 %** (from 2.47 % at 19 patches), 97.65 % measured, 0 harness
+errors, `unclassified` 0.

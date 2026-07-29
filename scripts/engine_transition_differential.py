@@ -324,6 +324,18 @@ _ROLL_SCALED_SOURCES = frozenset(
 # roll-scaled move damage of an unknown callee, and the realized outcome is
 # validated against the UNION of the candidate branches' supports — the same
 # support-based principle already used for hidden counters.
+#
+# IMPLEMENTED PREDICATE, stated exactly: this reclassifies ANY `-damage` line
+# inside a Sleep-Talk-flagged branch whose source fell through to the mapper's
+# generic `residual` tag. It is NOT "the called move's damage" — nothing in the
+# rendered stream identifies which line the callee produced, which is the whole
+# reason the branch is flagged. In practice the callee's damage is the only
+# unattributed damage there, because every other gen3 residual the mapper can
+# emit is named (psn/brn/Sandstorm/Hail/Leech Seed/partialtrap); the fall-through
+# is reachable only for a residual with no cause branch, and the two candidates
+# (Nightmare, Ghost-Curse) are both absent from the gen3 randbats pool. So the
+# broader predicate is latent, not exercised — but it is the predicate, and
+# `test_named_residual_is_NOT_reclassified` pins the boundary.
 _SLEEPTALK_LOSSY_MARKER = "sleeptalk_called_unidentified"
 _UNATTRIBUTED_DAMAGE_SOURCE = "residual"
 _UNKNOWN_CALLEE_SOURCE = "move_unknown_callee"
