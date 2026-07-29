@@ -2044,6 +2044,41 @@ def _spec(name):
                                  ("p1a", "item: Leftovers")]},
             landmark=lambda L: bool(_residual_sequence(L)),
             landmark_desc="the residual block emitted HP lines")
+    if name == "residualberrybeforestatus":
+        # The gen3 THRESHOLD BERRIES are order 10.4 — Leftovers' own slot — so they
+        # fire BEFORE Leech Seed (10.5) and status damage (10.6), not after.
+        # `data/mods/gen3/items.ts` gives every one of them `onResidualOrder: 10,
+        # onResidualSubOrder: 4` and strips the `onUpdate` that later gens use.
+        #
+        # This is the scenario tests/test_engine_residual_order.py said could not
+        # exist ("the differential cannot yet reach mid-battle HP states in a
+        # one-turn fresh battle"), which is why that file pinned the timing against
+        # the engine itself and pinned it BACKWARDS. A multi-turn fixture reaches the
+        # state fine: chip the holder under half with two Seismic Tosses, and the
+        # measured turn has the berry and the burn tick in the same residual block.
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                             moves=("Will-O-Wisp", "Seismic Toss", "Splash"))
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Sitrus Berry",
+                               moves=("Seismic Toss", "Splash"))
+        return dict(
+            p1=[lax], p2=[aipom],
+            turns=[("move willowisp", "move seismictoss"),
+                   ("move seismictoss", "move splash"),
+                   ("move seismictoss", "move splash")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Aipom|brn"),
+            # ORDER only. gen3 Sitrus heals a flat 30, not maxhp/4, which the engine
+            # gets wrong for its own (unrelated) reasons — asserting the amount here
+            # would fold that divergence into an ordering pin.
+            facts=lambda L: {
+                "sequence": _residual_sequence(L),
+                "berry_eaten": _has(L, "|-enditem|p2a: Aipom|Sitrus Berry|[eat]"),
+            },
+            expect={"sequence": [("p2a", "item: Sitrus Berry"), ("p2a", "brn"),
+                                 ("p1a", "item: Leftovers")],
+                    "berry_eaten": True},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
     raise ValueError(name)
 
 
@@ -2083,7 +2118,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "residualspeedmajor", "residualspeedmajorfast",
              "residualspeedpara", "residualspeedparacontrol",
              "residualspeedtie", "residualspeedsand", "residualspeedleech",
-             "residualsuborder")
+             "residualsuborder", "residualberrybeforestatus")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
