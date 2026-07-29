@@ -194,8 +194,9 @@ def materialize_search_artifacts(
              "--out", str(tables_path)],
             check=True,
         )
-    # Fail closed on root/leaf drift. showdown_root is passed so the check covers a
-    # REUSED artifact whose vocabulary predates this build — the reuse key cannot
-    # see that, and the file above is adopted whenever it merely exists.
-    validate_encoder_tables(contract, tables_path, showdown_root=showdown_root)
+    # Fail closed on root/leaf drift, against the checkpoint's own contract. A
+    # REUSED artifact is covered because the contract's vocabulary is in the reuse
+    # key, so tables exported against a different enumeration resolve to a
+    # different path and can never be adopted here.
+    validate_encoder_tables(contract, tables_path)
     return {"model_path": str(model_path), "tables_path": str(tables_path)}
