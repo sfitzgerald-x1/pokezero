@@ -686,3 +686,103 @@ So §4.3's "either the tree does not reach depth 6, or the cap is not binding" w
 a false dichotomy: the cap binds, and the subtree beyond node depth ~3 is too
 visit-starved to change a root argmax. **Any future depth cell should report the
 depth reached, not the depth configured.**
+
+---
+
+## 12. The acceptance re-bench: the prediction held
+
+**Date:** 2026-07-29. Build: main @ `2103d65` (the #937 merge, plus #936/#938/#939),
+engine fingerprint `7909290e14e065cda5cc38d5698c45a04db4862a416e1e2a52af86075104830b`
+(29 patches, 8 crate sources), image pinned by digest and gated in-pod before the
+first game of every shard. 440 games per arm, seeds 7800000–7800219, **within-seed
+mirrored pairs** — each seed played from both seats, so the two seats face the same
+two teams. Plan and prediction were registered before the run
+(`docs/mcts_acceptance_rebench_plan.md`).
+
+### 12.1 Result
+
+| arm | p1 seat | p2 seat | pooled pair mean |
+|---|---|---|---|
+| control (raw v raw) | 0.448 [0.383, 0.514] | 0.552 [0.486, 0.617] | **0.500** [0.500, 0.500] |
+| **search `d4-s1024`** | **0.639** [0.573, 0.699] | **0.591** [0.525, 0.654] | **0.615** [0.573, 0.658] |
+
+220 complete pairs per arm, Wilson 95% per seat, percentile bootstrap on the pair mean.
+
+**§8 acceptance criterion: MET.** `0.615`, and the whole interval sits above 0.500.
+Paired against the control on the same seeds, search adds **+0.115** [+0.072, +0.158].
+
+### 12.2 The prediction, adjudicated
+
+> p1 stays where it is and p2 rises to meet it; p2 non-recovery retracts §10 and §11.
+
+**Held.** The search seat gap (p1 − p2) collapsed from **+0.34 to +0.59** across the
+pre-fix cells to **+0.048**. The p2 seat, which sat at 0.140–0.260 in the pre-fix
+deep and high-simulation cells and at exactly 0.000 in three of them, reads
+**0.591**. §10 and §11 stand.
+
+### 12.3 The control did something the old harness could not
+
+Under within-seed pairing with two identical deterministic policies, both runs of a
+seed are *the same battle with the labels swapped*. The pooled control mean is
+therefore **exactly 0.500 by construction** — and it measured exactly 0.500 with a
+**zero-width** bootstrap interval. That is a strict equality test of the pairing, not
+a noisy null: any deviation would have meant seat- or label-dependent
+nondeterminism in the harness.
+
+Its per-seat split is the payload: these 220 seeds **favour the p2-slot team by
+10.4 points** (0.448 / 0.552). Read against that baseline, search gains **+0.191**
+on p1 and **+0.039** on p2. The parity-split harness of §4/§9 could not measure this
+at all.
+
+### 12.4 What is NOT closed: a residual seat asymmetry
+
+The seat-gap collapse is not a seat-gap elimination. Difference-in-differences on
+paired seeds — the search arm's within-seed seat gap minus the control's, which
+removes team advantage exactly:
+
+```
+control seat gap (p1 - p2)   -0.1045
+search  seat gap (p1 - p2)   +0.0477
+difference-in-differences    +0.1523   bootstrap95 [+0.0182, +0.2818]
+```
+
+**The interval excludes zero.** Search still helps the p1 seat more than the p2 seat,
+by about 15 points, beyond what the seed set's team advantage explains. The lower
+bound is +0.018 and the interval is wide — this is a marginal result on 220 pairs,
+not a second smoking gun — but it is a real signal and it should not be rounded away.
+
+This is §11.7's open question, now measurable and pointing the *opposite* way from
+how it was framed: the residual is not a depth effect on a healthy seat, it is a
+remaining seat asymmetry. Candidates, none tested:
+
+- the opponent side of the tree still runs uniform priors (`model_priors` applies to
+  the acting seat only — `multiply_batched_encoded_core`), which is not seat-symmetric
+  in its *effect* once the acting seat is side two;
+- belief/world construction asymmetries between the self and opponent seats;
+- residual fallback shape differing by seat.
+
+The cheap next probe is the same difference-in-differences at a second cell — the
+staged `d6-s4096` config exists for this and is owner-gated.
+
+### 12.5 Consequences
+
+- Every strength number in §4, §7 and §9 was produced by an engine that played one of
+  its two seats backwards. They stay **void**, not a baseline.
+- Search at `d4`/`s1024` is now **worth its compute**: +0.115 over its own prior on
+  paired seeds.
+- The depth and simulation ladders should be re-run on the fixed build before anyone
+  reasons about depth again. §4.1–§4.3 describe an artefact.
+
+### 12.6 Provenance notes
+
+- **Encoder tables.** The materialized table's vocab is **1216**, matching this
+  checkpoint's own `category_vocab` exactly (1216 + 16 OOV + 1 = its 1233 trained
+  embedding rows), with `volatile:solarbeam` absent from both — the checkpoint
+  predates that work. A table regenerated "fresh from the build" would have been the
+  defect here, not the fix. Established by direct measurement, because
+  `mcts_eval.resolver.validate_encoder_tables` compares schema version, token count
+  and feature counts but **not the vocab or its size**, and so cannot catch a
+  vocab renumbering on its own.
+- **Telemetry.** #939 single-counts model-mode s/decision. This campaign's wall
+  figures are not comparable to the pre-#939 grid without saying so; strength scores
+  are unaffected.
