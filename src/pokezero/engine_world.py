@@ -44,6 +44,7 @@ from .poke_engine_adapter import (
     build_poke_engine_state,
     require_charge_state_support,
     require_move_trap_support,
+    require_rest_turns_support,
 )
 from .showdown_fixture import FixturePokemon, _STAT_ORDER
 
@@ -144,6 +145,9 @@ _STATUS_CODES = {
     "frz": "freeze",
 }
 _SLEEP_STATUS_CODE = "slp"
+# gen3 Rest sets the engine's counter to 3 (gen3/choice_effects.rs); it is decremented
+# once per move attempt and the mon wakes at 1.
+_REST_SLEEP_TURNS = 3
 
 _MOVE_SLOT_LIMIT = 4
 _MANUAL_WEATHER_TURNS = 5
@@ -1265,7 +1269,7 @@ def _build_pokemon_spec(
         for stat in ("atk", "def", "spa", "spd", "spe")
     }
 
-    hp, status = _hp_and_status(
+    hp, status, rest_turns = _hp_and_status(
         row,
         maxhp=maxhp,
         slot=slot,
@@ -1273,6 +1277,13 @@ def _build_pokemon_spec(
         is_self=is_self,
         approximate_sleep_turns=approximate_sleep_turns,
     )
+    if rest_turns:
+        # Gated on the wheel actually preserving the counter, for the same reason the
+        # trapped volatile is: a binding that accepts ``rest_turns`` and drops it builds
+        # this mon as an ORDINARY sleeper, which re-arms the Sleep Clause the Rest is
+        # exempt from and hands search a sleep move Showdown would refuse. Failing the
+        # decision is strictly better than searching a rule the sim does not have.
+        require_rest_turns_support()
     moves = _move_specs(
         mon,
         row,
@@ -1297,6 +1308,12 @@ def _build_pokemon_spec(
         speed=stats["spe"],
         moves=moves,
         status=status,
+        # ``sleep_turns`` is deliberately left at its 0 default alongside a non-zero
+        # ``rest_turns``: the engine reads the two as alternatives, branching on
+        # ``rest_turns`` first and consulting ``sleep_turns`` only in its 0 arm
+        # (gen3/generate_instructions.rs), so a Rest sleep has no elapsed-turn count
+        # to carry and inventing one would be read by nothing.
+        rest_turns=rest_turns,
         ability=normalize_id(mon.ability) if mon.ability else None,
         # The CURRENT public item state beats the sampled battle-start
         # assignment: a publicly-stripped/consumed item is gone
@@ -1330,16 +1347,22 @@ def _hp_and_status(
     species: str,
     is_self: bool,
     approximate_sleep_turns: bool = False,
-) -> tuple[int, str]:
+) -> tuple[int, str, int]:
+    """Return ``(hp, engine status, rest_turns)`` for one public row.
+
+    ``rest_turns`` is non-zero only for a mon whose sleep the public protocol attributed
+    to its own Rest; see :func:`_rest_turns_from_row`.
+    """
+
     if row is None:
-        return maxhp, "none"
+        return maxhp, "none", 0
     condition = str(row.get("condition") or "")
     if not condition:
         raise EngineWorldUnsupported("payload_malformed", f"{slot}: {species!r} row has no condition")
     hp_part, _, status_part = condition.partition(" ")
     status_code = status_part.strip()
     if status_code == "fnt" or hp_part == "0":
-        return 0, "none"
+        return 0, "none", 0
     current_raw, _, max_raw = hp_part.partition("/")
     try:
         current = int(current_raw)
@@ -1367,16 +1390,59 @@ def _hp_and_status(
         hp = max(1, round(current * maxhp / denominator)) if current else 0
     status = _STATUS_CODES.get(status_code)
     if status is None:
-        if status_code == _SLEEP_STATUS_CODE and approximate_sleep_turns:
-            # Documented approximation: model the mon as freshly asleep
-            # (sleep_turns=0). Biases wake-up odds late in a sleep; the exact
-            # fix is public sleep-counter tracking in the replay state.
-            return hp, "sleep"
+        if status_code == _SLEEP_STATUS_CODE:
+            rest_turns = _rest_turns_from_row(row)
+            if rest_turns is not None:
+                # EXACT, not approximated: the public attempt count reconstructs the
+                # engine's own Rest counter with nothing left to guess.
+                return hp, "sleep", rest_turns
+            if approximate_sleep_turns:
+                # Documented approximation, and now only for an INDUCED sleep — a Rest
+                # sleep took the exact branch above. Model the mon as freshly asleep
+                # (sleep_turns=0); biases wake-up odds late in a sleep. The exact fix
+                # is public sleep-counter tracking in the replay state.
+                return hp, "sleep", 0
         raise EngineWorldUnsupported(
             "status_unsupported",
             f"{slot}: {species!r} status {status_code!r} (sleep needs public turn counts)",
         )
-    return hp, status
+    return hp, status, 0
+
+
+def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
+    """Rebuild the engine's Rest counter from the row's public attempt count.
+
+    ``restSleepAttempts`` (k) is written by ``local_showdown._apply_rest_sleep_provenance``
+    for exactly those mons whose ``slp`` the protocol attributed to their OWN Rest and
+    that the opposing side never put to sleep; an induced sleeper never carries it, so
+    the field's presence IS the provenance and no second lookup is needed here.
+
+    The arithmetic is exact rather than approximate because both clocks are the same
+    clock. The engine sets ``rest_turns = 3`` on Rest and decrements it once per move
+    ATTEMPT, waking the mon when it reaches 1 (gen3/generate_instructions.rs); k counts
+    those same attempts off the public ``|cant|SLOT|slp`` lines, which gen3 emits on
+    precisely the attempts that tick and on no others. So k attempts already spent leave
+    ``3 - k`` on the counter — 3, 2 or 1, never 0, since the attempt that would take it
+    to 0 is the one that wakes the mon and clears the tracker entry instead.
+
+    Why this matters beyond the wake timer: gen3's Sleep Clause Mod exempts a Rest sleep
+    (``rulesets.ts`` skips a sleeper whose ``statusState.source`` is its own ally), and
+    the engine spells that exemption as ``rest_turns == 0`` in
+    ``has_alive_non_rested_sleeping_pkmn``. A Rest-sleeper built with ``rest_turns = 0``
+    is therefore not merely mis-timed, it silently re-arms a clause the real battle does
+    not have — and on the BENCH, where nothing else would ever reveal the error.
+    """
+
+    attempts = row.get("restSleepAttempts")
+    # Bools are ints in Python; an accidental True must not read as one attempt.
+    if isinstance(attempts, bool) or not isinstance(attempts, int):
+        return None
+    if not 0 <= attempts < _REST_SLEEP_TURNS:
+        # k is 0..2 by construction. Anything else means the tracker and this
+        # arithmetic have drifted apart, which is exactly the silent wrongness the
+        # constructor fails closed on rather than clamping into.
+        return None
+    return _REST_SLEEP_TURNS - attempts
 
 
 def _move_specs(
