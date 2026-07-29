@@ -961,8 +961,7 @@ poke-engine-gen3-damage-stepwise-truncation.patch
 # sim reading: Light Ball is SpA-only in gen3 (mods/gen3/items.ts kills the
 # inherited Atk half; upstream doubled physical too), Thick Club is Atk-only,
 # Metal Powder is x2 Def for an UNTRANSFORMED Ditto physical-only (upstream:
-# /1.5 any category, behind a guard that tested the ATTACKER for being Ditto
-# instead of the holder, so it never fired against a non-Ditto attacker), Dragon Scale has no boost (bare evolution item),
+# /1.5 any category), Dragon Scale has no boost (bare evolution item),
 # Explosion/Self-Destruct halve the MODIFIED defense stat with a floor
 # (clampIntRange(floor(def/2),1)) instead of doubling BP, gen3 Plus/Minus
 # fire across the field (getAllActive - a Minun facing a Plusle is boosted),
