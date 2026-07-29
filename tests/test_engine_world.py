@@ -1009,6 +1009,59 @@ class DittoTransformLiveTests(unittest.TestCase):
         finally:
             env.close()
 
+    def test_world_still_builds_after_the_transformed_ditto_pivots_out(self) -> None:
+        """The window #872 left open: every decision AFTER the Ditto switches out.
+
+        Gen 3 ends Transform on switch-out, so ``transformed_slots`` empties and
+        the moveset guard is armed again -- but the actor's cached move state was
+        snapshotted WHILE transformed, so the benched Ditto's payload row still
+        advertises the copied moveset. That stale row failed the guard for the
+        rest of the battle, which is why self_moveset_mismatch stayed the
+        dominant fallback even after Transform became expressible.
+        """
+        from pokezero.dex import load_showdown_dex
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex(root)
+        ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber",
+                               item="Quick Claw", level=100)
+        lax = FixturePokemon(species="Snorlax", moves=("Body Slam", "Curse", "Rest", "Shadow Ball"),
+                             ability="Immunity", item="Leftovers", level=80,
+                             evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((ditto, _SWAMPERT)),
+            "p2": pack_team((lax, _SWAMPERT)),
+        })
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+        try:
+            env.reset_with_start_override(seed=99001, start_override=override)
+            actions = {}
+            for player in env.requested_players():
+                obs = env.observe(player)
+                legal = [c for c in obs.metadata["action_candidates"] if c.get("legal")]
+                want = "transform" if player == "p1" else "curse"
+                pick = next((c for c in legal if c.get("kind") == "move"
+                             and want in str(c.get("move_id"))), legal[0])
+                actions[player] = pick["action_index"]
+            self.assertIsNone(env.step(actions).terminal)
+
+            # Pivot the Ditto out: Transform ends, the copied form is gone.
+            actions = {}
+            for player in env.requested_players():
+                obs = env.observe(player)
+                legal = [c for c in obs.metadata["action_candidates"] if c.get("legal")]
+                switch = next((c for c in legal if c.get("kind") == "switch"), None)
+                actions[player] = (switch or legal[0])["action_index"]
+            self.assertIsNone(env.step(actions).terminal)
+
+            # With no transform in play the world must construct cleanly. Before
+            # the stale-snapshot fix this raised self_moveset_mismatch here and
+            # on every later decision.
+            world_battle_spec(env.public_materialization_state("p1"), override, dex=dex)
+        finally:
+            env.close()
+
     def test_mirror_seat_p1_facing_transformed_p2_ditto(self) -> None:
         # F4 (review): the symmetric seat — p2 owns the Ditto, p1 must block p2.
         from pokezero.dex import load_showdown_dex
@@ -1495,7 +1548,7 @@ class TransformOverlayTests(unittest.TestCase):
         return {"p1": SideSpec(pokemon=(ditto,)), "p2": SideSpec(pokemon=(donor,))}
 
     def test_copies_species_stats_ability_and_moves(self) -> None:
-        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual(copied.id, "snorlax")
         self.assertEqual(copied.attack, 250)
         self.assertEqual(copied.speed, 60)
@@ -1506,12 +1559,27 @@ class TransformOverlayTests(unittest.TestCase):
         # The single most important thing Gen 3 does NOT copy -- it is why a
         # transformed Ditto stays frail, and copying it would make the searched
         # world wrong in the one dimension that decides KOs.
-        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual((copied.hp, copied.maxhp), (180, 180))
 
-    def test_copied_moves_get_five_pp(self) -> None:
-        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
-        self.assertTrue(all(move.pp == 5 for move in copied.moves))
+    def test_copied_moves_get_five_pp_from_the_catalog_not_the_donor(self) -> None:
+        # Showdown reads the DEX base PP (transformInto), not the donor's
+        # remaining PP. The distinction only shows on a donor whose current PP is
+        # already below 5 -- with a full donor both formulas agree, which is why
+        # the original version of this test pinned nothing.
+        sides = self._sides()
+        spent = replace(
+            sides["p2"],
+            pokemon=(replace(
+                sides["p2"].pokemon[0],
+                moves=(MoveSpec(id="bodyslam", pp=2), MoveSpec(id="shadowball", pp=0)),
+            ),),
+        )
+        copied = _apply_transform(
+            {"p1": sides["p1"], "p2": spent}, {"p1": "Snorlax"}, dex=_dex()
+        )["p1"].pokemon[0]
+        self.assertEqual([(m.id, m.pp) for m in copied.moves],
+                         [("bodyslam", 5), ("shadowball", 5)])
 
     def test_a_drained_donor_move_still_copies_at_five_pp(self) -> None:
         # Showdown copies `Math.min(5, move.pp)` off the DEX entry -- the move's
@@ -1525,20 +1593,20 @@ class TransformOverlayTests(unittest.TestCase):
             moves=(MoveSpec(id="bodyslam", pp=1), MoveSpec(id="curse", pp=3)),
         )
         sides["p2"] = replace(sides["p2"], pokemon=(drained,))
-        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(sides, {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual([move.pp for move in copied.moves], [5, 5])
 
     def test_donor_side_is_left_untouched(self) -> None:
         sides = self._sides()
         donor_before = sides["p2"].pokemon[0]
-        self.assertEqual(_apply_transform(sides, {"p1": "Snorlax"})["p2"].pokemon[0], donor_before)
+        self.assertEqual(_apply_transform(sides, {"p1": "Snorlax"}, dex=_dex())["p2"].pokemon[0], donor_before)
 
     def test_base_identity_stays_the_transformer_s_own(self) -> None:
         # The half that used to be silently wrong. PokemonSpec plumbed neither
         # base field, so the binding defaulted base_ability to the ability this
         # function had just copied FROM THE DONOR -- a transformed Ditto reverted
         # into a Ditto with Immunity, and its types into a flat Normal.
-        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual(copied.ability, "immunity", "the CURRENT form is the donor's")
         self.assertEqual(copied.base_ability, "limber", "the BASE form is Ditto's own")
         self.assertEqual(copied.base_types, ("normal",))
@@ -1549,7 +1617,7 @@ class TransformOverlayTests(unittest.TestCase):
         sides = self._sides()
         mew = replace(sides["p1"].pokemon[0], id="mew", types=("psychic",), ability="synchronize")
         sides["p1"] = replace(sides["p1"], pokemon=(mew,))
-        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(sides, {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual(copied.types, ("normal",), "current typing is the donor's")
         self.assertEqual(copied.base_types, ("psychic",))
         self.assertEqual(copied.base_ability, "synchronize")
@@ -1557,20 +1625,20 @@ class TransformOverlayTests(unittest.TestCase):
     def test_pre_transform_carries_the_pre_copy_spec(self) -> None:
         sides = self._sides()
         before = sides["p1"].pokemon[0]
-        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        copied = _apply_transform(sides, {"p1": "Snorlax"}, dex=_dex())["p1"].pokemon[0]
         self.assertEqual(copied.pre_transform, before)
         self.assertIsNone(before.pre_transform, "a base form has no base form")
 
     def test_both_revert_volatiles_are_set(self) -> None:
         # TRANSFORMED drives the species/stats/moveset restore off pre_transform;
         # TYPECHANGE is the existing arm that restores types -> base_types.
-        side = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"]
+        side = _apply_transform(self._sides(), {"p1": "Snorlax"}, dex=_dex())["p1"]
         self.assertEqual(set(side.volatile_statuses), {"transformed", "typechange"})
 
     def test_existing_volatiles_are_preserved(self) -> None:
         sides = self._sides()
         sides["p1"] = replace(sides["p1"], volatile_statuses=("substitute",))
-        side = _apply_transform(sides, {"p1": "Snorlax"})["p1"]
+        side = _apply_transform(sides, {"p1": "Snorlax"}, dex=_dex())["p1"]
         self.assertEqual(side.volatile_statuses[0], "substitute")
         self.assertEqual(set(side.volatile_statuses), {"substitute", "transformed", "typechange"})
 
@@ -1579,7 +1647,7 @@ class TransformOverlayTests(unittest.TestCase):
         # moves would have to be invented -- exactly the silent wrongness the
         # constructor exists to refuse.
         with self.assertRaises(EngineWorldUnsupported) as caught:
-            _apply_transform(self._sides(), {"p1": "Rapidash"})
+            _apply_transform(self._sides(), {"p1": "Rapidash"}, dex=_dex())
         self.assertEqual(caught.exception.reason, "transform_unexpressible")
 
 

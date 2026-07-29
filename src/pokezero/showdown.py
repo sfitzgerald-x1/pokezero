@@ -1382,6 +1382,11 @@ class ShowdownReplayState:
     # partiallytrapped (Wrap) and from the trap-ability signal. Derived ONLY from public protocol
     # lines.
     meanlook_trap: Mapping[str, bool]
+    # Own-side species that have EVER Transformed. Sticky by design: gen 3 ends
+    # Transform on switch-out, so a "currently transformed" flag is already False
+    # by the time the actor's cached move state is consumed -- yet that cache was
+    # snapshotted while transformed and still advertises the COPIED moveset.
+    ever_transformed: Mapping[str, tuple[str, ...]]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -1886,6 +1891,7 @@ class _ReplayParser:
         # Mean Look / Spider Web move-trap per slot (spec v3 change 8). See
         # ShowdownReplayState.meanlook_trap.
         self.meanlook_trap: dict[str, bool] = {"p1": False, "p2": False}
+        self.ever_transformed: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.pending_baton_pass: set[str] = set()
         self.public_events: list[ShowdownPublicEvent] = []
         self.public_lines: list[str] = []
@@ -2112,6 +2118,9 @@ class _ReplayParser:
         }
         parser.meanlook_trap = {
             slot: bool(snapshot.meanlook_trap.get(slot, False)) for slot in ("p1", "p2")
+        }
+        parser.ever_transformed = {
+            slot: set(snapshot.ever_transformed.get(slot, ())) for slot in ("p1", "p2")
         }
         parser.public_events = list(snapshot.public_events)
         parser.public_lines = list(snapshot.public_lines)
@@ -2661,6 +2670,8 @@ class _ReplayParser:
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
         self._update_substitute_health_state(parts)
+
+        self._record_transform(parts)
         self._update_live_type_override(parts)
         self._update_traced_ability(parts, line)
         self._anchor_truant_phase(parts, line)
@@ -3182,6 +3193,25 @@ class _ReplayParser:
                 # Traced something else: the mon is no longer a Truant holder.
                 self.truant_phase[slot] = None
 
+    def _record_transform(self, parts: Sequence[str]) -> None:
+        """Latch, permanently, that a slot's mon has Transformed.
+
+        ``|-transform|SOURCE|TARGET`` is the only public announcement. Gen 3 ends
+        Transform on switch-out and the live flags clear with it, but the actor's
+        cached per-mon move state was snapshotted WHILE transformed and still
+        advertises the copied moveset. Consumers need "ever transformed" to know
+        that cache is poisoned; "currently transformed" is already False by then.
+        """
+
+        if len(parts) < 3 or parts[1] != "-transform":
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.ever_transformed:
+            return
+        species = str(parts[2]).split(":", 1)[-1].strip().casefold()
+        if species:
+            self.ever_transformed[slot].add(species)
+
     def _update_live_type_override(self, parts: Sequence[str]) -> None:
         """Track the active mon's LIVE type for retypes the species token cannot express.
 
@@ -3675,6 +3705,9 @@ class _ReplayParser:
             encore_elapsed=dict(self.encore_elapsed),
             wrap_trap_elapsed=dict(self.wrap_trap_elapsed),
             meanlook_trap=dict(self.meanlook_trap),
+            ever_transformed={
+                slot: tuple(sorted(names)) for slot, names in self.ever_transformed.items()
+            },
             public_events=tuple(self.public_events),
             public_lines=tuple(self.public_lines),
             weather=self.weather,

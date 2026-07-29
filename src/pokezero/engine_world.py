@@ -523,7 +523,7 @@ def battle_spec_from_payload(
             )
 
     if transformed_slots:
-        built_sides = _apply_transform(built_sides, transformed_slots)
+        built_sides = _apply_transform(built_sides, transformed_slots, dex=dex)
 
     if self_trapped:
         _require_world_reproduces_trap(built_sides, dex=dex, self_player=self_player)
@@ -573,9 +573,20 @@ def battle_spec_from_payload(
 _TRANSFORM_MOVE_PP = 5
 
 
+def _catalog_pp(dex: ShowdownDex, move_id: str) -> int:
+    """Dex base PP for a move id, or 0 for the ``none`` padding slots."""
+
+    try:
+        return int(dex.move_info(move_id).pp)
+    except Exception:
+        return 0
+
+
 def _apply_transform(
     sides: Mapping[str, SideSpec],
     transformed_slots: Mapping[str, str],
+    *,
+    dex: ShowdownDex,
 ) -> dict[str, SideSpec]:
     """Re-express a publicly Transformed active as the mon it copied.
 

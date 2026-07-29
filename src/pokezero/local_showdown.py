@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
+from typing import TYPE_CHECKING, Any, Collection, Mapping, Optional, Sequence, TextIO
 
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
@@ -696,7 +696,10 @@ class LocalShowdownEnv:
             replay=replace(replay, requests={}),
             belief_engine=self._belief_engine.clone(),
             self_request=_json_clone_mapping(request),
-            self_move_states=actor_move_states_from_request_history(self._request_history[player]),
+            self_move_states=actor_move_states_from_request_history(
+                self._request_history[player],
+                transformed_identities=_transformed_own_identities(replay, player),
+            ),
             self_initial_request=_json_clone_mapping(self._first_requests.get(player) or request),
         )
 
@@ -2834,21 +2837,48 @@ def _request_active_materialization_state(request: Mapping[str, Any]) -> dict[st
 
 def actor_move_states_from_request_history(
     requests: Sequence[Mapping[str, Any]],
+    *,
+    transformed_identities: Collection[str] = (),
 ) -> dict[str, tuple[Mapping[str, Any], ...]]:
     """Return each actor-known active move state from its most recent request.
 
     A normal Showdown request carries exact PP only for the current active Pokemon. Keeping the
     most recent such state per own Pokemon is player-known information and lets direct search
     restore a previously active Pokemon after it has switched out.
+
+    ``transformed_identities`` names own Pokemon the belief engine has seen Transform. Their
+    snapshot is POISONED: while transformed, the request advertises the COPIED moveset, and the
+    Ditto's row keeps its own ``details``. Gen 3 ends Transform on switch-out, so once it pivots
+    the mon is a plain Ditto again -- but the cached snapshot still says Body Slam. That stale
+    entry then failed the self-moveset guard on every remaining decision of the battle, which is
+    why ``self_moveset_mismatch`` stayed the dominant fallback after Transform was made
+    expressible (#872 fixed the ACTIVE window only). Dropping the entry outright costs just PP
+    precision for a mon whose real moveset is Transform alone.
     """
 
+    poisoned = {str(identity) for identity in transformed_identities}
     states: dict[str, tuple[Mapping[str, Any], ...]] = {}
     for request in requests:
         identity = _request_active_pokemon_identity(request)
         moves = _request_active_moves(request)
-        if identity is not None and moves:
+        if identity is not None and identity not in poisoned and moves:
             states[identity] = tuple(_json_clone_mapping(move) for move in moves)
     return states
+
+
+def _transformed_own_identities(replay: Any, player: str) -> set[str]:
+    """Own species that have EVER Transformed, per the replay's sticky record.
+
+    Deliberately not the belief engine's live ``transformed`` flag: gen 3 ends
+    Transform on switch-out and that flag clears with it, so by the time the
+    cached move state is consumed it reads False while the cache still holds the
+    copied moveset.
+    """
+
+    names = getattr(replay, "ever_transformed", None)
+    if not isinstance(names, Mapping):
+        return set()
+    return {_materialization_identity(str(n)) for n in (names.get(player) or ())}
 
 
 def _request_active_pokemon_identity(request: Mapping[str, Any]) -> str | None:
@@ -2884,6 +2914,13 @@ def _has_self_benched_move_history(state: PublicBattleMaterializationState) -> b
         raise LocalShowdownError("Direct materialization requires an acting-player active Pokemon.")
     active_identity = _materialization_identity(active_ident)
     known_identities = set(state.self_move_states)
+    # A mon that Transformed has no honest snapshot to be missing: every request
+    # it appeared in advertised the COPIED moveset, so its entry is deliberately
+    # dropped upstream. Demanding request-known PP for it would fail the world
+    # closed on every remaining decision -- the exactness this guard protects was
+    # never available for that mon. Catalog PP for its real (Transform) moveset
+    # is the far smaller error.
+    known_identities |= _transformed_own_identities(state.replay, state.player_id)
     return any(
         event.event_type == "move"
         and event.actor_slot == state.player_id
