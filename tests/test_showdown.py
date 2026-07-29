@@ -1516,15 +1516,12 @@ class Phase2DynamicStateTest(unittest.TestCase):
             battle_id="battle-gen3randombattle-1",
         )
 
-        # Both effects copy in Gen 3 (copyVolatileFrom carries every non-noCopy
-        # condition). Ingrain has a complete direct-state payload; Substitute's
-        # remaining HP is private, but the constructor now models it at fresh
-        # maxhp/4 behind approximate_substitute_health, so a passed Substitute is
-        # SEARCHED rather than walled. Baton Pass is on 25 pool species and
-        # Substitute on 75, so this pairing is common enough that falling back
-        # to a uniform-legal guess was the worse error.
+        # Both effects copy in Gen 3. Substitute stays fail-closed: the passed
+        # volatile carries the PASSER's remaining sub HP, which the constructor
+        # cannot derive -- modelling it as recipient.maxhp//4 would be a
+        # different Pokemon's number (see _DIRECT_MATERIALIZATION_VOLATILES).
         self.assertEqual(replay.volatiles["p2"], ("ingrain", "substitute"))
-        self.assertEqual(replay.direct_materialization_blockers["p2"], ())
+        self.assertEqual(replay.direct_materialization_blockers["p2"], ("baton-pass:substitute",))
 
         cleared = parse_showdown_replay(
             [
