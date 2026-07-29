@@ -754,5 +754,35 @@ poke-engine-gen3-toxic-accuracy.patch
 # gen3/generate_instructions.rs only.
 poke-engine-gen3-battle-end-residuals.patch
 
+# gen3 end-of-turn residual ordering: SPEED-MAJOR, not section-major.
+# `Battle.fieldEvent('Residual')` speed-sorts ONE handler list
+# (sim/battle.ts:507) with `comparePriority` (sim/battle.ts:404-411): order ASC,
+# priority DESC, SPEED DESC, subOrder ASC, effectOrder ASC. Within an order class
+# the faster Pokemon therefore resolves its WHOLE residual set before the slower
+# one resolves any -- and in gen3 almost everything (abilities 10.3, items 10.4,
+# Leech Seed 10.5, status 10.6, partial trap 10.9, Encore/Taunt/Yawn 10.14/15/19)
+# is one class, because gen3 keeps the pre-gen5 numbering (`Dex.mod('gen3')`, via
+# data/mods/gen3/items.ts and data/mods/gen4/{items,abilities}.ts). Everything
+# before this patch batched section-major across both sides.
+#
+# Also folds in what that reordering exposed: the ability class (10.3) runs
+# BEFORE the item class (10.4) rather than after status damage, the threshold
+# berries share Leftovers' 10.4 slot, Wish is order 7 (ahead of the weather chip
+# at 8), Reflect/Light Screen are side orders 1/2, and Future Sight is order 11
+# (after both sides' status damage, not before). The old "order 5" split is
+# removed: 5.x is the gen5+ table, which gen3 does not use.
+#
+# Speed ties are RANDOM -- `speedSort` finishes a tie with `prng.shuffle`
+# (sim/battle.ts:455-457) -- so a tie is a 50/50 fork in
+# `add_end_of_turn_branches`, collapsed back to one branch when both orders
+# produce the identical instruction list. Exports `get_effective_speed` and
+# `residual_speed_order` so the search crate's residual renderer can build its
+# positional attribution plan against the same order. Ground truth for every
+# ordering claim: scripts/gen3_switch_differential.py scenarios
+# `residualspeedmajor*` / `residualspeedpara*` / `residualspeedtie` and the
+# native pins in rust/pokezero-search/tests/gen3_residual_speed_order.rs.
+# Touches gen3/{abilities,items,generate_instructions}.rs.
+poke-engine-gen3-residual-speed-order.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch

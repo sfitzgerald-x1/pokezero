@@ -63,13 +63,17 @@ fn damages(list: &[Instruction], side_ref: SideReference) -> Vec<i16> {
 }
 
 /// Side two's active is poisoned on 1 HP, so the residual block kills it — and it is
-/// the FASTER mon, so its poison tick is processed before side one's.
+/// the FASTER mon (200 vs 50), so under gen3's speed-major ordering its ENTIRE
+/// order-10 set resolves before side one runs any of its own.
 ///
-/// Side one is burned and holds Leftovers, which straddles the fatal entry in gen3's
-/// residual order: Leftovers is order 5 and resolves BEFORE the poison, while the
-/// burn tick shares the status-damage bracket and is speed-sorted AFTER it. So the
-/// one fixture pins truncation in both directions — the heal must still happen, and
-/// the burn must not.
+/// Side one is burned and holds Leftovers. Both of those are order 10 (10.4 and
+/// 10.6), i.e. the same class as the fatal poison tick, so BOTH sit behind it in
+/// the sorted handler list and both are truncated. This fixture used to assert the
+/// opposite for the heal, on the belief that Leftovers was "order 5" and therefore
+/// a class ahead of status damage — that is the gen5+ table, which gen3 does not
+/// use, and the expectation was only ever green because the engine had the same
+/// wrong model. See `gen3_residual_speed_order.rs` for the order table and its
+/// resolution.
 ///
 /// `reserves_alive` decides whether that faint ends the battle (no living reserve)
 /// or is an ordinary mid-block faint.
@@ -105,8 +109,23 @@ fn poison_kill_state(reserves_alive: bool) -> State {
 }
 
 /// The bug. Side two's last Pokemon dies to poison in the residual block, which
-/// ends the battle — so side one's Leftovers heal, still queued behind it, never
-/// executes.
+/// ends the battle — so EVERY side-one residual still queued behind it, Leftovers
+/// heal included, never executes.
+///
+/// Transcribed from the real sim, not from this engine
+/// (`scripts/gen3_switch_differential.py::residualwin`; probe protocol, slow
+/// Leftovers+burn Snorlax vs faster toxic'd Aipom, final step):
+///
+/// ```text
+/// |-damage|p2a: Aipom|0 fnt|[from] psn
+/// |faint|p2a: Aipom
+/// |win|PokeZero p1
+/// ```
+///
+/// Nothing between `|faint|` and `|win|`, and no `|upkeep`: the winner's Leftovers
+/// and its own burn tick are both gone. The two steps before it show the same pair
+/// firing normally — `psn`, then `item: Leftovers`, then `brn` — so their absence
+/// here is truncation and not a missing source.
 #[test]
 fn a_residual_faint_that_ends_the_battle_truncates_the_block() {
     let mut state = poison_kill_state(false);
@@ -122,11 +141,10 @@ fn a_residual_faint_that_ends_the_battle_truncates_the_block() {
         "the poison tick that ends it still resolves in full: {:?}",
         list
     );
-    assert_eq!(
-        heals(&list, SideReference::SideOne),
-        vec![18],
-        "the heal is ordered BEFORE the fatal entry and must still happen — \
-         truncation must not run early: {:?}",
+    assert!(
+        heals(&list, SideReference::SideOne).is_empty(),
+        "the winner's Leftovers is order 10.4 — the same class as the fatal 10.6 \
+         poison tick and behind it on speed — so it is truncated too: {:?}",
         list
     );
     assert!(

@@ -2215,11 +2215,13 @@ fn render_residual_instruction(
 /// sand chip and the partial-trap tick are BOTH `maxhp/16`, which is a permanent
 /// counterexample, not an edge case (pinned by `sand_and_trap_collide_on_amount`).
 ///
-/// The engine emits residuals in a fixed phase order, per side, from
-/// `gen3/generate_instructions.rs::add_end_of_turn_instructions`:
+/// The engine emits residuals in Showdown's own speed-major order, from
+/// `gen3/generate_instructions.rs::add_end_of_turn_instructions`. PER SIDE that
+/// order is:
 ///
-///   weather chip -> future sight -> wish -> order-5 items (Leftovers)
-///   -> Leech Seed sap -> status damage -> order-10 items -> volatiles (partial trap)
+///   damage: weather chip (8) -> Leech Seed (10.5) -> status (10.6)
+///           -> partial trap (10.9) -> the OPPONENT's Future Sight (11)
+///   heal:   Wish (7) -> Leftovers (10.4) -> the seeder's Leech Seed drain
 ///
 /// Each phase emits at most one HP instruction per side, so the k-th damage on a
 /// side is the k-th firing damage phase for that side. The plan below predicts
@@ -2227,6 +2229,20 @@ fn render_residual_instruction(
 /// and is used ONLY when its predicted counts match the counts actually emitted.
 /// On any mismatch the side falls back to the generic `residual` tag, which is
 /// loud (it diverges) rather than confidently wrong.
+///
+/// TWO of those entries are cross-side, which is why this plan has to know the
+/// engine's speed order and is not simply a per-side constant:
+///
+/// * The Leech Seed sap DAMAGES the seeded side and HEALS the seeder, both at
+///   the seeded side's 10.5 slot. So the seeder's drain heal lands BEFORE its own
+///   Leftovers heal when the victim is faster, and AFTER it when the seeder is.
+/// * Future Sight is owned by one side and damages the other, at order 11 —
+///   after every order-10 handler on BOTH sides, so it is always last in the
+///   damaged side's sequence. (The pre-speed-major plan put this label on the
+///   OWNER's list, which is the side that takes no damage from it.)
+///
+/// Both are handled by reading the segment rather than by predicting a speed
+/// order, so the plan stays correct on the exact tie the engine forks on.
 #[derive(Default)]
 pub(crate) struct ResidualPlan {
     damage: [Vec<String>; 2],
@@ -2274,6 +2290,7 @@ impl ResidualPlan {
     /// Build from the PRE-residual state, in the engine's own emission order.
     pub(crate) fn build(state: &State, segment: &[Instruction]) -> ResidualPlan {
         let mut plan = ResidualPlan::default();
+        let mut drains_opponent = [false; 2];
         for side in [SideReference::SideOne, SideReference::SideTwo] {
             let i = side_index(side);
             let (s, opponent) = match side {
@@ -2285,9 +2302,6 @@ impl ResidualPlan {
             // --- damage phases, in order ---
             if let Some(label) = weather_chips(state, side) {
                 plan.damage[i].push(label.to_string());
-            }
-            if s.future_sight.0 == 1 {
-                plan.damage[i].push("move: Future Sight".to_string());
             }
             if s.volatile_statuses.contains(&PokemonVolatileStatus::LEECHSEED)
                 && opponent.get_active_immutable().hp > 0
@@ -2306,6 +2320,14 @@ impl ResidualPlan {
             {
                 plan.damage[i].push("partiallytrapped".to_string());
             }
+            // Future Sight is order 11 — after every order-10 handler on BOTH
+            // sides, so it is always last — and it is the OPPONENT's, because the
+            // engine emits `Damage { side_ref: owner.get_other_side() }`. The
+            // pre-speed-major plan listed it on the owner's side, which takes no
+            // damage from it at all.
+            if opponent.future_sight.0 == 1 {
+                plan.damage[i].push("move: Future Sight".to_string());
+            }
 
             // --- heal phases, in order ---
             if s.wish.0 == 1 {
@@ -2314,14 +2336,56 @@ impl ResidualPlan {
             if active.item == Items::LEFTOVERS {
                 plan.heal[i].push("item: Leftovers".to_string());
             }
-            if opponent
+            drains_opponent[i] = opponent
                 .volatile_statuses
                 .contains(&PokemonVolatileStatus::LEECHSEED)
-            {
-                // Silent: Showdown tags the victim's DAMAGE with Leech Seed and
-                // emits the seeder's heal bare.
-                plan.heal[i].push(String::new());
+                && active.hp > 0
+                && opponent.get_active_immutable().hp > 0;
+        }
+
+        // The seeder's silent drain heal is emitted at the SEEDED side's 10.5
+        // slot, not at the seeder's own, so where it lands among the seeder's
+        // heals depends on which side resolved first — before its Leftovers when
+        // the victim is faster, after it when the seeder is. That is not a
+        // per-side constant, and on an exact speed tie the engine forks and BOTH
+        // orders are live, so it cannot be predicted from speed either.
+        //
+        // Read it off the segment instead: walk once, and the drain is the
+        // seeder's next heal after the sap damage on the victim's side. Still
+        // positional, still never amount-based, and correct on a tie without
+        // having to know which fork this segment came from.
+        let leech_at: [Option<usize>; 2] = [
+            plan.damage[0].iter().position(|tag| tag == "Leech Seed"),
+            plan.damage[1].iter().position(|tag| tag == "Leech Seed"),
+        ];
+        let mut drain_at: [Option<usize>; 2] = [None; 2];
+        {
+            let mut damage_seen = [0usize; 2];
+            let mut heal_seen = [0usize; 2];
+            for ins in segment {
+                match ins {
+                    Instruction::Damage(d) => {
+                        let victim = side_index(d.side_ref);
+                        if leech_at[victim] == Some(damage_seen[victim]) {
+                            drain_at[1 - victim] = Some(heal_seen[1 - victim]);
+                        }
+                        damage_seen[victim] += 1;
+                    }
+                    Instruction::Heal(h) if h.heal_amount > 0 => {
+                        heal_seen[side_index(h.side_ref)] += 1;
+                    }
+                    _ => {}
+                }
             }
+        }
+        for i in 0..2 {
+            if !drains_opponent[i] {
+                continue;
+            }
+            // Silent: Showdown tags the victim's DAMAGE with Leech Seed and
+            // emits the seeder's heal bare.
+            let at = drain_at[i].unwrap_or(plan.heal[i].len()).min(plan.heal[i].len());
+            plan.heal[i].insert(at, String::new());
         }
 
         // Only trust the plan for a side when it predicts EXACTLY the number of
@@ -2655,7 +2719,7 @@ mod tests {
         assert_eq!(state.serialize(), serialized);
     }
 
-    /// THE WHOLE EMISSION ORDER, pinned against the REAL engine.
+    /// ONE SIDE's emission order, pinned against the REAL engine.
     ///
     /// The per-source tests below each pin one pair. None of them would catch a
     /// future engine that REORDERS the end-of-turn sections: the counts would
@@ -2664,11 +2728,16 @@ mod tests {
     /// `generate_instructions_from_move_pair` and asserts the rendered sequence,
     /// so a reorder in `add_end_of_turn_instructions` fails here.
     ///
-    /// Five of the eight sections fire on side one at once (weather chip,
-    /// order-5 Leftovers, Leech Seed, status, volatiles/partial trap), which
-    /// pins every ordering relationship between them. Note that the sandstorm
-    /// chip and the partial-trap tick are BOTH 20 here — the amount collision,
-    /// live, in the same trace.
+    /// Five sources fire on side one at once (weather chip, Leftovers, Leech
+    /// Seed, status, partial trap), which pins every ordering relationship
+    /// between them WITHIN one Pokemon. Note that the sandstorm chip and the
+    /// partial-trap tick are BOTH 20 here — the amount collision, live, in the
+    /// same trace.
+    ///
+    /// It filters to `p1a`, and that is a real limitation: the residual phase is
+    /// speed-major across the two sides, so a within-side sequence can be
+    /// perfectly right while the interleaving is wrong. That half is pinned by
+    /// `dual_side_emission_order_interleaves_by_speed` below.
     #[test]
     fn end_of_turn_section_order_is_pinned_against_the_engine() {
         let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
@@ -2733,6 +2802,129 @@ mod tests {
              updated in lock-step or every residual tick is mislabelled. \
              Rendered: {:?}",
             rendered.lines
+        );
+    }
+
+
+    /// THE INTERLEAVING, pinned against the REAL engine — the half the single-side
+    /// test above cannot see.
+    ///
+    /// gen3 resolves the residual phase speed-major: within an order class the
+    /// faster Pokemon runs its WHOLE set before the slower one runs any. So with
+    /// Leftovers on both sides and a status tick on the fast one, the rendered
+    /// sequence has to be `fast heal, fast status, slow heal` — NOT the
+    /// section-major `both heals, both statuses`.
+    ///
+    /// Transcribed from the real sim (`scripts/gen3_switch_differential.py::
+    /// residualspeedmajorfast`; 206-speed Aipom with Leftovers and a burn vs a
+    /// 96-speed badly poisoned Snorlax):
+    ///
+    /// ```text
+    /// |-heal|p2a: Aipom|235/251 brn|[from] item: Leftovers
+    /// |-damage|p2a: Aipom|204/251 brn|[from] brn
+    /// |-damage|p1a: Snorlax|277/461 tox|[from] psn
+    /// ```
+    ///
+    /// Seats are mirrored here (side ONE is the fast holder) so that a renderer
+    /// that happened to key on the seat rather than on emission order would fail.
+    #[test]
+    fn dual_side_emission_order_interleaves_by_speed() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let fast = state.side_one.get_active();
+            fast.maxhp = 320;
+            fast.hp = 200;
+            fast.speed = 206;
+            fast.item = Items::LEFTOVERS;
+            fast.status = PokemonStatus::BURN;
+            fast.types = (PokemonType::NORMAL, PokemonType::TYPELESS);
+        }
+        {
+            let slow = state.side_two.get_active();
+            slow.maxhp = 320;
+            slow.hp = 200;
+            slow.speed = 96;
+            slow.status = PokemonStatus::POISON;
+            slow.types = (PokemonType::NORMAL, PokemonType::TYPELESS);
+        }
+
+        let s1 = MoveChoice::from_string("splash", &state.side_one)
+            .or_else(|| MoveChoice::from_string("tackle", &state.side_one))
+            .expect("a move");
+        let s2 = MoveChoice::from_string("splash", &state.side_two)
+            .or_else(|| MoveChoice::from_string("tackle", &state.side_two))
+            .expect("a move");
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        let rendered = render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branches[0].instruction_list,
+            true,
+            &ctx(),
+        );
+
+        let tagged: Vec<String> = rendered
+            .lines
+            .iter()
+            .filter(|l| l.contains("-damage") || l.contains("-heal"))
+            .filter_map(|l| {
+                let seat = l.split('|').nth(2)?.split(':').next()?.to_string();
+                let tag = l.split("[from]").nth(1)?.trim().to_string();
+                Some(format!("{seat} {tag}"))
+            })
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                "p1a item: Leftovers".to_string(),
+                "p1a brn".to_string(),
+                "p2a psn".to_string(),
+            ],
+            "the faster side's whole set must precede the slower side's. Rendered: {:?}",
+            rendered.lines
+        );
+    }
+
+    /// The seeder's silent drain heal is emitted at the SEEDED side's slot, so
+    /// when the victim is faster it arrives BEFORE the seeder's own Leftovers —
+    /// and `ResidualPlan` must not label the Leftovers tick with it.
+    ///
+    /// Transcribed from the sim (`residualspeedleech`):
+    ///
+    /// ```text
+    /// |-heal|p2a: Aipom|135/251|[from] item: Leftovers
+    /// |-damage|p2a: Aipom|104/251|[from] Leech Seed|[of] p1a: Cacturne
+    /// |-heal|p1a: Cacturne|260/281|[silent]
+    /// |-heal|p1a: Cacturne|277/281|[from] item: Leftovers
+    /// ```
+    #[test]
+    fn a_seeders_drain_heal_does_not_steal_its_own_leftovers_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let seeder = state.side_one.get_active();
+            seeder.maxhp = 320;
+            seeder.hp = 200;
+            seeder.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        // Victim resolves first: sap damage on side two, drain heal on side one,
+        // then side one's own Leftovers.
+        let segment = vec![
+            Instruction::Damage(poke_engine::instruction::DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 40,
+            }),
+            heal_one(40),
+            heal_one(20),
+        ];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "only the Leftovers tick carries a tag; the drain is silent"
         );
     }
 
