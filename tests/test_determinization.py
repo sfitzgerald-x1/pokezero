@@ -208,6 +208,56 @@ def _metadata() -> dict[str, object]:
     }
 
 
+def _three_mon_opponent_metadata() -> dict[str, object]:
+    """`_metadata()` with all three opponent Pokemon already public.
+
+    The public-party tracker can only pin an index for a species it can name, so
+    the multi-mutation regressions need every backline member visible from the
+    start; Xatu leads.
+    """
+
+    metadata = _metadata()
+    variants = {
+        "Xatu": {
+            "variant_id": "xatu-support",
+            "source_set_id": "xatu-1",
+            "role": "Support",
+            "level": 84,
+            "moves": ["psychic", "thunderwave", "wish", "protect"],
+            "ability": "Synchronize",
+            "item": "Leftovers",
+        },
+        "Arcanine": {
+            "variant_id": "arcanine-breaker",
+            "source_set_id": "arcanine-1",
+            "role": "Breaker",
+            "level": 78,
+            "moves": ["fireblast", "crunch", "extremespeed", "hiddenpowergrass"],
+            "ability": "Flash Fire",
+            "item": "Leftovers",
+        },
+        "Tauros": {
+            "variant_id": "tauros-breaker",
+            "source_set_id": "tauros-1",
+            "role": "Breaker",
+            "level": 76,
+            "moves": ["return", "earthquake", "doubleedge", "hiddenpowerghost"],
+            "ability": "Intimidate",
+            "item": "Choice Band",
+        },
+    }
+    metadata["belief_view"]["opponent_pokemon"] = [  # type: ignore[index]
+        {
+            "showdown_slot": "p1",
+            "species": species,
+            "active": species == "Xatu",
+            "candidate_variants": [variant],
+        }
+        for species, variant in variants.items()
+    ]
+    return metadata
+
+
 class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
     def test_hidden_gender_matches_showdowns_uniform_randbat_roll(self) -> None:
         source = _source()
@@ -1727,6 +1777,170 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         assert override is not None
         opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
         self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
+
+    def _run_opponent_party_rounds(
+        self,
+        rounds: "list[tuple[str, list[str], int | None, PublicActionIdentifier | None]]",
+        *,
+        final_active: str,
+        final_events: "list[str] | None" = None,
+    ):
+        """Drive the public opponent-party tracker over a scripted set of rounds.
+
+        Each round is ``(opponent_active_species, recent_public_events,
+        opponent_action_index, captured_public_action)``: the first two describe
+        what OUR observation shows at the START of that round, and the last two
+        describe the opponent's recorded action for it. ``final_active`` is the
+        opponent's active species at the decision round the override is built
+        for, i.e. what the LAST scripted round resolved to.
+        """
+
+        metadata = _three_mon_opponent_metadata()
+        context = _context(metadata)
+        switch_mask = tuple(index in {0, 4, 5} for index in range(ACTION_COUNT))
+
+        def observation_for(species: str, events: list[str]):
+            return replace(
+                context.observation,
+                legal_action_mask=switch_mask,
+                metadata={
+                    **metadata,
+                    "opponent_active": {"species": species},
+                    "recent_public_events": list(events),
+                },
+            )
+
+        captured: list[dict] = []
+        for turn_index, (species, events, opponent_action, public_action) in enumerate(rounds):
+            observation = observation_for(species, events)
+            for player_id, action_index in (("p2", 0), ("p1", opponent_action)):
+                if action_index is None:
+                    continue
+                context.trajectory.append(
+                    TrajectoryStep(
+                        player_id=player_id,
+                        turn_index=turn_index,
+                        observation=observation,
+                        legal_action_mask=tuple(observation.legal_action_mask),
+                        action_index=action_index,
+                    )
+                )
+            if public_action is not None:
+                captured.append(
+                    PublicResolvedActionRound(
+                        turn_index=turn_index,
+                        actions={
+                            "p1": public_action,
+                            "p2": PublicActionIdentifier(
+                                kind="event",
+                                event_id="unresolved-public-event",
+                            ),
+                        },
+                    ).to_dict()
+                )
+        if captured:
+            context.trajectory.metadata = {"public_resolved_action_rounds": captured}
+        context = replace(
+            context,
+            decision_round_index=len(rounds),
+            observation=observation_for(final_active, final_events or []),
+        )
+        return gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+    def _assert_recovered_party_order(self, override) -> None:
+        self.assertIsNotNone(
+            override,
+            "a second party mutation in a decoded round must not bail the whole override",
+        )
+        assert override is not None
+        opponent_species_order = [
+            packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")
+        ]
+        self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
+
+    def test_same_round_drag_does_not_desync_public_switch_constraints(self) -> None:
+        """Roar/Whirlwind moves the opponent's party AFTER the switch we decoded.
+
+        Round 0's recorded switch brings Tauros in, and we immediately phaze it
+        back out, so Arcanine — not Tauros — is active at the next boundary.
+        Before the fix the tracker skipped that check, kept believing Tauros sat
+        at the active position, and decoded round 1's switch index against the
+        stale permutation; the resulting Tauros pin contradicted the one round 0
+        had already made and bailed the entire override on perfectly consistent
+        public data. The reconciliation now sees an unpinned species take the
+        field and stops collecting instead.
+        """
+
+        override = self._run_opponent_party_rounds(
+            [
+                ("Xatu", [], 5, PublicActionIdentifier(kind="switch", switched_species="tauros")),
+                (
+                    "Arcanine",
+                    ["|drag|opponenta: Arcanine|Arcanine, L78|100/100"],
+                    4,
+                    PublicActionIdentifier(kind="switch", switched_species="tauros"),
+                ),
+            ],
+            final_active="Tauros",
+        )
+        self._assert_recovered_party_order(override)
+
+    def test_same_chunk_faint_replacement_repairs_public_switch_constraints(self) -> None:
+        """A replacement resolved in the same chunk is the other second mutation.
+
+        Round 1's recorded switch brings Arcanine in, Arcanine faints before the
+        next boundary, and the replacement is Tauros — which round 0 already
+        pinned. This is the REPAIR half of the reconciliation rather than the
+        conservative bail: the tracker moves the pinned species back to the
+        active position, so round 2's switch index decodes against the party
+        Showdown actually has and re-confirms Arcanine's existing pin instead of
+        contradicting it.
+        """
+
+        override = self._run_opponent_party_rounds(
+            [
+                ("Xatu", [], 5, PublicActionIdentifier(kind="switch", switched_species="tauros")),
+                ("Tauros", [], 4, PublicActionIdentifier(kind="switch", switched_species="arcanine")),
+                (
+                    "Tauros",
+                    ["|switch|opponenta: Tauros|Tauros, L76|100/100"],
+                    4,
+                    PublicActionIdentifier(kind="switch", switched_species="arcanine"),
+                ),
+            ],
+            final_active="Arcanine",
+        )
+        self._assert_recovered_party_order(override)
+
+    def test_pursuit_cancelled_switch_does_not_bind_a_stale_window_line(self) -> None:
+        """A captured non-switch action must not fall through to the event window.
+
+        Round 1's recorded action index is a switch, but the captured public
+        action is the MOVE that happened instead — Pursuit KO'd the switcher, so
+        the switch never resolved. `recent_public_events` is a fixed-size rolling
+        window that still carries round 0's `|switch| ... Tauros` line, so the
+        old unconditional fallback re-read that stale line, bound Tauros to round
+        1's switch slot, and contradicted the index round 0 had pinned it to. The
+        captured action is positive evidence that no switch happened; trusting it
+        leaves the round undecoded and the override intact.
+        """
+
+        override = self._run_opponent_party_rounds(
+            [
+                ("Xatu", [], 5, PublicActionIdentifier(kind="switch", switched_species="tauros")),
+                ("Tauros", [], 4, PublicActionIdentifier(kind="move", move_id="pursuit")),
+            ],
+            final_active="Tauros",
+            # The window the fallback reads is the NEXT round's observation, and
+            # round 0's switch-in line is still inside it.
+            final_events=["|switch|opponenta: Tauros|Tauros, L76|100/100"],
+        )
+        self._assert_recovered_party_order(override)
 
     def test_conflicting_public_switch_team_slot_constraints_disable_override(self) -> None:
         metadata = _metadata()
