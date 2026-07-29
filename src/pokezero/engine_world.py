@@ -36,7 +36,14 @@ from typing import Any, Mapping, Sequence
 from .dex import ShowdownDex, normalize_id
 from .env import BattleStartOverride
 from .gen3_damage import gen3_hp_stat, gen3_stat
-from .poke_engine_adapter import BattleSpec, MoveSpec, PokemonSpec, SideSpec, build_poke_engine_state
+from .poke_engine_adapter import (
+    BattleSpec,
+    MoveSpec,
+    PokemonSpec,
+    SideSpec,
+    build_poke_engine_state,
+    require_move_trap_support,
+)
 from .showdown_fixture import FixturePokemon, _STAT_ORDER
 
 _MAX_IV = 31
@@ -628,7 +635,12 @@ def _require_world_reproduces_trap(
     # while it is set, so the world does refuse to switch. Showdown reports the
     # hard lock as ``trapped``, so without this the recharge turn after every
     # Hyper Beam fell back needlessly.
-    if self_volatiles & {"partiallytrapped", "lockedmove", "mustrecharge"}:
+    # ``trapped`` is Showdown's move-trap (Mean Look / Spider Web / Block), which
+    # the engine now models as its own volatile and honours in Side::trapped, so
+    # a world carrying it does refuse to switch. It reaches this set only through
+    # the allowlist below, which fails closed on a wheel that predates
+    # third_party/poke-engine-gen3-move-trapping.patch.
+    if self_volatiles & {"trapped", "partiallytrapped", "lockedmove", "mustrecharge"}:
         return
 
     active = self_side.pokemon[self_side.active_index] if self_side.pokemon else None
@@ -925,6 +937,19 @@ def _build_side_spec(
         # them the whole decision falls back to a uniform-legal guess, which is
         # wrong about every move rather than about one effect's clock.
         supported = supported | {"confusion", "yawn"}
+    if "trapped" in volatiles:
+        # Showdown's move-trap (Mean Look / Spider Web / Block). Expressed
+        # EXACTLY, not approximated: the gen3 trap carries no duration and no
+        # residual — it lasts until the trapper leaves the field — so there is no
+        # hidden clock to guess, unlike partiallytrapped above.
+        #
+        # Gated on the wheel actually carrying the patch. An unpatched binding
+        # resolves the unknown volatile token to NONE and drops it silently,
+        # which would be strictly worse than the fallback this replaces: instead
+        # of declining the decision, search would hand the trapped seat its
+        # switch options back and confidently plan an escape Showdown refuses.
+        require_move_trap_support()
+        supported = supported | {"trapped"}
     if "encore" in volatiles:
         supported = supported | {"encore"}
     if must_recharge:

@@ -39,6 +39,18 @@ TYPE_SLOTS = 2
 ADAPTER_CONSTRUCTION_API = ("State", "Side", "Pokemon", "Move")
 
 
+class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a state needs move-trapping but the native patch is absent.
+
+    Upstream has no TRAPPED volatile at all, and the binding's volatile parser
+    resolves an unknown token to NONE rather than rejecting it — so an
+    unpatched wheel accepts ``"trapped"`` and SILENTLY DROPS it. That is the
+    worst possible failure for this particular effect: the sampled world would
+    hand the trapped seat its switch options back, and search would confidently
+    plan an escape Showdown will refuse. Construction must fail closed.
+    """
+
+
 class PokeEngineAttractUnsupportedError(PokeEngineUnavailableError):
     """Raised when a state needs Attract but the native patch is absent.
 
@@ -209,6 +221,8 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
 
     if _spec_requires_attract(spec):
         _require_attract_immobilization(engine)
+    if _spec_requires_move_trap(spec):
+        require_move_trap_support(engine)
 
     return _build_poke_engine_state_unchecked(spec, engine)
 
@@ -234,6 +248,73 @@ def _build_poke_engine_state_unchecked(spec: BattleSpec, engine: Any) -> Any:
             spec.weather_turns_remaining, "weather_turns_remaining"
         )
     return engine.State(**kwargs)
+
+
+def _spec_requires_move_trap(spec: BattleSpec) -> bool:
+    return any(
+        str(volatile).casefold() == "trapped"
+        for side in (spec.side_one, spec.side_two)
+        for volatile in side.volatile_statuses
+    )
+
+
+def require_move_trap_support(engine: Any | None = None) -> None:
+    """Prove that the installed binding carries the gen3 move-trapping patch.
+
+    There is no binding-level version marker for a local patch, so probe the
+    capability itself. Unlike Attract — which the wheel at least stores before
+    ignoring — an unpatched wheel does not know TRAPPED exists, and
+    ``PokemonVolatileStatus::from_str`` is generated with ``default = NONE``, so
+    the token is accepted and quietly discarded. Round-tripping a minimal state
+    through ``to_string`` catches exactly that: on a patched wheel the volatile
+    survives serialization, on an unpatched one it vanishes.
+
+    Exposed (rather than private) because the world constructor has to gate on
+    it before it builds a side, not only when it renders one.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_move_trap_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable; production modules are not.
+        supported = _move_trap_supported(engine)
+    if not supported:
+        raise PokeEngineMoveTrapUnsupportedError(
+            "Move-trapping (Mean Look / Spider Web / Block) requires the patched "
+            "poke-engine wheel; the installed engine dropped the TRAPPED volatile "
+            "instead of round-tripping it, which would silently hand a trapped "
+            "Pokemon its switch options back. Rebuild with "
+            "scripts/setup_poke_engine.sh (patch list entry "
+            "third_party/poke-engine-gen3-move-trapping.patch)."
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_move_trap_supported(engine: Any) -> bool:
+    return _move_trap_supported(engine)
+
+
+def _move_trap_supported(engine: Any) -> bool:
+    """Return whether the binding preserves the TRAPPED volatile end to end."""
+
+    state_type = getattr(engine, "State", None)
+    side_type = getattr(engine, "Side", None)
+    if state_type is None or side_type is None:
+        return False
+    try:
+        state = state_type(
+            side_one=side_type(volatile_statuses={"trapped"}),
+            side_two=side_type(),
+        )
+        serialized = str(state.to_string())
+        if "TRAPPED" not in serialized.upper():
+            return False
+        # #878 made serialization a fixed point; a volatile that survives the
+        # first write but not the read would still corrupt a search root.
+        return str(state_type.from_string(serialized).to_string()) == serialized
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
 
 
 def _spec_requires_attract(spec: BattleSpec) -> bool:
