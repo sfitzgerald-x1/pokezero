@@ -3868,3 +3868,91 @@ Committed under #946's process fix: `reports/c7_summary.json` (counters and clas
 census, **repros stripped** — 170 rows excluded) and
 `reports/c7_damage_calc_brief.json` (39 adjudicated row extracts, protocols
 stripped). No checkpoints or full-run dumps in tree.
+
+---
+
+# Appendix X — Evidence standard for the 11 `capped_lethal` rows
+
+Design only. **Not to be executed until the damage lane reports** — their formula
+findings may adjudicate several of these for free, and a row explained by a
+confirmed arithmetic defect needs no separate branch walk.
+
+## X.1 The question, stated so it can be answered wrongly
+
+For each row, exactly one of:
+
+- **genuinely `limit:roll_divergent_lethality`** — Showdown's observed outcome is
+  reachable under *some* legal roll and ordering that the engine's branch set
+  already prices. The two sims took different draws from the same distribution;
+  no per-component comparison can align them, and the residue is a limit of the
+  comparison.
+- **`damage_calc`** — Showdown's outcome is reachable under *no* legal roll or
+  ordering the engine prices. The engine's damage arithmetic differs.
+
+The distinction is worth **11 rows off the residue either way**, which is why it
+gets a standard rather than a judgement call.
+
+## X.2 The evidence: per-row branch enumeration
+
+Modelled on the #946 row-walk. For each row, produce a table over the engine's
+**full** branch set — not the majority branch, not a sample:
+
+| column | meaning |
+|---|---|
+| branch pct | the engine's own probability for this branch |
+| damage instructions | every `Damage`/`Heal` with side and amount |
+| roll ladder | all 16 legal rolls for each damaging move in the branch, crit **and** non-crit |
+| ordering variants | any residual/speed-tie ordering the engine prices distinctly |
+| post-state HP vector | both actives' HP after the branch, and the faint set |
+
+The comparison target is the **observed post-state HP vector and faint set**, not
+a single component. A component-wise match is what failed here in the first
+place: `capped_lethal` exists precisely because one sim's residual killed and the
+other's did not, so the component *lists* differ in length and per-component
+comparison is undefined.
+
+## X.3 The decision rule
+
+Reachable if **some** (branch, roll assignment, ordering) reproduces the observed
+post-state HP vector and faint set exactly.
+
+- reachable -> `limit:roll_divergent_lethality`, adjudicated
+- not reachable -> `damage_calc`, and it carries a *quantified* gap: the closest
+  achievable HP vector and its distance, so the damage lane can use it
+- enumeration impossible (branch set not recoverable, world unbuildable) ->
+  **neither**. Record `cannot_enumerate` and leave the row labelled as it stands.
+
+That third outcome is mandatory. A standard with only two exits pressures the
+walker into picking one, which is how eleven rows become eleven guesses.
+
+## X.4 Pre-registration and controls
+
+Standing practice, applied here specifically:
+
+1. **Predict the split before walking.** Record the expected
+   limit/damage_calc/cannot_enumerate counts in the run artifact *before* the
+   first row. A standard whose result is written afterwards cannot be scored.
+2. **Sample before generalising.** Walk 4 of the 11 first. If they do not agree
+   on a mechanism, walk all 11 individually and do not extrapolate — the
+   `component_missing_in_engine:itemleftovers` sample split 3/8/3 and refuted its
+   own author's hypothesis.
+3. **Replay before labelling.** The row-walk *is* the replay; no row is labelled
+   from its recorded miss string alone.
+4. **Refusal is licensed.** If the evidence does not decide a row, say so and
+   leave it. Eleven rows correctly labelled beats eleven rows adjudicated.
+
+## X.5 Ordering of work
+
+1. Wait for the damage lane's report.
+2. Cross off any of the 11 that a confirmed formula defect already explains —
+   those are `damage_calc` on the lane's evidence, no walk needed. Record which,
+   and on what finding.
+3. Walk only the remainder, under X.2–X.4.
+
+## X.6 What this must not do
+
+The residue may not fall as a side effect of this walk. Rows move to
+`limit:roll_divergent_lethality` only with a per-row reachability demonstration
+attached — the same bar §W.1's guard enforces mechanically. If the walk cannot
+produce that demonstration, the row stays where it is and the residue stays where
+it is.
