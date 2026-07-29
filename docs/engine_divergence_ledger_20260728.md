@@ -3960,6 +3960,11 @@ magnitude pairing hid entirely (`drain`, `movewish_to_full`,
 
 ## W.3 CORRECTION: the 0.90–0.92 "cluster" was my own filter's artifact
 
+> **SUPERSEDED BY §Y — THIS SECTION'S VERDICT IS WRONG.** The band is 11 real
+> findings and a genuine lead; the artifact story was a cardinality-not-membership
+> error. Only the struck Shadow Ball anchor survives. Kept unedited below because
+> the retraction and its reversal are both part of the trail.
+
 §V.4 recommended the 0.90–0.92 band as the damage lane's entry point. **That
 guidance was wrong and is withdrawn.** So is the closing line of §W.2 as
 originally written ("keeps its tight 0.90–0.92 sub-cluster, so nothing they've
@@ -4044,3 +4049,236 @@ of a relabel.
 
 Note the count correction: I reported "14 unrelabelled" in the #950 summary. The
 classes hold **30** rows, 14 relabel and **16** do not.
+
+---
+
+# Appendix X — Evidence standard for the 11 `capped_lethal` rows
+
+Design only. **Not to be executed until the damage lane reports** — their formula
+findings may adjudicate several of these for free, and a row explained by a
+confirmed arithmetic defect needs no separate branch walk.
+
+## X.1 The question, stated so it can be answered wrongly
+
+For each row, exactly one of:
+
+- **genuinely `limit:roll_divergent_lethality`** — Showdown's observed outcome is
+  reachable under *some* legal roll and ordering that the engine's branch set
+  already prices. The two sims took different draws from the same distribution;
+  no per-component comparison can align them, and the residue is a limit of the
+  comparison.
+- **`damage_calc`** — Showdown's outcome is reachable under *no* legal roll or
+  ordering the engine prices. The engine's damage arithmetic differs.
+
+The distinction is worth **11 rows off the residue either way**, which is why it
+gets a standard rather than a judgement call.
+
+## X.2 The evidence: per-row branch enumeration
+
+Modelled on the #946 row-walk. For each row, produce a table over the engine's
+**full** branch set — not the majority branch, not a sample:
+
+| column | meaning |
+|---|---|
+| branch pct | the engine's own probability for this branch |
+| damage instructions | every `Damage`/`Heal` with side and amount |
+| roll ladder | all 16 legal rolls for each damaging move in the branch, crit **and** non-crit |
+| ordering variants | any residual/speed-tie ordering the engine prices distinctly |
+| post-state HP vector | both actives' HP after the branch, and the faint set |
+
+The comparison target is the **observed post-state HP vector, the faint set, AND
+the multiset of non-residual damage components**.
+
+The original draft stopped at the HP vector and faint set, justified by the
+component lists differing in length. **That justification holds only for the
+residual and faint components** — the ones `capped_lethal` actually makes
+incomparable. It does not extend to ordinary move damage, which is directly
+comparable on both sides. Discarding it lets an engine branch dealing `100 + 20`
+match a Showdown outcome of `110 + 10` because both land on the same post-state,
+adjudicating a genuine `damage_calc` defect as a limit. Non-residual damage
+components stay in the target; only residual/faint components are exempted.
+
+## X.3 The decision rule — CORRECTED, the draft had a counting hole
+
+**The hole.** The draft's test was an unbounded existential: *some* (branch, roll
+assignment, ordering) reproducing a roughly two-integer target. The search space
+is branches x 16 rolls per damaging move x crit/no-crit x orderings — on the
+order of a thousand combinations. Against a target that small, a match is close
+to guaranteed **by counting alone**, so a motivated walker could send all 11 rows
+to `limit` without ever writing something false. A standard that cannot fail is
+not a standard.
+
+Three constraints close it.
+
+### X.3.1 Report the mass, and gate the limit verdict on it
+
+A reproducing assignment is not evidence on its own; its **probability under the
+engine's own distribution** is. Every walk reports that mass, computed as the
+branch percentage times the probability of the specific roll assignment (each
+roll index is 1/16).
+
+`limit` requires **mass >= 1%**. A 0.02% corner of the distribution is a
+coincidence the search space handed you, not two sims drawing differently from
+the same distribution.
+
+The floor is deliberately above the two-damaging-move floor: one move at
+`1/16 = 6.25%` clears it comfortably, two independent rolls at `(1/16)^2 ~ 0.39%`
+do not. Rows in that gap are **not** thereby `damage_calc` — they are reachable —
+so they take the fourth exit below rather than being forced either way.
+
+### X.3.2 Roll consistency across the branch
+
+One roll index per move, applied everywhere that move appears in the branch.
+Per-component free choice is what makes the space combinatorial in the first
+place, and it is not a thing the engine can do: a move rolls once.
+
+### X.3.3 The four exits
+
+| condition | verdict | residue effect |
+|---|---|---|
+| reachable (X.2 target, X.3.2 consistency) **and** mass >= 1% | `limit:roll_divergent_lethality` | -1 row |
+| not reachable under any consistent assignment | `damage_calc`, carrying a quantified gap (closest achievable target and its distance) | none |
+| reachable but mass < 1% | **`limit_not_established`** — row keeps its current label | none |
+| branch set not recoverable / world unbuildable | `cannot_enumerate` — row keeps its current label | none |
+
+Three of the four exits leave the residue untouched. That asymmetry is
+intentional: only the verdict that *reduces* the residue has to clear a bar.
+
+### X.3.4 When `cannot_enumerate` may be claimed
+
+A licensing test, not a list of examples — examples let a walker reason by
+resemblance. `cannot_enumerate` is available **only** when a named, checkable
+precondition fails:
+
+- `generate_instructions` raises, or returns no branch, on the recorded state; or
+- no candidate `engine_state` deserializes; or
+- the branch set is non-finite under X.3.2 (no move admits a determinate roll
+  index); or
+- the recorded row lacks a field the walk requires (no `engine_states`, no
+  `pre_features`).
+
+Each claim names which precondition failed and quotes the failure. "The walk was
+inconclusive" is not a licence.
+
+## X.4 Pre-registration and controls
+
+Standing practice, applied here specifically:
+
+1. **Predict the split before walking, and score it.** Record the expected
+   limit / damage_calc / limit_not_established / cannot_enumerate counts in the
+   run artifact *before* the first row, and report **predicted vs actual in the
+   same artifact** at the end. A prediction that is recorded but never scored is
+   decoration; the cycle-four scorecard was useful precisely because four of its
+   seven predictions were marked wrong.
+2. **Sample before generalising.** Walk 4 of the 11 first. If they do not agree
+   on a mechanism, walk all 11 individually and do not extrapolate — the
+   `component_missing_in_engine:itemleftovers` sample split 3/8/3 and refuted its
+   own author's hypothesis.
+3. **Replay before labelling.** The row-walk *is* the replay; no row is labelled
+   from its recorded miss string alone.
+4. **Refusal is licensed.** If the evidence does not decide a row, say so and
+   leave it. Eleven rows correctly labelled beats eleven rows adjudicated.
+
+## X.5 Ordering of work
+
+1. Wait for the damage lane's report.
+2. Cross off any of the 11 that a confirmed formula defect already explains —
+   those are `damage_calc` on the lane's evidence, no walk needed. Record which,
+   and on what finding.
+3. Walk only the remainder, under X.2–X.4.
+
+## X.6 The two elevens are different sets
+
+There are now two unrelated groups of eleven, and conflating them would
+double-count:
+
+- **the 11 `capped_lethal` rows** — this appendix's subject, drawn from the
+  known-mislabel classes (§W.6);
+- **the 11 damage findings in ratio [0.85, 0.92)** — the damage lane's lead
+  (§W.3 as amended in §Y).
+
+Different objects entirely: rows versus findings, different selection criteria,
+and membership was checked rather than assumed — the two sets do not overlap.
+When X.5 step 2 crosses off rows the damage lane has already explained, it
+crosses off members of the *first* group only, and the cross-off must be recorded
+by seed/step so no row is counted in both places.
+
+## X.7 What this must not do
+
+The residue may not fall as a side effect of this walk. Rows move to
+`limit:roll_divergent_lethality` only with a per-row reachability demonstration
+attached — the same bar §W.1's guard enforces mechanically. If the walk cannot
+produce that demonstration, the row stays where it is and the residue stays where
+it is.
+
+---
+
+# Appendix Y — §W.3 amended: the artifact story was wrong, and how it died
+
+## Y.1 Final state
+
+**The 0.900–0.917 band is 11 REAL findings and a genuine lead.** §W.3's
+"instrument artifact" verdict is withdrawn. What survives from §W.3 is only the
+struck Shadow Ball anchor — still unsourced, still struck.
+
+Measured on the committed brief, which now carries the field that settles it:
+
+| findings in ratio [0.85, 0.92) | 11 |
+|---|---|
+| `reachable = false` (real) | **11** |
+| `reachable = true` (over-reported) | **0** |
+
+The `reachable = true` findings — 9 of them — sit at ratios 0.926, 0.930, 0.930,
+0.964, 0.986, 1.062, 1.068, 1.087, 1.169. **Every one is outside the band. The
+overlap is zero.**
+
+The 11 real findings, tight at 0.900–0.917 across eleven *different* moves
+(hiddenpowerground, aerialace, surf, silverwind, fireblast, doubleedge, return,
+psychic, sleeptalk, thunderbolt, hiddenpowerice), which is the signature of a
+shared formula factor rather than a per-move data error.
+
+## Y.2 The arc, recorded in full
+
+1. §V.4 offered the band as the damage lane's entry point.
+2. The #949 review judged it an artifact of `_classify_ratio`'s 0.92 floor: the
+   filter's low edge would pack over-reported rows against it.
+3. **I agreed and amended §W.3 to match** — and went further than asked, adding
+   the reasoning about mean-vs-top-of-range roll semantics.
+4. The `reachable` field (§W.4) was added for an unrelated reason: to stop the
+   partition being prose-only.
+5. Checked against that field, the artifact story is simply false. The two sets
+   are disjoint.
+
+The mechanism of the error is worth naming exactly. Both of us observed *about
+eleven* rows in the band and *about eleven* over-reported rows in the population,
+and concluded they were the same rows. **They were never the same rows.** The
+count matched; the membership did not.
+
+Nothing about the 0.92 floor reasoning was wrong in itself — a filter can pack
+rows against its threshold. It just did not happen here, and the arithmetic
+coincidence was mistaken for the evidence.
+
+## Y.3 METHOD RULE: check membership, not cardinality
+
+> **Before asserting that two sets are the same set, check membership. Equal
+> cardinality is not identity.**
+
+This generalizes the rule already in this ledger about `git ls-files` counts, and
+it now has its canonical case: two independent readers, one of them the author of
+the data, agreed on a false identification for no reason other than that both
+groups numbered about eleven.
+
+The test is cheap whenever the sets are materialized — here it was one
+comprehension over a committed JSON file. It is expensive only when the sets live
+in prose, which is the argument for §W.4's machine-checkable field and, more
+generally, for emitting the *predicate* alongside the count. **A count is a
+summary of a set; do not reason about the set from the summary when the set
+itself is at hand.**
+
+## Y.4 Standing consequence
+
+The retraction survived one review cycle and was corrected only because a
+falsifiable field existed to check it against. Where a claim partitions rows,
+the partition ships as data, not as a description of data — this is the fourth
+finding in this ledger that a reviewer could only catch because the underlying
+predicate was recoverable.
