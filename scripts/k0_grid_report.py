@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--results", required=True)
     ap.add_argument("--prefix", default="")
     ap.add_argument("--json-out", default=None)
+    ap.add_argument("--contrast", default=None,
+                    help="ARM:ARM cross-model deep-cell contrast, e.g. c:k64c")
     args = ap.parse_args()
 
     cells = load_cells(Path(args.results), args.prefix)
@@ -166,6 +168,84 @@ def main() -> int:
             if len(depths) >= 2:
                 _slope(f"{arm}/{seat}", arm, depths, f"{seat}_score",
                        lambda r, s=seat: (r[f"{s}_high"] - r[f"{s}_low"]) / 2)
+
+    # The experiment's actual question: does a HISTORY-FREE checkpoint decay with
+    # depth the way a history-carrying one does? Each model is scored against its
+    # own raw policy, so 0.500 is the null for both and the comparison is not
+    # confounded by the two checkpoints differing in strength.
+    #
+    # Single cells at n=100 cannot resolve a 0.10-0.12 difference (half-width
+    # ~0.10), so the deep cells are pooled. They are disjoint games, so this is
+    # just a larger binomial, and pooling d4+d6 is the natural "deep" contrast
+    # rather than a threshold chosen after seeing the numbers.
+    if args.contrast:
+        left, right = args.contrast.split(":")
+        print(f"\n=== cross-model contrast: {left} vs {right}, deep cells (d4+d6) ===")
+        for seat_label, score_key, n_key in (
+            ("pooled", "score", "n"), ("p1 only", "p1_score", "p1_n"),
+            ("p2 only", "p2_score", "p2_n"),
+        ):
+            agg = {}
+            for arm in (left, right):
+                wins = n = 0.0
+                for depth in (4, 6):
+                    r = by_arm.get(arm, {}).get(depth)
+                    if r and r[score_key] is not None:
+                        wins += r[score_key] * r[n_key]
+                        n += r[n_key]
+                agg[arm] = (wins, n)
+            (wl, nl), (wr, nr) = agg[left], agg[right]
+            if not nl or not nr:
+                continue
+            pl, pr = wl / nl, wr / nr
+            se = math.sqrt(pl * (1 - pl) / nl + pr * (1 - pr) / nr)
+            z = (pl - pr) / se if se else 0.0
+            verdict = "DIFFERENT" if abs(z) > 1.96 else "not separable at 95%"
+            print(f"  {seat_label:8s} {left}={pl:.3f} (n={int(nl)})  {right}={pr:.3f} "
+                  f"(n={int(nr)})  delta={pl - pr:+.3f}  z={z:+.2f}  {verdict}")
+
+        # The level contrast above is NOT baseline-free. Raw-vs-raw is 0.500 only in
+        # expectation: with two identical deterministic policies the winner of a
+        # seeded game is a property of the game, so each checkpoint has its own
+        # measured null (k0 0.570, k64 0.485 on this seed block). A level difference
+        # between two checkpoints inherits the difference between their nulls.
+        #
+        # The SLOPE does not: a per-checkpoint offset is constant in depth and
+        # cancels in d1 -> deep. So the hypothesis "history-carrying models decay
+        # with depth and Markov ones do not" is a claim about slopes, and this is
+        # the test of it.
+        print(f"\n=== slope difference (baseline-free): {left} vs {right} ===")
+        for seat_label, score_key, n_key in (
+            ("pooled", "score", "n"), ("p1 only", "p1_score", "p1_n"),
+            ("p2 only", "p2_score", "p2_n"),
+        ):
+            slopes = {}
+            for arm in (left, right):
+                shallow = by_arm.get(arm, {}).get(1)
+                if not shallow or shallow[score_key] is None:
+                    continue
+                dw = dn = 0.0
+                for depth in (4, 6):
+                    r = by_arm.get(arm, {}).get(depth)
+                    if r and r[score_key] is not None:
+                        dw += r[score_key] * r[n_key]
+                        dn += r[n_key]
+                if not dn:
+                    continue
+                p1_, n1_ = shallow[score_key], shallow[n_key]
+                p2_, n2_ = dw / dn, dn
+                slopes[arm] = (
+                    p2_ - p1_,
+                    p1_ * (1 - p1_) / n1_ + p2_ * (1 - p2_) / n2_,
+                )
+            if len(slopes) < 2:
+                continue
+            (sl, vl), (sr, vr) = slopes[left], slopes[right]
+            se = math.sqrt(vl + vr)
+            z = (sl - sr) / se if se else 0.0
+            verdict = "DIFFERENT" if abs(z) > 1.96 else "suggestive, NOT significant"
+            print(f"  {seat_label:8s} slope({left})={sl:+.3f}  slope({right})={sr:+.3f}  "
+                  f"diff={sl - sr:+.3f}  z={z:+.2f}  {verdict}")
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(rows, indent=2), encoding="utf-8")

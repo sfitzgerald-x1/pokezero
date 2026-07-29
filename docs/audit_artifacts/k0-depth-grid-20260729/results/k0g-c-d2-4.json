@@ -1,0 +1,209 @@
+{
+  "arm": "c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/transformer-policy.pt",
+  "checkpoint_sha256": "5ac9d88b26f79f27ac02127d9ec0998d776f4ad17358e60bfac787c47212e772",
+  "config": "d2-s1024-b64-w4",
+  "depth": 2,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600080,
+  "games": 20,
+  "search_wins": 9,
+  "draws": 0,
+  "score_vs_raw": 0.45,
+  "clean_games": 19,
+  "total_decisions": 1088,
+  "fallback_decisions": 20,
+  "fallback_rate": 0.018382,
+  "fallback_reasons": {
+    "no_worlds_constructed": 20
+  },
+  "world_failure_reasons": {
+    "self_moveset_mismatch: p2: request-known move 'toxic' is absent from the sampled moveset (Transform/Mimic-class desync)": 320
+  },
+  "search_wall_per_decision": 1.9623,
+  "provenance": {
+    "arm": "c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k0/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/.mcts-eval-artifacts-15084cf6cf33b225/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 0
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 0
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600080,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 24,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600081,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600082,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 58,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600083,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 101,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600084,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 49,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600085,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 64,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600086,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 34,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600087,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 35,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600088,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 43,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600089,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 40,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600090,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 117,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600091,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 48,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600092,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 32,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600093,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 76,
+      "fallbacks": 20,
+      "world_failures": {
+        "self_moveset_mismatch: p2: request-known move 'toxic' is absent from the sampled moveset (Transform/Mimic-class desync)": 320
+      }
+    },
+    {
+      "seed": 600094,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600095,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 58,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600096,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 67,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600097,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600098,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 112,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600099,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

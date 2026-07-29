@@ -1,0 +1,131 @@
+{
+  "arm": "c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/transformer-policy.pt",
+  "checkpoint_sha256": "5ac9d88b26f79f27ac02127d9ec0998d776f4ad17358e60bfac787c47212e772",
+  "config": "d6-s1024-b64-w4",
+  "depth": 6,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600090,
+  "games": 10,
+  "search_wins": 5,
+  "draws": 0,
+  "score_vs_raw": 0.5,
+  "clean_games": 9,
+  "total_decisions": 498,
+  "fallback_decisions": 6,
+  "fallback_rate": 0.012048,
+  "fallback_reasons": {
+    "no_worlds_constructed": 6
+  },
+  "world_failure_reasons": {
+    "self_moveset_mismatch: p2: request-known move 'toxic' is absent from the sampled moveset (Transform/Mimic-class desync)": 32,
+    "self_moveset_mismatch: p2: request-known move 'swordsdance' is absent from the sampled moveset (Transform/Mimic-class desync)": 64
+  },
+  "search_wall_per_decision": 3.967,
+  "provenance": {
+    "arm": "c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k0/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/.mcts-eval-artifacts-15084cf6cf33b225/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 0
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 0
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600090,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 108,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600091,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 49,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600092,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 27,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600093,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 51,
+      "fallbacks": 6,
+      "world_failures": {
+        "self_moveset_mismatch: p2: request-known move 'toxic' is absent from the sampled moveset (Transform/Mimic-class desync)": 32,
+        "self_moveset_mismatch: p2: request-known move 'swordsdance' is absent from the sampled moveset (Transform/Mimic-class desync)": 64
+      }
+    },
+    {
+      "seed": 600094,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 25,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600095,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 58,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600096,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 57,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600097,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 29,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600098,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 56,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600099,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 38,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

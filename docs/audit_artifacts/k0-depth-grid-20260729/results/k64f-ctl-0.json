@@ -1,0 +1,826 @@
+{
+  "arm": "k64ctl",
+  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
+  "config": "d4-s1024-b64-w4",
+  "depth": 4,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600000,
+  "games": 100,
+  "search_wins": 48,
+  "draws": 1,
+  "score_vs_raw": 0.485,
+  "clean_games": 100,
+  "total_decisions": 0,
+  "fallback_decisions": 0,
+  "fallback_rate": 0.0,
+  "fallback_reasons": {},
+  "world_failure_reasons": {},
+  "search_wall_per_decision": 154.8998,
+  "provenance": {
+    "arm": "k64ctl"
+  },
+  "per_game": [
+    {
+      "seed": 600000,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600001,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600002,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600003,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600004,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600005,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600006,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600007,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600008,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600009,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600010,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600011,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600012,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600013,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600014,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600015,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600016,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600017,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600018,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600019,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600020,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600021,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600022,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600023,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600024,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600025,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600026,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600027,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600028,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600029,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600030,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600031,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600032,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600033,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600034,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600035,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600036,
+      "search_seat": "p1",
+      "winner": null,
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600037,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600038,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600039,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600040,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600041,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600042,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600043,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600044,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600045,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600046,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600047,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600048,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600049,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600050,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600051,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600052,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600053,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600054,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600055,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600056,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600057,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600058,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600059,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600060,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600061,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600062,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600063,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600064,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600065,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600066,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600067,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600068,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600069,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600070,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600071,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600072,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600073,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600074,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600075,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600076,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600077,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600078,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600079,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600080,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600081,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600082,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600083,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600084,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600085,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600086,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600087,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600088,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600089,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600090,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600091,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600092,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600093,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600094,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600095,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600096,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600097,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600098,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600099,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 0,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

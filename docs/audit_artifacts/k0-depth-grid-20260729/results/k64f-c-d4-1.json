@@ -1,0 +1,123 @@
+{
+  "arm": "k64c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
+  "config": "d4-s1024-b64-w4",
+  "depth": 4,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600010,
+  "games": 10,
+  "search_wins": 3,
+  "draws": 0,
+  "score_vs_raw": 0.3,
+  "clean_games": 10,
+  "total_decisions": 419,
+  "fallback_decisions": 0,
+  "fallback_rate": 0.0,
+  "fallback_reasons": {},
+  "world_failure_reasons": {},
+  "search_wall_per_decision": 4.6501,
+  "provenance": {
+    "arm": "k64c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k64/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/.mcts-eval-artifacts-5e2e3e8c7899bfeb/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 64
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 64
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600010,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 55,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600011,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 22,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600012,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600013,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 44,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600014,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 26,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600015,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 19,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600016,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 67,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600017,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 48,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600018,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 59,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600019,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 51,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}
