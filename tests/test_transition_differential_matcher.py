@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from engine_transition_differential import (  # noqa: E402
     _split_components,
+    classify_divergence,
     damage_components,
     roll_components_agree,
 )
@@ -284,3 +285,94 @@ class PainSplitSetHp(unittest.TestCase):
         self.assertEqual(got["p1"], [("sethp", -4)])
         exact, rolled = _split_components(got["p1"])
         self.assertEqual(rolled, [])
+
+
+class MajorityBranchOverride(unittest.TestCase):
+    """#946's adjudication, made mechanical.
+
+    `branch_misses` is in branch order, so `misses[0]` may be a MINORITY branch.
+    A row whose 6.25% branch lacks a Leftovers tick, while the 93.75% of
+    probability mass complains only that the damage disagrees, is a damage
+    disagreement — not a Leftovers one.
+    """
+
+    # s1500014 st69, verbatim. The row carried
+    # `component_missing_in_engine:itemleftovers` for four cycles.
+    PINNED = [
+        "pct=6.25: p1 attributed components differ: "
+        "observed_only=[('itemleftovers', 18)] engine_only=[]",
+        "pct=75.00: p2 roll-scaled components differ: "
+        "observed=[('', -214)] engine=[('', -116)]",
+        "pct=18.75: p2 roll-scaled components differ: "
+        "observed=[('', -214)] engine=[('', -116)]",
+    ]
+
+    def test_pinned_row_relabels_to_the_damage_class(self):
+        self.assertEqual(classify_divergence([], self.PINNED), "roll_scaled_component")
+
+    def test_a_genuine_residual_miss_is_NOT_overridden(self):
+        """When the majority branch also blames the residual, the label stands."""
+        misses = [
+            "pct=25.00: p1 attributed components differ: "
+            "observed_only=[('itemleftovers', 18)] engine_only=[]",
+            "pct=75.00: p1 attributed components differ: "
+            "observed_only=[('itemleftovers', 18)] engine_only=[]",
+        ]
+        self.assertEqual(
+            classify_divergence([], misses),
+            "component_missing_in_engine:itemleftovers",
+        )
+
+    def test_the_override_never_moves_a_row_into_a_LIMIT_class(self):
+        """A relabel must not reduce the residue.
+
+        A `capped_lethal` majority classifies as `limit:roll_divergent_lethality`
+        — an adjudicated NON-divergence. Allowing the override there would move
+        rows out of the outside-limit count and hand the acceptance gate a credit
+        nobody adjudicated.
+        """
+        misses = [
+            "pct=6.25: p1 attributed components differ: "
+            "observed_only=[('itemleftovers', 18)] engine_only=[]",
+            "pct=93.75: p2 roll-scaled components differ: "
+            "observed=[('capped_lethal', -14)] engine=[('', -116)]",
+        ]
+        self.assertEqual(
+            classify_divergence([], misses),
+            "component_missing_in_engine:itemleftovers",
+        )
+
+    def test_an_unattributed_majority_does_not_trigger_the_override(self):
+        """Only NAMED residuals are adjudicable; '' is not 'the residual'."""
+        misses = [
+            "pct=10.00: p1 attributed components differ: "
+            "observed_only=[('abilityroughskin', 18)] engine_only=[]",
+            "pct=90.00: p2 roll-scaled components differ: "
+            "observed=[('', -214)] engine=[('', -116)]",
+        ]
+        self.assertEqual(
+            classify_divergence([], misses),
+            "component_missing_in_engine:abilityroughskin",
+        )
+
+
+class PairBySource(unittest.TestCase):
+    """Components pair by SOURCE; magnitude is only a tiebreak within a source."""
+
+    def test_a_residual_is_not_paired_against_a_move_hit(self):
+        from triage_roll_components import _pair_by_source
+
+        # The cycle-seven defect: sorted by bare magnitude, the 2-point residual
+        # pairs with the 136-point move hit and yields a ratio of 0.015.
+        observed = [("", -139), ("recoil", -2)]
+        engine = [("", -136), ("recoil", -2)]
+        paired = _pair_by_source(observed, engine)
+        self.assertIn(("", 139, 136), paired)
+        self.assertIn(("recoil", 2, 2), paired)
+        self.assertNotIn(("", 2, 136), paired)
+
+    def test_an_unmatched_component_yields_no_ratio(self):
+        """A count difference is structural; it must not become a ratio."""
+        from triage_roll_components import _pair_by_source
+
+        self.assertEqual(_pair_by_source([("drain", -10)], []), [])

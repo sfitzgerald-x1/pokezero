@@ -36,11 +36,15 @@ from typing import Any, Mapping
 # v3: `default_feature_masks` is derived from the checkpoint too. v2 only threaded
 # the observation SPEC through, so the masks stayed at the dataclass defaults and
 # the tables described feature gating no trained checkpoint actually used.
-# Bumping this invalidates every artifact exported by v1/v2 — which is the whole
+# v4: the categorical VOCABULARY is derived from the checkpoint too. v3 still
+# enumerated it from the build, so tables exported for an older checkpoint on a
+# newer build described a different string->row map than the model was trained
+# with. v3-era artifacts are therefore not reusable.
+# Bumping this invalidates every artifact exported by v1/v2/v3 — which is the whole
 # point of having the field: a behaviour change in the exporter must not be
 # silently reused. (Missing this bump caused a trimmed run to reuse cached
 # 87-token tables and fail the root/leaf contract check.)
-EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v3"
+EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v4"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
 SUPPORTED_OBSERVATION_SCHEMAS = ("pokezero.observation.v2.2", "pokezero.observation.v3")
@@ -86,6 +90,13 @@ class CheckpointContract:
     categorical_feature_count: int
     numeric_feature_count: int
     transition_token_count: int
+    # The token->row enumeration the checkpoint was TRAINED with. This is the
+    # authority for what a categorical id means: the model's embedding rows were
+    # learned against these positions, so an encode that uses a different
+    # enumeration indexes rows that mean something else. Never re-derive it from
+    # the build — the build's enumeration is only correct for a model created by
+    # that same build.
+    category_vocab: tuple[str, ...]
     architecture: Mapping[str, Any]
     feature_masks: Mapping[str, Any]
     model_device: str
@@ -106,6 +117,12 @@ class CheckpointContract:
             "numeric_feature_count": self.numeric_feature_count,
             "transition_token_count": self.transition_token_count,
             "feature_masks": dict(self.feature_masks),
+            # In the contract, so the reuse key changes when the enumeration does:
+            # a tables file exported against a different vocabulary can no longer
+            # be adopted for this checkpoint, whatever wrote it.
+            "category_vocab_sha256": hashlib.sha256(
+                "\n".join(self.category_vocab).encode("utf-8")
+            ).hexdigest(),
         }
 
     @property
@@ -226,6 +243,7 @@ def resolve_checkpoint_contract(
         categorical_feature_count=int(spec.categorical_feature_count),
         numeric_feature_count=int(spec.numeric_feature_count),
         transition_token_count=int(getattr(spec, "transition_token_count", 0)),
+        category_vocab=tuple(str(t) for t in (getattr(config, "category_vocab", ()) or ())),
         architecture=_architecture_from_model_config(config),
         feature_masks=masks_payload,
         model_device=model_device,
@@ -241,25 +259,18 @@ def resolve_checkpoint_contract(
     return contract
 
 
-def validate_encoder_tables(
-    contract: CheckpointContract,
-    tables_path: str | Path,
-    *,
-    showdown_root: str | Path | None = None,
-) -> None:
+def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Path) -> None:
     """Fail closed when the leaf encoder describes a different observation than the root.
 
     The crate encodes leaves from these tables while Python encodes the root from
     the checkpoint's spec; a silent disagreement is the census-mismatch class —
     the model would score states it never trained on.
 
-    Pass ``showdown_root`` to also check the tables' categorical VOCABULARY against
-    the one this build produces. Artifacts are reused whenever the file exists, and
-    the reuse key cannot see a vocabulary change (it keys on the checkpoint and the
-    exporter revision, not on the code that enumerates tokens). A cached tables file
-    written before a token was added stays adoptable forever, and since the vocab is
-    a positional list, one inserted token renumbers every token after it — the crate
-    would look up a different embedding row than the root encode for the same value.
+    Everything here is compared against the CHECKPOINT, never against the build.
+    The checkpoint is the only authority for what its own observation means: the
+    embedding rows were learned against the enumeration stamped in it, so a table
+    that agrees with today's build but not with the checkpoint is the defective
+    one, however freshly it was exported.
     """
     payload = json.loads(Path(tables_path).read_text(encoding="utf-8"))
     if payload.get("schema_version") != TABLES_SCHEMA_VERSION:
@@ -307,24 +318,26 @@ def validate_encoder_tables(
             if expected is not None and table_masks.get(key) != expected
         }
     )
-    if showdown_root is not None:
-        from ..randbat_vocab import gen3_category_vocabulary
-
-        current = list(
-            gen3_category_vocabulary(str(showdown_root), include_turn_merged=True).tokens
+    # Compare against the CHECKPOINT, not against this build. Getting that
+    # backwards is worse than not checking: on 2026-07-29 both 5M checkpoints had
+    # trained on a 1216-token enumeration while the build had grown to 1217
+    # (`volatile:solarbeam` inserted at index 1204, renumbering the 13 volatiles
+    # after it). A build-anchored check REJECTS the cached tables that correctly
+    # matched the model and ACCEPTS a fresh export that silently shifts those rows.
+    stored = list((payload.get("vocab") or {}).get("tokens") or [])
+    trained = list(contract.category_vocab)
+    if trained and stored != trained:
+        first_shift = next(
+            (i for i, (a, b) in enumerate(zip(stored, trained)) if a != b), None
         )
-        stored = list((payload.get("vocab") or {}).get("tokens") or [])
-        if stored != current:
-            missing = [token for token in current if token not in set(stored)]
-            extra = [token for token in stored if token not in set(current)]
-            first_shift = next(
-                (i for i, (a, b) in enumerate(zip(stored, current)) if a != b), None
-            )
-            mismatches["vocab.tokens"] = (
-                f"{len(stored)} tokens (first divergence at index {first_shift}; "
-                f"absent here: {missing[:5]}; unknown to this build: {extra[:5]})",
-                f"{len(current)} tokens",
-            )
+        unknown = [t for t in stored if t not in set(trained)]
+        absent = [t for t in trained if t not in set(stored)]
+        mismatches["vocab.tokens"] = (
+            f"{len(stored)} tokens (first divergence at index {first_shift}; "
+            f"not in the trained vocabulary: {unknown[:5]}; "
+            f"trained tokens absent from the tables: {absent[:5]})",
+            f"{len(trained)} tokens as trained",
+        )
 
     if mismatches:
         detail = ", ".join(

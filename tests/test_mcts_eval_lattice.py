@@ -6,7 +6,8 @@ from tests.test_mcts_eval_timing_corpus import _record
 
 C = CheckpointContract(checkpoint_path="/c.pt", checkpoint_sha256="a"*64, policy_id="p",
     schema_version="pokezero.observation.v3", token_count=87, categorical_feature_count=51,
-    numeric_feature_count=155, transition_token_count=64, architecture={}, feature_masks={},
+    numeric_feature_count=155, transition_token_count=64, category_vocab=("alpha", "beta"),
+    architecture={}, feature_masks={},
     model_device="cpu")
 
 class T(unittest.TestCase):
