@@ -90,5 +90,5 @@
 +    // first turn still pays exactly once and the next use pays again.
 +    if !choice.sleep_talk_move && !in_locked_turn(state, &attacking_side, locked_continuation) {
          // most of the time pp decrement doesn't matter and just adds another
-         // instruction so we only decrement pp if the move is at 10 or less pp
+         // instruction so we only decrement pp if the move is under 10 pp
          // since that is when it starts to matter

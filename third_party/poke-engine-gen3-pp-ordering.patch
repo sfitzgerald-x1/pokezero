@@ -69,7 +69,7 @@
 +    // engine's combined 1-or-2 decrement moves as one unit.
 +    if !choice.sleep_talk_move {
 +        // most of the time pp decrement doesn't matter and just adds another
-+        // instruction so we only decrement pp if the move is at 10 or less pp
++        // instruction so we only decrement pp if the move is under 10 pp
 +        // since that is when it starts to matter
 +        let (attacker_side, defender_side) = state.get_both_sides(&attacking_side);
 +        let active = attacker_side.get_active();
