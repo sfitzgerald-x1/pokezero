@@ -428,6 +428,59 @@ poke-engine-gen3-lastmove-semantics.patch
 # style as the struggle-typeless and move-trapping patches; authored against the
 # residual-rounding tree, applied before the fixture refresh.
 poke-engine-gen3-phaze-protect.patch
+# gen3 variable base power: Flail and Reversal.
+#
+# Both moves share one ladder and gen3 declares its OWN callback for EACH of
+# them — data/mods/gen3/moves.ts:273 (flail) and :496 (reversal), verified
+# independently rather than assumed from one another:
+#
+#     const ratio = Math.max(Math.floor(pokemon.hp * 48 / pokemon.maxhp), 1);
+#     ratio < 2  -> 200      ratio < 17 -> 80
+#     ratio < 5  -> 150      ratio < 33 -> 40
+#     ratio < 10 -> 100      else       -> 20
+#
+# THE INHERITANCE TRAP HAS THREE DIRECTIONS and this patch set has now been bitten
+# by all three; check every one before trusting a rule:
+#   1. inherit-from-gen4       — gen3 Spikes takes gen4's layer fractions
+#                                (poke-engine-gen3-spikes-layers.patch);
+#   2. inherit-from-further-up — gen3 burn takes GEN6's baseMaxhp/8, not the
+#                                modern /16 (poke-engine-gen3-residual-rounding.patch);
+#   3. gen3-overrides-everything — THIS patch: gen3 re-declares the move itself,
+#                                so no ancestor's table applies at all.
+# Read gen3's own mod file first; walk up only from where it is silent.
+#
+# Two upstream bugs, one per move:
+#   FLAIL had no arm anywhere in src/gen3/ and no base_power, so it was INERT —
+#   literally zero damage at every HP fraction, a missing damage component rather
+#   than a wrong value (the same gap shape as Transform).
+#   REVERSAL had the ladder written as ROUNDED FLOAT ratios (0.688 / 0.354 /
+#   0.208 / 0.104 / 0.042). 33/48 is 0.6875 and 17/48 is 0.35416..., so the
+#   rounded constants misclassify a thin band on the wrong side of four of the
+#   five breakpoints — e.g. hp/maxhp in [0.6875, 0.688) scored 40 where the sim
+#   scores 20. Reproducing the integer floor exactly removes the bands.
+#
+# Gen 4's 64-scale (cut points 2/6/13/22/43) disagrees with gen3's at exactly
+# four percentages of max HP — 4%, 10%, 35%, 68% — where gen3 scores
+# 200/150/80/40 and gen4 would score 150/100/40/20. Gen 3 is the HIGHER one at
+# every divergence, so borrowing gen4's table under-powers both moves in exactly
+# the desperation region they exist for. Those four are pinned by name.
+#
+# Reachability (pool: 220 species / 393 sets): flail 1 set (Dodrio), reversal 8
+# sets (Blaziken, Furret, Heracross, Hitmonlee, Medicham, Primeape, ...). The
+# rest of the variable-BP family was audited and left alone: eruption and
+# waterspout are implemented and correct (base_power * hp/maxhp, no gen3-chain
+# override) but appear on 0 of 393 sets; seismic toss (17 sets) is level-based
+# and already handled; night shade, super fang, psywave, low kick, magnitude and
+# present are all 0 of 393. Return (41 sets) is happiness-based and correctly
+# fixed at 102 for randbats' max-happiness sets.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# flailladder / reversalladder / flailladdercontrol); pinned by
+# rust/pokezero-search/tests/gen3_variable_bp_fidelity.rs. Touches the
+# modify_choice ladder in gen3/choice_effects.rs only; authored against the
+# phaze-patched tree, applied before the fixture refresh.
+poke-engine-gen3-variable-bp.patch
+
 
 
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
