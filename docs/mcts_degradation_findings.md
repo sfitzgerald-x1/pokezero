@@ -1,7 +1,9 @@
 # MCTS degradation: why search loses to its own prior
 
-**Status:** mechanism **IDENTIFIED** (§10–§11), pending the §8 acceptance
-re-bench. The leaf value was consumed with the wrong seat orientation whenever
+**Status:** mechanism **IDENTIFIED and CONFIRMED** (§10–§11, §13). The §8 acceptance
+criterion is **met** on the fixed build: 0.615 [0.573, 0.658] over 220 within-seed
+mirrored pairs, +0.115 over its own prior. One residual seat asymmetry remains open
+(§13.4). The leaf value was consumed with the wrong seat orientation whenever
 PokeZero played p2, and the per-seat split of the recorded grids (§11) shows the
 p2 seat carries essentially the whole deficit at every depth and every
 simulation budget, on both builds. Four candidate causes were tested before it;
@@ -686,3 +688,186 @@ So §4.3's "either the tree does not reach depth 6, or the cap is not binding" w
 a false dichotomy: the cap binds, and the subtree beyond node depth ~3 is too
 visit-starved to change a root argmax. **Any future depth cell should report the
 depth reached, not the depth configured.**
+
+---
+
+## 13. The acceptance re-bench: the prediction held
+
+**Date:** 2026-07-29. Build: main @ `2103d65` (the #937 merge, plus #936/#938/#939),
+engine fingerprint `7909290e14e065cda5cc38d5698c45a04db4862a416e1e2a52af86075104830b`
+(29 patches, 8 crate sources), image pinned by digest and gated in-pod before the
+first game of every shard. 440 games per arm, seeds 7800000–7800219, **within-seed
+mirrored pairs** — each seed played from both seats, so the two seats face the same
+two teams. Plan and prediction were registered before the run
+(`docs/mcts_acceptance_rebench_plan.md`).
+
+### 13.1 Result
+
+| arm | p1 seat | p2 seat | pooled pair mean |
+|---|---|---|---|
+| control (raw v raw) | 0.448 [0.383, 0.514] | 0.552 [0.486, 0.617] | **0.500** [0.500, 0.500] |
+| **search `d4-s1024`** | **0.639** [0.573, 0.699] | **0.591** [0.525, 0.654] | **0.615** [0.573, 0.658] |
+
+220 complete pairs per arm, Wilson 95% per seat, percentile bootstrap on the pair mean.
+
+**§8 acceptance criterion: MET.** `0.615`, and the whole interval sits above 0.500.
+Paired against the control on the same seeds, search adds **+0.115** [+0.072, +0.158].
+
+### 13.2 The prediction, adjudicated
+
+Verbatim from §11.8, as registered:
+
+> The prediction this makes falsifiable: p1 stays where it is and p2 rises to
+> meet it. If p2 does not recover, §10 and §11 both retract.
+
+**Held**, with the scope of that "held" stated precisely in §13.2.1 below.
+
+The search seat gap (p1 − p2) collapsed from **+0.34 to +0.59** across the
+pre-fix cells to **+0.048**. The p2 seat, which sat at 0.140–0.260 in the pre-fix
+deep and high-simulation cells and at exactly 0.000 in three of them, reads
+**0.591**. §10 and §11 stand.
+
+#### 13.2.1 Two things the adjudication must not overclaim
+
+**The run was larger than pre-registered.** §11.8 and §8 both say *200* mirrored
+pairs; this ran **220**. The margin was reserved so that up to 20 pairs could be
+excluded and still clear the bar. None were: all 220 pairs completed in both
+arms, so every number above is on 220, not on a pre-registered 200 with 20
+discarded. More than promised, but a deviation, and stated rather than left to
+be noticed.
+
+**"p1 stays where it is" is not directly measurable across this change, and it
+did not hold literally.** p1 read **0.639** here against the **0.460–0.540**
+range of §11's cells. But the comparison crosses both a seed block
+(7800000–7800219 vs 600000–600099) and a cell (`d4-s1024` vs §11's `d6`/`d4`
+cells at their own budgets), so the two are not commensurable and no conclusion
+should be drawn from the difference in either direction.
+
+The falsification criterion was the **p2 clause** — "if p2 does not recover, §10
+and §11 both retract" — and p2 is what the run adjudicates: 0.140–0.260 (and
+exactly 0.000 in three cells) before, **0.591** after. The p1 clause was a
+statement of expectation, not a test, and it is honest to say so: had p1 been
+the criterion, this run could not have decided it.
+
+### 13.3 The control did something the old harness could not
+
+Under within-seed pairing with two identical deterministic policies, both runs of a
+seed are *the same battle with the labels swapped*. The pooled control mean is
+therefore **exactly 0.500 by construction** — and it measured exactly 0.500 with a
+**zero-width** bootstrap interval. That is a strict equality test of the pairing, not
+a noisy null: any deviation would have meant seat- or label-dependent
+nondeterminism in the harness.
+
+Its per-seat split is the payload: these 220 seeds **favour the p2-slot team by
+10.4 points** (0.448 / 0.552). Read against that baseline, search gains **+0.191**
+on p1 and **+0.039** on p2. The parity-split harness of §4/§9 could not measure this
+at all.
+
+### 13.4 What is NOT closed: a residual seat asymmetry
+
+The seat-gap collapse is not a seat-gap elimination. Difference-in-differences on
+paired seeds — the search arm's within-seed seat gap minus the control's, which
+removes team advantage exactly:
+
+```
+control seat gap (p1 - p2)   -0.1045
+search  seat gap (p1 - p2)   +0.0477
+difference-in-differences    +0.1523   bootstrap95 [+0.0182, +0.2818]
+```
+
+**The interval excludes zero.** Search still helps the p1 seat more than the p2 seat,
+by about 15 points, beyond what the seed set's team advantage explains. The lower
+bound is +0.018 and the interval is wide — this is a marginal result on 220 pairs,
+not a second smoking gun — but it is a real signal and it should not be rounded away.
+
+This is §11.7's open question, now measurable and pointing the *opposite* way from
+how it was framed: the residual is not a depth effect on a healthy seat, it is a
+remaining seat asymmetry. Candidates, none tested:
+
+- the opponent side of the tree still runs uniform priors (`model_priors` applies to
+  the acting seat only — `multiply_batched_encoded_core`), which is not seat-symmetric
+  in its *effect* once the acting seat is side two;
+- belief/world construction asymmetries between the self and opponent seats;
+- residual fallback shape differing by seat.
+
+The cheap next probe is the same difference-in-differences at a second cell — the
+staged `d6-s4096` config exists for this and is owner-gated.
+
+### 13.5 Consequences
+
+- Every strength number in §4, §7 and §9 was produced by an engine that played one of
+  its two seats backwards. They stay **void**, not a baseline.
+- Search at `d4`/`s1024` is now **worth its compute**: +0.115 over its own prior on
+  paired seeds.
+- The depth and simulation ladders should be re-run on the fixed build before anyone
+  reasons about depth again. §4.1–§4.3 describe an artefact.
+
+### 13.6 Provenance notes
+
+- **Encoder tables.** The materialized table's vocab is **1216**, matching this
+  checkpoint's own `category_vocab` exactly (1216 + 16 OOV + 1 = its 1233 trained
+  embedding rows), with `volatile:solarbeam` absent from both — the checkpoint
+  predates that work. A table regenerated "fresh from the build" would have been the
+  defect here, not the fix. Established by direct measurement, because
+  `mcts_eval.resolver.validate_encoder_tables` — **as it stood when this campaign
+  ran** — compared schema version, token count and feature counts but **not the
+  vocab or its size**, and so could not catch a vocab renumbering on its own.
+  (#945 has since merged a vocab check; whether the merged version covers size
+  *and* content, and against which side, is the k0 lane's to confirm — not
+  re-litigated here.)
+- **Open hardening item: the export reuse key cannot see a pokezero-side
+  vocabulary-enumeration change.** `export_reuse_key` keys on
+  `checkpoint_sha256`, `model_device`, `observation_contract_sha256`,
+  `showdown_source_sha256` and `exporter_revision`. The observation contract is
+  `{schema_version, token_count, categorical_feature_count,
+  numeric_feature_count, transition_token_count, feature_masks}` — **it carries
+  no vocabulary at all**, neither the list nor its length. The vocab is produced
+  by `pokezero.randbat_vocab.gen3_category_vocabulary`, pokezero's *own*
+  enumeration over Showdown data. So a token added on the pokezero side —
+  `volatile:solarbeam` is exactly this, from the charge-state work — moves
+  neither hash: Showdown data did not change, and no contract field did either.
+  The key then permits reuse of a table built before the enumeration change.
+  Only `exporter_revision`, a hand-bumped constant, would catch it, and the
+  comment above it records this class biting once already ("Missing this bump
+  caused a trimmed run to reuse cached 87-token tables"). **This campaign was
+  safe only because its checkpoint predates the token**, so the cached table and
+  the checkpoint agreed at 1216. A checkpoint trained *after* such a change,
+  served a table cached from before it, would be reused silently. The durable
+  fix is to put the vocabulary hash (or its length) into the observation
+  contract so the reuse key and the validator both see it.
+- **Root encode was BUILD-anchored, not checkpoint-anchored (bounded caveat, not
+  a retraction).** `scripts/mcts_acceptance_h2h.py` built its env as
+  `LocalShowdownConfig(showdown_root=…, set_belief_source=True)` and passed
+  **no `category_vocab`**; `env_config_with_checkpoint_masks` latches the mask
+  and schema axes but not the vocabulary one, and `local_showdown` then falls
+  back to `self.config.category_vocab or gen3_category_vocabulary(root, …)` —
+  i.e. the *build's* enumeration. Both arms did this, identically. Scope, which
+  is narrower than it first looks:
+
+  - The **crate** path — the search arm's own model calls, root priors and every
+    leaf value — ran on the materialized checkpoint-matched tables, measured at
+    1216 (above). The root *inputs* handed to the crate are row-input JSON
+    (species and ledger strings), re-encoded by the crate from those tables, so
+    the build vocab does not reach the search arm's model evaluations.
+  - What the build vocab did drive is the **raw policy's** own forwards: the
+    opponent in the search arm, and both players in the control arm. Against a
+    1233-row trained embedding, a build vocab carrying `volatile:solarbeam`
+    shifts the 13-token volatile tail from index 1204 by one row.
+  - The **control is unaffected in its pooled number by construction** — both
+    runs of a seed are the same battle relabelled, so it is exactly 0.500
+    whatever the encode. And because the search arm's opponent *is* that same
+    raw policy, the control remains the right baseline for it: the comparison is
+    internally consistent.
+  - The direction of any residual bias is that a weakened raw opponent would
+    **overstate** the +0.115 delta. The k0 lane's k64c reproduction bounds the
+    shift's effect far below that margin, so this is a caveat on the margin's
+    exact size, not on its sign or on the §8 verdict. The seat-split and DiD
+    results are untouched: the shift is common-mode across seats.
+
+  The fix for future runs is one argument — pass the checkpoint's
+  `category_vocab` into `LocalShowdownConfig` — and it belongs with the
+  observation-contract hardening item above, since both are the same root cause:
+  vocabulary is not part of any latch.
+- **Telemetry.** #939 single-counts model-mode s/decision. This campaign's wall
+  figures are not comparable to the pre-#939 grid without saying so; strength scores
+  are unaffected.

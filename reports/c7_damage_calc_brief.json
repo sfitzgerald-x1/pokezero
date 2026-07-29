@@ -1,5 +1,5 @@
 {
- "note": "source-paired; multi-component slots now included",
+ "note": "source-paired. PARTITION ON `reachable` (legal-roll-set membership), NOT on ratio: the ratio window low edge 0.92 assumes the engine value is the MEAN roll, and if it is top-of-range every finding just under 0.92 is the filter own artifact. Constants deliberately not chosen pending the damage lane source-cited semantics answer.",
  "findings": [
   {
    "seed": 1500180,
@@ -7,10 +7,10 @@
    "slot": "p2",
    "source": "move",
    "move": "earthquake",
-   "obs": 30,
-   "eng": 125,
+   "observed": 30,
+   "engine": 125,
    "ratio": 0.24,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500028,
@@ -18,10 +18,10 @@
    "slot": "p2",
    "source": "move",
    "move": "shadowball",
-   "obs": 18,
-   "eng": 53,
+   "observed": 18,
+   "engine": 53,
    "ratio": 0.34,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500051,
@@ -29,10 +29,10 @@
    "slot": "p2",
    "source": "move",
    "move": "icebeam",
-   "obs": 26,
-   "eng": 69,
+   "observed": 26,
+   "engine": 69,
    "ratio": 0.377,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500204,
@@ -40,10 +40,10 @@
    "slot": "p2",
    "source": " Reflect/Light Screen, or type 1/2x)",
    "move": "hiddenpowerice70",
-   "obs": 18,
-   "eng": 39,
+   "observed": 18,
+   "engine": 39,
    "ratio": 0.462,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500191,
@@ -51,10 +51,10 @@
    "slot": "p1",
    "source": " Reflect/Light Screen, or type 1/2x)",
    "move": "hiddenpowerice70",
-   "obs": 16,
-   "eng": 34,
+   "observed": 16,
+   "engine": 34,
    "ratio": 0.471,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500222,
@@ -62,10 +62,10 @@
    "slot": "p2",
    "source": " Reflect/Light Screen, or type 1/2x)",
    "move": "hiddenpowerfighting70",
-   "obs": 119,
-   "eng": 233,
+   "observed": 119,
+   "engine": 233,
    "ratio": 0.511,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500206,
@@ -73,10 +73,10 @@
    "slot": "p2",
    "source": " Reflect/Light Screen, or type 1/2x)",
    "move": "headbutt",
-   "obs": 13,
-   "eng": 25,
+   "observed": 13,
+   "engine": 25,
    "ratio": 0.52,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500040,
@@ -84,10 +84,10 @@
    "slot": "p2",
    "source": "move",
    "move": "icebeam",
-   "obs": 16,
-   "eng": 29,
+   "observed": 16,
+   "engine": 29,
    "ratio": 0.552,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500228,
@@ -95,10 +95,10 @@
    "slot": "p1",
    "source": "move",
    "move": "crosschop",
-   "obs": 53,
-   "eng": 86,
+   "observed": 53,
+   "engine": 86,
    "ratio": 0.616,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500074,
@@ -106,10 +106,10 @@
    "slot": "p2",
    "source": "move",
    "move": "return",
-   "obs": 27,
-   "eng": 43,
+   "observed": 27,
+   "engine": 43,
    "ratio": 0.628,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500025,
@@ -117,10 +117,10 @@
    "slot": "p1",
    "source": "move",
    "move": "hiddenpowerghost70",
-   "obs": 58,
-   "eng": 90,
+   "observed": 58,
+   "engine": 90,
    "ratio": 0.644,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500025,
@@ -128,10 +128,10 @@
    "slot": "p1",
    "source": "move",
    "move": "crosschop",
-   "obs": 31,
-   "eng": 48,
+   "observed": 31,
+   "engine": 48,
    "ratio": 0.646,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500074,
@@ -139,10 +139,10 @@
    "slot": "p2",
    "source": "move",
    "move": "return",
-   "obs": 28,
-   "eng": 43,
+   "observed": 28,
+   "engine": 43,
    "ratio": 0.651,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500164,
@@ -150,10 +150,10 @@
    "slot": "p1",
    "source": "move",
    "move": "crosschop",
-   "obs": 54,
-   "eng": 82,
+   "observed": 54,
+   "engine": 82,
    "ratio": 0.659,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500294,
@@ -161,10 +161,10 @@
    "slot": "p2",
    "source": "move",
    "move": "rockslide",
-   "obs": 156,
-   "eng": 236,
+   "observed": 156,
+   "engine": 236,
    "ratio": 0.661,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500051,
@@ -172,10 +172,10 @@
    "slot": "p2",
    "source": "move",
    "move": "surf",
-   "obs": 69,
-   "eng": 103,
+   "observed": 69,
+   "engine": 103,
    "ratio": 0.67,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500030,
@@ -183,10 +183,10 @@
    "slot": "p1",
    "source": "move",
    "move": "rockslide",
-   "obs": 58,
-   "eng": 86,
+   "observed": 58,
+   "engine": 86,
    "ratio": 0.674,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500267,
@@ -194,10 +194,10 @@
    "slot": "p2",
    "source": "move",
    "move": "hiddenpowerground70",
-   "obs": 63,
-   "eng": 70,
+   "observed": 63,
+   "engine": 70,
    "ratio": 0.9,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500221,
@@ -205,10 +205,10 @@
    "slot": "p2",
    "source": "move",
    "move": "aerialace",
-   "obs": 102,
-   "eng": 113,
+   "observed": 102,
+   "engine": 113,
    "ratio": 0.903,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500051,
@@ -216,10 +216,10 @@
    "slot": "p2",
    "source": "move",
    "move": "surf",
-   "obs": 137,
-   "eng": 151,
+   "observed": 137,
+   "engine": 151,
    "ratio": 0.907,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500115,
@@ -227,10 +227,10 @@
    "slot": "p1",
    "source": "move",
    "move": "silverwind",
-   "obs": 176,
-   "eng": 194,
+   "observed": 176,
+   "engine": 194,
    "ratio": 0.907,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500123,
@@ -238,10 +238,10 @@
    "slot": "p1",
    "source": "move",
    "move": "fireblast",
-   "obs": 78,
-   "eng": 86,
+   "observed": 78,
+   "engine": 86,
    "ratio": 0.907,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500126,
@@ -249,10 +249,10 @@
    "slot": "p2",
    "source": "move",
    "move": "doubleedge",
-   "obs": 88,
-   "eng": 97,
+   "observed": 88,
+   "engine": 97,
    "ratio": 0.907,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500024,
@@ -260,10 +260,10 @@
    "slot": "p2",
    "source": "move",
    "move": "return",
-   "obs": 101,
-   "eng": 111,
+   "observed": 101,
+   "engine": 111,
    "ratio": 0.91,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500229,
@@ -271,10 +271,10 @@
    "slot": "p2",
    "source": "move",
    "move": "psychic",
-   "obs": 134,
-   "eng": 147,
+   "observed": 134,
+   "engine": 147,
    "ratio": 0.912,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500164,
@@ -282,10 +282,10 @@
    "slot": "p2",
    "source": "move",
    "move": "sleeptalk",
-   "obs": 97,
-   "eng": 106,
+   "observed": 97,
+   "engine": 106,
    "ratio": 0.915,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500201,
@@ -293,10 +293,10 @@
    "slot": "p1",
    "source": "move",
    "move": "thunderbolt",
-   "obs": 205,
-   "eng": 224,
+   "observed": 205,
+   "engine": 224,
    "ratio": 0.915,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500057,
@@ -304,10 +304,10 @@
    "slot": "p2",
    "source": "move",
    "move": "hiddenpowerice70",
-   "obs": 22,
-   "eng": 24,
+   "observed": 22,
+   "engine": 24,
    "ratio": 0.917,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500228,
@@ -315,10 +315,10 @@
    "slot": "p1",
    "source": "drain",
    "move": "crosschop",
-   "obs": 37,
-   "eng": 40,
+   "observed": 37,
+   "engine": 40,
    "ratio": 0.925,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500079,
@@ -326,10 +326,10 @@
    "slot": "p1",
    "source": "move",
    "move": "earthquake",
-   "obs": 50,
-   "eng": 54,
+   "observed": 50,
+   "engine": 54,
    "ratio": 0.926,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500123,
@@ -337,10 +337,10 @@
    "slot": "p2",
    "source": "move",
    "move": "surf",
-   "obs": 204,
-   "eng": 213,
+   "observed": 204,
+   "engine": 213,
    "ratio": 0.958,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500105,
@@ -348,10 +348,10 @@
    "slot": "p1",
    "source": "move",
    "move": "flamethrower",
-   "obs": 139,
-   "eng": 136,
+   "observed": 139,
+   "engine": 136,
    "ratio": 1.022,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500028,
@@ -359,10 +359,10 @@
    "slot": "p1",
    "source": "move",
    "move": "surf",
-   "obs": 111,
-   "eng": 100,
+   "observed": 111,
+   "engine": 100,
    "ratio": 1.11,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500028,
@@ -370,10 +370,10 @@
    "slot": "p1",
    "source": "move",
    "move": "surf",
-   "obs": 75,
-   "eng": 67,
+   "observed": 75,
+   "engine": 67,
    "ratio": 1.119,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500059,
@@ -381,10 +381,10 @@
    "slot": "p2",
    "source": "move",
    "move": "quickattack",
-   "obs": 34,
-   "eng": 30,
+   "observed": 34,
+   "engine": 30,
    "ratio": 1.133,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500059,
@@ -392,10 +392,10 @@
    "slot": "p2",
    "source": "movewish_to_full",
    "move": "quickattack",
-   "obs": 34,
-   "eng": 30,
+   "observed": 34,
+   "engine": 30,
    "ratio": 1.133,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500063,
@@ -403,10 +403,10 @@
    "slot": "p2",
    "source": "move",
    "move": "hiddenpowerghost70",
-   "obs": 34,
-   "eng": 30,
+   "observed": 34,
+   "engine": 30,
    "ratio": 1.133,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500207,
@@ -414,10 +414,10 @@
    "slot": "p1",
    "source": "recoil",
    "move": "spikes",
-   "obs": 25,
-   "eng": 22,
+   "observed": 25,
+   "engine": 22,
    "ratio": 1.136,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500121,
@@ -425,10 +425,10 @@
    "slot": "p2",
    "source": "move",
    "move": "flamethrower",
-   "obs": 16,
-   "eng": 13,
+   "observed": 16,
+   "engine": 13,
    "ratio": 1.231,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500121,
@@ -436,10 +436,10 @@
    "slot": "p2",
    "source": "itemleftovers_to_full",
    "move": "flamethrower",
-   "obs": 16,
-   "eng": 13,
+   "observed": 16,
+   "engine": 13,
    "ratio": 1.231,
-   "multi": true
+   "reachable": false
   },
   {
    "seed": 1500107,
@@ -447,10 +447,10 @@
    "slot": "p2",
    "source": "move",
    "move": "fireblast",
-   "obs": 9,
-   "eng": 7,
+   "observed": 9,
+   "engine": 7,
    "ratio": 1.286,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500127,
@@ -458,10 +458,10 @@
    "slot": "p1",
    "source": "move",
    "move": "hiddenpowerfire70",
-   "obs": 8,
-   "eng": 6,
+   "observed": 8,
+   "engine": 6,
    "ratio": 1.333,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500063,
@@ -469,10 +469,10 @@
    "slot": "p2",
    "source": "move",
    "move": "machpunch",
-   "obs": 138,
-   "eng": 94,
+   "observed": 138,
+   "engine": 94,
    "ratio": 1.468,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500174,
@@ -480,10 +480,10 @@
    "slot": "p2",
    "source": "move",
    "move": "sleeptalk",
-   "obs": 106,
-   "eng": 52,
+   "observed": 106,
+   "engine": 52,
    "ratio": 2.038,
-   "multi": false
+   "reachable": false
   },
   {
    "seed": 1500121,
@@ -491,10 +491,109 @@
    "slot": "p2",
    "source": "move",
    "move": "hiddenpowerfire70",
-   "obs": 171,
-   "eng": 23,
+   "observed": 171,
+   "engine": 23,
    "ratio": 7.435,
-   "multi": false
+   "reachable": false
+  },
+  {
+   "seed": 1500228,
+   "step": 70,
+   "slot": "p2",
+   "source": "move",
+   "move": "gigadrain",
+   "observed": 75,
+   "engine": 81,
+   "ratio": 0.926,
+   "reachable": true
+  },
+  {
+   "seed": 1500024,
+   "step": 9,
+   "slot": "p1",
+   "source": "move",
+   "move": "surf",
+   "observed": 106,
+   "engine": 114,
+   "ratio": 0.93,
+   "reachable": true
+  },
+  {
+   "seed": 1500174,
+   "step": 43,
+   "slot": "p1",
+   "source": "move",
+   "move": "icebeam",
+   "observed": 40,
+   "engine": 43,
+   "ratio": 0.93,
+   "reachable": true
+  },
+  {
+   "seed": 1500189,
+   "step": 61,
+   "slot": "p1",
+   "source": "move",
+   "move": "flamethrower",
+   "observed": 81,
+   "engine": 84,
+   "ratio": 0.964,
+   "reachable": true
+  },
+  {
+   "seed": 1500204,
+   "step": 83,
+   "slot": "p1",
+   "source": "move",
+   "move": "shadowball",
+   "observed": 73,
+   "engine": 74,
+   "ratio": 0.986,
+   "reachable": true
+  },
+  {
+   "seed": 1500196,
+   "step": 35,
+   "slot": "p2",
+   "source": "move",
+   "move": "hydropump",
+   "observed": 85,
+   "engine": 80,
+   "ratio": 1.062,
+   "reachable": true
+  },
+  {
+   "seed": 1500080,
+   "step": 11,
+   "slot": "p1",
+   "source": "move",
+   "move": "hiddenpowerelectric70",
+   "observed": 63,
+   "engine": 59,
+   "ratio": 1.068,
+   "reachable": true
+  },
+  {
+   "seed": 1500207,
+   "step": 27,
+   "slot": "p2",
+   "source": "move",
+   "move": "doubleedge",
+   "observed": 75,
+   "engine": 69,
+   "ratio": 1.087,
+   "reachable": true
+  },
+  {
+   "seed": 1500044,
+   "step": 30,
+   "slot": "p2",
+   "source": "move",
+   "move": "surf",
+   "observed": 90,
+   "engine": 77,
+   "ratio": 1.169,
+   "reachable": true
   }
  ]
 }

@@ -3850,3 +3850,103 @@ conclusion it has drawn is invalidated.**
 A secondary benefit: source pairing surfaces residual-source findings that
 magnitude pairing hid entirely (`drain`, `movewish_to_full`,
 `itemleftovers_to_full` now appear beside the move finding on the same row).
+# Appendix U — Cycle seven (30 patches) and the damage_calc triage brief
+
+Commit `dfb4d10285c003e3f324ea1e1dcb06b296ff8fd3`, fingerprint
+`814b2bd28d3983813b972ba3fd0af7fcc46871085fdea6f0e654c767d076b577`, 30 patches,
+fuzz 0, 28 crate suites green. Seeds 1,500,000–1,500,299.
+
+## U.1 Build verified BEHAVIOURALLY, per this ledger's own carry
+
+`--check` passed, but §T's carry is that it *cannot* detect a stale wheel after a
+re-vendor restamp — the stamp is computed from source content, so it matches
+whether or not the wheel was rebuilt. Both probes were therefore run against the
+built wheel and are the actual gate:
+
+| probe | expected | measured |
+|---|---|---|
+| patch 29 regression: Pain Split clamp | `SideOne: 0`, `SideTwo: 7` | matched |
+| patch 30 / #942: Protect stall ladder | k=1 prices at 50% | k=0 -> single 100% branch; **k=1 -> 50.0%**; k=2 -> 25.0%; k=3 -> 12.5% |
+
+The ladder is exactly `0.5^k`, and k=0 correctly produces no failure branch.
+
+## U.2 ACCEPTANCE: still not authorized to fire (sixth hold)
+
+Outside-limit residue 141 -> **127**. The gate is *non-damage_calc residue fully
+attributed*; it is not. Of the 127, 46 are `damage_calc` and **81 are not** —
+22 structural, 22 `missing:itemleftovers`, 6 `missing:psn`, and 31 across small
+classes. The sweep was not started. Seed block 2,000,000+ remains unconsumed.
+
+## U.3 Expectations, scored honestly
+
+- **Protect credit was 14 rows, not ~1.** The measured drop is larger than the
+  retired 10-row prediction *and* than the ~1-row revision. `roll_scaled` -10,
+  `missing:psn` -3, `limit:roll_divergent_lethality` -2, `extra:itemleftovers,sandstorm` -1.
+- **The predicted leftovers/psn RELABEL did not happen.**
+  `missing_in_engine:itemleftovers` is unchanged at 22. #946 adjudicated those 8
+  rows as really being `damage_calc`, but the classifier was not changed, so the
+  labels did not move. The adjudication currently lives in the ledger, not in the
+  instrument. Either the classifier should be taught the distinction or the
+  ledger should say plainly that this class is known-mislabelled — leaving it
+  implicit is how a wrong label survives four more cycles.
+
+## U.4 DAMAGE_CALC TRIAGE BRIEF
+
+46 `damage_calc` rows yield 62 damaged-slot findings.
+
+**The partition that decides reality.** gen3 rolls 85–100% in 16 steps, so two
+honest implementations routinely disagree on one roll. A finding is real only
+when Showdown's value is reachable by **no** engine roll:
+
+| findings | verdict |
+|---|---|
+| 10 | reachable — a roll disagreement the `unexplained_ratio_*` label over-reported |
+| 52 | unreachable — real |
+
+The `unexplained_ratio_*` labels are **not** this test: their window is
+0.92–1.09, narrower than gen3's true roll spread, so they over-report. Cluster
+on legal-set membership; use the ratio only to *describe* a cluster once real.
+
+**A caveat about my own tool, before anyone uses its numbers.** The brief pairs
+observed against engine components by sorted magnitude, which mispairs when a
+slot has more than one (a 2-point residual gets paired against a 136-point move
+hit, yielding a nonsense ratio of 0.015). 15 of the 54 multi-component findings
+are excluded for this reason. **39 unambiguous single-component real findings**
+remain, and only those are clustered below.
+
+### Clusters
+
+| n | ratio band | reading |
+|---|---|---|
+| 11 | 0.85–1.00, tightly packed at **0.90–0.92** | best lead: engine base damage systematically ~8–10% high. Matches the reported Shadow Ball case (engine ~116 vs Showdown ~107 = 0.922) |
+| 10 | 0.50–0.70 | a ~1/2 or ~2/3 factor — candidate: type-effectiveness or resist rounding |
+| 7 | < 0.50 | scattered extremes |
+| 10 | > 1.00 | scattered extremes |
+| 1 | 0.70–0.85 | — |
+
+### Factors, ruled in and out
+
+- **Screens: ruled OUT, cleanly — 0 of 39.** Consistent with the standing note
+  that Reflect/Light Screen are unreachable in the gen3 randbats pool.
+- Defender stat stages: present in only 4 of 39.
+- Weather: present in 11 of 39 — worth a controlled look, not yet a cluster.
+- **No dominant move**: the 39 spread across 20+ moves, which argues against a
+  per-move data error and for a shared formula factor.
+- **4 findings are Sleep-Talk-called** and must be separated before any fit: the
+  move label is the *caller*, not the move that dealt the damage, and these
+  travel the known unknown-callee union path.
+
+### Recommended entry point for the fix lane
+
+Start with the 0.90–0.92 cluster: it is the largest, the tightest, and the only
+one with a clean quantitative signature. Take the tightest exemplars, compute
+gen3 base damage by hand for both implementations, and find the factor. Do not
+start from the extremes — they are a mixture, and at least some are pairing
+artifacts of the multi-component slots excluded above.
+
+## U.5 Retention
+
+Committed under #946's process fix: `reports/c7_summary.json` (counters and class
+census, **repros stripped** — 170 rows excluded) and
+`reports/c7_damage_calc_brief.json` (39 adjudicated row extracts, protocols
+stripped). No checkpoints or full-run dumps in tree.
