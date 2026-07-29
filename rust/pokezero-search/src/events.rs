@@ -692,8 +692,15 @@ pub fn render_branch_events(
             // and mark the branch lossy so callers can count it.
             out.lossy.push("segmentation_failed".to_string());
             let mut sim = Sim::new(state, ctx.hp_percent);
-            for ins in instructions {
-                render_residual_instruction(&mut sim, ins, ctx, &mut out, true);
+            for (index, ins) in instructions.iter().enumerate() {
+                render_residual_instruction(
+                    &mut sim,
+                    ins,
+                    instructions.get(index + 1),
+                    ctx,
+                    &mut out,
+                    true,
+                );
             }
             finish_ply(
                 &mut sim,
@@ -740,8 +747,15 @@ pub fn render_branch_events(
     let residual_segment = &instructions[seg.p2_end..];
     if eot_triggered {
         out.lines.push("|".to_string());
-        for ins in residual_segment {
-            render_residual_instruction(&mut sim, ins, ctx, &mut out, false);
+        for (index, ins) in residual_segment.iter().enumerate() {
+            render_residual_instruction(
+                &mut sim,
+                ins,
+                residual_segment.get(index + 1),
+                ctx,
+                &mut out,
+                false,
+            );
         }
         // A pivot in flight (U-turn/Baton Pass chose to switch, the engine
         // skipped residuals): the turn is not over — no |upkeep| yet.
@@ -1219,8 +1233,8 @@ fn render_move_phase(
                     // empty delta (an ambiguous no-op call still means the
                     // real stream had a called-move line we cannot emit).
                     out.lossy.push("sleeptalk_called_unidentified".to_string());
-                    for ins in &tail {
-                        render_residual_instruction(sim, ins, ctx, out, true);
+                    for (index, ins) in tail.iter().enumerate() {
+                        render_residual_instruction(sim, ins, tail.get(index + 1), ctx, out, true);
                     }
                 }
             }
@@ -2073,6 +2087,7 @@ fn emit_faint_if_dead(
 fn render_residual_instruction(
     sim: &mut Sim<'_>,
     ins: &Instruction,
+    next_ins: Option<&Instruction>,
     ctx: &EventContext,
     out: &mut RenderedEvents,
     lossy_mode: bool,
@@ -2100,7 +2115,7 @@ fn render_residual_instruction(
                 ));
                 emit_faint_if_dead(sim, side, ctx, out);
             } else {
-                let cause = residual_heal_cause(sim.state, side);
+                let cause = residual_heal_cause(sim.state, side, next_ins);
                 out.lines
                     .push(format!("|-heal|{ident}|{condition}|[from] {cause}"));
             }
@@ -2188,12 +2203,42 @@ fn residual_damage_cause(state: &State, side: SideReference, amount: i16) -> Str
     "residual".to_string()
 }
 
-fn residual_heal_cause(state: &State, side: SideReference) -> String {
+/// Attribute a residual heal.
+///
+/// The Wish test is ADJACENCY, not `wish.0 > 0`. `wish.0` is the pending-turn
+/// counter, so a side merely *carrying* a wish mislabels every ordinary
+/// Leftovers tick as `[from] move: Wish` — the engine emits `DecrementWish`
+/// ahead of the Leftovers heal on a non-resolving turn, leaving the counter
+/// positive when the heal is rendered. Verified against the instruction stream:
+///
+///   resolving      : `Heal`, `DecrementWish`, [`Heal` (Leftovers)]
+///   pending only   : `DecrementWish`, `Heal` (Leftovers)
+///   no wish        : `Heal` (Leftovers)
+///
+/// so the wish heal is exactly the one IMMEDIATELY FOLLOWED by `DecrementWish`
+/// for the same side. `next_ins` is the lookahead the caller supplies.
+///
+/// WHY THIS SURVIVES #876's RESIDUAL DEFERRAL. The deferral relocates the WHOLE
+/// end-of-turn residual block past a forced replacement — it does not reorder,
+/// split, or interleave the block's contents. `Heal`/`DecrementWish` are emitted
+/// as a unit at the wish's residual slot, so wherever the block is emitted the
+/// pair stays adjacent. The invariant is therefore structural (a property of how
+/// the block is constructed), not an observation about where the block happens
+/// to land, and it holds equally on the deferred ply.
+fn residual_heal_cause(
+    state: &State,
+    side: SideReference,
+    next_ins: Option<&Instruction>,
+) -> String {
     let s = match side {
         SideReference::SideOne => &state.side_one,
         SideReference::SideTwo => &state.side_two,
     };
-    if s.wish.0 > 0 {
+    let wish_resolving = matches!(
+        next_ins,
+        Some(Instruction::DecrementWish(d)) if d.side_ref == side
+    );
+    if wish_resolving {
         return "move: Wish".to_string();
     }
     let opponent = match side {
@@ -2420,6 +2465,74 @@ mod tests {
         assert_eq!(state.serialize(), serialized);
     }
 
+    /// A side merely CARRYING a pending wish must not have its ordinary
+    /// Leftovers tick attributed to Wish. Regression for the mapper mis-tag that
+    /// inflated the strict differential's divergence count (ledger Appendix B.5):
+    /// `residual_heal_cause` keyed on `wish.0 > 0`, but the engine emits
+    /// `DecrementWish` BEFORE the Leftovers heal on a non-resolving turn, so the
+    /// counter is still positive when the heal renders. Only a heal IMMEDIATELY
+    /// FOLLOWED by `DecrementWish` is the wish landing.
+    #[test]
+    fn pending_wish_does_not_steal_the_leftovers_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.get_active().item = Items::LEFTOVERS;
+        state.side_one.wish = (2, 50);
+        let heal = Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: 6,
+        });
+
+        // Pending but NOT resolving: the next instruction is not DecrementWish.
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        render_residual_instruction(&mut sim, &heal, None, &ctx(), &mut rendered, false);
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] item: Leftovers"),
+            "pending wish stole the Leftovers tag: {:?}",
+            rendered.lines
+        );
+
+        // Resolving: DecrementWish for the SAME side follows immediately.
+        let decrement = Instruction::DecrementWish(
+            poke_engine::instruction::DecrementWishInstruction {
+                side_ref: SideReference::SideOne,
+            },
+        );
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        render_residual_instruction(
+            &mut sim,
+            &heal,
+            Some(&decrement),
+            &ctx(),
+            &mut rendered,
+            false,
+        );
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] move: Wish"),
+            "resolving wish not attributed: {:?}",
+            rendered.lines
+        );
+
+        // A DecrementWish for the OTHER side must not claim this heal.
+        let other = Instruction::DecrementWish(
+            poke_engine::instruction::DecrementWishInstruction {
+                side_ref: SideReference::SideTwo,
+            },
+        );
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(&mut state, [false, false]);
+        render_residual_instruction(&mut sim, &heal, Some(&other), &ctx(), &mut rendered, false);
+        sim.finish();
+        assert!(
+            rendered.lines[0].contains("[from] item: Leftovers"),
+            "other side's wish stole the tag: {:?}",
+            rendered.lines
+        );
+    }
+
     #[test]
     fn liquid_ooze_negative_heal_renders_as_lethal_damage() {
         let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
@@ -2431,7 +2544,7 @@ mod tests {
         });
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
-        render_residual_instruction(&mut sim, &instruction, &ctx(), &mut rendered, false);
+        render_residual_instruction(&mut sim, &instruction, None, &ctx(), &mut rendered, false);
         assert_eq!(
             rendered.lines,
             [
