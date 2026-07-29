@@ -70,6 +70,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         vocab_patch = patch("pokezero.randbat_vocab.gen3_category_vocabulary", return_value=fake_vocab)
         vocab_patch.start()
         self.addCleanup(vocab_patch.stop)
+        # Consumption paths now derive the vocabulary from the CHECKPOINT and consult
+        # showdown_root only for aliases, so the alias builder needs the same stub — the
+        # fake root has no dex on disk.
+        alias_patch = patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={})
+        alias_patch.start()
+        self.addCleanup(alias_patch.stop)
 
     def test_run_neural_selfplay_iterations_requires_torch_before_collecting(self) -> None:
         if torch_available():
@@ -818,7 +824,20 @@ class NeuralSelfPlayTest(unittest.TestCase):
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         # The HIGH-1 mask latch inspects neural: spec checkpoints at CLI time; the fake
         # bootstrap path has no file, so stub the config-only loader with a default-mask config.
-        fake_spec_config = _entity_test_model_config()
+        #
+        # Its vocabulary must MATCH setUp's stubbed build enumeration. `iterate` is a hybrid:
+        # it mints a new model config from the build while admitting the pre-existing
+        # --initial-policy checkpoint into the same env. Those two must agree on the
+        # enumeration or the run is genuinely inconsistent, and the vocabulary latch now says
+        # so. The previous stub paired a 64-token initial policy with a 3-token build vocab —
+        # a state that could not encode coherently, which nothing detected before.
+        fake_spec_config = TransformerPolicyConfig.compact_category(
+            category_vocab=("move:c", "species:a", "species:b"),
+            category_oov_buckets=16,
+            policy_id="entity-test",
+            embedding_dim=16,
+            attention_heads=4,
+        )
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run, patch(
             "pokezero.neural_cli.load_transformer_model_config", return_value=fake_spec_config
         ):

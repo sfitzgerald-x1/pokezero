@@ -135,35 +135,34 @@ def _source_commit() -> str:
 def checkpoint_category_vocabulary(model_config, showdown_root: str):
     """The vocabulary the ROOT encode must use: the checkpoint's own.
 
-    `LocalShowdownConfig.category_vocab` defaults to None and the env then builds the
-    enumeration from the showdown root (local_showdown.py:505), which is the build's,
-    not the checkpoint's. `env_config_with_checkpoint_masks` latches the mask and spec
-    axes from checkpoint provenance but not this one, so nothing supplies it unless a
-    caller does. Post-#948 the LEAF tables speak the checkpoint's enumeration, so
-    leaving the root on the build's would put the two sides of one tree 13 volatile
-    rows apart. Anchor it here until the root-binding lane lands.
+    Why this exists (state as of #947, since superseded): `LocalShowdownConfig.category_vocab`
+    defaulted to None and the env then built the enumeration from the showdown root, which is
+    the build's and not the checkpoint's. The latch — then named
+    `env_config_with_checkpoint_masks` — covered the mask and spec axes but not this one, so
+    nothing supplied it unless a caller did. Post-#948 the LEAF tables speak the checkpoint's
+    enumeration, so leaving the root on the build's would put the two sides of one tree 13
+    volatile rows apart.
 
-    Alias and OOV handling come from the build's vocabulary object and only the token
-    list is swapped, which is exactly what the exporter does for the leaf tables, so
-    both sides resolve strings the same way.
+    **The root-binding lane has since landed** (`env_config_from_checkpoint_provenance`
+    now requires `required_vocabs`), so this is no longer the sole enforcement — it is
+    the harness's explicit pass-through, and the value `assert_vocab_alignment` gates on.
+    Both layers are kept on purpose.
+
+    Delegates to `category_vocab_from_model_config` so there is exactly ONE construction
+    point. It previously took the build's vocabulary object and swapped only the token
+    list, which left `oov_buckets` coming from the BUILD while the latch takes it from
+    the CHECKPOINT. Those agree today (both 16) and the objects compare equal, but two
+    independent constructions of the same thing is how the enumeration drifted in the
+    first place; a checkpoint trained with a different OOV width would have made the
+    latch refuse this harness's own anchoring.
     """
-    from dataclasses import replace as _replace
+    from pokezero.neural_policy import category_vocab_from_model_config
 
-    from pokezero.observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
-    from pokezero.neural_policy import observation_spec_from_model_config
-    from pokezero.randbat_vocab import gen3_category_vocabulary
-
-    spec = observation_spec_from_model_config(model_config)
-    base = gen3_category_vocabulary(
-        showdown_root,
-        include_turn_merged=spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
-    )
-    trained = tuple(str(t) for t in (getattr(model_config, "category_vocab", ()) or ()))
-    if not trained:
+    if not (getattr(model_config, "category_vocab", ()) or ()):
         raise SystemExit(
             "checkpoint carries no category_vocab; refusing to guess the enumeration"
         )
-    return _replace(base, tokens=trained)
+    return category_vocab_from_model_config(model_config, showdown_root)
 
 
 def assert_vocab_alignment(model_config, env_config, tables_path) -> str:
@@ -261,9 +260,10 @@ def main(argv=None) -> int:
     from pokezero.local_showdown import (
         LocalShowdownConfig,
         LocalShowdownEnv,
-        env_config_with_checkpoint_masks,
+        env_config_from_checkpoint_provenance,
     )
     from pokezero.neural_policy import (
+        category_vocab_from_model_config,
         feature_masks_from_model_config,
         load_transformer_model_config,
         observation_spec_from_model_config,
@@ -281,7 +281,14 @@ def main(argv=None) -> int:
         worlds=args.worlds,
     )
     model_config = load_transformer_model_config(args.checkpoint)
-    env_config = env_config_with_checkpoint_masks(
+    # BOTH layers, deliberately (merge reconciliation, 2026-07-29). The explicit
+    # category_vocab below is #952's per-caller anchoring; required_vocabs is the
+    # production latch. They are not redundant in the way they look: the explicit
+    # value is what `assert_vocab_alignment` gates on, and the latch is what makes
+    # the anchoring mandatory rather than a thing this harness remembered to do.
+    # Because both now resolve through `category_vocab_from_model_config`, they
+    # cannot drift; if they ever did, the latch refuses rather than picking one.
+    env_config = env_config_from_checkpoint_provenance(
         LocalShowdownConfig(
             showdown_root=args.showdown_root,
             set_belief_source=True,
@@ -291,6 +298,7 @@ def main(argv=None) -> int:
         ),
         feature_masks_from_model_config(model_config),
         required_specs=observation_spec_from_model_config(model_config),
+        required_vocabs=category_vocab_from_model_config(model_config, args.showdown_root),
         context="mcts acceptance re-bench",
     )
 

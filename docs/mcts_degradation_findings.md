@@ -836,7 +836,10 @@ staged `d6-s4096` config exists for this and is owner-gated.
   fix is to put the vocabulary hash (or its length) into the observation
   contract so the reuse key and the validator both see it.
 - **Root encode was BUILD-anchored, not checkpoint-anchored (bounded caveat, not
-  a retraction).** `scripts/mcts_acceptance_h2h.py` built its env as
+  a retraction).** *[CLOSED 2026-07-29 by #954: the vocabulary axis is now latched
+  for every consumption site and the latch is renamed
+  `env_config_from_checkpoint_provenance`. The description below is retained as the
+  state at the time of this finding — the old symbol name will not resolve.]* `scripts/mcts_acceptance_h2h.py` built its env as
   `LocalShowdownConfig(showdown_root=…, set_belief_source=True)` and passed
   **no `category_vocab`**; `env_config_with_checkpoint_masks` latches the mask
   and schema axes but not the vocabulary one, and `local_showdown` then falls

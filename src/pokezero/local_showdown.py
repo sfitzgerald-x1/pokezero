@@ -56,14 +56,21 @@ class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
 
 
-def env_config_with_checkpoint_masks(
+def env_config_from_checkpoint_provenance(
     env_config: LocalShowdownConfig,
     required_masks: "ObservationFeatureMasks | Sequence[ObservationFeatureMasks]",
     *,
     context: str,
     required_specs: "ObservationSpec | Sequence[ObservationSpec]" = (),
+    required_vocabs: "CategoryVocabulary | Sequence[CategoryVocabulary]" = (),
 ) -> "LocalShowdownConfig":
-    """Derive the env's encode-time feature masks AND observation spec from checkpoint provenance.
+    """Derive the env's encode-time masks, observation spec AND category vocabulary from provenance.
+
+    Renamed from ``env_config_with_checkpoint_masks`` on 2026-07-29. The old name asserted one
+    axis while the function latched three, and a label that stops the next reader from looking
+    is the failure mode this whole change is about — the vocabulary axis went unlatched for
+    months behind a comment that said MUST. A name is a claim about coverage; this one now
+    matches what it does.
 
     The train/eval consistency latch for the mask axis (same failure shape as the #492
     belief-source mismatch): a checkpoint stamped with ablation masks (K=32 budget, stats-off,
@@ -81,7 +88,25 @@ def env_config_with_checkpoint_masks(
     columns, no v2.1 blocks) and a v2.1 checkpoint the v2.1 encode — resolved from stamped
     provenance, never from the build's default. A v2 and a v2.1 checkpoint in one env, or an
     explicit non-default env spec that disagrees with the checkpoints', hard-fails loudly.
+
+    ``required_vocabs`` extends it to the token ENUMERATION axis, with the same semantics
+    again: pass each loaded checkpoint's ``category_vocab_from_model_config``. This axis
+    existed unlatched until 2026-07-29 and is the one that fails *silently*. Masks and spec
+    disagreements change the observation's SHAPE, so a mismatch tends to blow up in the
+    forward pass. The vocabulary is a positional list of the same width whichever build wrote
+    it: a token inserted mid-list renumbers everything after it and the encoder happily
+    produces a well-formed tensor of embedding rows that mean something else. Nothing
+    crashes; the model just scores a state it never saw.
+
+    **Fail-closed (mirrors #948's required-not-defaulted move).** When any checkpoint
+    provenance is supplied at all, ``required_vocabs`` is REQUIRED. Passing masks or a spec
+    while omitting the vocabulary raises rather than quietly leaving the env to enumerate
+    from the build — which is precisely the shape of the bug this closes, where
+    ``LocalShowdownConfig.category_vocab``'s "callers MUST pass the model's vocabulary"
+    contract was a comment that nothing enforced. A caller with no checkpoints in play
+    (``required_masks`` and ``required_specs`` both empty) is still a no-op.
     """
+    from .category_vocab import CategoryVocabulary
     from .observation import ObservationFeatureMasks, ObservationSpec
 
     if isinstance(required_masks, ObservationFeatureMasks):
@@ -96,8 +121,26 @@ def env_config_with_checkpoint_masks(
     for spec in required_specs:
         if spec not in distinct_specs:
             distinct_specs.append(spec)
-    if not distinct and not distinct_specs:
+    if isinstance(required_vocabs, CategoryVocabulary):
+        required_vocabs = (required_vocabs,)
+    distinct_vocabs: list[CategoryVocabulary] = []
+    for vocab in required_vocabs:
+        if vocab not in distinct_vocabs:
+            distinct_vocabs.append(vocab)
+    if not distinct and not distinct_specs and not distinct_vocabs:
         return env_config
+    if not distinct_vocabs:
+        # Fail closed. Provenance is in play, so the vocabulary is knowable and its absence
+        # is an un-updated call site, not a legitimate case: every valid
+        # TransformerPolicyConfig carries category_vocab (neural_policy.py __post_init__).
+        raise ValueError(
+            f"{context}: checkpoint provenance was supplied without required_vocabs. The "
+            "categorical vocabulary is part of the observation contract — the model's "
+            "embedding rows were learned against the enumeration stamped in the checkpoint, "
+            "and re-deriving it from the build silently shifts every token after any that "
+            "the build has since inserted. Pass category_vocab_from_model_config(config, "
+            "showdown_root) for each loaded checkpoint."
+        )
     if len(distinct) > 1:
         raise ValueError(
             f"{context}: checkpoints require conflicting observation feature masks "
@@ -150,6 +193,25 @@ def env_config_with_checkpoint_masks(
                     "env spec or evaluate a matching checkpoint."
                 )
             resolved = replace(resolved, observation_spec=required_spec)
+    if len(distinct_vocabs) > 1:
+        sizes = ", ".join(str(len(vocab.tokens)) for vocab in distinct_vocabs)
+        raise ValueError(
+            f"{context}: checkpoints were trained on different categorical vocabularies "
+            f"({sizes} tokens). One env encodes one enumeration, and the mismatched model "
+            "would index embedding rows it learned as other tokens — score them in "
+            "separate runs."
+        )
+    required_vocab = distinct_vocabs[0]
+    if resolved.category_vocab != required_vocab:
+        if resolved.category_vocab is not None:
+            raise ValueError(
+                f"{context}: env category vocabulary ({len(resolved.category_vocab.tokens)} "
+                f"tokens) conflicts with the loaded checkpoint's trained vocabulary "
+                f"({len(required_vocab.tokens)} tokens). Refusing to encode token rows the "
+                "model never trained on; drop the explicit env vocabulary or evaluate a "
+                "matching checkpoint."
+            )
+        resolved = replace(resolved, category_vocab=required_vocab)
     return resolved
 
 
@@ -174,8 +236,16 @@ class LocalShowdownConfig:
     # transition_token_budget fields.
     feature_masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS
     # Category vocabulary used to convert token strings to embedding rows. When None it is built
-    # from showdown_root; callers that pair the env with a specific model MUST pass the model's
-    # vocabulary here so encode-time rows match the embedding exactly (no silent row drift).
+    # from showdown_root, which is correct ONLY when no trained model is in play: the build's
+    # enumeration is a positional list, so a token added since a checkpoint was trained
+    # renumbers every token after it and the encoder resolves rows the model learned as other
+    # values — silently, since the tensor stays well-formed.
+    #
+    # This used to say callers "MUST" pass the model's vocabulary, and nothing enforced it;
+    # the production consumption sites did not. Enforcement now lives in
+    # `env_config_from_checkpoint_provenance`, which requires `required_vocabs` whenever any
+    # checkpoint provenance is supplied. Route env construction for a loaded checkpoint
+    # through that helper rather than setting this field by hand.
     category_vocab: "CategoryVocabulary | None" = None
     read_timeout_seconds: float = 10.0
     # Whether the belief engine narrows opponent candidate sets via the Gen 3 randbats set source
@@ -1585,7 +1655,7 @@ class LocalShowdownEnv:
         """Whether this env populates Tier-2 residuals into transition tokens.
 
         Requires both the encode-time mask (checkpoint-latched via
-        ``env_config_with_checkpoint_masks``) AND the candidate-set source — without
+        ``env_config_from_checkpoint_provenance``) AND the candidate-set source — without
         candidate variants every strike is unassessable, so the tracker is skipped
         outright and encodes stay byte-identical to a pre-#505 pipeline.
         """

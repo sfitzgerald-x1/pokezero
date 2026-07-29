@@ -2716,7 +2716,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         with (
             patch("pokezero.foulplay_bridge._validate_external_paths"),
             patch("pokezero.foulplay_bridge.load_transformer_checkpoint", return_value=(object(), FakeCheckpointResult())),
-            patch("pokezero.foulplay_bridge.gen3_category_vocabulary", return_value=object()),
+            patch("pokezero.foulplay_bridge.category_vocab_from_model_config", return_value=object()),
             patch("pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()),
             patch("pokezero.foulplay_bridge._build_policy", return_value=FakePolicy()),
             patch("pokezero.foulplay_bridge._FoulPlayWebsocketServer", FakeServer),
@@ -2868,7 +2868,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     "pokezero.foulplay_bridge.load_transformer_checkpoint",
                     return_value=(object(), FakeCheckpointResult()),
                 ),
-                patch("pokezero.foulplay_bridge.gen3_category_vocabulary", return_value=object()),
+                patch("pokezero.foulplay_bridge.category_vocab_from_model_config", return_value=object()),
                 patch("pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()),
                 patch("pokezero.foulplay_bridge._build_policy", return_value=FakePolicy()),
                 patch("pokezero.foulplay_bridge._FoulPlayWebsocketServer", FakeServer),

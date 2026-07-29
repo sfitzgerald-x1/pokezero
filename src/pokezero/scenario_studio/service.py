@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..checkpoint_factors import choice_label
-from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
+from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance
 from ..neural_policy import (
+    category_vocab_from_model_config,
     evaluate_transformer_action_priors,
     feature_masks_from_model_config,
     load_transformer_checkpoint,
@@ -65,11 +66,14 @@ class ScenarioStudioService:
         scenario = validate_scenario(EndgameScenario.from_payload(payload), self.catalog)
         checkpoint = Path(checkpoint_path).expanduser().resolve()
         model, result = load_transformer_checkpoint(checkpoint, map_location=device)
-        env_config = env_config_with_checkpoint_masks(
+        env_config = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(showdown_root=self.catalog.showdown_root),
             feature_masks_from_model_config(result.model_config),
             context="scenario root evaluation",
             required_specs=observation_spec_from_model_config(result.model_config),
+            required_vocabs=category_vocab_from_model_config(
+                result.model_config, self.catalog.showdown_root
+            ),
         )
         with LocalShowdownEnv(env_config) as env:
             env.reset_with_start_override(seed=scenario.seed, start_override=scenario_start_override(scenario))

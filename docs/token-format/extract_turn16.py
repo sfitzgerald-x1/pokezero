@@ -640,7 +640,7 @@ masks_section = {
         "resolution": (
             "which schema an env/harness encodes resolves from the loaded checkpoint's "
             "stamped model_config (feature_masks_from_model_config / "
-            "env_config_with_checkpoint_masks latch family); "
+            "env_config_from_checkpoint_provenance latch family); "
             "DEFAULT_REPLAY_OBSERVATION_SPEC only covers checkpoint-free encodes. All "
             "three schemas pass require_current_observation_schema; v1/unversioned "
             "artifacts refuse with replay-from-pinned-tag guidance."

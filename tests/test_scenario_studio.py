@@ -255,8 +255,11 @@ class ScenarioStudioIntegrationTest(unittest.TestCase):
             mock.patch("pokezero.scenario_studio.service.load_transformer_checkpoint", return_value=(object(), result)),
             mock.patch("pokezero.scenario_studio.service.feature_masks_from_model_config", return_value=object()),
             mock.patch("pokezero.scenario_studio.service.observation_spec_from_model_config", return_value=object()),
+            # The third derivation axis, stubbed like its two siblings above: the stub
+            # model_config is a SimpleNamespace with no stamped category_vocab.
+            mock.patch("pokezero.scenario_studio.service.category_vocab_from_model_config", return_value=object()),
             mock.patch(
-                "pokezero.scenario_studio.service.env_config_with_checkpoint_masks",
+                "pokezero.scenario_studio.service.env_config_from_checkpoint_provenance",
                 side_effect=lambda config, *_args, **_kwargs: config,
             ),
             mock.patch("pokezero.scenario_studio.service.evaluate_transformer_action_priors", side_effect=action_priors),

@@ -40,7 +40,7 @@ from pokezero.actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from pokezero.local_showdown import (
     LocalShowdownConfig,
     LocalShowdownEnv,
-    env_config_with_checkpoint_masks,
+    env_config_from_checkpoint_provenance,
 )
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
@@ -123,11 +123,14 @@ def capture_base_state(
     # harnesses apply; build_agent already resolved agent.spec from the checkpoint).
     env_config = LocalShowdownConfig(showdown_root=showdown_root)
     if agent.feature_masks is not None:
-        env_config = env_config_with_checkpoint_masks(
+        env_config = env_config_from_checkpoint_provenance(
             env_config,
             agent.feature_masks,
             context="policy_probe capture driver",
             required_specs=agent.spec,
+            # agent.vocab is the checkpoint's own enumeration (build_agent latches it), so
+            # this closes the loop: the env encodes the same rows the driver's model reads.
+            required_vocabs=agent.vocab,
         )
 
     for game_seed in range(seed, seed + max_seeds):

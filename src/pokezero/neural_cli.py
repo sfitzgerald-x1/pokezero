@@ -59,7 +59,7 @@ from .prior_belief_profile import (
 )
 from .public_decision_corpus import open_public_decision_corpus, sha256_file
 from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
-from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
@@ -75,6 +75,7 @@ from .neural_policy import (
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
     TransformerTrainingResult,
+    category_vocab_from_model_config,
     checkpoint_file_sha256,
     collect_categorical_ids,
     distributed_training_context,
@@ -2380,10 +2381,10 @@ def _prior_belief_profile(args: argparse.Namespace) -> int:
         )
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     observation_spec = observation_spec_from_model_config(result.model_config)
-    vocab = gen3_category_vocabulary(
-        args.showdown_root,
-        include_turn_merged=observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
-    )
+    # All three encode axes come from the checkpoint. The vocabulary used to be enumerated
+    # from the build here, alongside a spec and masks that were both checkpoint-derived —
+    # two of three fields resolved from provenance and the third silently not, in one literal.
+    vocab = category_vocab_from_model_config(result.model_config, args.showdown_root)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -3474,8 +3475,12 @@ def _train_with_value_selection(
     return model, selected_result, payload
 
 def _benchmark(args: argparse.Namespace) -> int:
-    # Benchmark loads arbitrary checkpoints; the env builds the vocabulary from showdown_root
-    # (the closed-universe default), which matches any checkpoint trained on the same root.
+    # Benchmark loads arbitrary checkpoints. This used to say the env could build the
+    # vocabulary from showdown_root because that "matches any checkpoint trained on the same
+    # root" — which is false, and was the premise behind the whole class of bug: the same
+    # root at a LATER BUILD REVISION enumerates differently, because the enumeration is
+    # derived from the dex as it exists now, not as it existed at training time. The
+    # vocabulary is left unset here and latched from the matchup checkpoints below.
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -8359,11 +8364,15 @@ def _env_config_with_matchup_masks(env_config, matchups, *, context: str):
     (HIGH-1 latch + the dual-schema resolution: v2 checkpoints keep the v2 encode)."""
     policies = [policy for matchup in matchups for policy in (matchup.p1_policy, matchup.p2_policy)]
     configs = transformer_model_configs_from_policies(policies)
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
+        required_vocabs=[
+            category_vocab_from_model_config(config, env_config.resolved_showdown_root())
+            for config in configs
+        ],
     )
 
 
@@ -8425,11 +8434,15 @@ def _env_config_with_mixed_history_masks(env_config, matchups, *, context: str):
     masks = [feature_masks_from_model_config(config) for config in configs]
     max_budget = max(mask.transition_token_budget for mask in masks)
     unified = [_replace(mask, transition_token_budget=max_budget) for mask in masks]
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         unified,
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
+        required_vocabs=[
+            category_vocab_from_model_config(config, env_config.resolved_showdown_root())
+            for config in configs
+        ],
     )
 
 
@@ -8441,11 +8454,15 @@ def _env_config_with_spec_masks(env_config, specs, *, extra_model_configs=(), co
         for path in neural_checkpoint_paths_from_policy_specs(specs)
     ]
     configs.extend(extra_model_configs)
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
+        required_vocabs=[
+            category_vocab_from_model_config(config, env_config.resolved_showdown_root())
+            for config in configs
+        ],
     )
 
 

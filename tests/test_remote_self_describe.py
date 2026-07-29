@@ -96,7 +96,12 @@ class RemoteSelfDescribeTests(unittest.TestCase):
         # schema, differs only in transition_token_count -> adopt the trained width.
         import dataclasses
 
-        from pokezero.local_showdown import env_config_with_checkpoint_masks
+        from pokezero.category_vocab import build_category_vocabulary
+        from pokezero.local_showdown import env_config_from_checkpoint_provenance
+
+        # The latch is fail-closed on the vocabulary axis; this test exercises the SPEC
+        # region-refinement rule, so it supplies a fixed enumeration to isolate that axis.
+        vocab = build_category_vocabulary(("species:a",))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             ckpt = _train_checkpoint(Path(temp_dir), "served")
@@ -108,9 +113,9 @@ class RemoteSelfDescribeTests(unittest.TestCase):
             wider = dataclasses.replace(
                 required_spec, transition_token_count=required_spec.transition_token_count + 48
             )
-            refined = env_config_with_checkpoint_masks(
+            refined = env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(observation_spec=wider), (), context="refine",
-                required_specs=required_spec,
+                required_specs=required_spec, required_vocabs=vocab,
             )
             self.assertEqual(refined.observation_spec, required_spec)
             # a REAL conflict (different feature width) still hard-fails
@@ -118,9 +123,9 @@ class RemoteSelfDescribeTests(unittest.TestCase):
                 required_spec, numeric_feature_count=required_spec.numeric_feature_count + 1
             )
             with self.assertRaisesRegex(ValueError, "conflicts"):
-                env_config_with_checkpoint_masks(
+                env_config_from_checkpoint_provenance(
                     LocalShowdownConfig(observation_spec=conflicted), (), context="refine",
-                    required_specs=required_spec,
+                    required_specs=required_spec, required_vocabs=vocab,
                 )
 
     def test_reload_refuses_token_shape_mismatch(self) -> None:

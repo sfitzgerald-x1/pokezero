@@ -321,7 +321,7 @@ class TransformerPolicyConfig:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         # Dual-schema window: v2 AND v2.1 checkpoints are both loadable — which encode an env
         # uses resolves FROM this stamped version (observation_spec_from_model_config through
-        # the env_config_with_checkpoint_masks latch). Loading a v2 checkpoint is NOT a
+        # the env_config_from_checkpoint_provenance latch). Loading a v2 checkpoint is NOT a
         # refusal case; v1/unversioned artifacts still die here with the pinned-tag message.
         if self.observation_schema_version not in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
             if (
@@ -2468,7 +2468,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
 
     THE single derivation point from stamped provenance to env behavior. Every harness that
     builds an env for a loaded checkpoint must route through this (via
-    ``local_showdown.env_config_with_checkpoint_masks``) — provenance nothing reads back is
+    ``local_showdown.env_config_from_checkpoint_provenance``) — provenance nothing reads back is
     how the #492 train/eval observation mismatch happened.
     """
     return ObservationFeatureMasks(
@@ -2503,6 +2503,57 @@ def observation_spec_from_model_config(config: TransformerPolicyConfig) -> Obser
         # expects trimmed arrays automatically. Inert for existing artifacts (the
         # parsed default is the schema's full region).
         transition_token_count=config.transition_token_count,
+    )
+
+
+def category_vocab_from_model_config(
+    config: TransformerPolicyConfig, showdown_root: "str | PathLike[str] | Path"
+) -> "CategoryVocabulary":
+    """Encode-time category vocabulary a checkpoint's observations were trained under.
+
+    The THIRD axis of checkpoint-driven encode resolution, alongside
+    :func:`feature_masks_from_model_config` and :func:`observation_spec_from_model_config`.
+    It was the axis nobody latched, and it is the one that silently mis-indexes embeddings.
+
+    The vocabulary is a POSITIONAL list — row = index + 1 — so a token inserted in the
+    middle renumbers every token after it. The model's embedding rows were learned against
+    the positions in force at TRAINING time. Re-deriving the enumeration from the build is
+    therefore correct only for a model the build itself created; for any older checkpoint it
+    hands the encoder a map that resolves the same string to a row the model learned as
+    something else. Measured on 2026-07-29: both 5M checkpoints trained on 1216 tokens while
+    the build had grown to 1217 (``volatile:solarbeam`` inserted at index 1204), shifting the
+    13 volatile tokens after it.
+
+    ``showdown_root`` supplies only the ALIASES (cosmetic formes, dynamic-power moves), which
+    are a build-side *mapping onto* rows rather than an enumeration of them: every alias is
+    resolved through this vocabulary's own token index, and one whose base is absent from the
+    checkpoint's tokens is dropped rather than inventing a row (``CategoryVocabulary.__post_init__``).
+    So aliases cannot shift a trained row; only ``tokens`` can, and those come from the checkpoint.
+    """
+    from .category_vocab import CategoryVocabulary
+    from .observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+    from .randbat_vocab import gen3_category_string_aliases
+
+    # getattr, not attribute access: a config-shaped stub without the field must get the
+    # explanatory error below rather than an AttributeError from a different layer.
+    tokens = tuple(str(token) for token in (getattr(config, "category_vocab", ()) or ()))
+    if not tokens:
+        raise ValueError(
+            "checkpoint has no stamped category_vocab; refusing to fall back to the build's "
+            "enumeration (that is the row-drift bug this function exists to prevent). "
+            "TransformerPolicyConfig.__post_init__ requires category_vocab on every valid "
+            "config, so this indicates a hand-built or corrupted config."
+        )
+    return CategoryVocabulary(
+        tokens=tokens,
+        oov_buckets=int(getattr(config, "category_oov_buckets", 0) or 0),
+        aliases=gen3_category_string_aliases(
+            showdown_root,
+            include_turn_merged=(
+                getattr(config, "observation_schema_version", "")
+                in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+            ),
+        ),
     )
 
 
