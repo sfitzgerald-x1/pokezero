@@ -2966,3 +2966,102 @@ final faint), or it is not reaching this path. Handed back to that lane with the
 Under `<scratch>/reports/`: `c3.json`, `c3.jsonl` (resumable), `c3.log`;
 `cyc300.json` (cycle 2) for the diff. `<scratch>` =
 `/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+
+---
+
+# Appendix Q — AMENDMENT to P.3: the off-by-one diagnosis was wrong
+
+§K precedent: the author retracts in place, the trail stays honest.
+
+## Q.1 RETRACTED
+
+**P.3 claimed the `restSleepAttempts -> rest_turns` conversion was off by one and
+prescribed `4 - k`. Both the diagnosis and the prescription are wrong.**
+
+`3 - k` is correct and was already correct. The build lane **refused the
+instructed change and proved it at the simulator**: a plain Rest emits exactly
+**two** `|cant|` lines and then wakes-and-acts on the third attempt. Both
+conventions decrement-then-check, which the vendored source confirms directly —
+`data/mods/gen3/conditions.ts`, `slp.onBeforeMove`:
+
+```js
+pokemon.statusState.time--;                    // decrement FIRST
+if (pokemon.statusState.time <= 0) { pokemon.cureStatus(); return; }   // then check
+this.add('cant', pokemon, 'slp');
+```
+
+With `time = 3`: attempt 1 -> 2, cant; attempt 2 -> 1, cant; attempt 3 -> 0,
+cure and act. Two cants, act on the third. `4 - k` would have held every
+Rest sleeper an extra turn.
+
+**Why earlier checks passed:** `k = 0` is the single value where `3 - k` and
+`4 - k` agree on behaviour, and that is the case the round-trip and unit checks
+exercised.
+
+## Q.2 The real mechanism: gen3's `skippedTime` refund
+
+Verified independently at source rather than inherited — same file,
+`slp.onStart` / `onSwitchIn` / `onBeforeMove`:
+
+```js
+onStart:     this.effectState.time = this.random(2, 6);
+             this.effectState.skippedTime = 0;
+onSwitchIn:  this.effectState.time += this.effectState.skippedTime;   // REFUND
+             this.effectState.skippedTime = 0;
+onBeforeMove: ... this.add('cant', pokemon, 'slp');
+              if (move.sleepUsable) { this.effectState.skippedTime++; return; }  // acts anyway
+              this.effectState.skippedTime = 0;
+              return false;
+```
+
+A `sleepUsable` move — **Sleep Talk or Snore** — emits `|cant|` *and then still
+acts*, banking the turn in `skippedTime`; switching out and back **refunds** it.
+So a Rest + Sleep Talk mon that pivots can emit **up to four** `|cant|` lines for
+a two-turn sleep.
+
+**The public cant count therefore does not determine the clock for those mons.**
+The conversion was sound; its *input* was not, for that population. Seed
+1500013's Dunsparce is exactly such a set — 3 of its 5 randbats variants carry
+both Rest and Sleep Talk, and **70 of 1,682 pool variants (4.2 %)** do.
+
+## Q.3 The fix, and its honest trade
+
+PR #927 (in review): **retire the Rest entry once a `sleepUsable` move is
+selected**, so those mons **decline** — fail closed — rather than build a wrong
+clock.
+
+The trade, stated plainly: the exact-gating population **shrinks** by the
+Rest + Sleep Talk share. §P.2 recorded +4,097 boundaries moving onto exact
+gating as this cycle's headline; some of those go back to support/declined. That
+is the right direction — a declined boundary is visible, a wrongly-built one is
+not — but it is a cost, not a free win. Modelling the refund properly (tracking
+`skippedTime` from the public stream) is a possible follow-up that would recover
+the population.
+
+## Q.4 Cycle-four expectations, adjusted
+
+| Population | Prediction |
+| --- | --- |
+| plain-Rest rows | **clear** under the already-correct `3 - k` |
+| Rest + Sleep Talk rows | move to **declined / support**, not exact — measured coverage may dip |
+| net divergence | should fall, but coverage is the number to watch, not just the count |
+
+## Q.5 The error chain, recorded in full
+
+1. My probe showed **what**: `rest_turns=1` wakes this turn, 2 and 3 do not.
+2. I narrated **why** — "off-by-one conversion" — without checking it against
+   the simulator. The probe result was true; the explanation was invented.
+3. That narration was turned into a prescription (`4 - k`) and dispatched as an
+   instruction.
+4. The build lane refused it and proved the correct behaviour at the sim.
+
+Steps 2 and 3 are both part of the failure: a wrong cause was manufactured, then
+promoted to an instruction without an independent check anywhere in between. The
+lesson is the one this ledger already carries three times over — **the probe
+shows WHAT; the WHY needs its own evidence** — and it now has a fourth entry, in
+which the person who wrote the rule broke it.
+
+Worth naming precisely: a refusal-with-evidence from the implementing lane is the
+control that caught this, and it is the same control that caught §J.3. Neither
+was caught by review of the reasoning; both were caught by someone trying to
+build the thing and finding it did not hold.
