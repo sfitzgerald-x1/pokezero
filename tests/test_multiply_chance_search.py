@@ -171,6 +171,92 @@ class MultiPlyChanceSearchTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             pokezero_search.puct_search_multi("garbage", 10)
 
+    # (g) seat orientation. The handcrafted leaf is computed straight off the
+    # state and is side-one-oriented by construction, and side two's PUCT flips
+    # Q -- so unlike a model leaf there is no seat-dependent conversion that can
+    # be forgotten. That is the argument; this is the measurement. A search on a
+    # state and on its SEAT-SWAPPED twin must reflect about 0.5, at every depth,
+    # or every seat-split strength read built on this path is meaningless.
+    def test_seat_swap_reflects_about_one_half(self) -> None:
+        import dataclasses
+
+        from pokezero.poke_engine_adapter import (
+            BattleSpec,
+            MoveSpec,
+            PokemonSpec,
+            SideSpec,
+            build_poke_engine_state,
+        )
+
+        def mon(species, moves, *, hp, speed):
+            return PokemonSpec(
+                id=species,
+                level=100,
+                types=("normal",),
+                hp=hp,
+                maxhp=hp,
+                attack=120,
+                defense=100,
+                special_attack=100,
+                special_defense=100,
+                speed=speed,
+                status="none",
+                moves=tuple(MoveSpec(id=move, pp=32) for move in moves),
+            )
+
+        # Deliberately ASYMMETRIC: a symmetric position would pass this test
+        # with the orientation wired backwards.
+        base = BattleSpec(
+            side_one=SideSpec(
+                pokemon=(mon("rattata", ("tackle", "splash"), hp=100, speed=200),)
+            ),
+            side_two=SideSpec(
+                pokemon=(mon("chansey", ("tackle", "splash"), hp=60, speed=80),)
+            ),
+        )
+        mirror = dataclasses.replace(base, side_one=base.side_two, side_two=base.side_one)
+        forward = build_poke_engine_state(base).to_string()
+        reversed_ = build_poke_engine_state(mirror).to_string()
+
+        # Tolerance: the two searches realize different stochastic branch
+        # samples, so agreement is statistical, not bit-exact. 0.03 is far
+        # inside what any orientation error would produce -- an unreflected
+        # value on one seat moves these sums by |2q - 1|, which on this
+        # deliberately lopsided fixture is an order of magnitude larger.
+        tolerance = 0.03
+        for depth in (1, 2, 4, 6):
+            with self.subTest(depth=depth):
+                a = self.search(forward, max_depth=depth, seed=11)
+                b = self.search(reversed_, max_depth=depth, seed=11)
+                self.assertAlmostEqual(
+                    a["root_value"] + b["root_value"],
+                    1.0,
+                    delta=tolerance,
+                    msg="root value must reflect about 0.5 under a seat swap",
+                )
+                # Direction, which noise cannot fake: whichever seat the healthy
+                # fast mon sits on must be the favored one, so the two root
+                # values fall on opposite sides of 0.5.
+                self.assertLess(
+                    (a["root_value"] - 0.5) * (b["root_value"] - 0.5),
+                    0.0,
+                    msg="seat swap did not flip which side the search favors",
+                )
+                # The acting side's own arm values must reflect too: side one's
+                # Q in the forward state is side two's 1-Q in the mirror. Only
+                # arms the search actually invested in carry a meaningful mean.
+                budget = sum(entry["visits"] for entry in a["side_one"])
+                for entry in a["side_one"]:
+                    if entry["visits"] < 0.05 * budget:
+                        continue
+                    mirrored = _q(b, "side_two", entry["move"])
+                    self.assertAlmostEqual(
+                        entry["q"] + mirrored,
+                        1.0,
+                        delta=tolerance,
+                        msg=f"arm {entry['move']!r} is not seat-symmetric",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

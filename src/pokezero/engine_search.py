@@ -268,6 +268,14 @@ class EngineMctsConfig:
     # world, the crate's search_batched_multi_encoded — live root fold +
     # per-branch observations + in-crate TorchScript leaf eval + self-side
     # model priors in PUCT selection.
+    # "hp_fraction_crate": the CRATE's own multi-ply PUCT tree
+    # (pokezero_search.puct_search_multi) with the handcrafted HP-fraction leaf
+    # evaluator instead of the model. Measurement instrument for the depth-decay
+    # study (docs/mcts_handcrafted_leaf_depth_findings.md): it holds the search
+    # STRUCTURE fixed — identical traverse/expand/finalize, identical
+    # decision/chance node shape, identical depth and c_puct semantics — and
+    # swaps only the leaf value function, which is what separates "the defect is
+    # in the tree" from "the defect is in the learned value".
     leaf_eval: str = "hp_fraction"
     # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
     # artifact must run on cpu) and the encoder tables JSON
@@ -300,10 +308,17 @@ class EngineMctsConfig:
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
-        if self.leaf_eval not in ("hp_fraction", "model"):
+        if self.leaf_eval not in ("hp_fraction", "hp_fraction_crate", "model"):
             raise ValueError(
-                f"leaf_eval must be 'hp_fraction' or 'model', got {self.leaf_eval!r}."
+                "leaf_eval must be 'hp_fraction', 'hp_fraction_crate' or 'model', "
+                f"got {self.leaf_eval!r}."
             )
+        if self.leaf_eval == "hp_fraction_crate":
+            if self.search_sims <= 0 or self.search_depth <= 0:
+                raise ValueError(
+                    "search_sims and search_depth must be positive for "
+                    "leaf_eval='hp_fraction_crate'."
+                )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
                 raise ValueError(
@@ -432,6 +447,14 @@ class EngineMctsStats:
     # Tier-2 overlay telemetry (zero without an annotation source).
     fold_annotations_applied: int = 0
     fold_annotation_boundaries: int = 0
+    # Depth-reached instrumentation (hp_fraction_crate mode). The crate counts
+    # the deepest decision node any traversal actually opened; the depth CAP is
+    # only a real knob where these numbers sit at it. Recorded per SEARCHED
+    # WORLD, so depth_reached_samples counts worlds, not decisions.
+    depth_reached_samples: int = 0
+    depth_reached_sum: int = 0
+    depth_reached_max: int = 0
+    depth_reached_histogram: Counter = field(default_factory=Counter)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -472,7 +495,17 @@ class EngineMctsStats:
             "fold_cross_check_failures": self.fold_cross_check_failures,
             "fold_annotations_applied": self.fold_annotations_applied,
             "fold_annotation_boundaries": self.fold_annotation_boundaries,
+            "depth_reached_samples": self.depth_reached_samples,
+            "depth_reached_max": self.depth_reached_max,
+            "depth_reached_histogram": {
+                str(depth): count
+                for depth, count in sorted(self.depth_reached_histogram.items())
+            },
         }
+        if self.depth_reached_samples:
+            payload["depth_reached_mean"] = (
+                self.depth_reached_sum / self.depth_reached_samples
+            )
         if self.searched_decisions:
             payload["iterations_per_searched_decision"] = (
                 self.total_iterations / self.searched_decisions
@@ -647,6 +680,8 @@ class EngineMctsPolicy:
 
         if self._config.leaf_eval == "model":
             return self._search_model(context, worlds, live_fold, rng)
+        if self._config.leaf_eval == "hp_fraction_crate":
+            return self._search_hp_fraction_crate(context, worlds, rng)
 
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
@@ -684,7 +719,100 @@ class EngineMctsPolicy:
             },
         )
 
+    def _search_hp_fraction_crate(
+        self,
+        context: PolicyContext,
+        worlds: list[tuple[EngineWorld, Any]],
+        rng: random.Random,
+    ) -> PolicyDecision:
+        """Crate PUCT tree, handcrafted HP-fraction leaves, no learned model.
 
+        The controlled twin of ``_search_model``: same belief worlds, same
+        per-world visit-share aggregation, same choice mapping, same fallback
+        taxonomy. The ONLY differences are inside the tree —
+
+        - leaves are priced by ``HpFractionEval`` instead of a TorchScript
+          forward, so no observation encode, no fold chaining, no priors;
+        - the acting side's root priors stay uniform (``model_priors`` has no
+          meaning without a model);
+        - leaf pricing is inline (``LeafPrice::Ready``), so the driver is the
+          sequential one. ``search_batch`` is therefore inert here — it is the
+          batched driver's virtual-loss width, and the sequential driver is the
+          b=1 limit of it (crate test ``b=1 ≡ sequential``).
+
+        ``max_depth``/``search_sims``/``c_puct``/``deep_ko_split`` carry exactly
+        the meanings they carry in model mode: the identical ``MultiPlyConfig``
+        reaches the identical ``traverse``/``finalize``.
+        """
+
+        import pokezero_search  # noqa: PLC0415 — optional native dependency
+
+        config = self._config
+        aggregated: Counter[str] = Counter()
+        depths_reached: list[int] = []
+        worlds_searched_here = 0
+        search_started = time.perf_counter()
+        for world, state in worlds:
+            side_key = (
+                "side_one"
+                if world.slot_sides[context.player_id] == "side_one"
+                else "side_two"
+            )
+            try:
+                report = json.loads(
+                    pokezero_search.puct_search_multi(
+                        state.to_string(),
+                        config.search_sims,
+                        max_depth=config.search_depth,
+                        c_puct=config.c_puct,
+                        seed=rng.getrandbits(63),
+                        deep_ko_split=config.deep_ko_split,
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                detail = (
+                    str(error).splitlines()[0][:160] if str(error) else type(error).__name__
+                )
+                self.stats.world_failure_reasons[f"crate_search_hp: {detail}"] += 1
+                continue
+            entries = report[side_key]
+            total = max(sum(entry["visits"] for entry in entries), 1)
+            for entry in entries:
+                aggregated[entry["move"]] += entry["visits"] / total
+            reached = int(report["max_depth_reached"])
+            depths_reached.append(reached)
+            self.stats.depth_reached_samples += 1
+            self.stats.depth_reached_sum += reached
+            self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+            self.stats.depth_reached_histogram[reached] += 1
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.worlds_searched += 1
+            worlds_searched_here += 1
+        self.stats.search_wall_seconds += time.perf_counter() - search_started
+
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
+
+        action_index = self._map_choices(context, aggregated)
+        if action_index is None:
+            return self._fallback(context, rng, "choices_unmapped")
+
+        self.stats.searched_decisions += 1
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=self.policy_id,
+            metadata={
+                "engine_mcts": {
+                    "leaf_eval": "hp_fraction_crate",
+                    "worlds_searched": worlds_searched_here,
+                    "max_depth_reached": max(depths_reached),
+                    "depths_reached": tuple(depths_reached),
+                    "aggregated_choices": {
+                        choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                    },
+                }
+            },
+        )
 
     # ------------------------------------------------------------------------------
     # Live incremental root fold (ledger item: "live root-fold export")
