@@ -1029,6 +1029,46 @@ def _spec(name):
             expect={"announced": True, "fainted": False},
             landmark=lambda L: _has(L, "|-fieldactivate|move: Perish Song"),
             landmark_desc="Perish Song resolved")
+    if name in ("solarbeamrelease", "solarbeamcontrol"):
+        # Solar Beam is the ONLY charge move in the gen3 randbats pool (of the 17
+        # dex moves flagged `charge: 1`), so this is the whole reachable surface of
+        # the mid-charge state that world construction was missing.
+        #
+        # The protocol is the contract both new halves key off: the charge is
+        # `|move|...||[still]` + `|-prepare|`, and the release is a SECOND `|move|`
+        # tagged `[from] lockedmove` — one click, two announced turns. The control
+        # is the same Pokemon in SUN, and it is more interesting than expected:
+        # Showdown still emits `|move|...||[still]` AND `|-prepare|` there, then
+        # fires in the SAME turn via `|-anim|` + damage, with no second `|move|`
+        # line. So `-prepare` alone does NOT mean "is charging" — the discriminator
+        # is whether a `[from] lockedmove` release follows or an `-anim` lands on
+        # the spot. That is exactly what the parser keys off, and getting it wrong
+        # leaves a sunny Solar Beam user holding a phantom charge.
+        sun = name == "solarbeamcontrol"
+        eggy = FixturePokemon(species="Exeggutor", ability="Chlorophyll", item="None",
+                              moves=("Solar Beam", "Sunny Day"))
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                             moves=("Splash",))
+        turns = ([("move sunnyday", "move splash")] if sun else []) + [
+            ("move solarbeam", "move splash"), ("move solarbeam", "move splash"),
+        ]
+        return dict(
+            p1=[eggy], p2=[lax],
+            turns=turns, measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "prepared": _has(L, "|-prepare|p1a: Exeggutor|Solar Beam"),
+                "released_from_lockedmove": _has(L, "[from] lockedmove"),
+                "fired_on_the_spot": _has(L, "|-anim|p1a: Exeggutor|Solar Beam"),
+                "damaged": _has(L, "|-damage|p2a: Snorlax"),
+            },
+            # `-prepare` is announced either way; the two paths differ in HOW the
+            # beam lands, which is the fact world construction has to read.
+            expect={"prepared": True,
+                    "released_from_lockedmove": not sun,
+                    "fired_on_the_spot": sun,
+                    "damaged": True},
+            landmark=lambda L: _has(L, "|move|p1a: Exeggutor|Solar Beam"),
+            landmark_desc="Solar Beam used")
     if name == "perishladder":
         return dict(
             p1=_perish_p1, p2=_perish_p2, turns=_perish_turns,
@@ -1358,6 +1398,7 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "toxicladder", "toxicladdercontrol", "sandminimum",
              "lastmoveparaencore", "lastmoveconfusionencore",
              "lastmoveflinchencore", "lastmoveexecutedcontrol",
+             "solarbeamrelease", "solarbeamcontrol",
              "whirlwindprotect", "roarprotect", "whirlwinddrag",
              "whirlwindsub",
              "flailladder", "reversalladder", "flailladdercontrol",
