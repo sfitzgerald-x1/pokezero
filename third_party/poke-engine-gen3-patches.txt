@@ -863,6 +863,40 @@ poke-engine-gen3-rest-fullhp.patch
 # rust/pokezero-search/tests/gen3_painsplit_fidelity.rs. Touches
 # gen3/choice_effects.rs only; applied before the fixture refresh.
 poke-engine-gen3-painsplit-clamp.patch
+# gen3 consecutive-Protect success FLOORS at 1/8.
+#
+# gen3 resolves `stall` through gen4's `{ inherit: true, counterMax: 8 }`, and
+# that `inherit: true` resolves to GEN5's full definition, NOT to base — the
+# fifth inheritance direction recorded in the ledger's Dex-resolution rule. The
+# counter starts at 2 and doubles under a test-before-multiply gate,
+# `if (counter < counterMax) counter *= 2`, so it walks 2 -> 4 -> 8 and then
+# STOPS because `8 < 8` is false. The chance is 1/counter:
+#
+#     attempt   1     2     3     4     5     6 ...
+#     gen3      1    1/2   1/4   1/8   1/8   1/8
+#     upstream  1    1/2   1/4   1/8  1/16  1/32
+#
+# The ladder first REACHES 1/8 at the 4th attempt, which upstream already priced
+# correctly. Upstream first DIVERGES at the 5th, where it keeps halving past the
+# cap. Clamping the exponent at 3 reproduces the cap exactly (0.5^3 == 1/8).
+#
+# EVIDENCE BASIS, stated plainly because it differs from most patches here: the
+# floor itself is NOT empirically confirmed against the sim and is not claimed to
+# be. The 5th consecutive Protect needs four consecutive successes —
+# 1 * 1/2 * 1/4 * 1/8 = 1/64, about 1.6% of sequences — so no affordable sample
+# separates 1/8 from 1/16 there. What IS measured (160 seeds) is the x2 ladder
+# the floor sits on: 2nd attempt 239/496 = 0.482, 3rd 40/204 = 0.196, which is
+# ~7 sigma from the x3 reading that a base-data walk produces. That measurement
+# is what makes the resolved reading trustworthy; the cap is then read off the
+# same resolved definition and pinned at the engine level both ways.
+#
+# Pinned by rust/pokezero-search/tests/gen3_protect_floor_fidelity.rs, which
+# keeps attempts 1-4 as controls: they pass with and without this patch, so a
+# change that moved them would be altering behaviour the measurement endorses.
+# Touches the consecutive-Protect branch in gen3/generate_instructions.rs only;
+# applied before the fixture refresh.
+poke-engine-gen3-protect-floor.patch
+
 
 
 

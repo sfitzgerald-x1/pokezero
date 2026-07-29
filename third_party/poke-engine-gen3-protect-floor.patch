@@ -1,0 +1,32 @@
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-29 04:25:04
++++ b/src/gen3/generate_instructions.rs	2026-07-29 04:26:40
+@@ -2039,8 +2039,26 @@
+     if attacking_side.side_conditions.protect > 0 {
+         if let Some(vs) = &attacker_choice.volatile_status {
+             if PROTECT_VOLATILES.contains(&vs.volatile_status) {
+-                let protect_success_chance =
+-                    CONSECUTIVE_PROTECT_CHANCE.powi(attacking_side.side_conditions.protect as i32);
++                // pokezero gen3 fidelity fix: the success chance FLOORS at 1/8.
++                //
++                // gen3 resolves `stall` through gen4's
++                // `{ inherit: true, counterMax: 8 }`, and that `inherit: true`
++                // resolves to GEN5's full definition (not base): the counter
++                // starts at 2 and doubles, gated test-before-multiply by
++                // `if (counter < counterMax) counter *= 2`. So the counter walks
++                // 2 -> 4 -> 8 and then STOPS, because `8 < 8` is false, and the
++                // chance is 1/counter:
++                //
++                //   attempt   1     2     3     4     5     6 ...
++                //   gen3      1    1/2   1/4   1/8   1/8   1/8
++                //   upstream  1    1/2   1/4   1/8  1/16  1/32
++                //
++                // The ladder first REACHES 1/8 at the 4th attempt, which upstream
++                // already priced correctly; upstream first DIVERGES at the 5th,
++                // where it keeps halving past the cap. Clamping the exponent at 3
++                // reproduces the cap exactly, since 0.5^3 == 1/8.
++                let protect_success_chance = CONSECUTIVE_PROTECT_CHANCE
++                    .powi(cmp::min(attacking_side.side_conditions.protect as i32, 3));
+                 let mut protect_fail_instruction = incoming_instructions.clone();
+                 protect_fail_instruction.update_percentage(1.0 - protect_success_chance);
+                 final_instructions.push(protect_fail_instruction);
