@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from engine_transition_differential import (  # noqa: E402
+    _split_components,
     damage_components,
     roll_components_agree,
 )
@@ -98,6 +99,71 @@ class ComponentExtraction(unittest.TestCase):
         self.assertEqual(
             damage_components(lines, {"p1": 134})["p1"], [("itemleftovers", 16)]
         )
+
+
+class SleepTalkUnknownCallee(unittest.TestCase):
+    """A Sleep Talk branch the mapper could not attribute is still validatable.
+
+    The mapper cannot recover WHICH move Sleep Talk called, so it renders the
+    called move's damage as `[from] residual` and flags the branch. That routed
+    real move damage into the EXACT bucket, where it could never match
+    Showdown's bare `-damage` line. The engine still branches over the candidate
+    calls and the matching branch is present — only the label is missing — so
+    the damage is reclassified as roll-scaled and matched against the union.
+
+    Both pins come from rows that were replayed by hand:
+      seed 1350014 step 55 — Sleep Talk called Seismic Toss for exactly -78
+      seed 1350019 step 99 — called Psychic for -97 vs Showdown's -103
+    """
+
+    ENGINE_LINE = "|-damage|p1a: Armaldo|122/260 par|[from] residual"
+
+    def test_unattributed_damage_stays_exact_by_default(self):
+        got = damage_components(
+            [self.ENGINE_LINE], {"p1": 200}, unattributed_damage_as_roll=False
+        )
+        exact, rolled = _split_components(got["p1"])
+        self.assertEqual(sorted(exact.elements()), [("residual", -78)])
+        self.assertEqual(rolled, [])
+
+    def test_unattributed_damage_becomes_roll_scaled_when_flagged(self):
+        got = damage_components(
+            [self.ENGINE_LINE], {"p1": 200}, unattributed_damage_as_roll=True
+        )
+        exact, rolled = _split_components(got["p1"])
+        self.assertEqual(list(exact.elements()), [])
+        self.assertEqual(rolled, [("move_unknown_callee", -78)])
+
+    def test_seed_1350014_step_55_exact_damage_PASSES(self):
+        """The replayed row: Showdown -78 bare, engine -78 unattributed."""
+
+        observed = damage_components(
+            ["|-damage|p1a: Armaldo|122/260 par"], {"p1": 200}
+        )["p1"]
+        engine = damage_components(
+            [self.ENGINE_LINE], {"p1": 200}, unattributed_damage_as_roll=True
+        )["p1"]
+        self.assertTrue(roll_components_agree(
+            _split_components(observed)[1], _split_components(engine)[1], None))
+
+    def test_seed_1350019_step_99_in_window_damage_PASSES(self):
+        """Showdown -103 against the engine's -97: inside the roll window."""
+
+        self.assertTrue(roll_components_agree(
+            [("", -103)], [("move_unknown_callee", -97)], None))
+
+    def test_fabricated_wrong_damage_FAILS(self):
+        """The guard: a callee whose damage is nowhere near must still diverge."""
+
+        self.assertFalse(roll_components_agree(
+            [("", -78)], [("move_unknown_callee", -20)], None))
+        self.assertFalse(roll_components_agree(
+            [("", -78)], [("move_unknown_callee", -200)], None))
+
+    def test_missing_damage_entirely_FAILS(self):
+        """Reclassification must not make an absent component match a present one."""
+
+        self.assertFalse(roll_components_agree([("", -78)], [], None))
 
 
 class LengthMismatch(unittest.TestCase):

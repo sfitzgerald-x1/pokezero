@@ -305,7 +305,28 @@ def engine_choice_for_action(
 # step 72 — Showdown healed 251 from 2 HP, the engine healed 247 from 6 HP, same
 # mechanic, different Surf roll). A bare heal that does NOT reach full is a pure
 # fraction (Recover = maxhp/2) and stays EXACT.
-_ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion", "capped_lethal"})
+_ROLL_SCALED_SOURCES = frozenset(
+    {"", "recoil", "drain", "confusion", "capped_lethal", "move_unknown_callee"}
+)
+
+# The mapper cannot recover WHICH move Sleep Talk called from the instruction
+# delta (rust/pokezero-search/src/events.rs:1230, "documented insufficiency"), so
+# it flags the branch and renders the called move's damage with the generic
+# `[from] residual` tag. That routed real move damage into the EXACT bucket,
+# where it can never match Showdown's bare `-damage` line.
+#
+# It does not have to. The engine still BRANCHES over the candidate call set, and
+# each branch carries a concrete called move's damage — replaying two residue
+# rows showed the matching branch plainly present (seed 1350014 step 55: −78
+# exact; seed 1350019 step 99: −97 against Showdown's −103, inside the roll
+# window). The information needed to validate is there; only the LABEL is
+# missing. So within such a branch the unattributed damage is reclassified as
+# roll-scaled move damage of an unknown callee, and the realized outcome is
+# validated against the UNION of the candidate branches' supports — the same
+# support-based principle already used for hidden counters.
+_SLEEPTALK_LOSSY_MARKER = "sleeptalk_called_unidentified"
+_UNATTRIBUTED_DAMAGE_SOURCE = "residual"
+_UNKNOWN_CALLEE_SOURCE = "move_unknown_callee"
 # Sources whose rendering the mapper is known not to reproduce line-for-line;
 # counted and excluded rather than silently mismatched.
 _IGNORED_SOURCES = frozenset({"lockedmove"})
@@ -325,7 +346,10 @@ _CANONICAL_PARTIAL_TRAP = "partialtrap"
 
 
 def damage_components(
-    lines: Sequence[str], initial_hp: Mapping[str, int] | None = None
+    lines: Sequence[str],
+    initial_hp: Mapping[str, int] | None = None,
+    *,
+    unattributed_damage_as_roll: bool = False,
 ) -> dict[str, list[tuple[str, int]]]:
     """Per-source HP deltas from a protocol slice, keyed by slot.
 
@@ -371,6 +395,14 @@ def damage_components(
                 break
         if source in _PARTIAL_TRAP_SOURCES:
             source = _CANONICAL_PARTIAL_TRAP
+        if (
+            unattributed_damage_as_roll
+            and tag == "-damage"
+            and source == _UNATTRIBUTED_DAMAGE_SOURCE
+        ):
+            # Scoped to branches the mapper flagged: this is a called move's
+            # damage wearing a generic tag, not a genuine residual.
+            source = _UNKNOWN_CALLEE_SOURCE
         if not source and tag == "-heal":
             source = "heal"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
@@ -920,13 +952,22 @@ def evaluate_boundary_strict(
         for branch in branches:
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
-            if branch.get("lossy"):
+            lossy = list(branch.get("lossy") or [])
+            # A branch whose ONLY defect is the known Sleep Talk callee-identity
+            # gap is still usable: its damage is real, only its attribution is
+            # generic. Any other lossy marker is a different insufficiency and
+            # still disqualifies the branch.
+            sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
+            if lossy and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
                 continue
+            if sleeptalk_union:
+                counts["strict:sleeptalk_union_branch"] += 1
             usable_branches += 1
             engine_components = damage_components(
                 branch.get("events") or [],
                 {engine_label_for_slot[slot]: pre_hp[slot] for slot in ("p1", "p2")},
+                unattributed_damage_as_roll=sleeptalk_union,
             )
             ok = True
             reason = None
