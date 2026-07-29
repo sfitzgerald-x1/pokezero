@@ -39,7 +39,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def build_provenance(checkpoint: str, config_id: str, arm: str) -> str:
+def build_provenance(checkpoint: str, config_id: str, arm: str, *,
+                     vocab_sha256: str, commit: str) -> str:
     """Bind every row to the exact build + cell that produced it.
 
     ``merge_game_results`` treats a canonical-outcome conflict as terminal, so
@@ -56,6 +57,12 @@ def build_provenance(checkpoint: str, config_id: str, arm: str) -> str:
         "checkpoint": checkpoint,
         "config_id": config_id,
         "arm": arm,
+        # The enumeration the encode actually used. Rows produced against a
+        # different vocabulary describe different observations, so they must not
+        # merge with these -- `merge_game_results` treats a provenance conflict as
+        # terminal, which is exactly the protection wanted here.
+        "category_vocab_sha256": vocab_sha256,
+        "commit": commit,
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()
@@ -98,6 +105,113 @@ def build_policies(checkpoint, showdown_root, device, cfg, annotation_source):
         annotation_source=annotation_source,
     )
     return search, raw
+
+
+
+def _source_commit() -> str:
+    """The pokezero commit this container was built from.
+
+    Images do not carry .git, so the build stamps POKEZERO_COMMIT; fall back to a
+    local checkout when running outside a container, and never silently report
+    "unknown" as if it were a SHA.
+    """
+    import os
+    import subprocess
+
+    stamped = os.environ.get("POKEZERO_COMMIT")
+    if stamped:
+        return stamped
+    try:
+        return subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except Exception:
+        raise SystemExit(
+            "cannot determine the source commit: set POKEZERO_COMMIT in the job spec"
+        )
+
+
+def checkpoint_category_vocabulary(model_config, showdown_root: str):
+    """The vocabulary the ROOT encode must use: the checkpoint's own.
+
+    `LocalShowdownConfig.category_vocab` defaults to None and the env then builds the
+    enumeration from the showdown root (local_showdown.py:505), which is the build's,
+    not the checkpoint's. `env_config_with_checkpoint_masks` latches the mask and spec
+    axes from checkpoint provenance but not this one, so nothing supplies it unless a
+    caller does. Post-#948 the LEAF tables speak the checkpoint's enumeration, so
+    leaving the root on the build's would put the two sides of one tree 13 volatile
+    rows apart. Anchor it here until the root-binding lane lands.
+
+    Alias and OOV handling come from the build's vocabulary object and only the token
+    list is swapped, which is exactly what the exporter does for the leaf tables, so
+    both sides resolve strings the same way.
+    """
+    from dataclasses import replace as _replace
+
+    from pokezero.observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+    from pokezero.neural_policy import observation_spec_from_model_config
+    from pokezero.randbat_vocab import gen3_category_vocabulary
+
+    spec = observation_spec_from_model_config(model_config)
+    base = gen3_category_vocabulary(
+        showdown_root,
+        include_turn_merged=spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    )
+    trained = tuple(str(t) for t in (getattr(model_config, "category_vocab", ()) or ()))
+    if not trained:
+        raise SystemExit(
+            "checkpoint carries no category_vocab; refusing to guess the enumeration"
+        )
+    return _replace(base, tokens=trained)
+
+
+def assert_vocab_alignment(model_config, env_config, tables_path) -> str:
+    """Hard stop before the first game: root, checkpoint and leaf must agree.
+
+    Same standing as the engine fingerprint gate, and for the same reason -- a
+    misaligned enumeration does not error, it produces a plausible number. Returns
+    the vocabulary digest so it can be stamped into every row's provenance.
+    """
+    import hashlib
+    import json as _json
+
+    checkpoint_tokens = tuple(str(t) for t in (model_config.category_vocab or ()))
+    root_vocab = env_config.category_vocab
+    if root_vocab is None:
+        raise SystemExit(
+            "root encode would build its own vocabulary from the showdown root; "
+            "the env config must carry the checkpoint's."
+        )
+    root_tokens = tuple(str(t) for t in root_vocab.tokens)
+    if root_tokens != checkpoint_tokens:
+        raise SystemExit(
+            f"root vocabulary != checkpoint: {len(root_tokens)} vs "
+            f"{len(checkpoint_tokens)} tokens"
+        )
+    if tables_path is not None:
+        leaf_tokens = tuple(
+            str(t) for t in _json.loads(
+                Path(tables_path).read_text(encoding="utf-8")
+            )["vocab"]["tokens"]
+        )
+        if leaf_tokens != checkpoint_tokens:
+            first = next(
+                (i for i, (a, b) in enumerate(zip(leaf_tokens, checkpoint_tokens)) if a != b),
+                None,
+            )
+            raise SystemExit(
+                f"leaf tables vocabulary != checkpoint: {len(leaf_tokens)} vs "
+                f"{len(checkpoint_tokens)} tokens, first divergence at {first}"
+            )
+    digest = hashlib.sha256("\n".join(checkpoint_tokens).encode("utf-8")).hexdigest()
+    print(
+        f"vocab gate OK: root == checkpoint"
+        f"{' == leaf tables' if tables_path is not None else ''} "
+        f"({len(checkpoint_tokens)} tokens, sha256 {digest[:16]})",
+        flush=True,
+    )
+    return digest
 
 
 def main(argv=None) -> int:
@@ -145,7 +259,6 @@ def main(argv=None) -> int:
     config_id = f"d{args.depth}-s{args.sims}-b{args.batch}-w{args.worlds}"
     if args.arm == "control":
         config_id = "control-raw-v-raw"
-    provenance = build_provenance(args.checkpoint, config_id, args.arm)
 
     cfg = dict(
         search_depth=args.depth,
@@ -155,10 +268,36 @@ def main(argv=None) -> int:
     )
     model_config = load_transformer_model_config(args.checkpoint)
     env_config = env_config_with_checkpoint_masks(
-        LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True),
+        LocalShowdownConfig(
+            showdown_root=args.showdown_root,
+            set_belief_source=True,
+            # Both arms observe through this one env, so anchoring it here covers
+            # the raw opponent and the search root together.
+            category_vocab=checkpoint_category_vocabulary(model_config, args.showdown_root),
+        ),
         feature_masks_from_model_config(model_config),
         required_specs=observation_spec_from_model_config(model_config),
         context="mcts acceptance re-bench",
+    )
+
+    # Resolve the leaf artifacts up front so the gate can see them. Materialization
+    # is keyed and idempotent, so build_policies below reuses this exact export.
+    leaf_tables = None
+    if args.arm != "control":
+        from pokezero.mcts_eval.lattice import materialize_search_artifacts
+        from pokezero.mcts_eval.resolver import resolve_checkpoint_contract
+
+        leaf_tables = materialize_search_artifacts(
+            resolve_checkpoint_contract(
+                args.checkpoint, model_device=args.device, showdown_root=args.showdown_root
+            ),
+            showdown_root=args.showdown_root,
+        )["tables_path"]
+
+    vocab_sha256 = assert_vocab_alignment(model_config, env_config, leaf_tables)
+    provenance = build_provenance(
+        args.checkpoint, config_id, args.arm,
+        vocab_sha256=vocab_sha256, commit=_source_commit(),
     )
     env = LocalShowdownEnv(env_config)
     search, raw = build_policies(
