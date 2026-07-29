@@ -104,6 +104,18 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   matches -- and they exist because the ladder only lines up
                   while the end-of-turn block runs exactly once on every ply.
 
+  toxicladder   : a 651 max HP Blissey (651 % 16 == 11) ticks 40/80/120/160/200,
+                  i.e. ``floor(maxhp/16) * stage``. This is the divergence
+                  ``third_party/poke-engine-gen3-residual-rounding.patch`` fixes:
+                  upstream computed ``floor(maxhp * stage / 16)`` — flooring
+                  AFTER the multiply — and dealt 40/81/122/162/203.
+                  ``toxicladdercontrol`` runs the same ladder on a 656 max HP
+                  Blissey, where 16 divides max HP and BOTH orderings agree.
+  sandminimum   : sandstorm's ``onWeather`` is ``this.damage(baseMaxhp / 16)`` and
+                  every ``damage()`` runs through ``clampIntRange(damage, 1)``, so
+                  a 1 max HP Shedinja takes 1 and FAINTS. Upstream truncated to
+                  zero and left it standing in the sand forever.
+
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
 seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
@@ -224,6 +236,24 @@ def _spikes_skarmory():  # hazard setter with an inert filler move
 def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
     return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
                           moves=("Splash",))
+
+
+def _toxic_user():  # lays the ladder, then idles while it climbs
+    return FixturePokemon(species="Umbreon", ability="Synchronize", item="None",
+                          moves=("Toxic", "Splash"))
+
+
+def _toxic_ladder_control_victim():
+    """The same Blissey at 656 max HP, where 16 divides max HP exactly.
+
+    Level-100 HP is ``2*base + IV + floor(EV/4) + 110``; Blissey's base 255 with
+    31 IVs and 20 HP EVs gives 510 + 31 + 5 + 110 = 656, and 656 % 16 == 0. Both
+    roundings agree there, so this control proves the fixture is really reading
+    the ladder rather than the assertion being loose.
+    """
+
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Splash",), evs={"hp": 20})
 
 
 def _shedinja():  # 1 max HP: the Spikes minimum-damage clamp
@@ -387,6 +417,22 @@ def _seat_trapped(requests, seat: str):
     if not active:
         return False
     return bool(active[0].get("trapped"))
+
+
+def _toxic_ladder_hp(lines, maxhp: int):
+    """The ``cur`` HP p2 lands on after each ``[from] psn`` tick, in order."""
+
+    ladder = []
+    for line in lines:
+        if not (line.startswith("|-damage|p2a") and "[from] psn" in line):
+            continue
+        condition = line.split("|")[3]
+        if condition.startswith("0 fnt"):
+            ladder.append(0)
+            continue
+        current = condition.split(" ")[0].split("/")[0]
+        ladder.append(int(current))
+    return ladder
 
 
 def _index_of(lines, prefix: str):
@@ -957,6 +1003,45 @@ def _spec(name):
             landmark=lambda L: (_has(L, "|-start|p2a: Smeargle|Encore") if control
                                else _has(L, "|-fail|p1a: Misdreavus")),
             landmark_desc="Encore applied" if control else "Encore failed")
+    # --- residual rounding (toxic ladder / weather minimum) -----------------
+    if name in ("toxicladder", "toxicladdercontrol"):
+        # Blissey's 651 max HP is the sharp case: 651 % 16 == 11, so
+        # floor(651/16) * stage (Showdown) and floor(651 * stage / 16) (upstream)
+        # diverge from stage 2 onward — 40/80/120/160/200 vs 40/81/122/162/203.
+        # The control is a 656 max HP Snorlax-class target chosen so that
+        # 656 % 16 == 0, where BOTH orderings agree: it proves the fixture reads
+        # the ladder correctly rather than the assertion being loose.
+        divisible = name.endswith("control")
+        victim = _toxic_ladder_control_victim() if divisible else _blissey()
+        maxhp = 656 if divisible else 651
+        per_stage = maxhp // 16
+        ladder = [maxhp - per_stage * sum(range(1, n + 1)) for n in range(1, 6)]
+        return dict(
+            p1=[_toxic_user()], p2=[victim],
+            turns=[("move toxic", "move splash")]
+                  + [("move splash", "move splash")] * 4,
+            measured=None, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p2a") and not _has(L, "[miss]"),
+            facts=lambda L: {"ladder": _toxic_ladder_hp(L, maxhp)},
+            expect={"ladder": ladder},
+            landmark=lambda L: _has(L, "|-status|p2a"),
+            landmark_desc="Toxic landed")
+    if name == "sandminimum":
+        # Sandstorm's onWeather is this.damage(baseMaxhp / 16), and every
+        # damage() runs through clampIntRange(damage, 1) — so a 1 max HP
+        # Shedinja takes 1 and FAINTS. Upstream truncated to zero and left it
+        # standing in the sand forever.
+        return dict(
+            p1=[_sand_tyranitar()], p2=[_shedinja(), _blissey()],
+            turns=[("move splash", "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "chipped": _residual_from(L, "Sandstorm", "p2a"),
+                "fainted": _has(L, "|faint|p2a: Shedinja"),
+            },
+            expect={"chipped": True, "fainted": True},
+            landmark=lambda L: _has(L, _SAND_UPKEEP),
+            landmark_desc="the sandstorm upkeep ran")
     raise ValueError(name)
 
 
@@ -976,7 +1061,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "encoreduration", "encoreoutlivesshortest", "encoredurationslow",
              "encoredurationcontrol",
              "encorefailstruggle", "encorefailnolastmove", "encorefailmirrormove",
-             "encoreappliescontrol")
+             "encoreappliescontrol",
+             "toxicladder", "toxicladdercontrol", "sandminimum")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
