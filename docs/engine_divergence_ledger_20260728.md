@@ -1101,7 +1101,7 @@ resolved through Dex.mod('gen3') — moves
   thunderwave    accuracy=100 ...
 ```
 
-This rule exists because the inheritance-chain trap has produced **four** wrong
+This rule exists because the inheritance-chain trap has produced **five** wrong
 reads in this program, each of which reached a hand-off before being caught:
 
 | Move / condition | The trap |
@@ -1110,6 +1110,43 @@ reads in this program, each of which reached a hand-off before being caught:
 | burn | residual fraction changed at **gen6**, so base is wrong for gen3 |
 | Flail / Reversal | gen3 has its **own** override; the gen4 ladder is not it |
 | Thunder Wave | **gen6** declares a value BELOW gen3 in the chain |
+| Rest (PP) | **gen8** declares it; neither gen3 nor base carries the value |
+| `stall` (Protect decay) | gen4's `inherit: true` resolves to **gen5's full definition**, not base |
+
+### The fifth direction, and why it is the strongest case for probing
+
+`stall` is the one where two independent expert readers resolved the same
+`inherit: true` differently, in the same review cycle:
+
+* **Reading A** (engine lane, then the reviewer independently): gen3 -> gen4
+  `{ inherit: true, counterMax: 8 }` -> **base** (`counter = 3`, `counter *= 3`),
+  giving a 1/3, 1/9 ladder — and a puzzled note about the gen4 comment saying
+  1/8 when the arithmetic says 1/9.
+* **Reading B**: gen4's `inherit: true` resolves to **gen5**, which carries a
+  *full* definition (`counter = 2`, `counter *= 2`), giving 1/2, 1/4, 1/8.
+
+The measurement decides it. 160 seeds, real sim, gen3:
+
+| attempt | measured | Reading A (1/3ⁿ) | Reading B (1/2ⁿ) |
+| --- | --- | --- | --- |
+| 1st | 546/546 = 1.000 | 1.000 | 1.000 |
+| 2nd | 239/496 = **0.482** | 0.333 | **0.500** |
+| 3rd | 40/204 = **0.196** | 0.111 | **0.250** |
+
+The 2nd-attempt figure is ~7σ from Reading A. **Reading B is correct**, and the
+engine's existing `0.5 ** n` was right all along — a "fix" derived from Reading A
+would have replaced correct behaviour with wrong behaviour.
+
+Note what made this trap resistant to the existing probe: for `stall`, base and
+gen5 both define `onStart`, `onRestart` and `onStallMove`, so
+`gen3_dex_resolve.py --condition stall` lists the identical callback *names*
+either way and the reader must still hand-walk to find whose *body* survives —
+the exact step the rule says not to do by hand.
+
+**Proposed resolver extension:** report the surviving callback's source file
+(the mod that actually contributed the body), not just its name. That single
+addition would have prevented both misreads here, and is the only trap of the
+five the current probe cannot already close.
 
 The failure is always the same shape and always looks like diligence: someone
 opens the right file, reads a real value, and reports it — having walked a chain
@@ -1126,6 +1163,32 @@ Two corollaries:
   resolution. Read the body in source — but only after the probe has told you
   **which file's** version survives, which is exactly the step the four misreads
   skipped.
+
+# Process gap — repro states are captured but not retained
+
+`scripts/replay_residue.py` replays recorded `engine_state` values out of a
+report, so the harness *does* capture what replay-first triage needs. What is
+missing is retention: **no cycle-five report is committed**, and none is
+reachable from the repo. Asked to replay a specific recorded row
+(seed 1500010 step 39), the engine lane could not — the ledger carries the prose
+finding but not the state, and `find` turns up no artifact.
+
+The consequence is that "replay before you label" silently degrades to
+"regenerate, then replay", which is sound only when the build and seed are
+pinned. Regeneration on a pinned build + seed is acceptable provenance;
+narrating from a previous cycle's prose is not.
+
+**Proposal:** persist repro states by default. The differential already has
+`--checkpoint`, which writes one JSONL record per game and is crash-safe; the
+cheap fix is to make acceptance runs always pass it and to commit (or archive
+alongside the ledger) the resulting checkpoint for the seeds a cycle reports on.
+The states are small relative to the report and are the only artifact that makes
+a row re-examinable after main advances.
+
+Related, from the same review: **record the repo commit SHA next to every build
+fingerprint.** A fingerprint alone stops being verifiable once main moves, and
+`--check` does *not* detect a stale wheel after a re-vendor restamp — so the
+behavioural probe stays mandatory regardless of what `--check` says.
 
 # Method rule — replay before you label
 
