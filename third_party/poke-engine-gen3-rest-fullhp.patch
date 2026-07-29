@@ -1,0 +1,41 @@
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-29 03:08:47
++++ b/src/gen3/choice_effects.rs	2026-07-29 03:11:35
+@@ -777,9 +777,36 @@
+             state.reset_boosts(&SideReference::SideTwo, &mut instructions.instruction_list);
+         }
+         Choices::REST => {
++            // pokezero gen3 fidelity fix: Rest FAILS at full HP. `rest.onTry`
++            // (data/moves.ts — no gen mod anywhere in the chain overrides it, so
++            // gen3 inherits the base) checks four conditions, in this order:
++            //
++            //   1. status === 'slp' || hasAbility('comatose')  -> return false
++            //   2. hp === maxhp   -> `-fail <user> heal`, return null
++            //   3. hasAbility('insomnia')     -> `-fail ... ability: Insomnia`
++            //   4. hasAbility('vitalspirit')  -> `-fail ... ability: Vital Spirit`
++            //
++            // Upstream guarded only (1), so a full-HP Rest slept the user. That
++            // is a STATUS-level divergence, not a heal-level one: the sleep
++            // suppressed an incoming status that Showdown lets land, changing the
++            // legal action set for the rest of the battle.
++            //
++            // (3) and (4) are deliberately not modelled: Comatose is a gen7
++            // ability, and no gen3 randbats set pairs Rest with Insomnia or
++            // Vital Spirit (0 of the 55 Rest sets), so neither is reachable here.
++            // Note the ordering if they ever are — the full-HP check comes
++            // FIRST, so a full-HP Insomnia user fails with the heal message.
++            //
++            // Failing costs the turn and the PP: Showdown deducts PP in
++            // `runMove` (battle-actions.ts:282) before `useMove` runs the `Try`
++            // event (:585), and the engine likewise decrements PP in
++            // generate_instructions.rs well before this dispatcher, so skipping
++            // the effect here reproduces `-fail` exactly.
+             let active_index = attacking_side.active_index;
+             let active_pkmn = attacking_side.get_active();
+-            if active_pkmn.status != PokemonStatus::SLEEP {
++            if active_pkmn.status != PokemonStatus::SLEEP
++                && active_pkmn.hp != active_pkmn.maxhp
++            {
+                 let heal_amount = active_pkmn.maxhp - active_pkmn.hp;
+                 instructions
+                     .instruction_list
