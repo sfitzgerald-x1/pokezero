@@ -41,6 +41,14 @@ while IFS= read -r patch <&3; do
   echo "      $patch: applied"
 done 3< "$PATCH_LIST"
 
+# `patch` writes a <file>.orig backup whenever a hunk needs one, and those
+# backups are pre-patch copies of files we just changed. Left in place they ride
+# the rsync into the vendored tree and become a trap: a grep-based audit of
+# src/gen3/*.rs can read the STALE copy and reach the opposite conclusion about
+# what the engine does. Delete them at the source, so the `--delete` rsync below
+# also clears any that a previous run already installed.
+find "$SRC" -name '*.orig' -delete
+
 echo "[3/3] install into $DEST"
 # Keep the destination directory stable. Finder can recreate .DS_Store between
 # rm and mv on macOS, making a clean vendor operation fail with ENOTEMPTY.
