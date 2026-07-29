@@ -2655,6 +2655,87 @@ mod tests {
         assert_eq!(state.serialize(), serialized);
     }
 
+    /// THE WHOLE EMISSION ORDER, pinned against the REAL engine.
+    ///
+    /// The per-source tests below each pin one pair. None of them would catch a
+    /// future engine that REORDERS the end-of-turn sections: the counts would
+    /// still reconcile, the plan would still be "usable", and every tick would
+    /// be silently mislabelled. This test is the guard for that — it drives
+    /// `generate_instructions_from_move_pair` and asserts the rendered sequence,
+    /// so a reorder in `add_end_of_turn_instructions` fails here.
+    ///
+    /// Five of the eight sections fire on side one at once (weather chip,
+    /// order-5 Leftovers, Leech Seed, status, volatiles/partial trap), which
+    /// pins every ordering relationship between them. Note that the sandstorm
+    /// chip and the partial-trap tick are BOTH 20 here — the amount collision,
+    /// live, in the same trace.
+    #[test]
+    fn end_of_turn_section_order_is_pinned_against_the_engine() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+            active.status = PokemonStatus::POISON;
+            active.types = (PokemonType::NORMAL, PokemonType::TYPELESS);
+        }
+        {
+            let active = state.side_two.get_active();
+            active.maxhp = 320;
+            active.hp = 150;
+            active.item = Items::LEFTOVERS;
+            active.types = (PokemonType::NORMAL, PokemonType::TYPELESS);
+        }
+
+        let s1 = MoveChoice::from_string("splash", &state.side_one)
+            .or_else(|| MoveChoice::from_string("tackle", &state.side_one))
+            .expect("a move");
+        let s2 = MoveChoice::from_string("splash", &state.side_two)
+            .or_else(|| MoveChoice::from_string("tackle", &state.side_two))
+            .expect("a move");
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+        let rendered = render_branch_events(
+            &mut state,
+            &s1,
+            &s2,
+            &branches[0].instruction_list,
+            true,
+            &ctx(),
+        );
+
+        let p1_tags: Vec<String> = rendered
+            .lines
+            .iter()
+            .filter(|l| l.contains("p1a") && (l.contains("-damage") || l.contains("-heal")))
+            .filter_map(|l| l.split("[from]").nth(1).map(|t| t.trim().to_string()))
+            .collect();
+        assert_eq!(
+            p1_tags,
+            vec![
+                "Sandstorm".to_string(),
+                "item: Leftovers".to_string(),
+                "Leech Seed".to_string(),
+                "psn".to_string(),
+                "partiallytrapped".to_string(),
+            ],
+            "end-of-turn section order changed; ResidualPlan's order must be \
+             updated in lock-step or every residual tick is mislabelled. \
+             Rendered: {:?}",
+            rendered.lines
+        );
+    }
+
     // --- positional residual attribution (ledger H.1) ---------------------
 
     /// Render a whole residual segment through the plan, returning the `[from]`

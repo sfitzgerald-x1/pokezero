@@ -14,11 +14,15 @@ possible shape for a measurement that gates an acceptance criterion.
 
 Two independent checks, because they catch different halves:
 
-  FINGERPRINT (content).  A sha256 over the shared patch list and every patch
-  file it names — exactly the inputs both builders read. The builders stamp it
-  into the venv at build time; a mismatch means the installed wheel was built
-  from a different patch set than the one checked out. This is exact and does
-  not depend on timestamps.
+  FINGERPRINT (content).  A sha256 over the shared patch list, every patch file
+  it names, and every `.rs` under rust/pokezero-search/src — i.e. all the build
+  inputs. The builders stamp it into the venv at build time; a mismatch means the
+  installed artifacts were built from different inputs than the ones checked out.
+  Exact, and independent of timestamps.
+
+  The stamp must be written at the END of a FULL rebuild (wheel AND crate), which
+  is what the sequence below does — a stamp written after rebuilding only one of
+  them would claim currency the other has not earned.
 
   FRESHNESS (mtime).  The installed extension modules must be NEWER than every
   patch file and every vendored source file. This catches the crate half, which
@@ -44,6 +48,11 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCH_LIST = REPO_ROOT / "third_party" / "poke-engine-gen3-patches.txt"
 VENDORED = REPO_ROOT / "third_party" / "poke-engine-src"
+# The crate's OWN sources are build inputs too. Without them a .so built before
+# an events.rs edit passes the content check whenever timestamps are in the
+# provenance-unknown state — the mapper changes, the fingerprint does not. Hit
+# in practice while landing the positional attributor.
+CRATE_SRC = REPO_ROOT / "rust" / "pokezero-search" / "src"
 STAMP_NAME = ".engine-build-fingerprint.json"
 
 REBUILD_HINT = """
@@ -70,6 +79,14 @@ def patch_files() -> list[Path]:
     return [REPO_ROOT / "third_party" / name for name in names]
 
 
+def crate_sources() -> list[Path]:
+    """Every `.rs` the search crate compiles, sorted for a stable hash."""
+
+    if not CRATE_SRC.exists():
+        return []
+    return sorted(CRATE_SRC.rglob("*.rs"))
+
+
 def compute_fingerprint() -> dict[str, Any]:
     digest = hashlib.sha256()
     digest.update(PATCH_LIST.read_bytes())
@@ -81,7 +98,19 @@ def compute_fingerprint() -> dict[str, Any]:
         digest.update(path.name.encode())
         digest.update(hashlib.sha256(blob).digest())
         entries.append(path.name)
-    return {"fingerprint": digest.hexdigest(), "patches": entries, "count": len(entries)}
+    # Crate sources, hashed by repo-relative path so the digest is location
+    # independent.
+    crate = crate_sources()
+    digest.update(b"--crate--")
+    for path in crate:
+        digest.update(str(path.relative_to(REPO_ROOT)).encode())
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return {
+        "fingerprint": digest.hexdigest(),
+        "patches": entries,
+        "count": len(entries),
+        "crate_sources": len(crate),
+    }
 
 
 # maturin stamps extension modules with the reproducible-build epoch
@@ -157,6 +186,7 @@ def check(*, strict_mtime: bool = True) -> list[str]:
     problems: list[str] = []
     expected = compute_fingerprint()
 
+    fingerprint_ok = False
     stamp = _stamp_path()
     if not stamp.exists():
         problems.append(
@@ -164,7 +194,8 @@ def check(*, strict_mtime: bool = True) -> list[str]:
         )
     else:
         recorded = json.loads(stamp.read_text())
-        if recorded.get("fingerprint") != expected["fingerprint"]:
+        fingerprint_ok = recorded.get("fingerprint") == expected["fingerprint"]
+        if not fingerprint_ok:
             problems.append(
                 "patch-set fingerprint MISMATCH: installed engine was built from a "
                 f"different patch set\n    stamped : {recorded.get('fingerprint','?')[:16]} "
@@ -173,7 +204,7 @@ def check(*, strict_mtime: bool = True) -> list[str]:
             )
 
     if strict_mtime:
-        sources = list(patch_files()) + [PATCH_LIST]
+        sources = list(patch_files()) + [PATCH_LIST] + crate_sources()
         if VENDORED.exists():
             sources += list(VENDORED.rglob("*.rs"))
         newest_source = max((p.stat().st_mtime for p in sources if p.exists()), default=0.0)
@@ -189,10 +220,22 @@ def check(*, strict_mtime: bool = True) -> list[str]:
                 undatable.append(binary.name)
                 continue
             if stamped < newest_source:
-                problems.append(
-                    f"STALE artifact: {binary.name} predates the engine sources "
+                message = (
+                    f"{binary.name} predates the engine sources "
                     f"(by {origin}; built before the current patch set / vendored tree)"
                 )
+                if fingerprint_ok:
+                    # The CONTENT fingerprint — which now spans the patch set,
+                    # the patch list AND every crate source — matched exactly.
+                    # The inputs are therefore identical and a newer mtime just
+                    # means a file was touched, not changed. The exact check
+                    # outranks the heuristic one; reporting it as an error here
+                    # would be the same unsatisfiable false positive the
+                    # reproducible-epoch fix removed.
+                    print(f"note: {message} — content fingerprint matches, so this is "
+                          "a touched file, not a stale build.", file=sys.stderr)
+                else:
+                    problems.append(f"STALE artifact: {message}")
         if undatable:
             print(
                 "note: reproducible-build timestamps on "
@@ -241,7 +284,10 @@ def main(argv=None) -> int:
     if args.write:
         path = write_stamp()
         payload = json.loads(path.read_text())
-        print(f"stamped {payload['count']} patches -> {path}")
+        print(
+            f"stamped {payload['count']} patches + "
+            f"{payload.get('crate_sources', 0)} crate sources -> {path}"
+        )
         print(f"  fingerprint {payload['fingerprint']}")
         return 0
     if args.show:

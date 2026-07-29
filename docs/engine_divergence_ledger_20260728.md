@@ -2024,3 +2024,53 @@ component is genuinely present in one sim and not the other. Per the sequencing
 note these get their verdicts after the charge-state fix merges, since that gap
 has the same "engine is missing a component" signature and would otherwise force
 a re-triage.
+
+## I.5 Two hardening items before the acceptance run
+
+### The fingerprint now covers the crate's own sources
+
+It hashed the patch list and patch files only, so a `.so` built before an
+`events.rs` edit passed the content check whenever timestamps were in the
+provenance-unknown state — the mapper changes, the fingerprint does not. **I hit
+this seam myself** while landing the positional attributor: the crate compiled
+against a 21-patch vendored tree on a 22-patch checkout, and it surfaced as test
+failures rather than as a gate failure.
+
+`compute_fingerprint` now also hashes every `.rs` under
+`rust/pokezero-search/src`, keyed by repo-relative path. Verified both ways: a
+genuine edit to `events.rs` without a rebuild now **fails**; the same file
+touched but unchanged **passes**.
+
+That second case forced a related fix. Touching a source bumps its mtime above
+the artifact's, so the mtime half reported STALE while the content fingerprint
+matched exactly — the same unsatisfiable false positive the reproducible-epoch
+ladder removed. **The exact check now outranks the heuristic**: when the
+fingerprint matches, an mtime complaint is printed as a note, not an error. It is
+still an error whenever the fingerprint is missing or mismatched, which is
+exactly when the heuristic is the only signal left.
+
+The stamp must be written at the **end of a full rebuild** (wheel *and* crate) —
+a stamp written after rebuilding only one would claim currency the other has not
+earned. The documented rebuild sequence already ends that way.
+
+### The eight-section emission order is pinned as a whole
+
+The per-source tests each pin one pair. **None of them would catch an engine that
+REORDERS the end-of-turn sections**: the counts would still reconcile, the plan
+would still be "usable", and every tick would be silently mislabelled — the one
+failure mode the existing pins miss.
+
+`end_of_turn_section_order_is_pinned_against_the_engine` drives the real
+`generate_instructions_from_move_pair` with five sections firing on one side at
+once and asserts the rendered sequence:
+
+```
+Sandstorm -> item: Leftovers -> Leech Seed -> psn -> partiallytrapped
+```
+
+A reorder in `add_end_of_turn_instructions` now fails there instead of silently
+relabelling the census. The trace also contains the amount collision live — the
+sandstorm chip and the partial-trap tick are both 20 in it.
+
+Census after both items: **84 / 5,310 = 1.58 %**, byte-identical to before —
+the hardening is measurement-neutral, as it should be. 17 crate suites green.
