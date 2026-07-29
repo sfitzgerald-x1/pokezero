@@ -3365,3 +3365,130 @@ residue they produce is comfortably attributable to something else.
 Engine lane, alongside the §R.8 Rest patch: clamp both assignments to the
 receiving mon's `maxhp`, mirroring `sethp`. Expected to clear 12 of the 15
 remaining `movepainsplit` rows; the other 3 need their own attribution.
+
+---
+
+# Appendix T — Cycle five (29 patches): the fifth hold
+
+Run: 300 games, `--matcher strict`, seeds 1,500,000–1,500,299. Both wheels
+rebuilt from a wiped vendor tree into the measuring interpreter's own prefix.
+Build gate recorded verbatim, per the sibling agent's stale-wheel incident:
+
+```
+engine build is current (29 patches, cafd1ce9cce2b6b0)      [exit 0]
+```
+
+All 29 patches applied with **fuzz 0**. Both new patches were probed
+behaviourally in the built wheel rather than inferred from the count:
+
+- patch 28 (Rest full-HP): full-HP Rest emits **no instructions**; a damaged
+  Rest still sleeps and heals.
+- patch 29 (Pain Split clamp): Weezing 238/238 vs Groudon 252/252 emits
+  `Damage SideOne: 0` / `Damage SideTwo: 7` — the clamp, matching `sethp`.
+
+## T.1 ACCEPTANCE VERDICT: NOT MET — run not started (fifth hold)
+
+141 rows remain outside the adjudicated limit classes. The acceptance artifact
+must be a pass, so the 8x1250 sweep was not started. Seed block 2,000,000+
+remains unconsumed; verified mechanically this cycle rather than asserted — the
+highest seed consumed by *any* dev or measurement run in the workspace is
+**1,500,297**.
+
+## T.2 Numbers
+
+| metric | c4 (27p) | c4b (+harness fix) | c5 (29p) |
+|---|---|---|---|
+| boundaries measured | 23,335 | 23,335 | 23,335 |
+| diverged | 240 | 212 | **186** |
+| **outside limits** | 193 | 167 | **141** |
+| coverage | 0.978 | 0.978 | 0.978 |
+| harness errors | 0 | 0 | 0 |
+| gating exact / support | 20,478 / 2,857 | same | same |
+
+## T.3 Both fixes landed exactly as predicted — to the row
+
+| prediction | predicted | measured |
+|---|---|---|
+| §R.8 Rest full-HP clears its rows | 14 | `missing_in_engine:psn` 23 -> 9 = **14** |
+| §S.5 Pain Split clamp clears 12 of 15 | 12 | `movepainsplit` family 15 -> 3 = **12** |
+
+Zero new classes, zero regressions, coverage flat. Two engine patches predicted
+in advance at the row level and hitting exactly is the strongest evidence yet
+that the instrument's attributions are real rather than curve-fitted to the
+residue.
+
+## T.4 What the 141 are
+
+`roll_scaled_component` (82) triaged over its full population:
+
+| rows | bucket |
+|---|---|
+| 46 | `damage_calc:*` (ratio not a clean roll or type/STAB multiplier) |
+| 32 | `structural_component_count` |
+| 2 | `legitimate_roll_in_legal_set` |
+| 2 | `no_usable_branch` |
+
+`structural_component_count` fell 66 -> 32 with Pain Split gone. The dominant
+remaining shape (13 of 32) is *observation has a damage component the engine
+does not*, and `protect` appears in 10 of the 32.
+
+The rest of the 141: `missing_in_engine:itemleftovers` 22,
+`missing_in_engine:psn` 9, `extra_in_engine:itemleftovers` 6,
+`magnitude:movepainsplit` 3, `missing:itemleftovers,sandstorm` 3, and 16 in
+singleton or pair classes.
+
+## T.5 CANDIDATE, not a finding: Protect
+
+Seed 1500010 step 39. Spinda (282/282) uses Protect; Showdown emits
+`|-fail|p1a: Spinda` and Porygon2's Return lands for 102. The engine produces a
+**single branch at 100%** in which Protect succeeds and blocks the move
+entirely.
+
+That is the whole of what is established. The obvious story — gen3's
+consecutive-use success decay — is *not* recorded here as the cause, because it
+has not been tested: the attempt to probe it failed (`SideConditions.protect` is
+not writable through the Python binding), and no override was found in the gen3
+mod chain to read the rule from. Per the standing rule this ledger has now
+broken four times, **the probe shows WHAT; the WHY needs its own evidence**.
+
+Hand-off to the engine lane with the mechanism explicitly open: does gen3
+Protect ever produce a failure branch, and is its success probability
+conditioned on consecutive use? A binding that exposes the counter, or a
+Rust-side unit probe, would settle it.
+
+## T.6 Carry: shard vintage is now a lineage boundary (#936 review, Finding 1)
+
+The §S.2 mapper fix changes the *encoder's* output on the engine-as-environment
+path, not only the differential's verdicts. `fold.rs`'s Pain Split
+`self_hp_cost` branch was unreachable from engine protocol before the fix and is
+reachable after, so `self_hp_cost` turns non-zero on Pain Split turns and some
+Pain Split windows flip constant -> non-constant.
+
+**Rule: engine-env shards carry a vintage, and vintages must not be mixed.**
+Any training data generated through the engine-as-environment path *before* the
+§S.2 fix is a lineage discontinuity for the four Pain-Split-carrying species —
+weezing, misdreavus, swalot, dusclops (4 of 220, so it is a thin but real slice
+of the pool). Do not pool pre-fix and post-fix engine-env shards in any future
+run; regenerate, or partition and label.
+
+This is the same failure shape as the parity-lineage bug: a silent input change
+that leaves both halves individually plausible and only shows up as a trunk that
+never learns.
+
+## T.7 Carry: a documented NON-residual (#938)
+
+Patch 29 deliberately does **not** model `sethp`'s fainted no-op — Showdown's
+`sethp` returns without effect on a fainted target. Verified unreachable: Pain
+Split requires a live target, so the branch cannot be entered in gen3 randbats.
+
+Recorded here so a future reader diffing the engine against `sim/pokemon.ts`
+finds the omission already adjudicated rather than re-opening it. This is the
+`limit:`-class pattern applied to an engine omission instead of a residue class:
+**an unreachable divergence is not a divergence**, provided the reachability
+claim is written down where the next person will look.
+
+## T.8 Artifacts
+
+- report `reports/c5.json`, checkpoint `reports/c5.jsonl`, log `reports/c5.log`
+- triage `reports/c5_tri.json` (82/82 rows, population guard satisfied)
+- prior cycle for comparison: `reports/c4.json`, `reports/c4b.json`
