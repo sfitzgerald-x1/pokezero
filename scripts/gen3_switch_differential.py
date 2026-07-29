@@ -166,6 +166,26 @@ def _smeargle_encorer():  # spe 75: encores Blissey BEFORE it moves (no duration
                           moves=("Encore", "Splash"))
 
 
+def _misdreavus_encorer():  # spe 85: out-speeds Smeargle, so the Encore attempt lands first
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Encore", "Splash"))
+
+
+def _encore_target_smeargle():  # ordinary encorable move
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Splash",))
+
+
+def _mindreader_smeargle():  # 5 base PP -> 8 with PP Ups; sole move, so Struggle after 8
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Mind Reader",))
+
+
+def _mirrormove_smeargle():  # gen3 failencore flag, no PP grind needed
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Mirror Move",))
+
+
 def _shuckle_encorer():  # spe 5: encores Blissey AFTER it moves (onStart bumps duration)
     return FixturePokemon(species="Shuckle", ability="Sturdy", item="None",
                           moves=("Encore", "Splash"))
@@ -896,6 +916,47 @@ def _spec(name):
             # to cover both ends of the window (3, 3, 3, 6).
             spec["expect_in"] = {"span": (3, 4, 5, 6)}
         return spec
+    if name in ("encorefailstruggle", "encorefailnolastmove", "encorefailmirrormove",
+                "encoreappliescontrol"):
+        # Encore's APPLICATION-failure set. Misdreavus (spe 85) out-speeds
+        # Smeargle (spe 75), so p1 always gets to try Encore before p2 acts.
+        #
+        # encorefailstruggle: Smeargle's ONLY move is Mind Reader (5 base PP ->
+        #   8 with PP Ups), so eight turns exhaust it and it is forced onto
+        #   Struggle. Struggle carries `failencore` in data/mods/gen3/moves.ts
+        #   AND is absent from `moveSlots`, so both of Showdown's arms reject it;
+        #   the engine's slot-index representation only reproduces the flag arm,
+        #   which is sufficient because either alone fails the move.
+        # encorefailnolastmove: Encore on turn 1 from the faster side — the
+        #   target has not moved yet and `lastMove` is null.
+        # encorefailmirrormove: Mirror Move also carries gen3's `failencore`, and
+        #   unlike Struggle it needs no PP grind, so it isolates the flag arm from
+        #   the not-in-moveSlots arm.
+        # encoreappliescontrol: the same line against an ordinary move lands.
+        control = name == "encoreappliescontrol"
+        if name == "encorefailstruggle":
+            victim = _mindreader_smeargle()
+            turns = [("move splash", "move mindreader")] * 8
+            turns += [("move splash", "move struggle"), ("move encore", "move struggle")]
+        elif name == "encorefailnolastmove":
+            victim = _encore_target_smeargle()
+            turns = [("move encore", "move splash")]
+        elif name == "encorefailmirrormove":
+            victim = _mirrormove_smeargle()
+            turns = [("move splash", "move mirrormove"), ("move encore", "move mirrormove")]
+        else:
+            victim = _encore_target_smeargle()
+            turns = [("move splash", "move splash"), ("move encore", "move splash")]
+        return dict(
+            p1=[_misdreavus_encorer()], p2=[victim], turns=turns,
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {"encore_applied": _has(L, "|-start|p2a: Smeargle|Encore")},
+            expect={"encore_applied": control},
+            # Every non-control line must actually SHOW the failure, so a scenario
+            # that silently stopped reaching the Encore attempt cannot pass.
+            landmark=lambda L: (_has(L, "|-start|p2a: Smeargle|Encore") if control
+                               else _has(L, "|-fail|p1a: Misdreavus")),
+            landmark_desc="Encore applied" if control else "Encore failed")
     raise ValueError(name)
 
 
@@ -913,7 +974,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "meanlooktrapperbatonpassfreed",
              "perishladderfirsttick", "perishladder",
              "encoreduration", "encoreoutlivesshortest", "encoredurationslow",
-             "encoredurationcontrol")
+             "encoredurationcontrol",
+             "encorefailstruggle", "encorefailnolastmove", "encorefailmirrormove",
+             "encoreappliescontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

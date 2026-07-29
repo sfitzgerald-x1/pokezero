@@ -263,6 +263,53 @@ poke-engine-gen3-terminal-options.patch
 # terminal-options-patched tree, applied last of the BEHAVIOUR patches.
 poke-engine-gen3-encore-duration.patch
 
+# gen3 Encore's APPLICATION-failure set. The duration patch above bounded how
+# long an Encore lasts; this one bounds when it may start at all. Upstream asked
+# only whether the target had ever used a move, so the engine would happily
+# Encore a Struggle — Showdown's `encore.condition.onStart` also refuses on the
+# move's identity and on its PP:
+#
+#     let move = target.lastMove;
+#     if (!move || target.volatiles['dynamax']) return false;
+#     const moveSlot = target.getMoveData(move.id);
+#     if (move.isZ || move.isMax || move.flags['failencore'] ||
+#         !moveSlot || moveSlot.pp <= 0) return false;
+#
+# `dynamax`/`isZ`/`isMax` are unreachable in gen3. `!moveSlot` is structurally
+# unreachable in the engine, which stores last_used_move as a SLOT INDEX rather
+# than a move id, so it always denotes a real slot; the case it exists to catch
+# in Showdown is Struggle, which is not in `moveSlots` and which the flag list
+# below rejects anyway. The two already-handled arms stay right: LastUsedMove
+# ::None is `!move`, and ::Switch is a fresh switch-in — `Pokemon.clearVolatile()`
+# nulls `lastMove` on switch-out (sim/pokemon.ts), so Encore genuinely fails
+# against a Pokemon that just came in.
+#
+# The `failencore` set had to be resolved against gen3's ACTUAL mod chain
+# (gen3 -> gen4 -> gen5 -> gen6 -> gen7 -> gen8 -> base data/moves.ts),
+# remembering that a mod's `flags` object REPLACES its parent's wholesale rather
+# than merging into it. Six moves carry it as gen3 sees them:
+#
+#     mimic, mirrormove, sketch, struggle   flags from data/mods/gen3/moves.ts
+#     encore, transform                     flags from data/mods/gen4/moves.ts
+#
+# The replacement rule cuts BOTH ways, and the inverse cases are the trap. Four
+# more moves carry `failencore` in base data/moves.ts but LOSE it to a nearer
+# override that re-declares flags without it:
+#
+#     assist        gen3  { metronome, noassist, nosleeptalk }
+#     metronome     gen4  { noassist, failcopycat, nosleeptalk, failmimic }
+#     naturepower   gen4  { metronome }
+#     sleeptalk     gen6  { nosleeptalk, noassist, failcopycat }
+#
+# so none of the four fails Encore in gen3 and none belongs in the list. Reading
+# base — or gen8, which re-adds the flag to sleeptalk and mirrormove — would
+# over-fail all four. Verified vs real gen3 Showdown
+# (scripts/gen3_switch_differential.py); pinned by
+# rust/pokezero-search/tests/gen3_encore_failencore_fidelity.rs. Touches the
+# Encore arm of move_has_no_effect in gen3/generate_instructions.rs only;
+# authored against the encore-duration-patched tree.
+poke-engine-gen3-encore-failencore.patch
+
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
 # list, because its expectations are the behaviour every patch above it leaves

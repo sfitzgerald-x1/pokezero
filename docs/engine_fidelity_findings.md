@@ -512,3 +512,74 @@ and only becomes measurable once the wheel carries this patch.
 --only encoreduration encoreoutlivesshortest encoredurationslow
 encoredurationcontrol`; engine side pinned by
 `rust/pokezero-search/tests/gen3_encore_fidelity.rs` (9 tests).
+
+## Confirmed deviation 6: Encore applied when Showdown refuses it
+
+Deviation 5 bounded how long a gen3 Encore lasts. This one bounds when it may
+start. Upstream's only application check was whether the target had ever used a
+move (`move_has_no_effect`'s ENCORE arm), so the engine would happily Encore a
+**Struggle** — locking a seat into a move it cannot select — or a move with no PP
+left.
+
+Showdown's `encore.condition.onStart` (base `data/moves.ts`; nothing in gen3's
+chain overrides `onStart` itself) also refuses on the move's identity and PP:
+
+    let move = target.lastMove;
+    if (!move || target.volatiles['dynamax']) return false;
+    const moveSlot = target.getMoveData(move.id);
+    if (move.isZ || move.isMax || move.flags['failencore'] ||
+        !moveSlot || moveSlot.pp <= 0) return false;
+
+`dynamax`/`isZ`/`isMax` are unreachable in gen3. `!moveSlot` is structurally
+unreachable in the engine, which stores `last_used_move` as a SLOT INDEX rather
+than a move id, so it always denotes a real slot — the case it catches in
+Showdown is Struggle, which is not in `moveSlots` and which the flag list rejects
+anyway. The `!move` arms were already right: `LastUsedMove::None`, and
+`LastUsedMove::Switch` for a fresh switch-in, since `Pokemon.clearVolatile()`
+nulls `lastMove` on switch-out.
+
+**The `failencore` set, resolved per chain level.** A mod's `flags` object
+REPLACES its parent's wholesale rather than merging, so the set has to be walked
+gen3 -> gen4 -> gen5 -> gen6 -> gen7 -> gen8 -> base and taken from the FIRST
+level that declares flags for each move. Six moves carry it as gen3 sees them:
+
+| move | gen3's flags come from | failencore |
+|---|---|---|
+| `mimic`, `mirrormove`, `sketch`, `struggle` | `data/mods/gen3/moves.ts` | yes |
+| `encore`, `transform` | `data/mods/gen4/moves.ts` | yes |
+
+**The replacement rule cuts both ways, and the inverse cases are the trap.** Four
+more moves carry `failencore` in base `data/moves.ts` but lose it to a nearer
+override that re-declares `flags` without it:
+
+| move | nearest override | resulting flags | failencore |
+|---|---|---|---|
+| `assist` | gen3 | `{ metronome, noassist, nosleeptalk }` | no |
+| `metronome` | gen4 | `{ noassist, failcopycat, nosleeptalk, failmimic }` | no |
+| `naturepower` | gen4 | `{ metronome }` | no |
+| `sleeptalk` | gen6 | `{ nosleeptalk, noassist, failcopycat }` | no |
+
+So none of the four fails Encore in gen3. Reading base — or gen8, which re-adds
+the flag to `sleeptalk` and `mirrormove` — would over-fail all four, which is why
+`encore_succeeds_against_moves_that_lose_failencore_in_gen3` pins the negative
+side explicitly.
+
+**Impact:** search could commit to an Encore that Showdown refuses, and then plan
+against a lock that never existed. Reachable: 16 gen3 randbats species carry
+Encore, and Transform/Mimic/Mirror Move are all in the pool.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-encore-failencore.patch`, applied after
+encore-duration and before the test-only fixture refresh. Touches the Encore arm
+of `move_has_no_effect` only.
+
+**Not fixed here (pre-existing, orthogonal).** The engine records
+`last_used_move` before resolving the paralysis roll, so a fully-paralyzed turn
+still updates it, while Showdown sets `lastMove` only for a move that actually
+executed. That can make Encore target a move Showdown would not have offered.
+Bounded, unrelated to the failure set, and unchanged by this patch.
+
+**Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
+--only encorefailstruggle encorefailnolastmove encorefailmirrormove
+encoreappliescontrol`; engine side pinned by
+`rust/pokezero-search/tests/gen3_encore_failencore_fidelity.rs` (8 tests).

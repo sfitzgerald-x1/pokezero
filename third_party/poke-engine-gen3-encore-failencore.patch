@@ -1,0 +1,80 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1526,6 +1526,35 @@
+         );
+     }
+     hit_sub
++}
++
++/// pokezero gen3 fidelity fix: the moves whose `flags.failencore` makes Encore
++/// fail outright when they are the target's last move.
++///
++/// Resolved against gen3's ACTUAL mod chain (gen3 -> gen4 -> gen5 -> gen6 ->
++/// gen7 -> gen8 -> base `data/moves.ts`), remembering that a mod's `flags`
++/// object REPLACES its parent's wholesale rather than merging into it:
++///
++///   mimic, mirrormove, sketch, struggle   flags from data/mods/gen3/moves.ts
++///   encore, transform                     flags from data/mods/gen4/moves.ts
++///
++/// The replacement rule cuts BOTH ways, and the inverse cases are the trap here.
++/// `assist`, `metronome`, `naturepower` and `sleeptalk` all carry `failencore` in
++/// base `data/moves.ts`, but the nearest override in gen3's chain re-declares
++/// their flags WITHOUT it — assist at gen3, metronome and naturepower at gen4,
++/// sleeptalk at gen6 — so none of the four fails Encore in gen3 and none of them
++/// belongs in this list. Reading base, or gen8 (which re-adds it to sleeptalk and
++/// mirrormove), would over-fail all four.
++fn move_fails_encore(move_id: &Choices) -> bool {
++    matches!(
++        move_id,
++        Choices::ENCORE
++            | Choices::MIMIC
++            | Choices::MIRRORMOVE
++            | Choices::SKETCH
++            | Choices::STRUGGLE
++            | Choices::TRANSFORM
++    )
+ }
+ 
+ fn move_has_no_effect(state: &State, choice: &Choice, attacking_side_ref: &SideReference) -> bool {
+@@ -1538,13 +1567,35 @@
+     {
+         return true;
+     } else if choice.move_id == Choices::ENCORE {
+-        return match state
+-            .get_side_immutable(&attacking_side_ref.get_other_side())
+-            .last_used_move
+-        {
+-            LastUsedMove::None => true,
+-            LastUsedMove::Move(_) => false,
++        // pokezero gen3 fidelity fix: the rest of `encore.condition.onStart`'s
++        // failure set. Upstream only asked whether the target had used a move at
++        // all; Showdown also refuses on the move's identity and its PP:
++        //
++        //     let move = target.lastMove;
++        //     if (!move || target.volatiles['dynamax']) return false;
++        //     ...
++        //     const moveSlot = target.getMoveData(move.id);
++        //     if (move.isZ || move.isMax || move.flags['failencore'] ||
++        //         !moveSlot || moveSlot.pp <= 0) return false;
++        //
++        // `dynamax`, `isZ` and `isMax` are unreachable in gen3. `!moveSlot` is
++        // structurally unreachable here because the engine stores last_used_move
++        // as a SLOT INDEX rather than a move id, so it always denotes a real
++        // slot — the case it exists to catch in Showdown is Struggle, which is
++        // not in `moveSlots`, and which the `failencore` list below rejects
++        // anyway.
++        //
++        // The two arms already handled remain exactly right: LastUsedMove::None
++        // is `!move`, and LastUsedMove::Switch is a Pokemon that just came in —
++        // `Pokemon.clearVolatile()` nulls `lastMove` on switch-out, so a fresh
++        // switch-in genuinely has none and Encore fails against it.
++        return match defending_side.last_used_move {
++            LastUsedMove::None => true,
+             LastUsedMove::Switch(_) => true,
++            LastUsedMove::Move(move_index) => {
++                let move_slot = &defender.moves[&move_index];
++                move_fails_encore(&move_slot.id) || move_slot.pp <= 0
++            }
+         };
+     }
+     false
