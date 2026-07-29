@@ -373,6 +373,15 @@ def damage_components(
     said "roll disagreement", the replay showed the Hidden Power damage was not
     in the component list at all.
 
+    ``-sethp`` is consumed alongside ``-damage``/``-heal``. Omitting it silently
+    dropped Pain Split's HP change from the observation and folded its effect
+    into the NEXT attributed delta on that slot, so the instrument reported
+    impossible components such as a Leftovers heal of -73 and blamed the engine
+    for them (seed 1500008 step 101: true Leftovers +13/+25, harness said
+    +9/+28, engine said +13/+25 — the engine was right). Pain Split is the only
+    move in the gen3 pool that emits the tag, and it emits TWO lines, one per
+    slot, the target's first and `[silent]`; both must be read.
+
     Returns ``{"p1": [(source, delta), ...], "p2": [...]}`` where ``delta`` is
     signed (negative = damage) and ``source`` is the normalized ``[from]`` tag
     ("" for a bare damage line = direct move damage, "heal" for a bare heal).
@@ -391,7 +400,7 @@ def damage_components(
             slot = parts[2].split(":", 1)[0].strip()[:2]
             running[slot] = _hp_of(parts[4])
             continue
-        if tag not in ("-damage", "-heal") or len(parts) < 4:
+        if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
             continue
         slot = parts[2].split(":", 1)[0].strip()[:2]
         if slot not in out:
@@ -417,6 +426,13 @@ def damage_components(
             source = _UNKNOWN_CALLEE_SOURCE
         if not source and tag == "-heal":
             source = "heal"
+        if not source and tag == "-sethp":
+            # Defensive: every `-sethp` Showdown emits carries `[from] move:
+            # Pain Split`, but an untagged one must NOT fall through as "" —
+            # that is the roll-scaled bucket, and Pain Split is deterministic
+            # (floor((targetHP + userHP) / 2)), so its magnitude must be
+            # compared exactly.
+            source = "sethp"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
             # ANY heal that tops the mon out is roll-scaled, whatever its tag:
             # it restores `maxhp - hp`, so its magnitude is set by the damage

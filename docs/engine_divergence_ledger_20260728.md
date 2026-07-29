@@ -3263,3 +3263,105 @@ Steps 1 and 2 are independent and can run in parallel.
 - report `reports/c4.json`, checkpoint `reports/c4.jsonl`, log `reports/c4.log`
 - pre-registered predictions `reports/c4_predictions.json`
 - triage `reports/c4_tri_roll.json` (116/116 rows, population guard satisfied)
+
+---
+
+# Appendix S — The `-sethp` fix, and the engine bug it was hiding
+
+Fix for §R.7, plus the finding that came out from under it.
+
+## S.1 Sim-side facts, established before touching code
+
+- **Pain Split is the only `-sethp` emitter in the pool.** The whole
+  Showdown tree contains five `this.add('-sethp', ...)` sites: two in Pain
+  Split's `onHit`, and three for Flip Turn inside the `chatbats` joke mod, which
+  gen3 randbats cannot reach. There is no gen3/gen4/gen5 override of Pain Split,
+  so gen3 inherits the base implementation.
+- **It does NOT carry both slots' values on one line.** It emits *two* lines,
+  each with only its own slot's `getHealth`: the target's first and `[silent]`,
+  then the user's, visible. Both must be consumed — the silent one still moves
+  HP.
+- **Reachability**: 4 of 220 gen3 randbats species (dusclops, misdreavus,
+  swalot, weezing). Reachable, therefore encoded.
+
+## S.2 The fix, both sides of the instrument
+
+Observation side (`damage_components`): admit `-sethp`. Its `[from]` payload
+normalizes to `movepainsplit`, which is *not* in `_ROLL_SCALED_SOURCES`, so the
+component is compared exactly — correct, because Pain Split is deterministic
+(`floor((targetHP + userHP) / 2)`). An untagged `-sethp` is given the source
+`sethp` rather than `""`, so a missing tag can never silently fall into the
+roll-scaled bucket.
+
+Mapper side (`events.rs`): Pain Split was in the "genuine self-costs" list and
+rendered bare, under a comment asserting *"the real protocol renders them bare"*.
+The sim says otherwise. Both halves now render as `-sethp` with an identical
+`[from] move: Pain Split`, target `[silent]`.
+
+The pairing is the load-bearing part and is pinned by its own test: components
+are compared by normalized source, so had the two halves been tagged differently
+— or one left bare — the rows would have returned as attribution mismatches
+rather than matching.
+
+## S.3 The mapper bug was also a live Track B defect
+
+`fold.rs:1683` keys its Pain Split `self_hp_cost` branch on exactly `-sethp`
+plus a `[from]` payload whose `side_condition_identifier` is `painsplit`. The
+mapper's bare `-damage` matched neither, so **that branch never fired on the
+engine-as-environment path** and Pain Split's self-cost was silently uncharged —
+while the same fold, fed real Showdown logs, charged it. The encoder disagreed
+with itself depending on which side supplied the protocol. This was not visible
+from the differential at all; it fell out of asking what else consumes the lines
+before changing them.
+
+## S.4 Result: 30 of 43 rows cleared, and 12 turned out to be an engine bug
+
+| | c4 (pre-fix) | c4b (post-fix) |
+|---|---|---|
+| diverged | 240 | 212 |
+| outside limits | 193 | **167** |
+| Pain Split rows diverging | 43 | 13 |
+| coverage | 0.978 | 0.978 |
+| harness errors | 0 | 0 |
+
+Two rows that previously *matched* now diverge. They are not regressions: they
+are false passes the broken instrument was producing, and both are §S.5.
+
+## S.5 CONFIRMED ENGINE BUG: gen3 Pain Split does not clamp to `maxhp`
+
+```rust
+// third_party/poke-engine-src/src/gen3/choice_effects.rs:877
+let target_hp = (attacking_side.get_active_immutable().hp
+    + defending_side.get_active_immutable().hp) / 2;
+...
+attacking_side.get_active().hp = target_hp;
+defending_side.get_active().hp = target_hp;
+```
+
+The average is assigned to both actives with no clamp against each mon's own
+`maxhp`. Showdown assigns through `Pokemon#sethp` (`sim/pokemon.ts:1656`), which
+clamps. Whenever the average exceeds a mon's maximum — routinely, when a full-HP
+mon splits with a higher-`maxhp` opponent — the engine leaves `hp > maxhp`.
+
+Seed 1500037 step 7: Weezing 238/238 splits with Groudon 252/252. Average 245.
+Showdown clamps Weezing to 238/238 (`-sethp` with no change) and moves Groudon
+to 245/252. The engine gives Weezing +7 *above its maximum*.
+
+**12 of the 15 surviving `movepainsplit` rows are this bug** (measured by
+checking, for every row, whether Showdown's two post-split HPs differ with one
+sitting exactly at its max). The remaining 3 are a separate mechanism and are
+recorded as unattributed rather than folded in.
+
+This is worse than a protocol disagreement: `hp > maxhp` is corrupt state that
+every later damage, heal and faint check reads.
+
+It was *invisible* until the instrument was repaired — the `-sethp` blindness was
+swallowing the entire component. Fixing a measurement bug exposed an engine bug
+underneath it, which is an argument for repairing instruments even when the
+residue they produce is comfortably attributable to something else.
+
+## S.6 Hand-off
+
+Engine lane, alongside the §R.8 Rest patch: clamp both assignments to the
+receiving mon's `maxhp`, mirroring `sethp`. Expected to clear 12 of the 15
+remaining `movepainsplit` rows; the other 3 need their own attribution.
