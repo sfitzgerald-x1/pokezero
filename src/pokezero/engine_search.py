@@ -345,9 +345,29 @@ def _world_failure_key(error: EngineWorldUnsupported) -> str:
     detail = error.detail
     if error.reason == "materialization_blocker":
         _, _, tokens = detail.partition(":")
-        kinds = sorted({str(token).partition(":")[0].strip() for token in tokens.split(",") if token.strip()})
+        kinds = sorted(
+            {_blocker_bucket(str(token)) for token in tokens.split(",") if token.strip()}
+        )
         return f"{error.reason}: {', '.join(kinds)}" if kinds else error.reason
     return f"{error.reason}: {detail}"
+
+
+def _blocker_bucket(token: str) -> str:
+    """Bucket one blocker token at the granularity that names its fix.
+
+    Stripping the operand is right for ``item-state-*``, whose operand is a
+    species -- one bucket per species is unbounded noise and the species is not
+    what you would change. It is wrong for ``baton-pass``, where the operand is
+    the VOLATILE and is the entire actionable content: the 2026-07-28 power run
+    reported a bare ``materialization_blocker: baton-pass`` and gave no way to
+    tell whether it was a Substitute worth supporting or a Bide worth refusing.
+    The volatile ids are a small closed set, so keeping them stays bounded.
+    """
+
+    kind, _, operand = token.strip().partition(":")
+    if kind == "baton-pass" and operand:
+        return f"{kind}:{operand}"
+    return kind
 
 
 @dataclass

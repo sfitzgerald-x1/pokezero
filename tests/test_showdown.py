@@ -1485,6 +1485,26 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"spe": 2})
 
+    def test_baton_pass_carries_the_perish_countdown(self) -> None:
+        # The countdown lives on the mon as its COUNTER (perish3 ... perish1),
+        # never as "perishsong" -- the sim only ever emits |-start|<mon>|perishN.
+        # The transfer set listed the move id alone, so the intersection matched
+        # nothing and a passed countdown was silently DROPPED: the recipient
+        # walked away from a perish clock that is still running. Misdreavus is
+        # the pool's only Perish Song user and its only Mean Look user, so this
+        # is exactly the line those games are decided on.
+        replay = parse_showdown_replay(
+            [
+                "|-start|p2a: Misdreavus|perish3",
+                "|move|p2a: Misdreavus|Baton Pass",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ],
+            battle_id="battle-gen3randombattle-1",
+        )
+        self.assertEqual(replay.volatiles["p2"], ("perish3",))
+        # ...and it is materializable, so it must not wall the world either.
+        self.assertEqual(replay.direct_materialization_blockers["p2"], ())
+
     def test_baton_pass_carries_public_volatiles_and_marks_direct_state_gaps(self) -> None:
         replay = parse_showdown_replay(
             [
@@ -1496,8 +1516,10 @@ class Phase2DynamicStateTest(unittest.TestCase):
             battle_id="battle-gen3randombattle-1",
         )
 
-        # Both effects copy in Gen 3. Ingrain has a complete direct-state payload, while
-        # Substitute's private remaining HP makes direct materialization fail closed.
+        # Both effects copy in Gen 3. Substitute stays fail-closed: the passed
+        # volatile carries the PASSER's remaining sub HP, which the constructor
+        # cannot derive -- modelling it as recipient.maxhp//4 would be a
+        # different Pokemon's number (see _DIRECT_MATERIALIZATION_VOLATILES).
         self.assertEqual(replay.volatiles["p2"], ("ingrain", "substitute"))
         self.assertEqual(replay.direct_materialization_blockers["p2"], ("baton-pass:substitute",))
 

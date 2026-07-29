@@ -2552,9 +2552,40 @@ _BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
     "confusion", "leechseed", "substitute", "taunt", "curse", "ingrain", "lockon",
     "grudge", "focusenergy", "charge", "bide", "uproar", "magiccoat", "snatch",
     "mudsport", "watersport", "rage", "partiallytrapped", "perishsong",
+    # Perish Song lives on the mon as its COUNTER (``perish3`` ... ``perish1``),
+    # never as ``perishsong`` -- the sim announces ``|-start|<mon>|perishN``. The
+    # id-only entry therefore matched nothing and the intersection below silently
+    # DROPPED a Baton-Passed countdown, losing a public fact rather than blocking
+    # on it. Misdreavus is the pool's Perish Song user and also its Mean Look
+    # user, so the passed countdown is exactly the line that decides those games.
+    "perish0", "perish1", "perish2", "perish3",
 })
+
+# Transferred volatiles that do NOT wall the direct construction. Anything
+# transferred but absent here becomes a ``baton-pass:<id>`` blocker.
+#
+# NOT a claim that every member is fully materializable -- the engine-world
+# constructor keeps its own, narrower allowlist and re-validates independently,
+# so ``focusenergy``/``ingrain``/``mudsport``/``watersport`` (pre-existing
+# entries) still raise ``volatile_unsupported`` downstream. This list only
+# decides which BP transfers are worth attempting.
+#
+# Perish counters are exact: Showdown announces the post-decrement value and the
+# engine faints on PERISH1, so a mon publicly showing perishN acts N more times
+# in both. confusion and partial trap ride their existing named approximations.
+#
+# SUBSTITUTE IS DELIBERATELY ABSENT. It transfers in gen 3 -- copyVolatileFrom
+# shallow-clones the volatile including its ``hp`` field -- but that HP is
+# ``floor(PASSER.maxhp/4)`` minus everything it has already absorbed, and the
+# constructor can only derive ``recipient.maxhp // 4``. That is not an
+# approximation of the true value, it is a different Pokemon's number: wrong in
+# both directions (Ninjask->Snorlax models 86 where reality is <=56), and for a
+# Shedinja recipient it computes 0, which makes the engine absorb one hit of
+# ARBITRARY size for zero damage. Fail closed instead.
 _DIRECT_MATERIALIZATION_VOLATILES = frozenset({
     "focusenergy", "ingrain", "leechseed", "mudsport", "watersport",
+    "confusion", "partiallytrapped",
+    "perish1", "perish2", "perish3",
 })
 
 
