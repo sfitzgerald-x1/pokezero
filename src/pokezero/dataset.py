@@ -34,6 +34,70 @@ MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024
 # output parent is an unrelated scratch dir and the cap is irrelevant). Never set in production.
 _SKIP_CACHE_ROOT_CAP_ENV = "POKEZERO_SKIP_CACHE_ROOT_CAP"
 
+# ---- collection-environment provenance -------------------------------------
+# Which transition backend produced a shard, and how real its belief columns are.
+# The two backends write SCHEMA-IDENTICAL shards on purpose, so nothing about the
+# arrays distinguishes engine smoke data from Showdown training data — this is the
+# only thing that does, and `collection_env` is a concat compat key so the mix
+# fails closed instead of quietly diluting a training corpus.
+COLLECTION_ENV_KEY = "collection_env"
+COLLECTION_ENV_SHOWDOWN = "showdown"
+COLLECTION_ENV_ENGINE = "engine"
+COLLECTION_ENVS = (COLLECTION_ENV_SHOWDOWN, COLLECTION_ENV_ENGINE)
+# Legacy default: every shard written before this field existed came from the
+# Showdown backend, so a MISSING key means "showdown" (see _normalized_collection_env).
+DEFAULT_COLLECTION_ENV = COLLECTION_ENV_SHOWDOWN
+
+BELIEF_FIDELITY_KEY = "belief_fidelity"
+# "full": real public-knowledge candidate sets with genuine opponent uncertainty.
+# "degenerate": revealed facts only, opponent uncertainty pinned at 1.0 — a value
+# skew, never a shape change, which is exactly why it is invisible in the arrays.
+BELIEF_FIDELITY_FULL = "full"
+BELIEF_FIDELITY_DEGENERATE = "degenerate"
+BELIEF_FIDELITIES = (BELIEF_FIDELITY_FULL, BELIEF_FIDELITY_DEGENERATE)
+DEFAULT_BELIEF_FIDELITY = BELIEF_FIDELITY_FULL
+
+
+def _validated_collection_env(value: str) -> str:
+    if value not in COLLECTION_ENVS:
+        raise ValueError(f"unknown collection_env {value!r}; expected one of {list(COLLECTION_ENVS)}.")
+    return value
+
+
+def _validated_belief_fidelity(value: str) -> str:
+    if value not in BELIEF_FIDELITIES:
+        raise ValueError(f"unknown belief_fidelity {value!r}; expected one of {list(BELIEF_FIDELITIES)}.")
+    return value
+
+
+def _normalized_collection_env(metadata: Mapping[str, Any]) -> str:
+    """A cache's collection env, with the legacy default applied.
+
+    Back-compat is the whole point: production shards predating this field carry
+    no key at all, and they were all Showdown. Normalizing the absent key to
+    "showdown" BEFORE the concat compat comparison keeps every existing shard
+    concatenable with every other existing shard AND with new Showdown shards;
+    only genuine engine<->showdown mixing fails.
+    """
+    value = metadata.get(COLLECTION_ENV_KEY)
+    return DEFAULT_COLLECTION_ENV if value is None else str(value)
+
+
+def _normalized_belief_fidelity(metadata: Mapping[str, Any]) -> str | None:
+    """A cache's belief fidelity, with the legacy default applied.
+
+    Recorded provenance, NOT a compat key: the env is the gate, and fidelity
+    travels with it. A legacy shard is Showdown, hence "full"; an unstamped shard
+    that somehow claims a non-Showdown env gets no invented answer.
+    """
+    value = metadata.get(BELIEF_FIDELITY_KEY)
+    if value is not None:
+        return str(value)
+    if _normalized_collection_env(metadata) == COLLECTION_ENV_SHOWDOWN:
+        return DEFAULT_BELIEF_FIDELITY
+    return None
+
+
 PathInput = str | PathLike[str] | Path
 
 
@@ -400,6 +464,8 @@ class TrainingCacheBuilder:
         config: TrajectoryDatasetConfig | None = None,
         feature_masks=None,
         observation_schema: str | None = None,
+        collection_env: str = DEFAULT_COLLECTION_ENV,
+        belief_fidelity: str = DEFAULT_BELIEF_FIDELITY,
     ) -> None:
         self.config = config or TrajectoryDatasetConfig()
         self._record_count = 0
@@ -439,6 +505,11 @@ class TrainingCacheBuilder:
         # the trainer hard-fails on a cache-vs-model schema mismatch — the schema-axis
         # twin of the feature-mask cross-check (v2.2 fresh-selection latch).
         self._observation_schema = observation_schema
+        # Which transition backend collected these records, and how real their belief
+        # columns are. Validated here (not at write time) so a typo fails before a
+        # collection run rather than after it.
+        self._collection_env = _validated_collection_env(collection_env)
+        self._belief_fidelity = _validated_belief_fidelity(belief_fidelity)
 
     @property
     def record_count(self) -> int:
@@ -629,6 +700,13 @@ class TrainingCacheBuilder:
                 # Observation schema the collecting env encoded under (absent/None on
                 # legacy caches, which by definition predate v2.2 recording).
                 "observation_schema": self._observation_schema,
+                # Transition backend that produced these records, and the fidelity of
+                # their belief columns. The engine backend writes shards that are
+                # schema-identical to Showdown's, so this stamp is the only thing that
+                # keeps smoke data out of a training corpus; collection_env is a concat
+                # compat key (absent on legacy shards, which normalize to "showdown").
+                COLLECTION_ENV_KEY: self._collection_env,
+                BELIEF_FIDELITY_KEY: self._belief_fidelity,
                 "format": "directory-of-npy-arrays",
                 "padding_row": 0,
                 "categorical_storage": {
@@ -723,7 +801,23 @@ class TrainingCacheBuilder:
 # "padding_row": 0); every other array is per-example with no reserved row.
 _ZERO_ROW_ARRAYS = ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask")
 # Metadata fields that must match exactly for two caches to be concatenable.
-_CONCAT_COMPAT_FIELDS = ("schema_version", "dataset_config", "observation_schema", "feature_masks")
+# `collection_env` is compared on its NORMALIZED value (see _concat_compat_value), so
+# legacy shards without the key still merge with each other and with new Showdown
+# shards; only engine<->showdown mixing fails. `belief_fidelity` is deliberately NOT
+# here — it is recorded provenance that travels with the env, not a gate.
+_CONCAT_COMPAT_FIELDS = (
+    "schema_version",
+    "dataset_config",
+    "observation_schema",
+    "feature_masks",
+    COLLECTION_ENV_KEY,
+)
+
+
+def _concat_compat_value(metadata: Mapping[str, Any], field: str) -> Any:
+    if field == COLLECTION_ENV_KEY:
+        return _normalized_collection_env(metadata)
+    return metadata.get(field)
 
 
 def concat_training_caches(
@@ -760,11 +854,26 @@ def concat_training_caches(
     base = metadatas[0]
     for path, meta in zip(normalized[1:], metadatas[1:], strict=True):
         for field in _CONCAT_COMPAT_FIELDS:
-            if meta.get(field) != base.get(field):
+            meta_value = _concat_compat_value(meta, field)
+            base_value = _concat_compat_value(base, field)
+            if meta_value == base_value:
+                continue
+            if field == COLLECTION_ENV_KEY:
+                # The incident class this exists for: engine-env shards are a
+                # throughput instrument whose belief columns are degenerate, and they
+                # are byte-shaped exactly like Showdown training data. Merging the two
+                # would be undetectable downstream, so it fails closed here.
                 raise ValueError(
-                    f"cache {path} is not concatenable: {field} mismatch "
-                    f"({meta.get(field)!r} != {base.get(field)!r})."
+                    "cannot concatenate training caches collected in different environments: "
+                    f"{normalized[0]} has {COLLECTION_ENV_KEY}={base_value!r} but {path} has "
+                    f"{COLLECTION_ENV_KEY}={meta_value!r}. Engine-env shards carry degenerate "
+                    "belief columns (throughput measurement, not training data) and must never be "
+                    "merged into Showdown shards."
                 )
+            raise ValueError(
+                f"cache {path} is not concatenable: {field} mismatch "
+                f"({meta_value!r} != {base_value!r})."
+            )
         if meta.get("categorical_storage", {}).get("mode") != base.get("categorical_storage", {}).get("mode"):
             raise ValueError(f"cache {path} is not concatenable: categorical_storage mode mismatch.")
         if meta.get("categorical_storage", {}).get("original_feature_count") != base.get(
@@ -837,6 +946,13 @@ def concat_training_caches(
     metadata["opponent_pool_provenance_mixed"] = 0 < len(provenance) < record_count
     metadata["categorical_storage"] = dict(base["categorical_storage"])
     metadata["categorical_storage"]["stored_feature_count"] = int(merged["categorical_ids"].shape[2])
+    # Always stamp provenance on the output, even when every part was legacy-unstamped:
+    # a merge of legacy Showdown shards IS a Showdown shard and should say so. The env is
+    # unanimous by the compat gate above; fidelity is not gated, so it follows the
+    # belief_set_source_hash convention — the common value, or null when parts disagree.
+    metadata[COLLECTION_ENV_KEY] = _normalized_collection_env(base)
+    fidelities = {_normalized_belief_fidelity(meta) for meta in metadatas}
+    metadata[BELIEF_FIDELITY_KEY] = next(iter(fidelities)) if len(fidelities) == 1 else None
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
@@ -1058,6 +1174,8 @@ def write_training_cache_streaming(
     max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     cache_root: PathInput | None = None,
     flush_rows: int = 20000,
+    collection_env: str = DEFAULT_COLLECTION_ENV,
+    belief_fidelity: str = DEFAULT_BELIEF_FIDELITY,
 ) -> TrainingCacheSummary:
     """Stream rollout JSONL into a training cache with bounded memory.
 
@@ -1072,6 +1190,8 @@ def write_training_cache_streaming(
     """
     numpy = _require_numpy()
     cfg = config or TrajectoryDatasetConfig()
+    collection_env = _validated_collection_env(collection_env)
+    belief_fidelity = _validated_belief_fidelity(belief_fidelity)
     out = Path(output_path)
     if out.exists() and not overwrite:
         raise FileExistsError(f"training cache already exists: {out}")
@@ -1271,6 +1391,11 @@ def write_training_cache_streaming(
             # them through should set them here identically.
             "feature_masks": _feature_masks_payload(None),
             "observation_schema": None,
+            # Provenance mirrors the in-memory builder; this path ingests JSONL that
+            # carries no backend marker, so it stamps what its caller declares (legacy
+            # default: Showdown / full belief).
+            COLLECTION_ENV_KEY: collection_env,
+            BELIEF_FIDELITY_KEY: belief_fidelity,
             "format": "directory-of-npy-arrays",
             "padding_row": 0,
             "categorical_storage": {

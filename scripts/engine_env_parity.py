@@ -10,7 +10,12 @@ and ingestion, never equality.
 The binding check is the last one: :func:`concat_training_caches` is the exact
 compatibility contract the fleet uses to merge shards, so if a Showdown shard
 and an engine shard concatenate and then read back through
-:func:`iter_training_cache_batches`, the trainer cannot tell them apart.
+:func:`iter_training_cache_batches`, the trainer cannot tell them apart. That
+indistinguishability is the reason ``collection_env`` exists, so the check now
+has two halves: the real (unmodified) shards must REFUSE to merge, and a copy of
+the engine shard with only its ``collection_env`` stamp overridden must still
+merge and read back — proving the refusal is the provenance gate alone and not a
+structural incompatibility hiding behind it.
 
 Note on ``categorical_ids`` width: the writer stores categorical rows in
 ``compact-nonzero`` mode, whose stored width is the widest nonzero row IN THAT
@@ -37,6 +42,12 @@ sys.path.insert(0, str(REPO / "src"))
 
 from pokezero.dataset import (  # noqa: E402
     _CONCAT_COMPAT_FIELDS,
+    BELIEF_FIDELITY_DEGENERATE,
+    BELIEF_FIDELITY_FULL,
+    BELIEF_FIDELITY_KEY,
+    COLLECTION_ENV_ENGINE,
+    COLLECTION_ENV_KEY,
+    COLLECTION_ENV_SHOWDOWN,
     concat_training_caches,
     iter_training_cache_batches,
 )
@@ -44,6 +55,19 @@ from pokezero.rollout_cli import main as rollout_main  # noqa: E402
 
 # Per-shard compaction artifacts, not schema. See the module docstring.
 _COMPACTION_KEYS = ("observation_shapes", "categorical_storage")
+# Provenance fields MUST differ between the backends — that is their whole job — so
+# they are asserted by value below instead of being compared for equality.
+_PROVENANCE_KEYS = (COLLECTION_ENV_KEY, BELIEF_FIDELITY_KEY)
+_EXPECTED_PROVENANCE = {
+    "engine": {
+        COLLECTION_ENV_KEY: COLLECTION_ENV_ENGINE,
+        BELIEF_FIDELITY_KEY: BELIEF_FIDELITY_DEGENERATE,
+    },
+    "showdown": {
+        COLLECTION_ENV_KEY: COLLECTION_ENV_SHOWDOWN,
+        BELIEF_FIDELITY_KEY: BELIEF_FIDELITY_FULL,
+    },
+}
 
 
 def _collect(backend: str, out: Path, games: int, seed_start: int, showdown_root: Path | None) -> None:
@@ -123,7 +147,22 @@ def main() -> int:
     if set(engine_meta) != set(showdown_meta):
         failures.append("metadata key set differs")
     print(f"    {'key set':34s} {'identical' if set(engine_meta) == set(showdown_meta) else 'DIFFERS'}")
+
+    # 3a. Provenance: the ONLY metadata that is supposed to differ, so it is
+    #     asserted by value rather than for equality. Both stamps must be present
+    #     and correct — an unstamped engine shard normalizes to "showdown" at the
+    #     concat gate and would merge straight into training data.
+    for label, meta in (("engine", engine_meta), ("showdown", showdown_meta)):
+        for field, expected in _EXPECTED_PROVENANCE[label].items():
+            actual = meta.get(field)
+            ok = actual == expected
+            if not ok:
+                failures.append(f"{label} metadata.{field} is {actual!r}, expected {expected!r}")
+            print(f"    {label + ' ' + field:34s} {actual!r} {'OK' if ok else f'EXPECTED {expected!r}'}")
+
     for field in (*_CONCAT_COMPAT_FIELDS, "array_dtypes"):
+        if field in _PROVENANCE_KEYS:
+            continue  # asserted by value in 3a; differing is the point.
         same = engine_meta.get(field) == showdown_meta.get(field)
         if not same:
             failures.append(f"metadata.{field} differs")
@@ -169,13 +208,43 @@ def main() -> int:
             failures.append(f"{label}: transition region attended under --transition-token-budget 0")
         print(f"    {label:10s} transition region unattended: {not attended}")
 
-    # 6. The binding check: do they merge, and does the merge read back?
-    print("\n[6] concat + read-back (the trainer's own compatibility contract)")
+    # 6. The binding check, in two halves.
+    print("\n[6] concat (the trainer's own compatibility contract)")
+
+    # 6a. Fail-closed: the real shards must REFUSE to merge across environments.
+    merged_mixed = args.out / "cache-merged-mixed"
+    if merged_mixed.exists():
+        shutil.rmtree(merged_mixed)
+    try:
+        concat_training_caches([showdown_dir, engine_dir], merged_mixed)
+    except ValueError as exc:
+        message = str(exc)
+        named = all(token in message for token in (COLLECTION_ENV_KEY, COLLECTION_ENV_ENGINE, COLLECTION_ENV_SHOWDOWN))
+        if not named:
+            failures.append(f"env-mixing refusal does not name the field and both envs: {message}")
+        print(f"    engine + showdown refused (expected): {message[:200]}")
+    else:
+        failures.append("engine + showdown concatenated — the collection_env gate did not fire")
+        print("    FAILED: engine + showdown concatenated")
+
+    # 6b. Structural interchangeability: with ONLY the provenance stamp overridden,
+    #     the same two shards must merge and read back through the trainer's loader.
+    #     If this half fails while 6a passes, the backends really are incompatible and
+    #     the provenance gate was masking it.
+    print("\n    provenance-override control (proves 6a is the gate, not a schema break)")
+    engine_as_showdown = args.out / "cache-engine-stamped-showdown"
+    if engine_as_showdown.exists():
+        shutil.rmtree(engine_as_showdown)
+    shutil.copytree(engine_dir, engine_as_showdown)
+    override_meta = json.loads((engine_as_showdown / "metadata.json").read_text())
+    override_meta[COLLECTION_ENV_KEY] = COLLECTION_ENV_SHOWDOWN
+    (engine_as_showdown / "metadata.json").write_text(json.dumps(override_meta, indent=2, sort_keys=True) + "\n")
+
     merged = args.out / "cache-merged"
     if merged.exists():
         shutil.rmtree(merged)
     try:
-        concat_training_caches([engine_dir, showdown_dir], merged)
+        concat_training_caches([engine_as_showdown, showdown_dir], merged)
         batches = list(iter_training_cache_batches(merged, batch_size=64))
         rows = sum(int(batch.categorical_ids.shape[0]) for batch in batches)
         print(f"    concatenated OK -> {merged.name}; read back {len(batches)} batches, {rows} examples")
@@ -193,9 +262,11 @@ def main() -> int:
         return 1
     print("RESULT: SCHEMA PARITY OK")
     print("  Identical array set, dtypes, token dimensions, dataset config, feature masks")
-    print("  and categorical semantics; the two shards concatenate and read back through")
-    print("  the trainer's own loader. Values differ (different games, degenerate belief")
-    print("  columns on the engine side) — by design.")
+    print("  and categorical semantics; with the provenance stamp overridden the two shards")
+    print("  concatenate and read back through the trainer's own loader. Unmodified, they")
+    print("  refuse to merge on collection_env — which is the point: the shards are")
+    print("  structurally indistinguishable, so the stamp is the only thing keeping the")
+    print("  engine backend's degenerate belief columns out of training data.")
     return 0
 
 
