@@ -819,6 +819,50 @@ _MISS_COMPONENTS_RE = re.compile(
 _MISS_SOURCE_RE = re.compile(r"\('([a-z0-9_]*)',")
 
 
+_MISS_PCT_RE = re.compile(r"pct=(?P<pct>[\d.]+)")
+
+# Residuals whose presence in a miss makes that miss a candidate for the
+# majority override. Deliberately an allow-list of NAMED end-of-turn effects:
+# an unattributed or roll-scaled component is never "the residual".
+_ADJUDICABLE_RESIDUALS = frozenset({"itemleftovers", "psn", "brn", "sandstorm", "tox"})
+
+
+def _majority_miss(misses: Sequence[str]) -> str | None:
+    """The miss carrying the largest share of the branch probability mass."""
+
+    best: tuple[float, str] | None = None
+    for miss in misses:
+        match = _MISS_PCT_RE.search(miss)
+        if not match:
+            continue
+        pct = float(match.group("pct"))
+        if best is None or pct > best[0]:
+            best = (pct, miss)
+    return best[1] if best else None
+
+
+def _residual_only_sources(miss: str) -> set[str]:
+    """The named residuals a miss is about, or empty if it is about anything else.
+
+    Empty is the safe answer: it means "do not override". A miss mentioning a
+    roll-scaled component, or any source outside the allow-list, is not a
+    residual-only miss and must keep its own classification.
+    """
+
+    if not miss or "roll-scaled" in miss:
+        return set()
+    body = miss.split(": ", 1)[1] if ": " in miss else miss
+    match = _MISS_COMPONENTS_RE.search(body)
+    if not match:
+        return set()
+    sources = set(_MISS_SOURCE_RE.findall(match.group("obs"))) | set(
+        _MISS_SOURCE_RE.findall(match.group("eng"))
+    )
+    if not sources or not sources <= _ADJUDICABLE_RESIDUALS:
+        return set()
+    return sources
+
+
 def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str:
     """Name every divergence. No divergence may land in an unnamed bucket.
 
@@ -830,6 +874,43 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     """
 
     reason = misses[0] if misses else ""
+    # MAJORITY OVERRIDE (#946 adjudication, made mechanical).
+    #
+    # `misses` is in branch order, so `misses[0]` can be a minority branch. When
+    # a row's FIRST miss is a named residual (Leftovers, poison...) but the
+    # branches carrying most of the probability mass complain only about a
+    # damage component, the residual is not the disagreement — it is present and
+    # numerically identical in the majority branch, and only the low-probability
+    # branch lacks it. Classifying from `misses[0]` then files a damage
+    # disagreement under the residual's name.
+    #
+    # s1500014 st69: three branches. The 6.25% branch reports a missing
+    # `itemleftovers`; the 75.00% and 18.75% branches (93.75% together) report
+    # `observed=[('', -214)] engine=[('', -116)]` — a damage disagreement of
+    # nearly 2x. The row is damage_calc, and was labelled
+    # `component_missing_in_engine:itemleftovers` for four cycles.
+    #
+    # Deliberately narrow: this only fires when the first miss is residual-named
+    # AND the majority miss is roll-scaled. Reordering every row by probability
+    # would re-classify rows nobody has adjudicated.
+    secondary = _residual_only_sources(reason)
+    if secondary:
+        majority = _majority_miss(misses)
+        if (
+            majority is not None
+            and "roll-scaled" in majority
+            and "capped_lethal" not in majority
+        ):
+            # The `capped_lethal` exclusion is load-bearing and deliberate. A
+            # majority miss carrying it classifies as
+            # `limit:roll_divergent_lethality` — an ADJUDICATED NON-DIVERGENCE —
+            # so allowing the override there would move 15 rows out of the
+            # outside-limit count and hand the acceptance gate a 15-row credit
+            # that no one adjudicated. #946 adjudicated these rows as
+            # damage_calc, not as a comparison limit. A relabel must never
+            # reduce the residue; if those rows belong in a limit class, that is
+            # its own decision, taken on its own evidence.
+            reason = majority
     body = reason.split(": ", 1)[1] if ": " in reason else reason
 
     # PHAZE FIRST — it explains the components rather than the other way round.

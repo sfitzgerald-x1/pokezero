@@ -90,6 +90,38 @@ def _state_context(state: Any) -> dict[str, Any]:
     return out
 
 
+def _pair_by_source(
+    observed: Sequence[tuple[str, int]], engine: Sequence[tuple[str, int]]
+) -> list[tuple[str, int, int]]:
+    """Pair observed against engine components BY SOURCE, magnitude only within it.
+
+    The previous version sorted both sides by bare magnitude and zipped. In a
+    slot with more than one component that pairs unlike things: a 2-point
+    residual against a 136-point move hit, reported as a ratio of 0.015 that
+    describes nothing. 15 of 54 multi-component findings in the cycle-seven
+    brief were unusable for this reason, and were excluded rather than trusted —
+    dark data feeding nothing.
+
+    Source is the meaningful key: `recoil` belongs with `recoil` and a move hit
+    with a move hit, whatever their magnitudes. Within a source, magnitude order
+    is the only available tiebreak and is used. Components with no counterpart
+    on the other side are dropped here — an unmatched COUNT is a structural
+    difference, which `structural_component_count` already reports; it is not a
+    ratio and must not be manufactured into one.
+    """
+
+    by_source: dict[str, list[list[int]]] = {}
+    for index, side in ((0, observed), (1, engine)):
+        for source, delta in side:
+            by_source.setdefault(source, [[], []])[index].append(abs(delta))
+    out: list[tuple[str, int, int]] = []
+    for source in sorted(by_source):
+        obs, eng = by_source[source]
+        for a, b in zip(sorted(obs), sorted(eng)):
+            out.append((source, a, b))
+    return out
+
+
 def _classify_ratio(ratio: float) -> str:
     if _ROLL_LOW <= ratio <= _ROLL_HIGH:
         return "within_roll_window"
@@ -176,12 +208,13 @@ def triage_row(row: Mapping[str, Any], *, verbose: bool) -> dict[str, Any]:
         bucket = "structural_component_count"
     else:
         for slot in ("p1", "p2"):
-            o = sorted(abs(d) for _s, d in obs_rolled[slot])
-            e = sorted(abs(d) for _s, d in best["eng_rolled"][slot])
-            for a, b in zip(o, e):
+            for source, a, b in _pair_by_source(
+                obs_rolled[slot], best["eng_rolled"][slot]
+            ):
                 if a == b:
                     continue
-                findings.append(f"{slot}:{a}vs{b}:{_classify_ratio(a / max(b, 1))}")
+                label = _classify_ratio(a / max(b, 1))
+                findings.append(f"{slot}:{a}vs{b}:{label}:{source or 'move'}")
         if not findings:
             bucket = "matches_best_branch"
         elif all(v in legal for v in all_obs) and legal:

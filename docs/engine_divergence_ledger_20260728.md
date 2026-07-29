@@ -3768,7 +3768,7 @@ recorded above for exactly that reason.
 
 ---
 
-# Appendix U — Cycle seven (30 patches) and the damage_calc triage brief
+# Appendix V — Cycle seven (30 patches) and the damage_calc triage brief
 
 Commit `dfb4d10285c003e3f324ea1e1dcb06b296ff8fd3`, fingerprint
 `814b2bd28d3983813b972ba3fd0af7fcc46871085fdea6f0e654c767d076b577`, 30 patches,
@@ -3797,8 +3797,12 @@ classes. The sweep was not started. Seed block 2,000,000+ remains unconsumed.
 
 ## U.3 Expectations, scored honestly
 
-- **Protect credit was 14 rows, not ~1.** The measured drop is larger than the
-  retired 10-row prediction *and* than the ~1-row revision. `roll_scaled` -10,
+- **Protect credit was 14 rows GROSS, not ~1.** The itemisation credits -16 rows
+  to Protect; two rows moved the OTHER way, so the NET drop is -14. The figure
+  quoted here and in #949 is the gross credit, and the two clauses must be read
+  together — an itemisation that reports only its gross side will over-credit
+  whatever it is itemising. The measured drop is still larger than the retired
+  10-row prediction *and* than the ~1-row revision. `roll_scaled` -10,
   `missing:psn` -3, `limit:roll_divergent_lethality` -2, `extra:itemleftovers,sandstorm` -1.
 - **The predicted leftovers/psn RELABEL did not happen.**
   `missing_in_engine:itemleftovers` is unchanged at 22. #946 adjudicated those 8
@@ -3836,7 +3840,7 @@ remain, and only those are clustered below.
 
 | n | ratio band | reading |
 |---|---|---|
-| 11 | 0.85–1.00, tightly packed at **0.90–0.92** | best lead: engine base damage systematically ~8–10% high. Matches the reported Shadow Ball case (engine ~116 vs Showdown ~107 = 0.922) |
+| 11 | 0.85–0.92 | ~~best lead~~ **RETRACTED — instrument artifact, see W.3** |
 | 10 | 0.50–0.70 | a ~1/2 or ~2/3 factor — candidate: type-effectiveness or resist rounding |
 | 7 | < 0.50 | scattered extremes |
 | 10 | > 1.00 | scattered extremes |
@@ -3854,10 +3858,10 @@ remain, and only those are clustered below.
   move label is the *caller*, not the move that dealt the damage, and these
   travel the known unknown-callee union path.
 
-### Recommended entry point for the fix lane
+### Recommended entry point for the fix lane — RETRACTED, see W.3
 
-Start with the 0.90–0.92 cluster: it is the largest, the tightest, and the only
-one with a clean quantitative signature. Take the tightest exemplars, compute
+~~Start with the 0.90–0.92 cluster.~~ The band is this filter's own artifact and
+is not a lead. The damage lane has been redirected to the 0.50–0.70 group. Take the tightest exemplars, compute
 gen3 base damage by hand for both implementations, and find the factor. Do not
 start from the extremes — they are a mixture, and at least some are pairing
 artifacts of the multi-component slots excluded above.
@@ -3956,3 +3960,172 @@ The residue may not fall as a side effect of this walk. Rows move to
 attached — the same bar §W.1's guard enforces mechanically. If the walk cannot
 produce that demonstration, the row stays where it is and the residue stays where
 it is.
+# Appendix W — Two instrument fixes (classifier adjudication, source pairing)
+
+Both are instrument changes, not engine changes. Neither alters the residue
+count; V.1 was explicitly constrained so that it cannot.
+
+## V.1 The #946 adjudication, made mechanical
+
+`branch_misses` is in branch order, so `misses[0]` may be a MINORITY branch.
+s1500014 st69 has three: the 6.25% branch reports a missing `itemleftovers`, and
+the 75.00% + 18.75% branches report `observed=[('', -214)] engine=[('', -116)]`
+— a damage disagreement of nearly 2x. The classifier read the 6.25% branch and
+filed the row under Leftovers. It held that label for four cycles.
+
+The rule now: when the first miss names only an adjudicable residual
+(`itemleftovers`, `psn`, `brn`, `sandstorm`, `tox`) and the branch carrying the
+largest probability mass complains only about a roll-scaled component, classify
+from the majority. Deliberately narrow — reordering every row by probability
+would re-classify rows nobody has adjudicated.
+
+**Effect, stated in advance and then measured** (replayed over the c7 rows):
+
+| | before | after |
+|---|---|---|
+| rows relabelled | — | **14** |
+| `roll_scaled_component` | 72 | 86 |
+| `component_missing_in_engine:itemleftovers` | 22 | 11 |
+| `component_missing_in_engine:psn` | 6 | 4 |
+| `component_missing_in_engine:brn` | 2 | 1 |
+| **total diverged** | 170 | **170** |
+| **outside limits** | 127 | **127** |
+| limit classes | 43 | 43 |
+
+14 of the 28 known-mislabels relabel; the other 14 do not meet the predicate and
+keep their labels honestly rather than being swept along.
+
+### The guard that matters more than the rule
+
+The first implementation moved **15 additional rows into
+`limit:roll_divergent_lethality`** and dropped outside-limits from 127 to 112.
+That is an instrument change silently handing the acceptance gate a 15-row
+credit. #946 adjudicated those rows as `damage_calc`, not as a comparison limit.
+
+The override therefore refuses to fire when the majority miss carries
+`capped_lethal`. **A relabel must never reduce the residue.** If those rows
+belong in a limit class, that is a separate decision on its own evidence.
+
+## V.2 Source pairing replaces sorted-magnitude pairing
+
+The triage paired observed against engine components by sorting both sides by
+bare magnitude and zipping. In any slot with more than one component that pairs
+unlike things — a 2-point residual against a 136-point move hit, reported as a
+ratio of 0.015 describing nothing. 15 findings were excluded from the cycle-seven
+brief for this reason: dark data feeding nothing.
+
+Pairing is now keyed on source, with magnitude used only as a tiebreak within a
+source. Components with no counterpart are dropped rather than paired: an
+unmatched count is a structural difference, already reported as
+`structural_component_count`, and must not be manufactured into a ratio.
+
+### Answer to the question asked: they join existing clusters
+
+**9 previously-dark findings became usable. None forms a new cluster.**
+
+| ratio band | old (single-component only) | new (all, source-paired) | of which previously dark |
+|---|---|---|---|
+| < 0.50 | 7 | 5 | 0 |
+| 0.50–0.70 | 10 | 12 | 2 |
+| 0.70–0.85 | 1 | 0 | 0 |
+| 0.85–1.00 | 11 | 14 | 2 |
+| > 1.00 | 10 | 14 | 5 |
+
+Real findings go 52 -> 45, because unmatched components are no longer
+manufactured into ratios. The nonsense extremes are gone: no 0.015, no 25.0.
+
+The 0.85–1.00 band — the damage lane's recommended entry point — gains 2 and
+still holds the tight 0.90–0.92 sub-cluster. **The brief is an additive update:
+the 39-row structure the lane is working from is unchanged in character, and no
+conclusion it has drawn is invalidated.**
+
+A secondary benefit: source pairing surfaces residual-source findings that
+magnitude pairing hid entirely (`drain`, `movewish_to_full`,
+`itemleftovers_to_full` now appear beside the move finding on the same row).
+
+## W.3 CORRECTION: the 0.90–0.92 "cluster" was my own filter's artifact
+
+§V.4 recommended the 0.90–0.92 band as the damage lane's entry point. **That
+guidance was wrong and is withdrawn.** So is the closing line of §W.2 as
+originally written ("keeps its tight 0.90–0.92 sub-cluster, so nothing they've
+concluded is invalidated") — the sub-cluster is not a finding, and that sentence
+should not be read as reassurance.
+
+`_classify_ratio`'s low edge is `0.92`, which treats the engine's damage value as
+the **mean** roll. If the engine instead reports top-of-range, the honest window
+is `[0.85, 1.00]`-shaped and everything between 0.85 and 0.92 is *the filter's
+own floor*, not a signal. Findings pile up against a threshold because the
+threshold is there.
+
+Measured on the source-paired set: **11 real findings sit in [0.85, 0.92)**.
+Remove them and the 0.92–1.00 range holds **3** findings (0.925, 0.926, 0.958).
+Three scattered points are not a cluster and were never a lead.
+
+The **Shadow Ball 116/107 anchor is struck**: it appears in no committed extract
+and I could not source it. It entered §V.4 as a reported figure and I repeated
+it as if it were evidence — the same "narrate the WHY" failure this ledger has
+now recorded five times, in the appendix that was supposed to hand the next lane
+clean structure.
+
+The damage lane is redirected to the **0.50–0.70 group** (12 findings).
+
+## W.4 The partition is now machine-checkable
+
+The reachability partition was prose-only, so a reader had to re-derive which
+rows were artifact from the ratios — and the §V.4 mismatch survived exactly
+because nobody could check it cheaply. Every finding in
+`reports/c7_damage_calc_brief.json` now carries a **`reachable` boolean**
+(legal-roll-set membership); 54 findings, **0 null**. Partition on that field,
+not on the ratio.
+
+## W.5 Window semantics: deferred deliberately, not guessed
+
+The strict matcher already answers this correctly for roll-scaled components —
+**legal-roll-set membership**, which needs no constant and cannot develop a floor
+artifact. The brief should follow it, and the `reachable` field is that answer.
+
+If ratio constants are kept anywhere, they must wait on the damage lane's
+source-cited determination of the engine's damage-value semantics (max vs mean,
+with line citation). **No constant is chosen here.** Guessing one is how the
+0.92 floor manufactured an eleven-row cluster in the first place.
+
+## W.6 Inventory: the known-mislabels the override does NOT move
+
+Listed, deliberately **not** adjudicated. 30 rows carry the known-mislabel
+classes; 14 relabel under W.1; **16 do not**:
+
+| rows | majority-miss type |
+|---|---|
+| 11 | roll-scaled carrying `capped_lethal` — the override refuses by design (W.1's guard) |
+| 5 | attributed-components: the majority branch **also** blames the residual |
+
+| seed / step | source | majority | type |
+|---|---|---|---|
+| s1500012 st24 | itemleftovers | 79.1% | capped_lethal |
+| s1500050 st33 | itemleftovers | 52.7% | capped_lethal |
+| s1500054 st125 | itemleftovers | 33.3% | attributed-components |
+| s1500074 st57 | itemleftovers | 70.3% | capped_lethal |
+| s1500105 st111 | itemleftovers | 79.1% | capped_lethal |
+| s1500112 st40 | itemleftovers | 31.2% | attributed-components |
+| s1500168 st97 | psn | 79.7% | capped_lethal |
+| s1500188 st33 | itemleftovers | 75.0% | capped_lethal |
+| s1500219 st62 | itemleftovers | 93.8% | capped_lethal |
+| s1500242 st56 | psn | 79.7% | capped_lethal |
+| s1500242 st60 | itemleftovers | 39.5% | capped_lethal |
+| s1500243 st79 | psn | 85.0% | attributed-components |
+| s1500251 st56 | itemleftovers | 44.0% | capped_lethal |
+| s1500255 st55 | itemleftovers | 93.8% | capped_lethal |
+| s1500287 st76 | brn | 100.0% | attributed-components |
+| s1500294 st110 | psn | 100.0% | attributed-components |
+
+What the inventory decides for cycle eight: the **5 attributed-components rows**
+are labelled correctly — their majority branch really does blame the residual, so
+they are not mislabels at all and #946's set was over-broad by that much. The
+**11 `capped_lethal` rows** are the real open question, and it is the one W.1's
+guard deliberately declines to answer: they may be `damage_calc`, or genuinely
+`limit:roll_divergent_lethality`, and deciding costs 11 rows off the residue
+either way. That is a decision to take on its own evidence, not as a side effect
+of a relabel.
+
+Note the count correction: I reported "14 unrelabelled" in the #950 summary. The
+classes hold **30** rows, 14 relabel and **16** do not.
