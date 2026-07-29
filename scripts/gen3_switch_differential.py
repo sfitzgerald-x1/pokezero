@@ -310,6 +310,17 @@ def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
                           moves=("Splash",))
 
 
+def _poison_toxicer():
+    """Muk: pure Poison and a real Toxic carrier in the pool.
+
+    A Poison-type user is the ONLY case the never-miss bypass affected — gen3
+    rolls Toxic's 85 like anyone else, and Showdown gates the bypass on gen 8.
+    """
+
+    return FixturePokemon(species="Muk", ability="Sticky Hold", item="None",
+                          moves=("Toxic", "Splash"))
+
+
 def _tosser():  # Blissey carries Seismic Toss on 17 of the pool's 393 sets
     return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
                           moves=("Seismic Toss", "Body Slam", "Splash"))
@@ -1526,6 +1537,28 @@ def _spec(name):
             expect={"immune": True, "damaged": False},
             landmark=lambda L: _has(L, "|move|p1a: Blissey|Seismic Toss"),
             landmark_desc="Seismic Toss was used into the Ghost")
+    # --- Toxic accuracy from a Poison-type user ------------------------------
+    if name in ("toxicmiss", "toxichit"):
+        # gen3 Toxic is 85 (gen4's override of the base 90; gen3 inherits gen4)
+        # and a POISON-type user does not bypass the roll — Showdown gates that
+        # on `this.battle.gen >= 8` (sim/battle-actions.ts:622 and :726). The
+        # engine applied it to every generation, so a Poison-type Toxic came out
+        # as one 100% branch carrying the poison.
+        #
+        # The outcome is a coin flip, so the seeds are chosen rather than banded:
+        # these four MISS and these four HIT under the real sim, which pins both
+        # sides deterministically instead of asserting a rate.
+        misses = name.endswith("miss")
+        return dict(
+            p1=[_poison_toxicer()], p2=[_blissey()],
+            turns=[("move toxic", "move splash")],
+            seeds=[1006, 1012, 1017, 1022] if misses else [1000, 1001, 1002, 1003],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"missed": _has(L, "|-miss|"),
+                             "poisoned": _has(L, "|-status|p2a: Blissey|tox")},
+            expect={"missed": misses, "poisoned": not misses},
+            landmark=lambda L: _has(L, "|move|p1a: Muk|Toxic"),
+            landmark_desc="Toxic was used by the Poison-type")
     raise ValueError(name)
 
 
@@ -1557,7 +1590,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "lockedmoveppdrain", "lockedmoveppcontrol",
              "solarbeamclear", "solarbeamsand", "solarbeamsun",
              "seismictosssub", "seismictosssubbreak", "seismictosscontrol",
-             "seismictossghost")
+             "seismictossghost",
+             "toxicmiss", "toxichit")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

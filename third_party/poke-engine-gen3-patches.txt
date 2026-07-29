@@ -679,6 +679,52 @@ poke-engine-gen3-solarbeam-weather.patch
 # gen3/choice_effects.rs only; authored against the head of the list, applied
 # before the fixture refresh.
 poke-engine-gen3-fixed-damage-substitute.patch
+# gen3 Toxic: a Poison-type user does NOT bypass the accuracy roll.
+#
+# Showdown gates that never-miss rule on GENERATION 8, in two places
+# (sim/battle-actions.ts:622 and :726):
+#     this.battle.gen >= 8 && move.id === 'toxic' && pokemon.hasType('Poison')
+# and the base move data points at it rather than implementing it as a move
+# effect ("No Guard-like effect for Poison-type users implemented in
+# Scripts#tryMoveHit"). Upstream applied it to every generation, so a Poison-type
+# Toxic came out of the engine as ONE branch at 100% carrying the poison.
+#
+# The accuracy value itself was already right: 85, from gen4's override of the
+# base 90 (gen3 inherits gen4, the same rule as Wish and Sleep Talk). So the
+# whole fix is deleting the bypass arm from gen3's modify_choice.
+#
+# Reachability is narrower than the headline "Toxic is 152/393 sets": ONLY a
+# Poison-type user trips this. That is 8 of 393 sets — ariados, crobat, dustox,
+# muk, roselia, swalot, tentacruel, weezing — still well above the bar, and on
+# the pool's most common move, but the other 144 Toxic sets were already priced
+# correctly at 85/15.
+#
+# This was NOT a class failure of status-move accuracy. Every imperfect-accuracy
+# status move in the pool was probed against the engine and already branches at
+# its real gen3 accuracy, walked through the FULL inheritance chain (gen3 ->
+# gen4 -> ... -> current) rather than a truncated one:
+#
+#     move          gen3 acc   sets     engine branches
+#     hypnosis        60        14        60 / 40   ok
+#     lovelykiss      75         1        75 / 25   ok
+#     stunspore       75         7        75 / 25   ok
+#     willowisp       75         8        75 / 25   ok
+#     sleeppowder     75        14        75 / 25   ok
+#     toxic           85       152        85 / 15   ok for a NON-Poison user
+#     leechseed       90        12        90 / 10   ok
+#     thunderwave    100        33        single    ok - perfect in gen3
+#
+# Thunder Wave is worth spelling out: it is 100 in gen3 and 90 in current data,
+# so a truncated chain that skips gen6/gen7 reports 90 and makes the engine's
+# single branch look like a missing miss branch. It is not.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# toxicmiss / toxichit, on chosen seeds so both sides of the roll are
+# deterministic rather than banded); pinned by
+# rust/pokezero-search/tests/gen3_status_accuracy_fidelity.rs. Touches
+# gen3/choice_effects.rs only; applied before the fixture refresh.
+poke-engine-gen3-toxic-accuracy.patch
+
 
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
