@@ -122,7 +122,7 @@ poke-engine-gen3-residual-defer-on-faint.patch
 # gen3/generate_instructions.rs, gen3/state.rs and gen3/abilities.rs. Shares the
 # end-of-turn branch site with residual-defer-on-faint (the confusion ladder
 # forks each branch right where Shed Skin does), so it is authored against the
-# residual-defer-patched tree and applied last.
+# residual-defer-patched tree.
 poke-engine-gen3-confusion-duration.patch
 
 # gen3 Transform (Ditto / Mew) implemented in rollouts. Upstream defines
@@ -208,5 +208,23 @@ poke-engine-gen3-state-roundtrip.patch
 # struggle-typeless patch already uses. Pinned by
 # rust/pokezero-search/tests/gen3_trap_perish_fidelity.rs. Touches
 # gen3/state.rs, gen3/choice_effects.rs, gen3/generate_instructions.rs and
-# choices.rs; authored against the confusion-patched tree, applied last.
+# choices.rs; authored against the confusion-patched tree, applied last of the
+# BEHAVIOUR patches (the test-only fixture refresh below is the only one after).
 poke-engine-gen3-move-trapping.patch
+
+# Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
+# behaviour. Touches tests only — no engine code — and must stay LAST in this
+# list, because its expectations are the behaviour every patch above it leaves
+# behind. Adding a behaviour patch after this one without re-checking the
+# upstream suite would silently invalidate these fixtures again.
+#
+# Currently covers the five fixtures invalidated by residual-defer-on-faint,
+# which flags a fainted side as owing a replacement via ToggleSideXForceSwitch.
+# The five predate that instruction and asserted the exact instruction stream, so
+# they failed on the vendored tree while the engine was correct. In every one the
+# end-of-turn residual block is EMPTY, so the deferral has no other observable
+# effect and the sole delta is the flag: test_rest_does_not_activate_when_fainted,
+# test_branch_when_a_roll_can_kill, test_gen3_branch_when_a_roll_can_kill,
+# test_fast_explosion_makes_other_side_unable_to_move, test_same_speed_branch.
+# Each updated expectation carries a one-line rationale in the fixture itself.
+poke-engine-gen3-upstream-fixture-refresh.patch
