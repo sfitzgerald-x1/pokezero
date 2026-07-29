@@ -1827,3 +1827,114 @@ needs the same per-row treatment before the final table.
 3. Adjudicate: engine lane, harness, or a named `limit:` class with a mechanism.
 4. If clean against the bar — zero divergent transitions outside the adjudicated
    `limit:` classes — proceed to 8x1250 from seed 2,000,000 per F.6/the plan.
+
+---
+
+# Appendix H — replay-verified adjudication of the named residue classes
+
+Branch `scott/residue-adjudication`, 22-patch main. Verdicts below come from
+replaying rows, per the method rule — not from reading class names. Census is
+the 21-patch run (seeds 1350000-1350059, 128 divergences / 5,310 measured);
+the 22-patch re-run is held until the charge-state fix lands so its rows do not
+contaminate the structural classes.
+
+## H.1 CONFIRMED: one mapper bug explains five classes (30 rows, 23.4 %)
+
+| Class | n | Replayed repro |
+| --- | --- | --- |
+| `component_mismatch:sandstorm\|psn` | 10 | seed 1350002 step 14 |
+| `component_mismatch:heal,itemleftovers\|leechseed` | 9 | seed 1350006 step 46 |
+| `component_mismatch:partialtrap\|sandstorm` | 5 | seed 1350055 step 53 |
+| `component_mismatch:leechseed\|psn` | 3 | seed 1350024 step 137 |
+| `component_mismatch:sandstorm\|brn` | 3 | — same shape |
+
+**In every replayed case the engine's HP arithmetic is IDENTICAL to Showdown's.
+Only the labels differ.** seed 1350002 step 14, raw instructions:
+
+```
+Damage SideOne: 18     <- sandstorm    rendered "[from] psn"
+Damage SideTwo: 23     <- sandstorm    rendered "[from] Sandstorm"
+Heal   SideOne: 18     <- Leftovers    rendered "[from] item: Leftovers"
+Heal   SideTwo: 23     <- Leftovers
+Damage SideOne: 37     <- poison       rendered "[from] psn"
+observed  p1: itemleftovers +18, psn -37, sandstorm -18
+engine    p1: itemleftovers +18, psn -37, psn      -18
+```
+
+**Root cause.** `residual_damage_cause` / `residual_heal_cause`
+(`rust/pokezero-search/src/events.rs`) attribute by inspecting the side's STATE
+in a fixed priority order — status, then Leech Seed, then weather, then partial
+trap — and return the first match for **every** residual instruction on that
+side. A mon with two simultaneous residual sources therefore has *all* its ticks
+labelled with the highest-priority one. Each observed pair is exactly that:
+
+* poisoned mon in sand -> the sand tick is tagged `psn` (status checked first);
+* seeded + poisoned -> the leech tick is tagged `psn`;
+* trapped mon in sand -> the trap tick is tagged `Sandstorm` (weather before trap);
+* Leftovers holder whose opponent is seeded -> its Leftovers heal is tagged
+  `Leech Seed` (opponent-leechseed checked before Leftovers).
+
+| | |
+| --- | --- |
+| Verdict | **HARNESS / mapper** — same family as the Wish/Leftovers mis-tag (C.1) |
+| Lane | mine |
+| Acceptance | **blocking** — 23.4 % of the residue |
+| State fidelity | unaffected; the engine's transitions are correct |
+
+**Fix spec.** Attribute residual instructions **positionally**, against the
+engine's own end-of-turn order, instead of guessing from state. That order is
+explicit in `gen3/generate_instructions.rs::add_end_of_turn_instructions` and
+runs per side in `[first_move_side, other]`:
+
+1. weather decrement / dissipation
+2. weather chip (Hail, then Sand)
+3. residual order 5 — Leftovers / Shed Skin
+4. Leech Seed sap
+5. status damage (burn / poison / toxic)
+6. later-order effects (threshold berries, Rain Dish)
+
+Implementation shape: build a per-side ordered queue of expected residual events
+from the pre-residual state, then consume it as `Damage`/`Heal` instructions
+arrive. Amount alone is insufficient to disambiguate — sand chip and partial trap
+are both maxhp/16, and seed 1350055 step 53 shows exactly that collision — so
+position and expected amount must be used together.
+
+**Deliberately not implemented in this pass.** A half-right positional
+attributor emits *confident wrong* labels, which is worse than today's honest
+mislabel: the current bug is loud (it diverges) whereas a subtly wrong attributor
+would be silent. It wants its own change with its own pins, and the window while
+the charge-state fix is in flight is the right place for it.
+
+## H.2 NOT the label bug: component present in one sim only
+
+| Class | n | Replayed | Finding |
+| --- | --- | --- | --- |
+| `component_missing_in_engine:itemleftovers` | 11 | — | |
+| `component_missing_in_engine:psn` | 9 | seed 1350002 step 31 | observed p1 has `itemleftovers +16, psn -16, sandstorm -16`; the engine branch has only `itemleftovers +16, sandstorm -16` — a genuinely absent component, not a relabel |
+| `component_extra_in_engine:itemleftovers` | 8 | seed 1350007 step 85 | engine heals p2 `+19`; Showdown gives p2 no tick at all |
+| `component_magnitude:itemleftovers` | 5 | — | |
+| `component_missing_in_engine:heal` / `:leechseed` | 5 / 5 | — | |
+
+These have a different signature from H.1 — component **counts** differ rather
+than labels — so the mapper bug does not explain them and they are **not
+adjudicated**. Two were replayed to establish that much; the rest need per-row
+replay. Some are plausibly the charge-state gap (G.2), whose signature is also
+"the engine is missing a component", but that is a hypothesis and this ledger
+does not record hypotheses as verdicts.
+
+## H.3 Adjudication status
+
+| Family | n | Verdict | Lane |
+| --- | --- | --- | --- |
+| residual mis-attribution (H.1) | 30 | **CONFIRMED harness/mapper** | mine, fix specced |
+| structural / charge state (G.2) | ~16 | **CONFIRMED world construction** | engine lane, in progress |
+| `limit:roll_divergent_lethality` | 10 | adjudicated limit | — |
+| `limit:world_sample_drag_target` | 2 | adjudicated limit | — |
+| present-in-one-sim-only (H.2) | ~38 | **UNADJUDICATED** | needs per-row replay |
+| long-tail ratios | ~21 | **UNADJUDICATED** | singletons, lowest value |
+
+**The acceptance table cannot yet call itself fully adjudicated.** Two named
+families are confirmed and lane-assigned; roughly 59 rows across H.2 and the
+ratio tail still need replay-verified verdicts. That work, plus the mapper fix
+and the charge-state fix, is what stands between here and a meaningful
+acceptance run.
