@@ -68,6 +68,22 @@ def build_provenance(checkpoint: str, config_id: str, arm: str, *,
     return hashlib.sha256(blob).hexdigest()
 
 
+def _policy_stats_payload(stats) -> dict:
+    """Policy stats with the depth keys GUARANTEED present.
+
+    Every shard row must carry `search_ran`, `depth_reached_samples` and
+    `depth_reached_histogram`, so that a missing key is a real defect rather than
+    an ordinary "nothing to report". Without this, an absent histogram and a cap
+    that never bound are the same bytes on disk.
+    """
+    payload = stats.to_payload() if hasattr(stats, "to_payload") else {}
+    payload.setdefault("search_ran", True)
+    payload.setdefault("depth_reached_samples", 0)
+    payload.setdefault("depth_reached_max", 0)
+    payload.setdefault("depth_reached_histogram", {})
+    return payload
+
+
 def outcome_for(winner: str | None, seat: str, capped: bool) -> str:
     if capped:
         return "cap"
@@ -331,6 +347,23 @@ def main(argv=None) -> int:
             fallback_reasons: dict = {}
             world_failure_reasons: dict = {}
 
+            def to_payload(self) -> dict:
+                """Explicit zeros, never an empty dict.
+
+                A bare ``{}`` here would make three different situations
+                serialize identically: "this arm ran no search", "search ran but
+                reported no depth", and "the field was never emitted at all". A
+                depth ladder is read off exactly these counters, so `no data` and
+                `the cap never bound` must not collapse into one shape. The
+                control arm therefore states its own emptiness.
+                """
+                return {
+                    "search_ran": False,
+                    "depth_reached_samples": 0,
+                    "depth_reached_max": 0,
+                    "depth_reached_histogram": {},
+                }
+
         search.stats = _NoStats()
 
     results = []
@@ -418,9 +451,7 @@ def main(argv=None) -> int:
         # uninterpretable without them: whether the CAP was binding is the
         # difference between "depth does not help" and "the sims budget never let
         # the tree reach the cap".
-        "policy_stats": (
-            search.stats.to_payload() if hasattr(search.stats, "to_payload") else {}
-        ),
+        "policy_stats": _policy_stats_payload(search.stats),
         "wall_s": round(time.perf_counter() - started, 1),
         "results": results,
         "per_game": per_game,

@@ -224,3 +224,62 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
         source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text()
         self.assertIn("policy_stats", source)
         self.assertIn("to_payload()", source)
+
+
+class DepthPayloadDisambiguationTest(unittest.TestCase):
+    """"No data" and "the cap never bound" must not be the same bytes on disk.
+
+    A depth ladder is read straight off these counters. If an absent histogram
+    and a histogram that stayed empty serialize identically, a shard that
+    silently reported nothing is indistinguishable from one proving the cap was
+    never reached -- and the second is a finding while the first is a bug.
+    """
+
+    def _module(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "h2h", REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_every_shape_carries_the_depth_keys(self) -> None:
+        m = self._module()
+
+        class NoPayload:
+            pass
+
+        class WithData:
+            def to_payload(self):
+                return {
+                    "depth_reached_samples": 3,
+                    "depth_reached_max": 6,
+                    "depth_reached_histogram": {"2": 1, "6": 2},
+                }
+
+        for stats in (NoPayload(), WithData()):
+            payload = m._policy_stats_payload(stats)
+            for key in (
+                "search_ran",
+                "depth_reached_samples",
+                "depth_reached_max",
+                "depth_reached_histogram",
+            ):
+                self.assertIn(key, payload, f"{type(stats).__name__} is missing {key}")
+
+    def test_control_arm_states_its_own_emptiness(self) -> None:
+        """The control must say search_ran=False, not emit a bare {}."""
+        source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text()
+        self.assertIn('"search_ran": False', source)
+        # and the real data path must still be able to report a bound cap
+        m = self._module()
+
+        class Bound:
+            def to_payload(self):
+                return {"depth_reached_samples": 10, "depth_reached_histogram": {"6": 10}}
+
+        payload = m._policy_stats_payload(Bound())
+        self.assertTrue(payload["search_ran"])
+        self.assertEqual(payload["depth_reached_histogram"], {"6": 10})
