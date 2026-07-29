@@ -1,0 +1,79 @@
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -439,16 +439,14 @@
+                 attacking_side.future_sight = (3, attacking_side.active_index);
+             }
+         }
+-        Choices::EXPLOSION | Choices::SELFDESTRUCT if defender.ability != Abilities::DAMP => {
+-            let damage_amount = attacker.hp;
+-            instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: *attacking_side_ref,
+-                    damage_amount,
+-                }));
+-            attacker.hp = 0;
+-        }
++        // pokezero gen3 fidelity fix: the self-destruct faint MOVED OUT of this
++        // function. `choice_before_move` runs before the move-time immobilizers are
++        // rolled, so fainting the user here happened even on the branch where full
++        // paralysis (or sleep/freeze) blocked the move entirely. Showdown reaches
++        // `selfdestruct` only inside `useMoveInner` (sim/battle-actions.ts:501),
++        // which `runMove` calls only AFTER the `BeforeMove` gate returns true --
++        // an immobilized Pokemon never explodes. Relocated to
++        // generate_instructions.rs, immediately after the status-condition gate.
+         _ => {}
+     }
+     let attacking_side = state.get_side(attacking_side_ref);
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2263,6 +2263,49 @@
+             &mut final_instructions,
+         );
+     }
++
++    // pokezero gen3 fidelity fix: self-destruct faints the user HERE, not in
++    // `choice_before_move`. Showdown reaches it in `useMoveInner`
++    // (sim/battle-actions.ts:501, `gen !== 4`), and `runMove` only calls `useMove`
++    // once the `BeforeMove` gate has returned true -- so a Pokemon that is fully
++    // paralyzed, asleep or frozen never explodes. Applying it pre-gate killed the
++    // user on the BLOCKED branch too, which then (correctly, for a dead mon)
++    // suppressed that branch's end-of-turn residuals. The visible symptom was a
++    // missing Leftovers tick, which is why the family was first read as a
++    // residual-block drop; an ordinary blocked move keeps its residuals fine.
++    //
++    // Everything above this point is still the gate: the blocked branches were
++    // already pushed to `final_instructions` by the call above and never reach
++    // here, while the surviving branch continues on `incoming_instructions`.
++    //
++    // Position within the surviving branch is unchanged -- still BEFORE damage, so
++    // gen3's "user faints first" ordering is preserved -- and Protect does not stop
++    // it, matching Showdown, where the faint precedes `tryMoveHit`. Sleep Talk's
++    // callee reaches this too (the gate above is skipped for it), which is correct:
++    // the called move runs through `useMove` exactly like any other.
++    if matches!(
++        choice.move_id,
++        Choices::EXPLOSION | Choices::SELFDESTRUCT
++    ) {
++        let damp = state
++            .get_side_immutable(&attacking_side.get_other_side())
++            .get_active_immutable()
++            .ability
++            == Abilities::DAMP;
++        if !damp {
++            let attacker = state.get_side(&attacking_side).get_active();
++            if attacker.hp > 0 {
++                let damage_amount = attacker.hp;
++                incoming_instructions
++                    .instruction_list
++                    .push(Instruction::Damage(DamageInstruction {
++                        side_ref: attacking_side,
++                        damage_amount,
++                    }));
++                attacker.hp = 0;
++            }
++        }
++    }
+     let attacker_status = state
+         .get_side_immutable(&attacking_side)
+         .get_active_immutable()
