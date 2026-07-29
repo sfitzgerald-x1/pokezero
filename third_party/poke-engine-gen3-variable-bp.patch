@@ -1,7 +1,7 @@
 diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
---- a/src/gen3/choice_effects.rs	2026-07-28 20:31:38
-+++ b/src/gen3/choice_effects.rs	2026-07-28 20:35:04
-@@ -61,22 +61,64 @@
+--- a/src/gen3/choice_effects.rs	2026-07-28 20:52:06
++++ b/src/gen3/choice_effects.rs	2026-07-28 20:52:49
+@@ -61,22 +61,72 @@
  ) {
      let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
      match attacker_choice.move_id {
@@ -43,11 +43,19 @@ diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
 +        // base_power, so it was inert — literally zero damage at every HP
 +        // fraction. REVERSAL had this ladder written as ROUNDED FLOAT ratios
 +        // (0.688 / 0.354 / 0.208 / 0.104 / 0.042), which is where this formula
-+        // family classically breaks: 33/48 is 0.6875 and 17/48 is 0.35416..., so
-+        // the rounded constants misclassify a thin band on the wrong side of
-+        // four of the five breakpoints (e.g. hp/maxhp in [0.6875, 0.688) scored
-+        // 40 where the sim scores 20). Reproducing the integer floor exactly
-+        // removes the bands entirely.
++        // family classically breaks. ALL FIVE breakpoints were misclassified, in
++        // two directions — the two outer constants rounded HIGH and the three
++        // middle ones LOW — so each produced its own distinct wrong band:
++        //
++        //   33/48 = 0.6875    -> 0.688 HIGH : scored  40 where the sim says  20
++        //   17/48 = 0.354166  -> 0.354 LOW  : scored  40 where the sim says  80
++        //   10/48 = 0.208333  -> 0.208 LOW  : scored  80 where the sim says 100
++        //    5/48 = 0.104166  -> 0.104 LOW  : scored 100 where the sim says 150
++        //    2/48 = 0.041666  -> 0.042 HIGH : scored 200 where the sim says 150
++        //
++        // Reproducing the integer floor exactly removes all five bands, and with
++        // them the entire misclassification class: an exhaustive (hp, maxhp)
++        // sweep across the realistic gen3 max-HP range leaves no disagreement.
 +        Choices::FLAIL | Choices::REVERSAL => {
              let attacker = attacking_side.get_active_immutable();
 -            let hp_ratio = attacker.hp as f32 / attacker.maxhp as f32;

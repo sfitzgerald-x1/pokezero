@@ -454,10 +454,17 @@ poke-engine-gen3-phaze-protect.patch
 #   literally zero damage at every HP fraction, a missing damage component rather
 #   than a wrong value (the same gap shape as Transform).
 #   REVERSAL had the ladder written as ROUNDED FLOAT ratios (0.688 / 0.354 /
-#   0.208 / 0.104 / 0.042). 33/48 is 0.6875 and 17/48 is 0.35416..., so the
-#   rounded constants misclassify a thin band on the wrong side of four of the
-#   five breakpoints — e.g. hp/maxhp in [0.6875, 0.688) scored 40 where the sim
-#   scores 20. Reproducing the integer floor exactly removes the bands.
+#   0.208 / 0.104 / 0.042). ALL FIVE breakpoints were misclassified, in two
+#   directions — the two outer constants rounded HIGH and the three middle ones
+#   LOW — each producing its own distinct wrong band:
+#       33/48 = 0.6875    -> 0.688 HIGH : scored  40, sim says  20
+#       17/48 = 0.354166  -> 0.354 LOW  : scored  40, sim says  80
+#       10/48 = 0.208333  -> 0.208 LOW  : scored  80, sim says 100
+#        5/48 = 0.104166  -> 0.104 LOW  : scored 100, sim says 150
+#        2/48 = 0.041666  -> 0.042 HIGH : scored 200, sim says 150
+#   Reproducing the integer floor exactly removes all five bands, and with them
+#   the whole class: an exhaustive (hp, maxhp) sweep across the realistic gen3
+#   max-HP range leaves no disagreement.
 #
 # Gen 4's 64-scale (cut points 2/6/13/22/43) disagrees with gen3's at exactly
 # four percentages of max HP — 4%, 10%, 35%, 68% — where gen3 scores
@@ -472,7 +479,15 @@ poke-engine-gen3-phaze-protect.patch
 # override) but appear on 0 of 393 sets; seismic toss (17 sets) is level-based
 # and already handled; night shade, super fang, psywave, low kick, magnitude and
 # present are all 0 of 393. Return (41 sets) is happiness-based and correctly
-# fixed at 102 for randbats' max-happiness sets.
+# fixed at BP 102: Showdown defaults happiness to 255 when a set omits it
+# (sim/pokemon.ts:342), and Return's callback is floor(happiness * 10 / 25), so
+# floor(255 * 10 / 25) = 102. The 102 is the BASE POWER, not the happiness.
+#
+# One more recorded non-difference so nobody re-derives it: Showdown computes
+# Eruption/Water Spout as basePower * hp / maxhp (multiply, THEN divide) while
+# the engine computes basePower * (hp / maxhp) (divide, then multiply). Those are
+# identical in exact arithmetic and can differ by one ULP in f32 — unreachable
+# here at 0 of 393 sets, and left alone rather than churned.
 #
 # Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
 # flailladder / reversalladder / flailladdercontrol); pinned by
