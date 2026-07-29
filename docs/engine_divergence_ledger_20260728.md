@@ -2681,3 +2681,87 @@ move that appears in a quarter of all sets.
 
 The Rest-provenance fix (§M.2, 51 rows) remains dispatched to the
 world-construction lane and is unaffected by this result.
+
+---
+
+# Appendix O — the 9 faint-reproducible rows: terminal-boundary residual truncation
+
+Diagnosis only. Toxic-guaranteed-poison ruled out **first, per row**, as directed.
+
+## O.1 Toxic rule-out
+
+Four of the nine chose Toxic. The Toxic-never-misses signature is *Showdown shows
+`|-miss|` and the engine poisons anyway*. **No row in the sample shows a Toxic
+miss** (`showdown-miss=False` on all nine), and where the engine carries an extra
+`psn` component it is explained by O.2 rather than by a phantom poison. **Toxic
+is not implicated in any of the nine.**
+
+## O.2 CONFIRMED mechanism: the battle ends and Showdown stops the residual block
+
+`seed 1500064 step 126`:
+
+```
+|-heal|p2a: Zapdos|90/255 tox|[from] item: Leftovers
+|-damage|p2a: Zapdos|0 fnt|[from] psn
+|faint|p2a: Zapdos
+|win|PokeZero p1          <- battle over; p1's OWN Leftovers never fires
+```
+
+`seed 1500081 step 61` is identical in shape. Showdown's last Pokemon faints
+during the residual phase, the battle ends **immediately**, and every residual
+still queued — notably the winner's own Leftovers — never executes. The engine
+runs the residual block to completion and applies them, so the engine has
+components Showdown does not.
+
+This is why the rows read as "faint reproducible": the engine **can** faint the
+mon, and does. The divergence is not the faint, it is everything Showdown skips
+*after* it.
+
+**Census, not a sample** (the property is `|win|` in the step, so it is
+decidable for every row):
+
+| | |
+| --- | --- |
+| of the 9 sampled | **7 terminal** |
+| of the whole residue | **32 of 298 (11 %)** |
+| of the 40 extra-half rows | **24** (19 `extra:itemleftovers`, 5 `extra:itemleftovers,psn`) |
+
+## O.3 The 2 non-terminal rows are each something else
+
+* `seed 1500084 step 31` — **genuine roll-divergent lethality, other side.**
+  Showdown's Lickitung survives at 17/322 (`move=-179`); the engine's roll kills
+  it (`capped_lethal=-196`). My batch classifier called it "faint reproducible"
+  because it keyed on the faint Showdown *did* have (p2 Delibird, Recoil) rather
+  than the one it did not. A classifier limitation, not a new mechanism.
+* `seed 1500005 step 67` — component **splitting**: Showdown emits one
+  `capped_lethal=-150`; the engine emits `move=-149` plus `capped_lethal=-1`.
+  Same total, different decomposition. Undiagnosed.
+
+## O.4 Mechanism table
+
+| Mechanism | n of 9 | Residue-wide | Verdict | Repro |
+| --- | --- | --- | --- | --- |
+| terminal-boundary residual truncation | **7** | **32 (11 %)** | see O.5 | seed 1500064 step 126 |
+| roll-divergent lethality (other side) | 1 | — | existing adjudicated limit | seed 1500084 step 31 |
+| component splitting on a lethal hit | 1 | — | **open** | seed 1500005 step 67 |
+| Toxic-guaranteed-poison | **0** | — | ruled out | — |
+
+## O.5 Recommendation: fix the engine, do not widen the limit class
+
+Two treatments are available and they are not equivalent.
+
+**Engine fix (recommended).** Stop the residual block when the battle ends, which
+is what Showdown does. Small, exactly specified, testable, and it removes the
+class outright — 11 % of the residue — **without touching the acceptance bar**.
+
+**Limit widening (not recommended).** One could argue a terminal boundary is
+unobservable-by-construction: the game is over, no decision follows, and the
+winner's post-final-turn HP never influences play or training. That argument is
+*plausible*, which is exactly why I am not banking it. It shrinks the residue by
+moving rows into an adjudicated class rather than by making the two simulators
+agree, and §N is a fresh reminder of what happens when a plausible
+reclassification goes unchallenged.
+
+If the engine lane judges the fix not worth it, the widening should go to
+adversarial review on rows the reviewer picks — the §N protocol — rather than
+being adopted here.
