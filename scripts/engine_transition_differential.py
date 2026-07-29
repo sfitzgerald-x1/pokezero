@@ -294,7 +294,17 @@ def engine_choice_for_action(
 # ---------------------------------------------------------------------------------------------
 
 # Components that scale with the damage roll; everything else must be exact.
-_ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion"})
+#
+# ``heal_to_full`` is the subtle one. A move heal that CAPS at max HP (Rest, and
+# Recover/Soft-Boiled/Morning Sun when the mon is above half) restores
+# ``maxhp - hp``, so its magnitude is set by whatever damage landed earlier in
+# the SAME turn — it inherits that hit's roll. Demanding an exact match on it was
+# a matcher defect, not an engine bug: it produced the whole
+# "move-heal invisible to the engine branch" class (ledger B.4, seed 1310001
+# step 72 — Showdown healed 251 from 2 HP, the engine healed 247 from 6 HP, same
+# mechanic, different Surf roll). A bare heal that does NOT reach full is a pure
+# fraction (Recover = maxhp/2) and stays EXACT.
+_ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion", "capped_lethal"})
 # Sources whose rendering the mapper is known not to reproduce line-for-line;
 # counted and excluded rather than silently mismatched.
 _IGNORED_SOURCES = frozenset({"lockedmove"})
@@ -327,6 +337,8 @@ def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
         if slot not in out:
             continue
         new_hp = _hp_of(parts[3])
+        max_hp = _maxhp_of(parts[3])
+        fainted_here = new_hp == 0
         source = ""
         for extra in parts[4:]:
             extra = extra.strip()
@@ -335,11 +347,38 @@ def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
                 break
         if not source and tag == "-heal":
             source = "heal"
+        if tag == "-heal" and max_hp and new_hp >= max_hp:
+            # ANY heal that tops the mon out is roll-scaled, whatever its tag:
+            # it restores `maxhp - hp`, so its magnitude is set by the damage
+            # that landed earlier in the same turn. This covers Rest and Recover
+            # (bare) and equally a Leftovers or Wish tick that happens to cap.
+            # The tag is preserved so attribution is still compared; only the
+            # magnitude is relaxed, and only in the capped direction.
+            source = f"{source}_to_full"
+        if fainted_here and tag == "-damage":
+            # A residual that KILLS is capped by the HP that happened to be
+            # left, so its magnitude inherits the roll of whatever damaged the
+            # mon earlier in the turn — Showdown reports 20 where the uncapped
+            # tick would be 26. Comparing that exactly against a branch with a
+            # different roll is a false divergence (seed 1310000 step 193,
+            # exonerated by the engine lane in #893). Bucket it as roll-scaled.
+            source = "capped_lethal"
         previous = running.get(slot)
         if previous is not None:
             out[slot].append((source, new_hp - previous))
         running[slot] = new_hp
     return out
+
+
+def _maxhp_of(condition: str) -> int:
+    """Max HP from a ``cur/max`` condition string, or 0 when unavailable."""
+
+    head = condition.strip().split()[0] if condition.strip().split() else ""
+    _, _, tail = head.partition("/")
+    try:
+        return int(tail)
+    except ValueError:
+        return 0
 
 
 def _hp_of(condition: str) -> int:
@@ -356,16 +395,20 @@ def _hp_of(condition: str) -> int:
 
 def _split_components(
     components: Sequence[tuple[str, int]]
-) -> tuple[Counter, list[int]]:
-    """Partition one slot's components into (exact multiset, roll-scaled deltas)."""
+) -> tuple[Counter, list[tuple[str, int]]]:
+    """Partition one slot's components into (exact multiset, roll-scaled pairs).
+
+    The roll-scaled half keeps its SOURCE, because ``capped_lethal`` is compared
+    as an inequality rather than a window (see :func:`roll_components_agree`).
+    """
 
     exact: Counter = Counter()
-    rolled: list[int] = []
+    rolled: list[tuple[str, int]] = []
     for source, delta in components:
         if source in _IGNORED_SOURCES:
             continue
-        if source in _ROLL_SCALED_SOURCES:
-            rolled.append(delta)
+        if source in _ROLL_SCALED_SOURCES or source.endswith("_to_full"):
+            rolled.append((source, delta))
         else:
             exact[(source, delta)] += 1
     return exact, rolled
@@ -389,7 +432,9 @@ def legal_roll_damages(base_rolls: Sequence[int]) -> set[int]:
 
 
 def roll_components_agree(
-    observed: Sequence[int], engine: Sequence[int], legal: set[int] | None
+    observed: Sequence[tuple[str, int]],
+    engine: Sequence[tuple[str, int]],
+    legal: set[int] | None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -401,9 +446,20 @@ def roll_components_agree(
 
     if len(observed) != len(engine):
         return False
-    for obs, eng in zip(sorted(observed), sorted(engine)):
+    for (obs_source, obs), (_eng_source, eng) in zip(
+        sorted(observed, key=lambda pair: pair[1]),
+        sorted(engine, key=lambda pair: pair[1]),
+    ):
         if obs == eng:
             continue
+        if obs_source == "capped_lethal" or obs_source.endswith("_to_full"):
+            # A residual that killed, or a heal that topped out, was clipped by
+            # the HP that happened to remain, so it can be ARBITRARILY smaller
+            # than the uncapped value the engine branch carries. Clipping only
+            # ever reduces, so the sound test is an inequality, not a window.
+            if abs(obs) <= abs(eng) + 1:
+                continue
+            return False
         if (obs < 0) != (eng < 0):
             return False
         magnitude = abs(obs)
@@ -642,34 +698,97 @@ def _transition_mismatch(
 
 
 
-def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str:
-    """Coarse, evidence-based bucket for one divergent boundary.
+_MISS_COMPONENTS_RE = re.compile(
+    r"observed_only=\[(?P<obs>.*?)\]\s+engine_only=\[(?P<eng>.*?)\]"
+)
+_MISS_SOURCE_RE = re.compile(r"\('([a-z0-9_]*)',")
 
-    Ordered most-specific-first; every bucket is falsifiable from the step's own
-    protocol so the ledger's per-class rates are auditable.
+
+def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str:
+    """Name every divergence. No divergence may land in an unnamed bucket.
+
+    Under the strict matcher the FAILING COMPONENT is always known — it is in the
+    miss reason — so classification is driven by that first, and only falls back
+    to step-protocol evidence when there is no parsable miss. An earlier version
+    classified from the protocol alone, which left ~28 % of strict divergences
+    ``unclassified``; "zero divergence" cannot gate on a bucket nobody can name.
     """
 
+    reason = misses[0] if misses else ""
+    body = reason.split(": ", 1)[1] if ": " in reason else reason
+
+    # PHAZE FIRST — it explains the components rather than the other way round.
+    # Whirlwind/Roar drag a RANDOM target: the engine fans out uniformly over its
+    # world's alive reserve, while Showdown drew from the real hidden team. When
+    # the realized target is not the one a branch dragged, the entry-hazard
+    # arithmetic lands on a different mon with a different max HP, and the
+    # component diff reads as a hazard/residual disagreement that it is not.
+    # The engine lane verified these are determinization limits, not engine bugs
+    # (feeding the exact repro state back produced correct fan-out including the
+    # observed tick). Named so the residue table stops charging them to hazards.
+    if any(line.startswith("|drag|") for line in step_lines):
+        return "limit:world_sample_drag_target"
+
+    if "boost deltas" in body:
+        return "boost_delta_support"
+    if "roll-scaled" in body:
+        if "capped_lethal" in body:
+            # Showdown's roll left the mon at N HP and the residual killed it;
+            # the engine's roll left it at M and the residual did not (or vice
+            # versa). The component sets then differ in LENGTH — one sim has a
+            # lethal residual, the other an ordinary one — and no per-component
+            # comparison can align two different stochastic outcomes. This is a
+            # limit of the comparison, not an engine fault; named so it can be
+            # excluded explicitly rather than sitting in an anonymous bucket.
+            return "limit:roll_divergent_lethality"
+        return "roll_scaled_component"
+    match = _MISS_COMPONENTS_RE.search(body)
+    if match:
+        observed = set(_MISS_SOURCE_RE.findall(match.group("obs")))
+        engine = set(_MISS_SOURCE_RE.findall(match.group("eng")))
+        shared = observed & engine
+        if shared and observed == engine:
+            return "component_magnitude:" + ",".join(sorted(shared))
+        if observed and not engine:
+            return "component_missing_in_engine:" + ",".join(sorted(observed))
+        if engine and not observed:
+            return "component_extra_in_engine:" + ",".join(sorted(engine))
+        if observed or engine:
+            return "component_mismatch:%s|%s" % (
+                ",".join(sorted(observed)),
+                ",".join(sorted(engine)),
+            )
+        return "component_set_equal_but_unmatched"
+    if "every branch rendered lossy" in body:
+        return "mapper_lossy"
+    if "mapper produced no usable branch" in body:
+        return "no_usable_branch"
+
+    # Banded matcher (or an unparsable miss): fall back to protocol evidence.
+    if " status " in body:
+        return "status_support"
+    if "fainted " in body:
+        return "faint_boundary"
+    if " hp " in body:
+        return "damage_band"
+    # PROTOCOL-EVIDENCE fallbacks only. These name what the step CONTAINED, not
+    # what went wrong, and they are reached only when the miss reason could not
+    # be parsed. The old `faint_ply_residual_deferral` label was actively
+    # misleading: it pointed the residue table at D2 for boundaries where
+    # nothing faints in the move phase (#893). Prefixed so no reader mistakes
+    # evidence for attribution.
     fainted = any(line.startswith("|faint|") for line in step_lines)
     upkeep = any(line.strip() == "|upkeep" for line in step_lines)
     if fainted and not upkeep:
-        # Showdown defers the end-of-turn residual block past a mid-turn faint
-        # (the switch request comes first); poke-engine runs it in the same ply.
-        return "faint_ply_residual_deferral"
+        return "evidence:faint_ply_no_upkeep"
     if any("[from] Spikes" in line for line in step_lines):
-        return "spikes_entry_damage"
-    if any("[from] psn" in line or "[from] brn" in line or "[from] tox" in line for line in step_lines):
-        return "status_residual"
+        return "evidence:spikes_in_step"
     if any("|-crit|" in line for line in step_lines):
-        return "crit_roll_band"
-    if misses and "boost deltas" in misses[0]:
-        return "boost_delta_support"
-    if misses and " status " in misses[0]:
-        return "status_support"
-    if misses and "fainted " in misses[0]:
-        return "faint_boundary"
-    if misses and " hp " in misses[0]:
-        return "damage_band"
+        return "evidence:crit_in_step"
+    if not reason:
+        return "no_miss_recorded"
     return "unclassified"
+
 
 def _active_maxhp_by_slot(state: Any, slot_sides: Mapping[str, str]) -> dict[str, int]:
     sides = _sides_by_slot(state, slot_sides)
@@ -752,6 +871,19 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_components(engine_components[label])
+                # ROLL FIRST. A branch whose roll does not match is the wrong
+                # branch, and its deterministic components are then compared
+                # against a different damage history — reporting THAT as the
+                # miss points at the wrong mechanic. Reject on the roll and let
+                # a later branch be judged on its residuals.
+                if not roll_components_agree(obs_rolled[slot], eng_rolled, legal):
+                    reason = (
+                        f"{slot} roll-scaled components differ: "
+                        f"observed={sorted(obs_rolled[slot], key=lambda p: p[1])} "
+                        f"engine={sorted(eng_rolled, key=lambda p: p[1])}"
+                    )
+                    ok = False
+                    break
                 if eng_exact != obs_exact[slot]:
                     only_obs = obs_exact[slot] - eng_exact
                     only_eng = eng_exact - obs_exact[slot]
@@ -759,13 +891,6 @@ def evaluate_boundary_strict(
                         f"{slot} attributed components differ: "
                         f"observed_only={sorted(only_obs.elements())} "
                         f"engine_only={sorted(only_eng.elements())}"
-                    )
-                    ok = False
-                    break
-                if not roll_components_agree(obs_rolled[slot], eng_rolled, legal):
-                    reason = (
-                        f"{slot} roll-scaled components differ: "
-                        f"observed={sorted(obs_rolled[slot])} engine={sorted(eng_rolled)}"
                     )
                     ok = False
                     break

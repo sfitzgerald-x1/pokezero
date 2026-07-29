@@ -1050,3 +1050,122 @@ B.4 → re-measure → then run acceptance from seed 2,000,000.
 
 Seeds burned by this appendix: 981000–981149 (A/B, re-used deliberately),
 1300000–1300009, 1310000–1310299.
+
+---
+
+# Appendix C — mapper attribution, matcher component semantics, full classification
+
+Branch `scott/mapper-attribution-fixes`, stacked on #890. Measured on the
+**15-patch** engine (main + #888 terminal-options, #889 encore-duration).
+**Deliberately NOT re-based onto #893's 17 patches**: holding the engine fixed
+isolates the effect of the harness changes below. The post-#893 re-measurement
+is sequenced after phaze-protect and PP-ordering land.
+
+Build currency was verified rather than assumed (the engine lane's warning that
+cargo's cache survives an rsync'd vendored-tree swap): Encore expires at turn 6
+in the built wheel, so patch 14 is genuinely present.
+
+## C.1 Mapper: a pending Wish stole the Leftovers tag
+
+`residual_heal_cause` keyed on `wish.0 > 0`, which is the **pending-turn
+counter**, not "a wish is landing". The engine emits `DecrementWish` *before*
+the Leftovers heal on a non-resolving turn, so the counter is still positive
+when the heal renders — and every ordinary Leftovers tick on a side carrying a
+wish was tagged `[from] move: Wish`.
+
+The instruction stream **does** distinguish them, by adjacency:
+
+| situation | instructions |
+| --- | --- |
+| wish resolving | `Heal`, `DecrementWish`, [`Heal` (Leftovers)] |
+| pending, not resolving | `DecrementWish`, `Heal` (Leftovers) |
+| no wish | `Heal` (Leftovers) |
+
+So the wish heal is exactly the one **immediately followed by `DecrementWish`
+for the same side**. `render_residual_instruction` now takes that lookahead.
+No instruction-level contract gap — the information was already there.
+Regression test covers all three cases plus the other side's `DecrementWish`.
+
+Verified on the reported repros: seeds **1310002 step 35**, **1310005 steps
+10 and 49** all resolve.
+
+## C.2 The move-heal class (B.4) was a matcher defect — verdict
+
+**Neither hypothesis was right; it was my component classification.** The class
+is **Rest**. Showdown renders it `|-heal|…|253/253 slp|[silent]` — a bare heal
+with no `[from]`, which my extractor treated as a deterministic component
+requiring exact equality.
+
+But a heal that **caps at max HP restores `maxhp − hp`**, so its magnitude is
+set by whatever damage landed earlier in the same turn — it inherits that hit's
+roll. Seed 1310001 step 72: Showdown healed **251** from 2 HP, the engine healed
+**247** from 6 HP. Same mechanic, different Surf roll. The engine was right.
+
+Fix: any heal that tops the mon out is roll-scaled, whatever its tag (Rest,
+Recover, and equally a Leftovers or Wish tick that happens to cap). The tag is
+preserved so attribution is still compared; only the magnitude is relaxed, and
+only in the capped direction (clipping can only reduce, so the test is an
+inequality, not a window). **The class is gone from the residue.**
+
+## C.3 Branch-consistency and capped residuals (#893 exoneration)
+
+Two related corrections, both mine:
+
+* **Check order.** Roll-scaled components are now compared **first**. A branch
+  whose roll does not match is the wrong branch, and comparing its deterministic
+  components against a different damage history reported the wrong mechanic.
+* **Capped lethality.** A residual that *kills* is clipped to the HP that
+  remained, so it can be arbitrarily smaller than the uncapped tick
+  (seed 1310000 step 193: burn −20 observed where the uncapped tick is −26).
+  Bucketed as roll-scaled and compared as an inequality.
+
+The residual case where Showdown's roll left the mon alive-then-killed-by-burn
+and the engine's roll did not is **not decidable** by per-component comparison —
+the two sims took different stochastic outcomes. It is now its own named class,
+`limit:roll_divergent_lethality` (4.2 % of divergences), rather than being
+forced into a verdict.
+
+## C.4 Phaze drag targets
+
+Whirlwind/Roar drag a **random** target: the engine fans out over its world's
+alive reserve while Showdown drew from the real hidden team, so entry-hazard
+arithmetic can land on a different mon with a different max HP. The engine lane
+verified these are determinization limits, not engine bugs. Now classified
+`limit:world_sample_drag_target` instead of being charged to hazards.
+
+## C.5 Every divergence is named
+
+The old classifier read only step protocol and left ~28 % `unclassified`.
+Classification is now driven by the **failing component**, which the strict
+matcher always knows; protocol evidence is a fallback and its labels are
+prefixed `evidence:` so no reader mistakes evidence for attribution. In
+particular `faint_ply_residual_deferral` is gone — it was pointing the residue
+table at D2 for boundaries where nothing faints in the move phase.
+
+**60 games (seeds 1330000–1330059), 99.0 % measured, 0 harness errors,
+240 divergences over 4,471 boundaries = 5.37 %, `unclassified` = 0:**
+
+| Class | n | Share |
+| --- | --- | --- |
+| `component_magnitude:psn` (the toxic rounding bug) | 152 | **63.3 %** |
+| `roll_scaled_component` | 27 | 11.2 % |
+| `component_missing_in_engine:itemleftovers` | 11 | 4.6 % |
+| `limit:roll_divergent_lethality` | 10 | 4.2 % |
+| `component_mismatch:itemleftovers,psn|psn` | 5 | 2.1 % |
+| 20 further named classes, each ≤ 4 | 35 | 14.6 % |
+
+## C.6 Updated projection
+
+`component_magnitude:psn` is the toxic multiply-then-floor bug reported in B.3,
+**fixed by #893** — which is not in this build. Removing it and the psn-bearing
+compound classes projects roughly **2 % of measured boundaries**, from 7.6 % in
+Appendix B. That is a projection, not a measurement; the real number comes from
+the post-#893 re-run once phaze-protect and PP-ordering land.
+
+Acceptance remains held. Two classes are documented comparison limits
+(`limit:*`) rather than divergences — the acceptance criterion should be stated
+against them explicitly, either by driving them to zero with a better matcher or
+by excluding them by name.
+
+Seeds burned: 1320000–1320299, 1330000–1330059, plus single-game repro checks at
+1310000, 1310002, 1310005.
