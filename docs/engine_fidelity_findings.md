@@ -564,6 +564,21 @@ the flag to `sleeptalk` and `mirrormove` — would over-fail all four, which is 
 `encore_succeeds_against_moves_that_lose_failencore_in_gen3` pins the negative
 side explicitly.
 
+**Regenerating this list needs care.** The six are hardcoded deliberately. A
+Dex-derived `failencore` set for gen3 resolves **twelve** moves, because six more
+leak in from the inherited base table despite having no gen3-legal existence at
+all — `blazingtorque`, `combattorque`, `dynamaxcannon`, `magicaltorque`,
+`noxioustorque`, `wickedtorque`, all gen8/gen9. Anyone re-deriving the set
+programmatically must intersect against the gen3 move pool as well as walking the
+flag overrides, or it will over-fail in both directions at once.
+
+**Coupled with deviation 7.** This patch decides Encore's fate *from*
+`last_used_move`, so a right failure set applied to a wrong `last_used_move`
+still produces the wrong answer — and before deviation 7 that value was wrong on
+exactly the turns where a target was immobilized. The two are one story, the
+application gate and the value it reads, and should be reviewed and changed
+together rather than as unrelated items.
+
 **Impact:** search could commit to an Encore that Showdown refuses, and then plan
 against a lock that never existed. Reachable: 16 gen3 randbats species carry
 Encore, and Transform/Mimic/Mirror Move are all in the pool.
@@ -583,3 +598,85 @@ Bounded, unrelated to the failure set, and unchanged by this patch.
 --only encorefailstruggle encorefailnolastmove encorefailmirrormove
 encoreappliescontrol`; engine side pinned by
 `rust/pokezero-search/tests/gen3_encore_failencore_fidelity.rs` (8 tests).
+
+## Confirmed deviation 7: last_used_move recorded for moves that never executed
+
+The engine recorded `last_used_move` before resolving the status branch, so a
+turn spent fully paralyzed, asleep, frozen or hitting itself in confusion still
+counted as "used". Showdown records only a move that actually got past the
+`BeforeMove` gate.
+
+The set site is singular and precise: `Pokemon.moveUsed()`, called from
+`BattleActions.runMove` (`sim/battle-actions.ts:291`) after the gate and after PP
+deduction:
+
+    const willTryMove = this.battle.runEvent('BeforeMove', pokemon, target, move);
+    if (!willTryMove) { runEvent('MoveAborted', ...); ...; return; }   // no moveUsed
+    if (move.beforeMoveCallback) { ... return; }                       // no moveUsed
+    if (!pokemon.deductPP(...) && move.id !== 'struggle') {
+        this.battle.add('cant', pokemon, 'nopp', move); ... return;    // no moveUsed
+    }
+    pokemon.moveUsed(move, targetLoc);                                 // lastMove SET
+
+The `runMove` / `useMove` distinction is what settles the "failed vs executed"
+question: `moveUsed` runs in `runMove` BEFORE `useMove` is entered, so accuracy,
+immunity, Protect and outright failure all happen downstream of the record. A
+move that misses or fails still counts as used; only a move that never started
+does not.
+
+**Truth table** (gen3-chain handler deciding each row):
+
+| turn outcome | lastMove | decided by |
+|---|---|---|
+| move executes — hit, miss, fail, or Protect-blocked | **SET** | `moveUsed` precedes `useMove` |
+| fully paralyzed | not set | `data/mods/gen4/conditions.ts` `par.onBeforeMove` -> `false` |
+| asleep, stays asleep | not set | `data/mods/gen3/conditions.ts` `slp.onBeforeMove` -> `false` |
+| asleep, wakes and moves | **SET** | gen3 `slp` cures, returns undefined |
+| asleep using Sleep Talk | **SET** | `move.sleepUsable` -> gen3 `slp` returns undefined |
+| the move Sleep Talk CALLS | not set | called via `useMove`, which never touches `lastMove` |
+| frozen, stays frozen | not set | `data/mods/gen4/conditions.ts` `frz.onBeforeMove` -> `false` |
+| frozen, thaws and moves | **SET** | gen4 `frz` cures, returns undefined |
+| flinched | not set | `data/conditions.ts` `flinch.onBeforeMove` -> `false` |
+| confusion self-hit | not set | `data/mods/gen4/conditions.ts` `confusion` -> `false` |
+| confusion snap-out, or no self-hit | **SET** | returns undefined, move proceeds |
+| infatuation immobilized | not set | `data/moves.ts` `attract` -> `false` |
+| no PP (`cant nopp`) | not set | PP gate returns before `moveUsed` |
+
+**Impact:** Encore's `onStart` reads `lastMove`, so the engine could Encore a
+move the target never got to make — and, since deviation 6, decide Encore's
+success or failure from it. A fully-paralyzed Pokemon appeared to have "used" the
+move it was about to use, which is exactly the move Showdown would not have
+offered Encore.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-lastmove-semantics.patch`. The record point moves
+below `generate_instructions_from_existing_status_conditions` and below the
+still-asleep early return, so only the branch on which the move really executes
+reaches it — those immobilized branches are terminal and were already pushed to
+`final_instructions`. It stays ABOVE `move_has_no_effect` and the accuracy roll,
+matching `moveUsed` preceding `useMove`.
+
+**Sleep Talk needed explicit handling**, not just relocation. Sleep Talk is
+`sleepUsable`, so gen3's `slp.onBeforeMove` returns undefined and Sleep Talk
+itself reaches `moveUsed`; the move it calls runs through `useMove` and must not
+overwrite the record. A naive move of the record point past the Sleep Talk branch
+would have inverted exactly this — recording the called move and not the caller —
+so the caller records explicitly and the recursive sub-calls are excluded by a
+`!choice.sleep_talk_move` guard.
+
+**Composition with earlier patches.** The confusion ladder's paralysis reordering
+(deviation 4) put the immobilizers in Showdown's priority order, which is what
+makes a single record point below all of them correct; the pins assert the
+stacked case (confused + paralyzed records on 1/2 x 3/4 = 37.5% of the mass).
+
+**Still divergent (out of scope, newly measured).** PP is deducted *before* the
+status branch in the engine but *after* the `BeforeMove` gate in Showdown, so a
+fully-paralyzed, asleep or self-hitting turn still costs the engine a PP where
+Showdown charges none. Flinch is already correct (it short-circuits in
+`cannot_use_move` above the decrement). This is the same ordering family as the
+fix above and the two lines sit adjacent, but it is a distinct observable and is
+left for its own change.
+
+**Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py`;
+engine side pinned by `rust/pokezero-search/tests/gen3_lastmove_semantics.rs`
+(12 tests, one per truth-table row).

@@ -1,0 +1,98 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2221,15 +2221,6 @@
+         active.moves[&choice.move_index].pp -= pp_decrement_amount;
+     }
+ 
+-    if state.use_last_used_move {
+-        set_last_used_move_as_move(
+-            state.get_side(&attacking_side),
+-            choice.move_index,
+-            attacking_side,
+-            &mut incoming_instructions,
+-        );
+-    }
+-
+     if !choice.sleep_talk_move {
+         generate_instructions_from_existing_status_conditions(
+             state,
+@@ -2239,10 +2230,29 @@
+             &mut final_instructions,
+         );
+     }
+-    let attacker = state
++    let attacker_status = state
+         .get_side_immutable(&attacking_side)
+-        .get_active_immutable();
+-    if choice.move_id == Choices::SLEEPTALK && attacker.status == PokemonStatus::SLEEP {
++        .get_active_immutable()
++        .status;
++    if choice.move_id == Choices::SLEEPTALK && attacker_status == PokemonStatus::SLEEP {
++        // pokezero gen3 fidelity fix (last_used_move): Sleep Talk is
++        // `sleepUsable`, so gen3's `slp.onBeforeMove` returns undefined for it
++        // (data/mods/gen3/conditions.ts) and the move reaches `moveUsed` —
++        // lastMove becomes SLEEP TALK. The move Sleep Talk then calls is run
++        // through `useMove`, which never touches lastMove, so the called move
++        // must NOT overwrite it; that is what the `!choice.sleep_talk_move` guard
++        // on the update below enforces for the recursive sub-calls made here.
++        if state.use_last_used_move {
++            set_last_used_move_as_move(
++                state.get_side(&attacking_side),
++                choice.move_index,
++                attacking_side,
++                &mut incoming_instructions,
++            );
++        }
++        let attacker = state
++            .get_side_immutable(&attacking_side)
++            .get_active_immutable();
+         let new_choices = attacker.get_sleep_talk_choices();
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         let num_choices = new_choices.len() as f32;
+@@ -2261,12 +2271,45 @@
+             );
+         }
+         return;
+-    } else if attacker.status == PokemonStatus::SLEEP && !choice.sleep_talk_move {
++    } else if attacker_status == PokemonStatus::SLEEP && !choice.sleep_talk_move {
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         if incoming_instructions.percentage > 0.0 {
+             final_instructions.push(incoming_instructions);
+         }
+         return;
++    }
++
++    // pokezero gen3 fidelity fix: record the move as "last used" HERE, not before
++    // the status branch. Showdown sets `lastMove` in `Pokemon.moveUsed()`, called
++    // from `BattleActions.runMove` (sim/battle-actions.ts) only AFTER the
++    // `BeforeMove` gate has passed and PP has been deducted:
++    //
++    //     const willTryMove = this.battle.runEvent('BeforeMove', ...);
++    //     if (!willTryMove) { ...; return; }        // no moveUsed
++    //     ...
++    //     if (!pokemon.deductPP(...)) { ...; return; }  // no moveUsed
++    //     pokemon.moveUsed(move, targetLoc);            // <- lastMove set
++    //
++    // Every immobilizer sits behind that gate by returning false from its
++    // onBeforeMove — full paralysis, sleep, freeze, flinch, a confusion self-hit,
++    // infatuation — so none of them records a last move. The engine used to set
++    // it before `generate_instructions_from_existing_status_conditions`, which
++    // meant a fully-paralyzed or self-hitting turn still counted as "used", and
++    // an opponent could then Encore a move the target never got to make.
++    //
++    // Placing it after that call, and after the still-asleep early return above,
++    // reproduces the gate exactly: those branches are terminal and were already
++    // pushed to `final_instructions`, so only the branch on which the move really
++    // executes reaches this line. It stays BEFORE `move_has_no_effect` and the
++    // accuracy roll on purpose — `moveUsed` precedes `useMove` in Showdown, so a
++    // move that misses, fails, or is blocked by Protect still counts as used.
++    if state.use_last_used_move && !choice.sleep_talk_move {
++        set_last_used_move_as_move(
++            state.get_side(&attacking_side),
++            choice.move_index,
++            attacking_side,
++            &mut incoming_instructions,
++        );
+     }
+ 
+     if move_has_no_effect(state, &choice, &attacking_side) {

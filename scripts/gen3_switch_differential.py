@@ -178,6 +178,21 @@ def _smeargle_encorer():  # spe 75: encores Blissey BEFORE it moves (no duration
                           moves=("Encore", "Splash"))
 
 
+def _lastmove_encorer():  # spe 85: out-speeds Smeargle, so Encore resolves first
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Encore", "Splash", "Thunder Wave", "Confuse Ray"))
+
+
+def _lastmove_faker():  # Fake Out on a FAST body, so the flinched target never acts
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Fake Out", "Encore", "Splash"))
+
+
+def _lastmove_victim():  # two distinguishable moves: Splash is "used", Tackle is "attempted"
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Splash", "Tackle"))
+
+
 def _misdreavus_encorer():  # spe 85: out-speeds Smeargle, so the Encore attempt lands first
     return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
                           moves=("Encore", "Splash"))
@@ -1042,6 +1057,64 @@ def _spec(name):
             expect={"chipped": True, "fainted": True},
             landmark=lambda L: _has(L, _SAND_UPKEEP),
             landmark_desc="the sandstorm upkeep ran")
+    if name in ("lastmoveparaencore", "lastmoveconfusionencore",
+                "lastmoveflinchencore", "lastmoveexecutedcontrol"):
+        # Does an immobilized turn count as "using" the move? Showdown records
+        # lastMove in moveUsed(), which the BeforeMove gate short-circuits, so it
+        # does not -- and Encore then locks the EARLIER move instead.
+        #
+        # The victim uses Splash on turn 1 (so lastMove = Splash), then attempts
+        # Tackle while immobilized on turn 2, then p1 Encores on turn 3. If the
+        # immobilized attempt had counted, Encore would lock Tackle and the
+        # scripted "move splash" on turn 4 would be an unavailable choice -- so
+        # the seeds where the immobilization did NOT land desync, and are skipped
+        # exactly like any other missed setup.
+        if name == "lastmoveflinchencore":
+            # Fake Out flinches on turn 1, so the victim never moves at all and
+            # has NO last move: Encore fails outright rather than retargeting.
+            return dict(
+                p1=[_lastmove_faker()], p2=[_lastmove_victim()],
+                turns=[("move fakeout", "move splash"), ("move encore", "move splash")],
+                measured=None, setup_step=0,
+                setup_landed=lambda L: _has(L, "|cant|p2a: Smeargle|flinch"),
+                facts=lambda L: {"encore_applied": _has(L, "|-start|p2a: Smeargle|Encore")},
+                expect={"encore_applied": False},
+                landmark=lambda L: _has(L, "|-fail|p1a: Misdreavus"),
+                landmark_desc="Encore failed against a target with no last move")
+        control = name == "lastmoveexecutedcontrol"
+        # Turn 1 must actually RECORD Splash, or the scenario is measuring the
+        # wrong thing: Thunder Wave and Confuse Ray both resolve before the
+        # victim acts, so the victim can already be immobilized on turn 1 and
+        # end up with NO last move -- in which case Encore correctly fails and
+        # the "which move got encored" question never arises. Gating both steps
+        # keeps only the lines where turn 1 recorded and turn 2 did not.
+        used_splash = "|move|p2a: Smeargle|Splash"
+        if control:
+            setup = ("move splash", "move splash")
+            gate = lambda L: _has(L, used_splash)
+        elif name == "lastmoveparaencore":
+            setup = ("move splash", "move tackle")
+            gate = lambda L: _has(L, used_splash) and _has(L, "|cant|p2a: Smeargle|par")
+        else:
+            setup = ("move splash", "move tackle")
+            gate = lambda L: _has(L, used_splash) and _has(L, "[from] confusion")
+        opener = ("move thunderwave" if name == "lastmoveparaencore"
+                  else "move confuseray" if name == "lastmoveconfusionencore"
+                  else "move splash")
+        return dict(
+            p1=[_lastmove_encorer()], p2=[_lastmove_victim()],
+            turns=[(opener, "move splash"), ("move splash", setup[1]),
+                   ("move encore", setup[1]), ("move splash", "move splash")],
+            measured=None, setup_step=(0, 1), setup_landed=gate,
+            tolerate_desync=True,
+            # Both halves of the gate are ~50/50 (the victim must record on
+            # turn 1 AND be immobilized on turn 2), so a 4-seed band is too thin
+            # to guarantee a landed line; this widens it rather than hand-picking.
+            seeds=tuple(range(1000, 1024)),
+            facts=lambda L: {"encored_move_is_splash": _has(L, "|-start|p2a: Smeargle|Encore")},
+            expect={"encored_move_is_splash": True},
+            landmark=lambda L: _has(L, "|-start|p2a: Smeargle|Encore"),
+            landmark_desc="Encore applied")
     raise ValueError(name)
 
 
@@ -1062,7 +1135,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "encoredurationcontrol",
              "encorefailstruggle", "encorefailnolastmove", "encorefailmirrormove",
              "encoreappliescontrol",
-             "toxicladder", "toxicladdercontrol", "sandminimum")
+             "toxicladder", "toxicladdercontrol", "sandminimum",
+             "lastmoveparaencore", "lastmoveconfusionencore",
+             "lastmoveflinchencore", "lastmoveexecutedcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
@@ -1088,7 +1163,16 @@ def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
             continue
         steps = result.steps
         if spec["setup_step"] is not None:
-            setup_lines = steps[spec["setup_step"]].protocol_lines
+            # A list of indices concatenates those steps, for setups that only
+            # count as landed across more than one boundary — e.g. "the victim
+            # really did record a move on turn 1, AND was immobilized on turn 2",
+            # where a self-hit on turn 1 would leave it with no last move at all
+            # and quietly change which case the scenario is measuring.
+            if isinstance(spec["setup_step"], (list, tuple)):
+                setup_lines = [line for index in spec["setup_step"]
+                               for line in steps[index].protocol_lines]
+            else:
+                setup_lines = steps[spec["setup_step"]].protocol_lines
             if not spec["setup_landed"](setup_lines):
                 notes.append(f"  seed {seed}: setup missed, skipped")
                 continue
