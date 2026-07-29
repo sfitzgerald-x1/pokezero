@@ -1,0 +1,605 @@
+--- a/src/gen3/damage_calc.rs	2026-07-29 15:14:10
++++ b/src/gen3/damage_calc.rs	2026-07-29 15:19:01
+@@ -1,7 +1,9 @@
+ use super::abilities::Abilities;
++use super::items::Items;
+ use super::state::{PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+ use crate::choices::{Choices, MOVES};
++use crate::pokemon::PokemonName;
+ use crate::state::{
+     Pokemon, PokemonBoostableStat, PokemonIndex, PokemonStatus, PokemonType, Side, SideReference,
+     State,
+@@ -150,6 +152,232 @@
+     modifier
+ }
+ 
++// pokezero gen3 fidelity fix (stat-modifier flooring): RSE applies the
++// item/ability stat modifiers to the (already boost-floored) STAT via
++// `battle.modify`'s 4096-based fixed point BEFORE the base formula's /Defense
++// and /50 truncations. `getDamage` (sim/battle-actions.ts) computes
++// `attack = attacker.calculateStat(...)` and then fires the
++// ModifyAtk/ModifySpA/ModifyDef/ModifySpD events; every gen3 handler
++// (data/mods/gen3/items.ts for Choice Band / Light Ball / Thick Club /
++// Soul Dew / the 1.1x type items, data/abilities.ts for Guts / Huge Power /
++// Pure Power / Hustle / Marvel Scale, base data/items.ts for Metal Powder)
++// calls `chainModify`; the event tail applies ONE `modify()` with the
++// accumulated modifier (sim/battle.ts runEvent -> modify). Upstream instead
++// multiplied `choice.base_power` in f32, which carries the modifier's
++// half-point through the /D and /50 floors: a Choice Band on an odd attack
++// stat left the engine's max roll 1-2 points above the sim's, so the sim's
++// real bottom rolls fell outside the engine's legal roll set (the c9
++// `mechanism2_stat_modifier_flooring` family; proof rows 1500024/9 and
++// 1500221/13 in the divergence ledger).
++//
++// `battle.modify(v, m)`: tr((tr(v * tr(m*4096)) + 2048 - 1) / 4096) — a
++// round-half-down at 4096 scale. `chainModify` accumulates
++// (prev * next + 2048) >> 12. Both transcribed from sim/battle.ts:2318-2359.
++const FP_ONE: i32 = 4096;
++const FP_1_05: i32 = 4300; // tr(1.05 * 4096) — Sea Incense (mods/gen3/items.ts)
++const FP_1_1: i32 = 4505; // tr(1.1 * 4096) — the gen3 type-boost items
++const FP_1_5: i32 = 6144;
++const FP_2: i32 = 8192;
++
++fn fp_chain(previous: i32, next: i32) -> i32 {
++    (previous * next + 2048) >> 12
++}
++
++fn fp_modify(value: i32, modifier: i32) -> i32 {
++    (value * modifier + 2048 - 1) >> 12
++}
++
++/// ModifyAtk / ModifySpA: the attacker-side stat modifiers, chained in the
++/// sim's handler-priority order (abilities at priority 5, items at 1,
++/// Plus/Minus at 0 — sim comparePriority runs HIGHER priority first).
++fn gen3_offensive_stat_modifiers(
++    stat: i16,
++    attacking_side: &Side,
++    defending_side: &Side,
++    choice: &Choice,
++) -> i16 {
++    let attacker = attacking_side.get_active_immutable();
++    let defender = defending_side.get_active_immutable();
++    let mut stat = stat as i32;
++    let mut chain = FP_ONE;
++    match choice.category {
++        MoveCategory::Physical => {
++            match attacker.ability {
++                // Guts keys off the status at damage time (onModifyAtk), which
++                // this function reads live: on the engine's wake/thaw branch the
++                // status is already NONE before the damage instruction is
++                // generated, and a Sleep Talk-called move still carries SLEEP —
++                // both match Showdown's evaluation point. Burn gets no special
++                // case here: the stepwise pipeline's Guts-guarded burn halving
++                // (below, in common_pkmn_damage_calc) is the only burn term the
++                // sim has for a Guts attacker.
++                Abilities::GUTS if attacker.status != PokemonStatus::NONE => {
++                    chain = fp_chain(chain, FP_1_5);
++                }
++                Abilities::HUGEPOWER | Abilities::PUREPOWER => {
++                    chain = fp_chain(chain, FP_2);
++                }
++                // Hustle is the one handler that modifies the stat DIRECTLY
++                // ("applied directly to the stat as opposed to chaining with the
++                // others" — data/abilities.ts), so it takes its own floor before
++                // the chained handlers' single final modify.
++                Abilities::HUSTLE => {
++                    stat = fp_modify(stat, FP_1_5);
++                }
++                _ => {}
++            }
++            match attacker.item {
++                Items::CHOICEBAND => chain = fp_chain(chain, FP_1_5),
++                Items::THICKCLUB => match attacker.id {
++                    PokemonName::CUBONE | PokemonName::MAROWAK => {
++                        chain = fp_chain(chain, FP_2);
++                    }
++                    _ => {}
++                },
++                // mods/gen3/items.ts: the type-boost items are onModifyAtk for
++                // gen3's physical types (the hook name IS the category gate).
++                Items::SILKSCARF if choice.move_type == PokemonType::NORMAL => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::BLACKBELT if choice.move_type == PokemonType::FIGHTING => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::SHARPBEAK if choice.move_type == PokemonType::FLYING => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::POISONBARB if choice.move_type == PokemonType::POISON => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::SOFTSAND if choice.move_type == PokemonType::GROUND => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::HARDSTONE if choice.move_type == PokemonType::ROCK => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::SILVERPOWDER if choice.move_type == PokemonType::BUG => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::SPELLTAG if choice.move_type == PokemonType::GHOST => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::METALCOAT if choice.move_type == PokemonType::STEEL => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                _ => {}
++            }
++        }
++        MoveCategory::Special => {
++            match attacker.item {
++                // gen3 Light Ball doubles SpA ONLY (mods/gen3/items.ts kills the
++                // inherited onModifyAtk/onBasePower); the physical doubling
++                // upstream carried is a gen4+ behaviour.
++                Items::LIGHTBALL if attacker.id.is_pikachu_variant() => {
++                    chain = fp_chain(chain, FP_2);
++                }
++                Items::SOULDEW => match attacker.id {
++                    PokemonName::LATIOS | PokemonName::LATIAS => {
++                        chain = fp_chain(chain, FP_1_5);
++                    }
++                    _ => {}
++                },
++                Items::CHOICESPECS => chain = fp_chain(chain, FP_1_5),
++                Items::MYSTICWATER if choice.move_type == PokemonType::WATER => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::SEAINCENSE if choice.move_type == PokemonType::WATER => {
++                    chain = fp_chain(chain, FP_1_05);
++                }
++                Items::CHARCOAL if choice.move_type == PokemonType::FIRE => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::MAGNET if choice.move_type == PokemonType::ELECTRIC => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::MIRACLESEED if choice.move_type == PokemonType::GRASS => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::NEVERMELTICE if choice.move_type == PokemonType::ICE => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::TWISTEDSPOON if choice.move_type == PokemonType::PSYCHIC => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                Items::BLACKGLASSES if choice.move_type == PokemonType::DARK => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                // Dragon Fang boosts; Dragon Scale is a bare evolution item in
++                // the sim (no hooks) — upstream's 1.1 on it was invented.
++                Items::DRAGONFANG if choice.move_type == PokemonType::DRAGON => {
++                    chain = fp_chain(chain, FP_1_1);
++                }
++                _ => {}
++            }
++            // gen3 Plus/Minus check ALL actives (mods/gen3/abilities.ts uses
++            // getAllActive, not allies()), so the boost fires across the field
++            // in singles: a Minun facing a Plusle is boosted, and vice versa.
++            match attacker.ability {
++                Abilities::PLUS if defender.ability == Abilities::MINUS => {
++                    chain = fp_chain(chain, FP_1_5);
++                }
++                Abilities::MINUS if defender.ability == Abilities::PLUS => {
++                    chain = fp_chain(chain, FP_1_5);
++                }
++                _ => {}
++            }
++        }
++        _ => {}
++    }
++    fp_modify(stat, chain) as i16
++}
++
++/// ModifyDef / ModifySpD, plus the gen<=4 Explosion/Self-Destruct defense
++/// halving, which `getDamage` applies to the MODIFIED defense stat:
++/// `clampIntRange(floor(defense / 2), 1)` (sim/battle-actions.ts).
++fn gen3_defensive_stat_modifiers(
++    stat: i16,
++    defending_side: &Side,
++    choice: &Choice,
++) -> i16 {
++    let defender = defending_side.get_active_immutable();
++    let mut chain = FP_ONE;
++    match choice.category {
++        MoveCategory::Physical => {
++            if defender.ability == Abilities::MARVELSCALE
++                && defender.status != PokemonStatus::NONE
++            {
++                chain = fp_chain(chain, FP_1_5);
++            }
++            // Metal Powder is x2 Defense for an UNTRANSFORMED Ditto (base
++            // data/items.ts, unmodified through the gen3 chain); upstream's
++            // any-category /1.5 was both the wrong factor and the wrong scope.
++            if defender.item == Items::METALPOWDER
++                && defender.id == PokemonName::DITTO
++                && defender.pre_transform.is_none()
++            {
++                chain = fp_chain(chain, FP_2);
++            }
++        }
++        MoveCategory::Special => {
++            if defender.item == Items::SOULDEW {
++                match defender.id {
++                    PokemonName::LATIOS | PokemonName::LATIAS => {
++                        chain = fp_chain(chain, FP_1_5);
++                    }
++                    _ => {}
++                }
++            }
++        }
++        _ => {}
++    }
++    let mut stat = fp_modify(stat as i32, chain);
++    if choice.category == MoveCategory::Physical
++        && matches!(choice.move_id, Choices::EXPLOSION | Choices::SELFDESTRUCT)
++    {
++        stat = (stat / 2).max(1);
++    }
++    stat as i16
++}
++
+ fn get_attacking_and_defending_stats(
+     attacker: &Pokemon,
+     defender: &Pokemon,
+@@ -159,6 +387,9 @@
+ ) -> (i16, i16, i16, i16) {
+     let (attacking_final_stat, defending_final_stat, crit_attacking_stat, crit_defending_stat);
+ 
++    // A gen3 crit ignores unfavourable boost STAGES only (getDamage zeroes the
++    // boosts before calculateStat); the item/ability stat modifiers still apply
++    // on the crit path, so both variants run through the modifier chains.
+     match choice.category {
+         MoveCategory::Physical => {
+             if attacking_side.attack_boost > 0 {
+@@ -202,10 +433,10 @@
+     }
+ 
+     (
+-        attacking_final_stat,
+-        defending_final_stat,
+-        crit_attacking_stat,
+-        crit_defending_stat,
++        gen3_offensive_stat_modifiers(attacking_final_stat, attacking_side, defending_side, choice),
++        gen3_defensive_stat_modifiers(defending_final_stat, defending_side, choice),
++        gen3_offensive_stat_modifiers(crit_attacking_stat, attacking_side, defending_side, choice),
++        gen3_defensive_stat_modifiers(crit_defending_stat, defending_side, choice),
+     )
+ }
+ 
+--- a/src/gen3/items.rs	2026-07-29 15:14:10
++++ b/src/gen3/items.rs	2026-07-29 15:19:01
+@@ -1,14 +1,13 @@
+ #![allow(unused_variables)]
+ use super::generate_instructions::{add_remove_status_instructions, apply_boost_instruction};
+-use crate::choices::{Choice, Choices, MoveCategory};
++use crate::choices::{Choice, Choices};
+ use crate::define_enum_with_from_str;
+ use crate::instruction::{
+     ChangeItemInstruction, ChangeStatusInstruction, DisableMoveInstruction, HealInstruction,
+     Instruction, StateInstructions,
+ };
+-use crate::pokemon::PokemonName;
+ use crate::state::{
+-    Pokemon, PokemonBoostableStat, PokemonStatus, PokemonType, Side, SideReference, State,
++    Pokemon, PokemonBoostableStat, PokemonStatus, Side, SideReference, State,
+ };
+ use std::cmp;
+ 
+@@ -386,26 +385,15 @@
+ }
+ 
+ pub fn item_modify_attack_against(
+-    state: &State,
+-    attacking_choice: &mut Choice,
+-    attacking_side_ref: &SideReference,
++    _state: &State,
++    _attacking_choice: &mut Choice,
++    _attacking_side_ref: &SideReference,
+ ) {
+-    let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
+-    match defending_side.get_active_immutable().item {
+-        Items::METALPOWDER if attacking_side.get_active_immutable().id == PokemonName::DITTO => {
+-            attacking_choice.base_power /= 1.5;
+-        }
+-        Items::SOULDEW => {
+-            if defending_side.get_active_immutable().id == PokemonName::LATIOS
+-                || defending_side.get_active_immutable().id == PokemonName::LATIAS
+-            {
+-                if attacking_choice.category == MoveCategory::Special {
+-                    attacking_choice.base_power /= 1.5;
+-                }
+-            }
+-        }
+-        _ => {}
+-    }
++    // pokezero gen3 fidelity fix (stat-modifier flooring): Metal Powder and the
++    // defensive half of Soul Dew are ModifyDef / ModifySpD STAT modifiers in the
++    // sim, not damage modifiers; they now apply (with battle.modify's fixed-point
++    // floor, and Metal Powder's real x2 / untransformed-Ditto / physical-only
++    // semantics) in gen3/damage_calc.rs `gen3_defensive_stat_modifiers`.
+ }
+ 
+ pub fn item_modify_attack_being_used(
+@@ -413,135 +401,19 @@
+     attacking_choice: &mut Choice,
+     attacking_side_ref: &SideReference,
+ ) {
+-    let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
++    let (attacking_side, _defending_side) = state.get_both_sides_immutable(attacking_side_ref);
++    // pokezero gen3 fidelity fix (stat-modifier flooring): Choice Band / Specs,
++    // Thick Club, Light Ball, the attacking half of Soul Dew and the gen3 1.1x
++    // (Sea Incense 1.05x) type-boost items are ModifyAtk / ModifySpA STAT
++    // modifiers in the sim (data/mods/gen3/items.ts), not base-power modifiers.
++    // They now apply with battle.modify's fixed-point floor in
++    // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`, which also drops two
++    // behaviours the sim never had: Light Ball's physical doubling (gen3 is
++    // SpA-only) and Dragon Scale's 1.1 (a bare evolution item in the sim).
+     match attacking_side.get_active_immutable().item {
+-        Items::BLACKBELT => {
+-            if attacking_choice.move_type == PokemonType::FIGHTING {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::BLACKGLASSES => {
+-            if attacking_choice.move_type == PokemonType::DARK {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::CHARCOAL => {
+-            if attacking_choice.move_type == PokemonType::FIRE {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::CHOICEBAND => {
+-            if attacking_choice.category == MoveCategory::Physical {
+-                attacking_choice.base_power *= 1.5;
+-            }
+-        }
+-        Items::CHOICESPECS => {
+-            if attacking_choice.category == MoveCategory::Special {
+-                attacking_choice.base_power *= 1.5;
+-            }
+-        }
+-        Items::DRAGONFANG | Items::DRAGONSCALE => {
+-            if attacking_choice.move_type == PokemonType::DRAGON {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::METALCOAT => {
+-            if attacking_choice.move_type == PokemonType::STEEL {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::MYSTICWATER => {
+-            if attacking_choice.move_type == PokemonType::WATER {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::NEVERMELTICE => {
+-            if attacking_choice.move_type == PokemonType::ICE {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::POISONBARB => {
+-            if attacking_choice.move_type == PokemonType::POISON {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::SEAINCENSE => {
+-            if attacking_choice.move_type == PokemonType::WATER {
+-                attacking_choice.base_power *= 1.05;
+-            }
+-        }
+-        Items::SHARPBEAK => {
+-            if attacking_choice.move_type == PokemonType::FLYING {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+         Items::SHELLBELL => {
+             attacking_choice.drain = Some(0.125);
+         }
+-        Items::SILKSCARF => {
+-            if attacking_choice.move_type == PokemonType::NORMAL {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::SILVERPOWDER => {
+-            if attacking_choice.move_type == PokemonType::BUG {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::SOFTSAND => {
+-            if attacking_choice.move_type == PokemonType::GROUND {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::SPELLTAG => {
+-            if attacking_choice.move_type == PokemonType::GHOST {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::MIRACLESEED => {
+-            if attacking_choice.move_type == PokemonType::GRASS {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::SOULDEW => {
+-            if attacking_side.get_active_immutable().id == PokemonName::LATIOS
+-                || attacking_side.get_active_immutable().id == PokemonName::LATIAS
+-            {
+-                if attacking_choice.category == MoveCategory::Special {
+-                    attacking_choice.base_power *= 1.5;
+-                }
+-            }
+-        }
+-        Items::THICKCLUB => match attacking_side.get_active_immutable().id {
+-            PokemonName::CUBONE | PokemonName::MAROWAK => {
+-                attacking_choice.base_power *= 2.0;
+-            }
+-            _ => {}
+-        },
+-        Items::TWISTEDSPOON => {
+-            if attacking_choice.move_type == PokemonType::PSYCHIC {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::HARDSTONE => {
+-            if attacking_choice.move_type == PokemonType::ROCK {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::MAGNET => {
+-            if attacking_choice.move_type == PokemonType::ELECTRIC {
+-                attacking_choice.base_power *= 1.1;
+-            }
+-        }
+-        Items::LIGHTBALL => {
+-            if attacking_side
+-                .get_active_immutable()
+-                .id
+-                .is_pikachu_variant()
+-            {
+-                attacking_choice.base_power *= 2.0;
+-            }
+-        }
+         _ => {}
+     }
+ }
+--- a/src/gen3/abilities.rs	2026-07-29 15:14:10
++++ b/src/gen3/abilities.rs	2026-07-29 15:19:01
+@@ -526,11 +526,8 @@
+                 attacker_choice.recoil = None;
+             }
+         }
+-        Abilities::PUREPOWER => {
+-            if attacker_choice.category == MoveCategory::Physical {
+-                attacker_choice.base_power *= 2.0;
+-            }
+-        }
++        // (Pure Power: ModifyAtk x2 — applied as a stat modifier in
++        // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`.)
+         Abilities::TORRENT => {
+             if attacker_choice.move_type == PokemonType::WATER
+                 && attacking_pkmn.hp <= attacking_pkmn.maxhp / 3
+@@ -545,11 +542,8 @@
+                 }
+             }
+         }
+-        Abilities::HUGEPOWER => {
+-            if attacker_choice.category == MoveCategory::Physical {
+-                attacker_choice.base_power *= 2.0;
+-            }
+-        }
++        // (Huge Power: ModifyAtk x2 — applied as a stat modifier in
++        // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`.)
+         Abilities::COMPOUNDEYES => {
+             attacker_choice.accuracy *= 1.3;
+         }
+@@ -592,46 +586,26 @@
+             }
+         }
+         Abilities::HUSTLE => {
++            // The 1.5x attack half is a DIRECT stat modify (data/abilities.ts:
++            // "applied directly to the stat as opposed to chaining"), handled in
++            // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`; only the
++            // accuracy drop stays on the choice.
+             if attacker_choice.category == MoveCategory::Physical {
+-                attacker_choice.base_power *= 1.5;
+                 attacker_choice.accuracy *= 0.80
+             }
+         }
+-        Abilities::GUTS => {
+-            // pokezero gen3 fidelity fix: Guts must key off the status the
+-            // attack actually EXECUTES under, not the pre-turn status. This
+-            // choice modification runs (via before_move) BEFORE the sleep /
+-            // freeze branching in generate_instructions_from_move, but a
+-            // sleeping or frozen attacker's move only ever executes on the
+-            // branch that CURED the status first: Showdown's slp.onBeforeMove
+-            // calls cureStatus() before the move runs
+-            // (data/mods/gen3/conditions.ts), and Guts is onModifyAtk
+-            // (data/abilities.ts), evaluated at damage time against the cured
+-            // status — while the engine's own wake branch likewise sets status
+-            // NONE before the damage instruction is applied. Boosting on
+-            // SLEEP/FREEZE here therefore gave the wake-turn attack a phantom
+-            // 1.5x. The exception is a Sleep Talk-called move, which executes
+-            // while still asleep and DOES get the boost (onModifyAtk sees
+-            // status 'slp' at damage time).
+-            let status_at_execution = match attacking_pkmn.status {
+-                PokemonStatus::SLEEP | PokemonStatus::FREEZE
+-                    if !attacker_choice.sleep_talk_move =>
+-                {
+-                    PokemonStatus::NONE
+-                }
+-                other => other,
+-            };
+-            if status_at_execution != PokemonStatus::NONE {
+-                attacker_choice.base_power *= 1.5;
+-
+-                // not the right place to put this, but good enough
+-                if status_at_execution == PokemonStatus::BURN
+-                    && attacker_choice.category == MoveCategory::Physical
+-                {
+-                    attacker_choice.base_power *= 2.0;
+-                }
+-            }
+-        }
++        // (Guts: ModifyAtk x1.5 while statused — applied as a stat modifier in
++        // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`, which reads the
++        // status at damage time: the engine's wake/thaw branch has already set
++        // the status to NONE before damage is generated, and a Sleep Talk-called
++        // move still carries SLEEP — the same evaluation point as Showdown's
++        // onModifyAtk. The wake-turn special-casing that lived here (patch 31)
++        // is therefore subsumed, and the old upstream burn-compensation double
++        // ("not the right place to put this") is GONE: it dated from the era
++        // when the engine halved a burned Guts attacker's damage, which the
++        // stepwise pipeline's Guts-guarded burn halving no longer does, so
++        // keeping it triple-counted a burned Guts attacker (1.5 x 2 with no
++        // halving = 3x instead of the sim's plain 1.5x).)
+         _ => {}
+     }
+ }
+@@ -679,13 +653,8 @@
+             // doubles. It grants neither immunity nor a SpA boost, so it is
+             // behaviorally inert in this singles-only engine.
+         }
+-        Abilities::MARVELSCALE => {
+-            if target_pkmn.status != PokemonStatus::NONE
+-                && attacker_choice.category == MoveCategory::Physical
+-            {
+-                attacker_choice.base_power /= 1.5;
+-            }
+-        }
++        // (Marvel Scale: ModifyDef x1.5 while statused — applied as a stat
++        // modifier in gen3/damage_calc.rs `gen3_defensive_stat_modifiers`.)
+         Abilities::EFFECTSPORE => {
+             if attacker_choice.flags.contact
+                 && !defending_side
+--- a/src/gen3/choice_effects.rs	2026-07-29 15:14:10
++++ b/src/gen3/choice_effects.rs	2026-07-29 15:19:01
+@@ -147,9 +147,11 @@
+                 });
+             }
+         }
+-        Choices::EXPLOSION | Choices::SELFDESTRUCT => {
+-            attacker_choice.base_power *= 2.0;
+-        }
++        // (Explosion / Self-Destruct: the sim halves the MODIFIED defense stat
++        // with a floor — `clampIntRange(floor(defense / 2), 1)` in getDamage —
++        // rather than doubling base power; applied in gen3/damage_calc.rs
++        // `gen3_defensive_stat_modifiers`. The float BP doubling that lived here
++        // put the truncation in the wrong place for odd defense stats.)
+         Choices::MORNINGSUN | Choices::MOONLIGHT | Choices::SYNTHESIS => {
+             let active_weather = state.weather_is_active(&state.weather.weather_type);
+             match state.weather.weather_type {
+@@ -269,7 +271,8 @@
+             }
+         }
+         Choices::FACADE => {
+-            // pokezero gen3 fidelity fix (same rule as Guts in abilities.rs):
++            // pokezero gen3 fidelity fix (same rule as Guts, which now lives in
++            // gen3/damage_calc.rs as a stat modifier):
+             // Facade's doubling keys off the status at EXECUTION time. A
+             // sleeping/frozen attacker only attacks through the branch that
+             // cured the status first, so SLEEP/FREEZE must not double — unless

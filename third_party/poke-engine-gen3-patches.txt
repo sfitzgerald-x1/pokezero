@@ -970,6 +970,46 @@ poke-engine-gen3-damage-stepwise-truncation.patch
 # (relocation); authored against the lastmove-semantics tree, applied before the
 # fixture refresh. Pinned by rust/pokezero-search/tests/gen3_selfdestruct_gate.rs.
 poke-engine-gen3-explosion-selfdestruct-gate.patch
+# gen3 stat-modifier flooring (mechanism 2 of the damage_calc lane). RSE
+# applies the item/ability stat modifiers to the boost-floored STAT via
+# battle.modify's 4096-based fixed point BEFORE the base formula's /Defense
+# and /50 truncations (sim/battle-actions.ts getDamage: calculateStat ->
+# ModifyAtk/ModifySpA/ModifyDef/ModifySpD events -> the truncated base
+# formula; every effective-gen3 handler chainModifies, Hustle modifies the
+# stat directly). Upstream multiplied choice.base_power in f32, carrying the
+# modifier's half-point through the /D and /50 floors: Choice Band on an odd
+# attack stat left the engine max 1-2 points above the sim's, so real bottom
+# rolls fell outside the engine's legal roll set. Repro rows: 1500221/13
+# (Choice Band Pidgeot Aerial Ace: engine max 123 vs sim 121; observed 102 =
+# sim's exact min roll, engine legal floor 104) and 1500024/9 (Guts+psn -1
+# atk Ursaring Return: engine 120 vs sim 118). Also folds in, per the same
+# sim reading: Light Ball is SpA-only in gen3 (mods/gen3/items.ts kills the
+# inherited Atk half; upstream doubled physical too), Thick Club is Atk-only,
+# Metal Powder is x2 Def for an UNTRANSFORMED Ditto physical-only (upstream:
+# /1.5 any category), Dragon Scale has no boost (bare evolution item),
+# Explosion/Self-Destruct halve the MODIFIED defense stat with a floor
+# (clampIntRange(floor(def/2),1)) instead of doubling BP, gen3 Plus/Minus
+# fire across the field (getAllActive - a Minun facing a Plusle is boosted),
+# and the upstream Guts burn-compensation double is dropped: with patch 33's
+# Guts-guarded burn halving it triple-counted a burned Guts attacker (3x
+# instead of the sim's 1.5x). Touches gen3/damage_calc.rs (new fixed-point
+# stat-modifier chains), gen3/items.rs, gen3/abilities.rs and
+# gen3/choice_effects.rs (the relocated arms removed); authored against the
+# explosion-selfdestruct-gate tree above.
+poke-engine-gen3-stat-modifier-flooring.patch
+
+# gen3 type-effectiveness netting. The sim NETS the type exponent first
+# (typeMod = runEffectiveness sums +1/-1 across the defender's types) and
+# only then applies |typeMod| steps of the net sign (data/mods/gen3/
+# scripts.ts modifyDamage:88-104). Patch 33's transcription applied the two
+# types as independent steps, flooring inside a net-neutral (2x, 0.5x) pair
+# whenever the resisted type comes first in the defender's type tuple:
+# floor(v/2)*2 = v-1 for odd v where the sim leaves v untouched. Repro row:
+# 1500076/96 (HP Grass into Shuckle, BUG/ROCK: sim max 29, engine max 28;
+# observed 29 = the sim's exact 100% roll, above the engine's legal max).
+# Touches the type step in gen3/damage_calc.rs common_pkmn_damage_calc only;
+# authored against the stat-modifier-flooring tree above.
+poke-engine-gen3-type-effectiveness-netting.patch
 
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch

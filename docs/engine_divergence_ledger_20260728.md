@@ -5239,3 +5239,211 @@ this one too.
 - `reports/c10_kecleon_differential.json` — 127 rows, `repros_complete: true`
 - `reports/c10_explosion_differential.json` — #959's missing artifact, 131 rows, reproduces 92
 - pins: `tests/test_engine_world_live_typechange.py` (9)
+---
+
+# Appendix Z7 — Cycle eleven: mechanism-2 stat-modifier flooring (patches 35-36), and what the family label got right and wrong
+
+Fix-lane worktree, branch `scott/engine-gen3-stat-modifier-flooring`. The work was
+authored against main at #958 (33 patches, fingerprint `887a722dd2d6cd9b...`, probes
+9/9), where all six `mechanism2_stat_modifier_flooring` rows were regenerated from seed
+and replayed through `scripts/replay_residue.py` before any design; #959 (patch 34,
+explosion-selfdestruct-gate) and #961 (Kecleon world seeding) merged mid-review, so the
+branch carries a merge of main, the two patches renumbered to slots 35-36
+(fixture-refresh still last), and the binding measurement below re-run against the
+88-row post-#961 baseline. The pre-merge run (96-frame, fingerprint `a987f3db...`,
+outside-limits 96 -> 86) measured the identical ten-row clearance and is retained in
+branch history; every number in Z7.5 is from the post-merge tree.
+
+## Z7.1 Derivation: where gen3 Showdown puts the stat modifiers (all vendored-source citations)
+
+- `getDamage` (sim/battle-actions.ts:1589-1726) computes
+  `attack = attacker.calculateStat(attackStat, atkBoosts)` — boost stages floor AT THE
+  STAT (`Pokemon.calculateStat`, sim/pokemon.ts:561-595: `Math.floor(stat * table[boost])`
+  up, `Math.floor(stat / table[-boost])` down) — then fires the
+  `ModifyAtk`/`ModifySpA`/`ModifyDef`/`ModifySpD` events (:1712-1713) BEFORE the base
+  formula `tr(tr(tr(tr(2L/5+2) * BP * A) / D) / 50)` (:1722).
+- Every effective-gen3 handler `chainModify`s: Guts 1.5 / Huge+Pure Power 2 (prio 5,
+  data/abilities.ts), Choice Band 1.5 (prio 1, data/items.ts), Thick Club 2 (gen4 mod),
+  Light Ball 2 — **SpA-only in gen3** (data/mods/gen3/items.ts:187 defines `onModifySpA`
+  and kills the inherited hooks), Soul Dew 1.5 SpA/SpD (gen6 mod), Marvel Scale 1.5 Def
+  (prio 6), Metal Powder **x2 Def, untransformed Ditto** (base data/items.ts, unmodified
+  through the chain), and the gen3 1.1x type items — **stat-side in gen3**
+  (data/mods/gen3/items.ts re-hooks every one of them from onBasePower to
+  onModifyAtk/onModifySpA at prio 1; Sea Incense is 1.05). Hustle alone modifies the stat
+  DIRECTLY (`return this.modify(atk, 1.5)` — its own floor before the chain's).
+- Event tail: `chainModify` accumulates `(prev*next + 2048) >> 12` at 4096 scale and
+  runEvent applies ONE `modify(relayVar, modifier)` = `tr((tr(v*tr(m*4096)) + 2047)/4096)`
+  — round-half-down (sim/battle.ts:2318-2359, runEvent:929-933).
+- Explosion/Self-Destruct: gen<=4 halves the MODIFIED defense stat,
+  `clampIntRange(Math.floor(defense/2), 1)` (battle-actions.ts:1715-1717) — not BP.
+- gen3 Plus/Minus check `getAllActive()` (data/mods/gen3/abilities.ts:115-135) — the foe
+  counts, so a Minun facing a Plusle is boosted x1.5 in singles.
+- **Burn is NOT a stat modifier in gen3**: it is the FIRST damage-side step of
+  `modifyDamage` (data/mods/gen3/scripts.ts:41-43), halving physical damage pre-+2 and
+  skipped entirely for Guts. Patch 33's placement was correct; no reconciliation needed.
+- Stays BP-side per the same reading (NOT touched): the pinch abilities (gen4 mod
+  onBasePower), Thick Fat (gen4 mod onSourceBasePower 0.5), Facade (basePowerCallback),
+  screens/spread/weather (damage-side, gen3 scripts.ts modifyDamage).
+
+Every stat-side rule above was probed live (gen3customgame fixtures,
+`pokezero.showdown_fixture`, seeds 1-10 each) and agrees with the in-house sim-exact
+oracle `pokezero.gen3_damage` (itself live-sim cross-checked in tests/test_gen3_damage.py).
+
+## Z7.2 The architectural difference, and patch 34
+
+The engine applied ALL of these as f32 multipliers on `choice.base_power`
+(gen3/items.rs `item_modify_attack_being_used` / `item_modify_attack_against`,
+gen3/abilities.rs, gen3/choice_effects.rs Explosion x2). Attaching a x1.5 to BP instead
+of the stat is the same product but a DIFFERENT truncation locus: the sim floors
+`modify(stat, 1.5)` before `*BP/D` and `/50`; the engine carried the half-point through
+both. Proof-row arithmetic (recorded states, replayed this cycle):
+
+- 1500221/13 — Choice Band Pidgeot L87 atk 189, Aerial Ace vs Unown def 153: sim
+  `floor(189*1.5)=283 -> max 121`; engine `BP 60*1.5 -> max 123`. Observed 102 = the
+  sim's exact min roll, below the engine's legal floor 104.
+- 1500024/9 — Guts+psn Ursaring L81 atk 257 at -1, Return vs Slowbro def 228: sim
+  `floor(floor(257/1.5)*1.5)=256 -> max 118`; engine 120. Observed 101 below the
+  engine's legal floor 102.
+
+`poke-engine-gen3-stat-modifier-flooring.patch` (slot 35) adds the fixed-point
+stat-modifier chains to gen3/damage_calc.rs (`gen3_offensive_stat_modifiers` /
+`gen3_defensive_stat_modifiers`, applied to the normal AND crit stat variants inside
+`get_attacking_and_defending_stats`) and deletes the relocated BP arms. Guts now reads
+the status at damage time — the engine's wake/thaw branch has already cured it and a
+Sleep Talk callee still carries SLEEP, so patch 31's wake-turn special-casing is
+subsumed, its pins still pass. Folded in, each sim-cited and pinned:
+
+- **Light Ball physical doubling removed** (gen3 is SpA-only; the engine doubled Quick
+  Attack too), **Thick Club special doubling removed**, **Dragon Scale's 1.1 dropped**
+  (a bare evolution item in the sim; upstream's boost was invented).
+- **Metal Powder corrected wholesale**: x2 Def, untransformed Ditto, physical only —
+  upstream had /1.5 any-category behind a guard that tested the ATTACKER for being
+  Ditto, so it also never fired. Pool-unreachable (randbats Ditto gets Leftovers);
+  pinned like Fake Out rather than left to be rediscovered.
+- **Explosion/Self-Destruct def-halving relocated** from BP x2 to
+  `max(floor(def'/2), 1)` after the defense chain (odd defenses shift by a point;
+  live-probed vs Skarmory: observed max 129 is exactly the halved-def prediction).
+- **gen3 Plus/Minus added** (x1.5 SpA vs the opposing partner ability; live-probed
+  Minun vs Plusle: observed {78..90} = the boosted roll set of max 90, control vs
+  Slowbro unboosted). Both species are in the randbats pool, so the pair is reachable.
+- **CONFIRMED LIVE BUG, fixed: burned Guts was 3x — and Z.4's record of it is WRONG.**
+  Z.4 states patch 33 dropped the upstream Guts burn-compensation double ("Guts'
+  burn-compensation double is dropped in favour of the pipeline's Guts-guarded burn
+  halving"). It did not: patch 33 only touched damage_calc.rs, the double survived in
+  abilities.rs, and
+  once patch 33's Guts-guarded burn halving stopped halving, a burned Guts attacker
+  multiplied BP by 1.5*2 with nothing compensating (probe: burned Guts Machamp Rock
+  Slide dealt the 226-hp cap where paralyzed dealt 177). No prior residue row carried
+  the signature (burned Guts users are rare); the stat pipeline makes burn just another
+  Guts status (live probe: burned == paralyzed max 172 on the probe stats).
+
+## Z7.3 The family label: 4/6 right, 2/6 wrong — and the wrong ones are two different things
+
+Replay-first decomposition of the six `mechanism2_stat_modifier_flooring` rows:
+
+| row | verdict | mechanism |
+|---|---|---|
+| 1500024/9, 1500126/13, 1500221/13, 1500267/77 | label RIGHT | stat-modifier flooring (Guts / Choice Band), arithmetic above |
+| 1500076/96 | label WRONG — real engine defect, different mechanism | **type-effectiveness netting** (below) |
+| 1500028/44 | label WRONG — not an engine defect | heal-cap structural matcher artifact: engine max = sim max = **19** at the recorded state (Vigoroth -1 atk Shadow Ball vs Mightyena — the -1 costs nothing, 183*2/3 is exact); the divergence is the engine world's avg-roll Leftovers heal capping `_to_full` while the observed roll's heal did not. Instrument lane, predicted NOT to clear, did not clear. |
+
+1500076/96 (HP Grass into Shuckle, -1 SpD): the boost flooring is identical on both
+sides (floor(506/1.5)=337 both); the point is lost at the TYPE step. **This is a defect
+in the SHIPPED patch 33** (merged in the damage_calc lane, Appendix Z.4): its rewrite of
+common_pkmn_damage_calc mis-transcribed the sim's type block. Found by this lane's
+replay-first decomposition, fixed by patch 36; cycle history should read patch 33 as
+correct on the modifier ORDER and truncation points but wrong on type-step NETTING. The sim NETS the
+type exponent first (`typeMod = runEffectiveness` sums +1/-1 across the defender's
+types) and applies only the net (data/mods/gen3/scripts.ts:88-104); patch 33's
+transcription applied the two types as independent steps, so a net-neutral (0.5, 2)
+pair with the resist FIRST in the type tuple floors an odd value: engine
+`floor(29/2)*2 = 28` where the sim leaves 29. Observed 29 = the sim's exact 100% roll.
+`poke-engine-gen3-type-effectiveness-netting.patch` (slot 36) nets the exponent in
+common_pkmn_damage_calc; only (2x, 0.5x) pairs change, and only when the resisted type
+leads the tuple and the pre-type value is odd.
+
+## Z7.4 Pins, build chain and gates
+
+`tests/test_engine_stat_modifier_fidelity.py`: 14 divergence pins + 4 controls, every
+divergence pin's sim value transcribed from live probe runs (roll sets in the
+docstrings; discriminating stats found by exact two-pipeline search where the loci
+coincide on natural stats). On the 33-patch wheel (throwaway venv, built from the
+pristine 33-patch tree): exactly the 14 divergence pins FAIL — each with the predicted
+unpatched branch value — and the 4 controls pass. On the 35-patch build: 18/18.
+
+| build | patches | fingerprint | gates |
+|---|---|---|---|
+| authoring baseline (#958 main) | 33 | `887a722d...` | probes 9/9; six family rows reproduce |
+| pre-merge (+stat-flooring +netting) | 35 | `a987f3db...` | probes 9/9 (no expectation moved); pins 18/18; engine tree 17/17; pokezero-search 264/264; first differential (96-frame): 96 -> 86 |
+| **post-merge (binding)** — main@#961 + slots 35-36 | 36 | `bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5` | fuzz=0 through both builders in the merged order (explosion-selfdestruct-gate applies BEFORE these two); probes 9/9 (no expectation moved by the netting patch); pins 18/18 + #961's typechange pins green; engine tree 17/17; pokezero-search 270/270 (incl. #959's gate tests) |
+
+The fixture-refresh patch stays LAST and needed no extension on any of the three
+builds: no upstream expectation moved.
+
+## Z7.5 Prediction and the identity diff (registered BEFORE each run)
+
+Per the standing rule (two prior fixes under-counted by trusting family labels), the
+prediction was made by MECHANISM SIGNATURE: all 96 then-surviving outside-limits rows
+regenerated at the 33-patch authoring baseline (96/96 reproduced) and marker-scanned on
+the row payloads (`reports/c11_statfloor_prediction.json`). The pre-merge run scored it
+on the 96-frame (5/5 arithmetic-verified rows cleared, 4/7 marker candidates cleared,
+1500028/44 stayed as predicted, one extra netting clearance — 1500072/48, Silver Wind
+into Metagross, missed by the scan because Silver Wind was absent from its move-type
+table, named by identity diff and diagnosed by arithmetic: sim 85 vs engine 84).
+
+After #959/#961 merged, the prediction was RESTATED against the new baseline before the
+binding run (same artifact, `postmerge_restatement`): the same ten rows clear, 88 -> 78,
+zero interaction with the eight rows #959/#961 cleared, nine remaining walk rows stay,
+limit census unchanged. Binding run: 300 games, seeds 1500000-1500299, strict,
+`--repros-per-game 40 --keep-repro 500`, fingerprint `bdb6ad30...`
+(`reports/c11_statfloor_differential.json`). **Both sides of the identity diff carry
+`repro_retention.repros_complete: true`** (baseline `reports/c10_kecleon_differential.json`
+127/127; this run 117/117), so the diff is over the full divergent sets.
+
+| | predicted | actual |
+|---|---|---|
+| the ten rows (5 verified + 4 scored candidates + 1500072/48) | all clear | **10/10 cleared** |
+| 1500028/44 (heal-cap matcher artifact) | stays | **stayed** |
+| #959/#961's eight cleared rows | stay absent (zero interaction) | **all absent** |
+| remaining marker candidates (1500054/125, 1500174/43, 1500253/70) | stay, labels kept | **stayed** |
+| capped-lethal walk (9 of 11 remain post-#959) | 9 present | **9/9 present** |
+| limit:* population | 39, unchanged | **39, same classes** |
+| new rows / class changes | 0 / 0 | **0 / 0** |
+| outside-limits population | 88 -> 78 | **88 -> 78**; diverged 127 -> 117 on identical boundary counts (23335 measured) |
+
+## Z7.6 Honest coverage statement
+
+- The three surviving marker candidates (1500054/125, 1500174/43, 1500253/70) keep
+  their labels: a marker on a boundary move does not make the modifier's fixed-point
+  floor the row's divergence (the shift only exists when the fraction survives /50, and
+  the row's divergence may sit elsewhere). They remain where c9 filed them.
+- Of the eleven c9 capped-lethal walk rows, #959 already cleared two (1500074/57,
+  1500188/33); nine remain on the post-#961 baseline. Two of those nine carry markers
+  from this lane's scan (1500012/24 Choice Band, 1500242/60 netting); both remain
+  divergent and keep their adjudications, but their recorded branch VALUES may have
+  shifted by a point — the walk evidence for those two is stale-in-detail until the
+  walker is rerun. The other seven are a clean zero-change control.
+- Documented BP-side one-point residue this lane deliberately did NOT touch (the sim
+  floors the BasePower event's result to an integer; the engine carries f32): pinch
+  abilities (x1.5 on odd BP), Thick Fat (0.5 on odd BP), Facade, the weakened-condition
+  halving. Same shape as mechanism 2 but a different event locus
+  (`damage_calc_one_point_family` candidates; two of its rows cleared here via netting
+  and Choice Band, the rest keep the label).
+- Flash Fire's volatile is ModifyDamagePhase1 in gen3 (chains WITH screens, pre-+2);
+  the engine still applies it as a trailing float multiplier after the type steps.
+  Reachable in principle, no attributed row; left documented.
+- Deep Sea Tooth/Scale (Clamperl) do not exist in the engine and Clamperl is not in the
+  randbats species pool; not added. Beat Up's per-ally SpA override (gen3 moves.ts
+  condition) is not modelled. Choice Specs (not a gen3 item) kept its arm, moved
+  stat-side for uniformity.
+
+## Z7.7 Artifacts
+
+- `third_party/poke-engine-gen3-stat-modifier-flooring.patch` (34) and
+  `third_party/poke-engine-gen3-type-effectiveness-netting.patch` (35), fixture-refresh
+  still last
+- `tests/test_engine_stat_modifier_fidelity.py` — 14 divergence pins + 4 controls
+- `reports/c11_statfloor_prediction.json` — pre-registered on the 96-frame, restated
+  pre-run on the 88-frame (`postmerge_restatement`), both scored in Z7.5
+- `reports/c11_statfloor_differential.json` — the binding post-merge run
+  (`repros_complete: true`, 117/117)
