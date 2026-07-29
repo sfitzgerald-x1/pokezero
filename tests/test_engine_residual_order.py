@@ -1,9 +1,33 @@
-"""Regression pins for the gen3 residual-order patch (requires the patched wheel).
+"""Regression pins for the gen3 residual ORDER patches (requires the patched wheel).
 
-The Showdown-vs-engine differential cannot yet reach mid-battle HP states in a
-one-turn fresh battle, so the berry-threshold timing is pinned directly against
-the engine: residual order must be Leftovers/Shed Skin (5) -> Leech Seed (8) ->
-status damage (9/10) -> threshold berries / Rain Dish (10+).
+Resolved through `Dex.mod('gen3')` (`scripts/gen3_dex_resolve.py`'s rule), gen3
+keeps the pre-gen5 residual numbering and everything here is ONE order class:
+
+    abilities 10.3 -> items 10.4 -> Leech Seed 10.5 -> status damage 10.6
+
+so within one Pokemon the ability heal, then EVERY item (Leftovers and the
+threshold berries alike), then Leech Seed, then the status tick. The 5.x values in
+`data/{items,abilities}.ts` are the gen5+ table and do not apply to gen3.
+
+This file previously asserted the opposite for the berries -- "status damage
+(9/10) -> threshold berries / Rain Dish (10+)" -- and said so was necessary
+because "the Showdown-vs-engine differential cannot yet reach mid-battle HP states
+in a one-turn fresh battle". That was a pin on the ENGINE'S OWN behaviour, and it
+was backwards. A MULTI-turn fixture reaches the state fine:
+`scripts/gen3_switch_differential.py::residualberrybeforestatus` chips a burned
+Sitrus holder under half and reads the sim's answer directly --
+
+    |-enditem|p2a: Aipom|Sitrus Berry|[eat]
+    |-heal|p2a: Aipom|150/251 brn|[from] item: Sitrus Berry
+    |-damage|p2a: Aipom|119/251 brn|[from] brn
+
+-- so the timing is now re-derived from Showdown on every differential run, and
+these pins only guard that the engine still agrees with it.
+
+Note the SIDE of the block these tests exercise: they build a fresh state where
+the berry holder is the FASTER Pokemon, so its whole 10.x set resolves first.
+Cross-side interleaving is pinned separately, in
+`rust/pokezero-search/tests/gen3_residual_speed_order.rs`.
 """
 
 from __future__ import annotations
@@ -48,22 +72,41 @@ class ResidualOrderTests(unittest.TestCase):
         applied = state.apply_instructions(branch)
         return applied.side_two, [str(i) for i in branch.instruction_list]
 
-    def test_sitrus_fires_after_status_damage_crosses_threshold(self) -> None:
-        # 85/165 poisoned: poison -20 -> 65 <= 82 -> Sitrus +41 -> 106.
-        side, instructions = self._end_of_turn(item="sitrusberry", hp=85, status="poison")
-        self.assertEqual(side.pokemon[0].hp, 106)
-        damage_pos = next(i for i, s in enumerate(instructions) if s == "Damage SideTwo: 20")
-        heal_pos = next(i for i, s in enumerate(instructions) if s == "Heal SideTwo: 41")
-        self.assertLess(damage_pos, heal_pos)
+    def test_sitrus_fires_before_status_damage_at_item_suborder(self) -> None:
+        """Sitrus is 10.4, the status tick is 10.6 -> the berry heals FIRST.
 
-    def test_pinch_berry_boost_fires_after_status_damage(self) -> None:
-        # 45/165 poisoned: poison -20 -> 25 <= 41 -> Liechi +1 Atk.
-        side, instructions = self._end_of_turn(item="liechiberry", hp=45, status="poison")
-        self.assertEqual(side.pokemon[0].hp, 25)
-        self.assertEqual(side.attack_boost, 1)
+        The threshold is therefore read against the PRE-tick HP: 82/165 is already
+        at or under half, so the berry eats, and the poison tick lands on the
+        healed total. Ground truth `residualberrybeforestatus`.
+        """
+        # 82/165 poisoned: Sitrus +41 -> 123, then poison -20 -> 103.
+        side, instructions = self._end_of_turn(item="sitrusberry", hp=82, status="poison")
+        self.assertEqual(side.pokemon[0].hp, 103)
+        heal_pos = next(i for i, s in enumerate(instructions) if s == "Heal SideTwo: 41")
         damage_pos = next(i for i, s in enumerate(instructions) if s == "Damage SideTwo: 20")
+        self.assertLess(heal_pos, damage_pos)
+
+    def test_sitrus_does_not_fire_on_hp_the_status_tick_would_have_reached(self) -> None:
+        """The other side of the same rule, and the reason it is observable.
+
+        85/165 is ABOVE half, so at 10.4 the berry does not qualify; the 10.6 tick
+        then drops it to 65, which is under half, but the berry's slot has already
+        passed and it does not eat this turn. Under the old (backwards) ordering
+        the same fixture ate the berry.
+        """
+        side, instructions = self._end_of_turn(item="sitrusberry", hp=85, status="poison")
+        self.assertEqual(side.pokemon[0].hp, 65)
+        self.assertNotIn("Heal SideTwo: 41", instructions)
+
+    def test_pinch_berry_boost_fires_before_status_damage(self) -> None:
+        """Liechi is 10.4 as well -- the boost lands ahead of the 10.6 tick."""
+        # 41/165 poisoned: Liechi +1 Atk at 41 <= 41, then poison -20 -> 21.
+        side, instructions = self._end_of_turn(item="liechiberry", hp=41, status="poison")
+        self.assertEqual(side.pokemon[0].hp, 21)
+        self.assertEqual(side.attack_boost, 1)
         boost_pos = next(i for i, s in enumerate(instructions) if "Boost SideTwo Attack" in s)
-        self.assertLess(damage_pos, boost_pos)
+        damage_pos = next(i for i, s in enumerate(instructions) if s == "Damage SideTwo: 20")
+        self.assertLess(boost_pos, damage_pos)
 
     def test_leftovers_heals_before_status_damage(self) -> None:
         # Full-HP toxic holder: Leftovers no-ops at full, toxic nets -165/16.

@@ -657,6 +657,49 @@ def _residual_from(lines, source: str, seat: str) -> bool:
 _SAND_UPKEEP = "|-weather|Sandstorm|[upkeep]"
 
 
+# --- speed-major residual ordering (poke-engine-gen3-residual-speed-order.patch) --
+
+# The residual phase is ONE speed-sorted handler list (sim/battle.ts:507 ->
+# comparePriority at 404-411: order ASC, priority DESC, SPEED DESC, subOrder ASC,
+# effectOrder ASC). These scenarios record the ORDER, not just the presence, and
+# every one of them is DUAL-SIDE: a single-mon fixture cannot see this bug at all,
+# because interleaving is the whole phenomenon.
+_RESIDUAL_TAGS = (
+    ("[from] Sandstorm", "Sandstorm"),
+    ("[from] Hail", "Hail"),
+    ("[from] item: Leftovers", "item: Leftovers"),
+    ("[from] item: Sitrus Berry", "item: Sitrus Berry"),
+    ("[from] ability: Rain Dish", "ability: Rain Dish"),
+    ("[from] Leech Seed", "Leech Seed"),
+    ("[from] move: Wish", "move: Wish"),
+    ("[from] move: Fire Spin", "partiallytrapped"),
+    ("[from] psn", "psn"),
+    ("[from] brn", "brn"),
+)
+
+
+def _residual_sequence(lines):
+    """``[(seat, tag), ...]`` for the residual HP lines, in emission order.
+
+    Only sourced (`[from]`) damage/heal lines are collected, so move damage in the
+    same protocol block cannot contaminate the sequence.
+    """
+    out = []
+    for line in lines:
+        if not (line.startswith("|-damage|") or line.startswith("|-heal|")):
+            continue
+        for needle, tag in _RESIDUAL_TAGS:
+            if needle in line:
+                out.append((line.split("|")[2].split(":")[0], tag))
+                break
+    return out
+
+
+def _residual_seats(lines, tag: str):
+    """Just the seats, in order, for one residual tag."""
+    return [seat for seat, found in _residual_sequence(lines) if found == tag]
+
+
 def _spikes_landing_hp(lines):
     """The ``cur/max`` (or ``0 fnt``) p2 lands on after its Spikes hit."""
     for line in lines:
@@ -1817,6 +1860,227 @@ def _spec(name):
             expect={"cants_before_wake": 4, "woke": True, "acted_while_cant": True},
             landmark=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
             landmark_desc="Rest landed and started the clock")
+    if name in ("residualspeedmajor", "residualspeedmajorfast"):
+        # THE demonstrated divergence, and its mirror. Both sides carry residuals;
+        # a single-mon fixture cannot see this bug, because the bug IS the
+        # interleaving. gen3 puts Leftovers at 10.4 and status damage at 10.6 —
+        # the SAME order class — so speed decides which mon runs its whole set
+        # first and subOrder only orders within a mon.
+        #
+        # `residualspeedmajor`: the toxic'd Aipom (spe 206) is faster than the
+        # Leftovers+burn Snorlax (spe 96), so its 10.6 poison tick precedes the
+        # slower mon's 10.4 heal — the LOWER subOrder loses.
+        #
+        # `residualspeedmajorfast` swaps which mon is fast, so the same three
+        # entries come out in the opposite grouping. Together they pin that the
+        # order tracks SPEED and not the seat, the section, or the subOrder.
+        fast_holder = name == "residualspeedmajorfast"
+        if fast_holder:
+            p1 = FixturePokemon(species="Snorlax", ability="Thick Fat", item="None",
+                                moves=("Will-O-Wisp", "Splash"))
+            p2 = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                                moves=("Toxic", "Seismic Toss", "Splash"))
+            turns = [("move willowisp", "move toxic"),
+                     ("move splash", "move seismictoss"),
+                     ("move splash", "move splash")]
+            measured = 2
+            sequence = [("p2a", "item: Leftovers"), ("p2a", "brn"), ("p1a", "psn")]
+            statuses = ("|-status|p2a: Aipom|brn", "|-status|p1a: Snorlax|tox")
+        else:
+            p1 = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                                moves=("Toxic", "Splash"))
+            p2 = FixturePokemon(species="Aipom", ability="Pickup", item="None",
+                                moves=("Will-O-Wisp", "Splash"))
+            turns = [("move toxic", "move willowisp"),
+                     ("move splash", "move splash"),
+                     ("move splash", "move splash")]
+            measured = 1
+            sequence = [("p2a", "psn"), ("p1a", "item: Leftovers"), ("p1a", "brn")]
+            statuses = ("|-status|p2a: Aipom|tox", "|-status|p1a: Snorlax|brn")
+        return dict(
+            p1=[p1], p2=[p2], turns=turns, measured=measured, setup_step=0,
+            setup_landed=lambda L, st=statuses: all(_has(L, needle) for needle in st),
+            facts=lambda L: {"sequence": _residual_sequence(L)},
+            expect={"sequence": sequence},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
+    if name in ("residualspeedpara", "residualspeedparacontrol"):
+        # WHICH speed the sort reads. `resolvePriority` stamps `handler.speed =
+        # pokemon.speed` (sim/battle.ts:1003) and `pokemon.speed` is refreshed by
+        # `updateSpeed()` immediately before the residual phase (sim/battle.ts:2838)
+        # — `getStat('spe', false, false)`, so boosts and every ModifySpe apply.
+        # gen3 paralysis is `chainModify(0.25)` (inherited from
+        # data/mods/gen4/conditions.ts), so a paralysed Aipom drops 206 -> 51 and
+        # falls behind a 126-speed Ampharos.
+        #
+        # The pair is decisive because subOrder points the other way: Leftovers is
+        # 10.4 and poison is 10.6, so a subOrder-major engine would put the heal
+        # first in BOTH arms. Only the paralysed arm flips.
+        #
+        # Seismic Toss carries no secondary, and Ampharos' Static cannot fire
+        # because Aipom only ever uses Toxic/Splash — so the ONLY paralysis in the
+        # fixture is the scripted Thunder Wave.
+        para = name == "residualspeedpara"
+        amph = FixturePokemon(species="Ampharos", ability="Static", item="None",
+                              moves=("Thunder Wave", "Seismic Toss", "Splash"))
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                               moves=("Toxic", "Splash"))
+        setup = ("move thunderwave" if para else "move splash", "move toxic")
+        sequence = ([("p1a", "psn"), ("p2a", "item: Leftovers")] if para
+                    else [("p2a", "item: Leftovers"), ("p1a", "psn")])
+        return dict(
+            p1=[amph], p2=[aipom],
+            turns=[setup, ("move seismictoss", "move splash"),
+                   ("move splash", "move splash")],
+            measured=2, setup_step=0,
+            setup_landed=lambda L, para=para: _has(L, "|-status|p1a: Ampharos|tox")
+                                              and (_has(L, "|-status|p2a: Aipom|par") == para),
+            facts=lambda L: {"sequence": _residual_sequence(L)},
+            expect={"sequence": sequence},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
+    if name == "residualspeedtie":
+        # TIE SEMANTICS. `speedSort` finishes an exact tie with `this.prng.shuffle`
+        # (sim/battle.ts:455-457), so a tie is RANDOM — which is why the engine has
+        # to BRANCH on it rather than pick a side.
+        #
+        # Two identical 146-speed Blisseys, both badly poisoned, one residual each.
+        # Every comparator key ties: order 10, priority 0, speed 146, subOrder 6,
+        # effectOrder unset for Residual. On these seeds the two orders BOTH occur
+        # inside a single battle, which is the strongest available statement — it
+        # rules out any per-battle or per-seed determinism as well.
+        blissey = FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                                 moves=("Toxic", "Splash"))
+        return dict(
+            p1=[blissey], p2=[blissey],
+            turns=[("move toxic", "move toxic"), ("move splash", "move splash"),
+                   ("move splash", "move splash")],
+            measured=None, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p1a: Blissey|tox")
+                                   and _has(L, "|-status|p2a: Blissey|tox"),
+            seeds=(1001, 1003, 1004),
+            facts=lambda L: {
+                "both_orders_seen": len({
+                    tuple(_residual_seats(L, "psn")[i:i + 2])
+                    for i in range(0, len(_residual_seats(L, "psn")) - 1, 2)
+                }) > 1,
+            },
+            expect={"both_orders_seen": True},
+            landmark=lambda L: len(_residual_seats(L, "psn")) >= 4,
+            landmark_desc="at least two residual turns with both seats ticking")
+    if name == "residualspeedsand":
+        # Weather is a FIELD handler at order 8, so BOTH sides' sand chips precede
+        # EVERY order-10 entry on either side — the class boundary the speed-major
+        # rule does NOT cross. Within the class the chip itself is still speed
+        # sorted (`onFieldResidual` runs `eachEvent('Weather')`, which speed-sorts
+        # the actives), so the fast mon chips first.
+        # Deliberately status-free: the only residuals in the fixture are the two
+        # sand chips and the two Leftovers heals, so the sequence is exactly the
+        # class boundary and nothing else.
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                             moves=("Sandstorm", "Splash"))
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                               moves=("Seismic Toss", "Splash"))
+        return dict(
+            p1=[lax], p2=[aipom],
+            turns=[("move sandstorm", "move splash"),
+                   ("move splash", "move seismictoss"),
+                   ("move splash", "move splash"), ("move splash", "move splash")],
+            measured=2, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-weather|Sandstorm"),
+            facts=lambda L: {"sequence": _residual_sequence(L)},
+            expect={"sequence": [("p2a", "Sandstorm"), ("p1a", "Sandstorm"),
+                                 ("p2a", "item: Leftovers"), ("p1a", "item: Leftovers")]},
+            landmark=lambda L: _residual_block_ran(L),
+            landmark_desc="the sandstorm upkeep ran")
+    if name == "residualspeedleech":
+        # The one CROSS-SIDE emission in the class: the Leech Seed sap damages the
+        # seeded side and heals the seeder in the same breath, at the SEEDED side's
+        # 10.5 slot. With the victim faster, the seeder's (silent) drain heal is
+        # emitted BEFORE its own 10.4 Leftovers heal — an ordering no per-side rule
+        # can produce, and the reason `ResidualPlan` reads the segment instead of
+        # predicting from speed.
+        cact = FixturePokemon(species="Cacturne", ability="Sand Veil", item="Leftovers",
+                              moves=("Leech Seed", "Seismic Toss", "Splash"))
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Leftovers",
+                               moves=("Seismic Toss", "Splash"))
+        return dict(
+            p1=[cact], p2=[aipom],
+            turns=[("move leechseed", "move seismictoss"),
+                   ("move seismictoss", "move splash"),
+                   ("move splash", "move splash")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-start|p2a: Aipom|move: Leech Seed"),
+            facts=lambda L: {"sequence": _residual_sequence(L)},
+            expect={"sequence": [("p2a", "item: Leftovers"), ("p2a", "Leech Seed"),
+                                 ("p1a", "item: Leftovers")]},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
+    if name == "residualsuborder":
+        # DUAL-SIDE coverage for what poke-engine-gen3-residual-order.patch first
+        # claimed. That patch put Leftovers in an "order 5" bucket ahead of Leech
+        # Seed and status damage, and left Rain Dish / Speed Boost / the threshold
+        # berries behind status damage. gen3 has no order-5 bucket: resolved through
+        # Dex.mod('gen3'), abilities are 10.3 and items are 10.4, one class with the
+        # 10.6 status tick.
+        #
+        # Ludicolo (spe 176) carries all three at once in rain, opposite a slower
+        # Leftovers holder, so the fixture pins BOTH the within-mon subOrder ladder
+        # and the between-mon speed grouping in one sequence.
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                             moves=("Will-O-Wisp", "Seismic Toss", "Splash"))
+        ludi = FixturePokemon(species="Ludicolo", ability="Rain Dish", item="Leftovers",
+                              moves=("Rain Dance", "Seismic Toss", "Splash"))
+        return dict(
+            p1=[lax], p2=[ludi],
+            turns=[("move willowisp", "move raindance"),
+                   ("move seismictoss", "move seismictoss"),
+                   ("move splash", "move splash"), ("move splash", "move splash")],
+            measured=2, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Ludicolo|brn")
+                                   and _has(L, "|-weather|RainDance"),
+            facts=lambda L: {"sequence": _residual_sequence(L)},
+            expect={"sequence": [("p2a", "ability: Rain Dish"),
+                                 ("p2a", "item: Leftovers"),
+                                 ("p2a", "brn"),
+                                 ("p1a", "item: Leftovers")]},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
+    if name == "residualberrybeforestatus":
+        # The gen3 THRESHOLD BERRIES are order 10.4 — Leftovers' own slot — so they
+        # fire BEFORE Leech Seed (10.5) and status damage (10.6), not after.
+        # `data/mods/gen3/items.ts` gives every one of them `onResidualOrder: 10,
+        # onResidualSubOrder: 4` and strips the `onUpdate` that later gens use.
+        #
+        # This is the scenario tests/test_engine_residual_order.py said could not
+        # exist ("the differential cannot yet reach mid-battle HP states in a
+        # one-turn fresh battle"), which is why that file pinned the timing against
+        # the engine itself and pinned it BACKWARDS. A multi-turn fixture reaches the
+        # state fine: chip the holder under half with two Seismic Tosses, and the
+        # measured turn has the berry and the burn tick in the same residual block.
+        lax = FixturePokemon(species="Snorlax", ability="Immunity", item="Leftovers",
+                             moves=("Will-O-Wisp", "Seismic Toss", "Splash"))
+        aipom = FixturePokemon(species="Aipom", ability="Pickup", item="Sitrus Berry",
+                               moves=("Seismic Toss", "Splash"))
+        return dict(
+            p1=[lax], p2=[aipom],
+            turns=[("move willowisp", "move seismictoss"),
+                   ("move seismictoss", "move splash"),
+                   ("move seismictoss", "move splash")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Aipom|brn"),
+            # ORDER only. gen3 Sitrus heals a flat 30, not maxhp/4, which the engine
+            # gets wrong for its own (unrelated) reasons — asserting the amount here
+            # would fold that divergence into an ordering pin.
+            facts=lambda L: {
+                "sequence": _residual_sequence(L),
+                "berry_eaten": _has(L, "|-enditem|p2a: Aipom|Sitrus Berry|[eat]"),
+            },
+            expect={"sequence": [("p2a", "item: Sitrus Berry"), ("p2a", "brn"),
+                                 ("p1a", "item: Leftovers")],
+                    "berry_eaten": True},
+            landmark=lambda L: bool(_residual_sequence(L)),
+            landmark_desc="the residual block emitted HP lines")
     raise ValueError(name)
 
 
@@ -1852,7 +2116,11 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "seismictossghost",
              "toxicmiss", "toxichit",
              "hypnosisrestclause", "hypnosisrestclausecontrol",
-             "restattemptclock", "restsleeptalkrefund")
+             "restattemptclock", "restsleeptalkrefund",
+             "residualspeedmajor", "residualspeedmajorfast",
+             "residualspeedpara", "residualspeedparacontrol",
+             "residualspeedtie", "residualspeedsand", "residualspeedleech",
+             "residualsuborder", "residualberrybeforestatus")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

@@ -1,0 +1,1623 @@
+diff -ruN a/src/gen3/abilities.rs b/src/gen3/abilities.rs
+--- a/src/gen3/abilities.rs	2026-07-29 01:21:34
++++ b/src/gen3/abilities.rs	2026-07-29 01:56:25
+@@ -252,23 +252,35 @@
+     }
+ }
+ 
+-// pokezero gen3 residual-order split: Shed Skin is Showdown gen3 residual
+-// order 5.3 (before status damage); Speed Boost (27) and the rain heals
+-// (10.3) stay in ability_end_of_turn after status damage.
+-pub fn ability_end_of_turn_order5(
++/// Residual **order 10, subOrder 3** — every gen3 residual ability shares it.
++///
++/// Resolved through `Dex.mod('gen3')`: `data/mods/gen4/abilities.ts` sets Shed
++/// Skin, Speed Boost and Rain Dish to `onResidualOrder: 10 / SubOrder: 3` and
++/// gen3 inherits that file. The 5/3 (Shed Skin) and 28/2 (Speed Boost) in
++/// `data/abilities.ts` are gen5+ values; reading them is what produced the old
++/// "order 5 Shed Skin, order 10 Speed Boost / Rain Dish" split, which put both
++/// halves on the wrong side of the status tick.
++///
++/// 10.3 sits BEFORE the items at 10.4, so on one Pokemon the ability heal lands
++/// first. Ground truth, `raindish_vs_leftovers` probe against the real sim:
++///   `|-heal|p2a: Ludicolo|155/301|[from] ability: Rain Dish`
++///   `|-heal|p2a: Ludicolo|173/301|[from] item: Leftovers`
++///
++/// `shed_skin_activates` stays a caller-supplied branch flag: the 1/3 roll is
++/// forked in `add_end_of_turn_branches`, not decided here.
++pub fn ability_end_of_turn(
+     state: &mut State,
+     side_ref: &SideReference,
+     instructions: &mut StateInstructions,
+     shed_skin_activates: bool,
+ ) {
+-    let (attacking_side, _defending_side) = state.get_both_sides(side_ref);
++    let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+     let active_pkmn = attacking_side.get_active();
+     match active_pkmn.ability {
+         Abilities::SHEDSKIN if shed_skin_activates => {
+             if active_pkmn.status != PokemonStatus::NONE {
+                 let attacking_side = state.get_side(side_ref);
+                 let active_index = attacking_side.active_index;
+-                let active_pkmn = attacking_side.get_active();
+ 
+                 add_remove_status_instructions(
+                     instructions,
+@@ -278,18 +290,6 @@
+                 );
+             }
+         }
+-        _ => {}
+-    }
+-}
+-
+-pub fn ability_end_of_turn(
+-    state: &mut State,
+-    side_ref: &SideReference,
+-    instructions: &mut StateInstructions,
+-) {
+-    let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+-    let active_pkmn = attacking_side.get_active();
+-    match active_pkmn.ability {
+         Abilities::SPEEDBOOST => {
+             if attacking_side.speed_boost < 6 {
+                 let ins = Instruction::Boost(BoostInstruction {
+diff -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-29 01:21:34
++++ b/src/gen3/generate_instructions.rs	2026-07-29 01:33:23
+@@ -1,7 +1,7 @@
+ use super::abilities::{
+-    ability_after_damage_hit, ability_end_of_turn, ability_end_of_turn_order5,
+-    ability_modify_attack_against, ability_modify_attack_being_used, ability_on_switch_in,
+-    ability_on_switch_out, update_forecast, Abilities,
++    ability_after_damage_hit, ability_end_of_turn, ability_modify_attack_against,
++    ability_modify_attack_being_used, ability_on_switch_in, ability_on_switch_out,
++    update_forecast, Abilities,
+ };
+ use super::choice_effects::{
+     charge_choice_to_volatile, choice_after_damage_hit, choice_before_move, choice_hazard_clear,
+@@ -26,8 +26,8 @@
+ use super::damage_calc::calculate_futuresight_damage;
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+-    item_before_move, item_end_of_turn, item_end_of_turn_order5, item_modify_attack_against,
+-    item_modify_attack_being_used, Items,
++    item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
++    Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+@@ -2583,7 +2583,7 @@
+     }
+ }
+ 
+-fn get_effective_speed(state: &State, side_reference: &SideReference) -> i16 {
++pub fn get_effective_speed(state: &State, side_reference: &SideReference) -> i16 {
+     let side = state.get_side_immutable(side_reference);
+     let active_pkmn = side.get_active_immutable();
+ 
+@@ -2745,10 +2745,88 @@
+     };
+ }
+ 
++/// pokezero gen3 fidelity fix: SPEED-MAJOR residual ordering.
++///
++/// Showdown's residual phase is ONE handler list, not a sequence of per-effect
++/// passes over both sides. `Battle.fieldEvent('Residual')` collects every
++/// handler on the field and calls `this.speedSort(handlers)`
++/// (`sim/battle.ts:507`), whose comparator `Battle.comparePriority`
++/// (`sim/battle.ts:404-411`) sorts by
++///
++/// ```text
++/// order ASC -> priority DESC -> SPEED DESC -> subOrder ASC -> effectOrder ASC
++/// ```
++///
++/// so WITHIN AN ORDER CLASS the faster Pokemon resolves its ENTIRE residual set
++/// before the slower one resolves any. Upstream — and every pokezero patch
++/// before this one — batched section-major instead ("both sides' Leftovers, then
++/// both sides' status damage"), which is only ever right when the two sides
++/// happen to carry disjoint sections.
++///
++/// Ground truth, read off the real Node sim and never off this engine
++/// (`scripts/gen3_switch_differential.py`, scenarios `residualspeedmajor*`):
++///
++/// ```text
++/// |-damage|p2a: Aipom|206/251 tox|[from] psn                 <- spe 206, 10.6
++/// |-heal|p1a: Snorlax|432/461 brn|[from] item: Leftovers     <- spe 96,  10.4
++/// |-damage|p1a: Snorlax|375/461 brn|[from] brn               <- spe 96,  10.6
++/// ```
++///
++/// The faster Aipom's status tick precedes the slower Snorlax's Leftovers heal
++/// even though Leftovers has the LOWER subOrder — speed outranks subOrder.
++///
++/// # The gen3 order table
++///
++/// Resolved through `Dex.mod('gen3')` (the standing rule: never base data, never
++/// a hand-walked chain). gen3 keeps the pre-gen5 numbering, in which almost
++/// everything shares order 10:
++///
++/// | order | effect | holder | speed |
++/// | --- | --- | --- | --- |
++/// | 1 / 2 / 3 / 4 | Reflect / Light Screen / Mist / Safeguard | Side | 0 |
++/// | 7 | Wish | the wisher's slot | that Pokemon |
++/// | 8 | weather upkeep AND weather chip | Field | 0 |
++/// | 10.3 | Shed Skin, Speed Boost, Rain Dish | Pokemon | own |
++/// | 10.4 | Leftovers, threshold berries | Pokemon | own |
++/// | 10.5 | Leech Seed | Pokemon | own |
++/// | 10.6 | burn / poison / toxic | Pokemon | own |
++/// | 10.9 | partially trapped | Pokemon | own |
++/// | 10.14 / 10.15 / 10.19 | Encore / Taunt / Yawn | Pokemon | own |
++/// | 11 | Future Sight | the TARGET's slot | the target |
++/// | 12 | Perish Song | Pokemon | own |
++/// | 28.2 | Slow Start | Pokemon | own |
++/// | (none) | locked move, flinch, Protect/Endure | Pokemon | own |
++///
++/// Every 10.x entry is therefore ONE class: the whole mid-block is speed-major
++/// and only the sub-ordering inside a single Pokemon follows subOrder. The
++/// classes above and below it are not — Wish really does precede the weather
++/// chip regardless of who is faster, and Future Sight really does follow both
++/// sides' status damage. Both verified against the sim.
++///
++/// # Which speed
++///
++/// `resolvePriority` stamps `handler.speed = pokemon.speed` (`sim/battle.ts:1003`),
++/// and `pokemon.speed` is refreshed by `this.updateSpeed()` immediately before
++/// `fieldEvent('Residual')` (`sim/battle.ts:2838`). `updateSpeed` is
++/// `getActionSpeed()` -> `getStat('spe', false, false)`: boosts applied,
++/// `ModifySpe` applied, which in gen3 includes paralysis' `chainModify(0.25)`
++/// (gen3 inherits `data/mods/gen4/conditions.ts`). It is therefore the SAME
++/// effective speed `get_effective_speed` already computes for the move phase.
++/// Confirmed empirically both ways: a paralysed Aipom (206 -> 51) drops behind a
++/// 126-speed Ampharos in the residual order, and an Ampharos that Agilities on
++/// the measured turn overtakes Aipom in that same turn's residual order.
++///
++/// # Speed ties
++///
++/// `speedSort` finishes an exact tie with `this.prng.shuffle`
++/// (`sim/battle.ts:455-457`), so a tie is RANDOM, not a fixed side preference —
++/// two 146-speed Blisseys swap residual order between seeds and between turns of
++/// a single battle. The tie is therefore a 50/50 BRANCH, taken in
++/// `add_end_of_turn_branches`; this function is handed the side that goes first.
+ fn add_end_of_turn_instructions(
+     state: &mut State,
+     mut incoming_instructions: &mut StateInstructions,
+-    first_move_side: &SideReference,
++    residual_first_side: &SideReference,
+     shed_skin_activations: [bool; 2],
+ ) {
+     state.apply_instructions(&incoming_instructions.instruction_list);
+@@ -2770,35 +2848,19 @@
+     // a_non_final_residual_faint_still_defers.
+     stop_residuals_if_battle_ended!(state, incoming_instructions);
+ 
+-    let sides = [first_move_side, &first_move_side.get_other_side()];
++    // Faster side first. Every per-side loop below walks this order, which is
++    // what makes the order-10 block speed-major; the classes with a single
++    // handler per side get the same treatment for free.
++    let sides = [residual_first_side, &residual_first_side.get_other_side()];
+ 
+-    // Weather decrement / dissipation
+-    if state.weather.turns_remaining > 0 && state.weather.weather_type != Weather::NONE {
+-        let weather_dissipate_instruction = Instruction::DecrementWeatherTurnsRemaining;
+-        incoming_instructions
+-            .instruction_list
+-            .push(weather_dissipate_instruction);
+-        state.weather.turns_remaining -= 1;
+-        if state.weather.turns_remaining == 0 {
+-            let weather_end_instruction = Instruction::ChangeWeather(ChangeWeather {
+-                new_weather: Weather::NONE,
+-                new_weather_turns_remaining: 0,
+-                previous_weather: state.weather.weather_type,
+-                previous_weather_turns_remaining: 0,
+-            });
+-            incoming_instructions
+-                .instruction_list
+-                .push(weather_end_instruction);
+-            state.weather.weather_type = Weather::NONE;
+-            update_forecast(state, &mut incoming_instructions);
+-        }
+-    }
+-
+-    // Side Condition decrement
++    // ---------------------------------------------------------------- order 1/2
++    // Reflect (`onSideResidualOrder: 1`) and Light Screen (2) are SIDE handlers:
++    // `findSideEventHandlers` leaves `effectHolder` a Side, which has no
++    // `getStat`, so `resolvePriority` never stamps a speed and both sides tie at
++    // 0. Nothing here interacts with anything, but the class is genuinely first
++    // — `-sideend|p2: ...|Reflect` precedes `|-weather|Sandstorm|[upkeep]` in the
++    // sim on the turn the screen expires.
+     for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+         stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         if side.side_conditions.reflect > 0 {
+@@ -2827,6 +2889,69 @@
+         }
+     }
+ 
++    // ------------------------------------------------------------------ order 7
++    // Wish is a SLOT condition, so its handler is held by the Pokemon standing in
++    // the slot and carries that Pokemon's speed — but order 7 puts the whole
++    // class ahead of the weather chip at 8 no matter who is faster. Sim:
++    //   |-heal|p2a: Blissey|651/651|[from] move: Wish|[wisher] Blissey
++    //   |-weather|Sandstorm|[upkeep]
++    //   |-damage|p2a: Blissey|611/651|[from] Sandstorm
++    for side_ref in sides {
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        let side = state.get_side(side_ref);
++        let side_wish = side.wish;
++        let active_pkmn = side.get_active();
++
++        if side_wish.0 > 0 {
++            let decrement_wish_instruction = Instruction::DecrementWish(DecrementWishInstruction {
++                side_ref: *side_ref,
++            });
++            if side_wish.0 == 1 && 0 < active_pkmn.hp && active_pkmn.hp < active_pkmn.maxhp {
++                let heal_amount =
++                    cmp::min(active_pkmn.maxhp - active_pkmn.hp, active_pkmn.maxhp / 2);
++
++                let wish_heal_instruction = Instruction::Heal(HealInstruction {
++                    side_ref: *side_ref,
++                    heal_amount: heal_amount,
++                });
++                incoming_instructions
++                    .instruction_list
++                    .push(wish_heal_instruction);
++                active_pkmn.hp += heal_amount;
++            }
++            side.wish.0 -= 1;
++            incoming_instructions
++                .instruction_list
++                .push(decrement_wish_instruction);
++        }
++    }
++
++    // ------------------------------------------------------------------ order 8
++    // Weather is a FIELD handler: one entry covers the upkeep, the expiry and
++    // both sides' chip damage. Its `onFieldResidual` runs `eachEvent('Weather')`,
++    // which speed-sorts the actives, so the chip itself is emitted fastest-first
++    // like everything else.
++    if state.weather.turns_remaining > 0 && state.weather.weather_type != Weather::NONE {
++        let weather_dissipate_instruction = Instruction::DecrementWeatherTurnsRemaining;
++        incoming_instructions
++            .instruction_list
++            .push(weather_dissipate_instruction);
++        state.weather.turns_remaining -= 1;
++        if state.weather.turns_remaining == 0 {
++            let weather_end_instruction = Instruction::ChangeWeather(ChangeWeather {
++                new_weather: Weather::NONE,
++                new_weather_turns_remaining: 0,
++                previous_weather: state.weather.weather_type,
++                previous_weather_turns_remaining: 0,
++            });
++            incoming_instructions
++                .instruction_list
++                .push(weather_end_instruction);
++            state.weather.weather_type = Weather::NONE;
++            update_forecast(state, &mut incoming_instructions);
++        }
++    }
++
+     // Weather Damage
+     for side_ref in sides {
+         // Showdown checks `this.ended` between residual entries; a side whose last
+@@ -2880,12 +3005,401 @@
+         }
+     }
+ 
+-    // future sight
++    // ----------------------------------------------------------------- order 10
++    // THE speed-major class. One Pokemon at a time, fastest first, each running
++    // its whole 10.x set in subOrder before the other side runs any of its own.
++    // `stop_residuals_if_battle_ended!` guards every sub-step because Showdown
++    // runs `this.faintMessages(); if (this.ended) return;` after EVERY handler,
++    // not after every section — which is exactly what makes the loser's last
++    // residual truncate the winner's (ledger appendix O).
+     for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
++        // 10.3 — abilities (Shed Skin, Speed Boost, Rain Dish)
+         stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0 {
++                let shed_skin_activates = match side_ref {
++                    SideReference::SideOne => shed_skin_activations[0],
++                    SideReference::SideTwo => shed_skin_activations[1],
++                };
++                ability_end_of_turn(
++                    state,
++                    side_ref,
++                    &mut incoming_instructions,
++                    shed_skin_activates,
++                );
++            }
++        }
++
++        // 10.4 — items (Leftovers, threshold berries)
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0 {
++                item_end_of_turn(state, side_ref, &mut incoming_instructions);
++            }
++        }
++
++        // 10.5 — Leech Seed. The sap DAMAGES this side and HEALS the other, so
++        // the seeder's drain heal is emitted at the victim's slot, not at the
++        // seeder's own. That is a real cross-side emission and it is why
++        // `ResidualPlan` has to know the speed order to label heals.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let (leechseed_side, other_side) = state.get_both_sides(side_ref);
++            if leechseed_side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::LEECHSEED)
++            {
++                let active_pkmn = leechseed_side.get_active();
++                let other_active_pkmn = other_side.get_active();
++                if active_pkmn.hp != 0 && other_active_pkmn.hp != 0 {
++                    let health_sapped =
++                        cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
++                    let damage_ins = Instruction::Damage(DamageInstruction {
++                        side_ref: *side_ref,
++                        damage_amount: health_sapped,
++                    });
++                    active_pkmn.hp -= health_sapped;
++                    incoming_instructions.instruction_list.push(damage_ins);
++
++                    if active_pkmn.ability == Abilities::LIQUIDOOZE {
++                        let ooze_damage = cmp::min(health_sapped, other_active_pkmn.hp);
++                        if ooze_damage > 0 {
++                            let damage_ins = Instruction::Heal(HealInstruction {
++                                side_ref: side_ref.get_other_side(),
++                                heal_amount: -ooze_damage,
++                            });
++                            other_active_pkmn.hp -= ooze_damage;
++                            incoming_instructions.instruction_list.push(damage_ins);
++                        }
++                    } else {
++                        let health_recovered = cmp::min(
++                            health_sapped,
++                            other_active_pkmn.maxhp - other_active_pkmn.hp,
++                        );
++                        if health_recovered > 0 {
++                            let heal_ins = Instruction::Heal(HealInstruction {
++                                side_ref: side_ref.get_other_side(),
++                                heal_amount: health_recovered,
++                            });
++                            other_active_pkmn.hp += health_recovered;
++                            incoming_instructions.instruction_list.push(heal_ins);
++                        }
++                    }
++                }
++            }
++        }
++
++        // 10.6 — status damage
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            let toxic_count = side.side_conditions.toxic_count as i16;
++            let active_pkmn = side.get_active();
++            if active_pkmn.hp != 0 {
++                match active_pkmn.status {
++                    PokemonStatus::BURN => {
++                        let damage_factor = 0.125;
++
++                        let damage_amount = cmp::max(
++                            cmp::min(
++                                (active_pkmn.maxhp as f32 * damage_factor) as i16,
++                                active_pkmn.hp,
++                            ),
++                            1,
++                        );
++                        let burn_damage_instruction = Instruction::Damage(DamageInstruction {
++                            side_ref: *side_ref,
++                            damage_amount,
++                        });
++                        active_pkmn.hp -= damage_amount;
++                        incoming_instructions
++                            .instruction_list
++                            .push(burn_damage_instruction);
++                    }
++                    PokemonStatus::POISON => {
++                        let damage_amount = cmp::max(
++                            1,
++                            cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp),
++                        );
++
++                        let poison_damage_instruction = Instruction::Damage(DamageInstruction {
++                            side_ref: *side_ref,
++                            damage_amount,
++                        });
++                        active_pkmn.hp -= damage_amount;
++                        incoming_instructions
++                            .instruction_list
++                            .push(poison_damage_instruction);
++                    }
++                    PokemonStatus::TOXIC => {
++                        // pokezero gen3 fidelity fix: ROUNDING ORDER. Showdown's `tox`
++                        // residual is
++                        //     this.damage(this.clampIntRange(pokemon.baseMaxhp / 16, 1) * stage)
++                        // (data/conditions.ts; gen3 inherits gen4's `tox`, which only
++                        // re-orders the residual and inherits this body) — the per-stage
++                        // tick is FLOORED and clamped to a minimum of 1 FIRST, and only
++                        // then multiplied by the stage counter.
++                        //
++                        // Upstream computed `floor(maxhp * stage / 16)`, flooring after
++                        // the multiply. The two agree only when maxhp is a multiple of
++                        // 16: writing maxhp = 16q + r, Showdown deals q*stage while
++                        // upstream deals q*stage + floor(r*stage/16), so the engine
++                        // OVER-damages by up to stage-1 HP and the gap widens every turn
++                        // the toxic ladder climbs. This was 55% of the strict-matcher
++                        // residue against the real sim.
++                        //
++                        // The min-1 clamp sits INSIDE the multiply, which is a second,
++                        // opposite divergence at the bottom of the HP range: a 1 HP
++                        // Shedinja (in the gen3 randbats pool) takes `1 * stage`, not 1.
++                        let stage = toxic_count + 1;
++                        let per_stage = cmp::max(active_pkmn.maxhp / 16, 1);
++                        // Clamp against remaining HP in i32 so a deep ladder on a big
++                        // maxhp cannot overflow the i16 the instruction carries.
++                        let damage_amount =
++                            cmp::min(per_stage as i32 * stage as i32, active_pkmn.hp as i32) as i16;
++                        let toxic_damage_instruction = Instruction::Damage(DamageInstruction {
++                            side_ref: *side_ref,
++                            damage_amount,
++                        });
++
++                        active_pkmn.hp -= damage_amount;
++                        incoming_instructions
++                            .instruction_list
++                            .push(toxic_damage_instruction);
++
++                        let toxic_counter_increment_instruction =
++                            Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
++                                side_ref: *side_ref,
++                                side_condition: PokemonSideCondition::ToxicCount,
++                                amount: 1,
++                            });
++                        side.side_conditions.toxic_count += 1;
++                        incoming_instructions
++                            .instruction_list
++                            .push(toxic_counter_increment_instruction);
++                    }
++                    _ => {}
++                }
++            }
++        }
++
++        // 10.9 — partial trap
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0
++                && side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
++            {
++                let active_pkmn = side.get_active();
++                let damage_amount =
++                    cmp::min((active_pkmn.maxhp as f32 / 16.0) as i16, active_pkmn.hp);
++
++                incoming_instructions
++                    .instruction_list
++                    .push(Instruction::Damage(DamageInstruction {
++                        side_ref: *side_ref,
++                        damage_amount,
++                    }));
++                active_pkmn.hp -= damage_amount;
++            }
++        }
++
++        // 10.14 — Encore
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0
++                && side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::ENCORE)
++            {
++                // pokezero gen3 fidelity fix: burn one ENCORE residual tick. Showdown
++                // decrements `duration` for every effect with an `end` callback once per
++                // turn in the residual phase (sim/battle.ts), which is exactly here — so
++                // unlike the confusion ladder there is no timing approximation, and the
++                // tick lands whether or not the encored Pokemon actually moved.
++                //
++                // Only the counter moves here. The stochastic end is a BRANCH, so it is
++                // taken in `add_end_of_turn_branches` once this block is complete, gated
++                // on the `+1` instruction pushed below — the same marker discipline the
++                // confusion ladder uses, and it inherits the same composition with the
++                // residual deferral for free: `add_end_of_turn_instructions` returns
++                // early on a deferred ply, so no tick is emitted and no branch is taken
++                // until the replacement ply re-attaches the block. That matches Showdown,
++                // which defers the whole residual phase, duration decrements included.
++                //
++                // The other half of Showdown's `encore.onResidual`: Encore ends
++                // EARLY, deterministically, the moment the encored move runs out of
++                // PP ("early termination if you run out of PP"). Worth modelling
++                // rather than deferring, because the engine's own option filter drops
++                // 0-PP moves — so without this an encored Pokemon whose locked move
++                // is exhausted has no legal move at all and falls through to "No
++                // Move", standing still until the ladder happens to fire instead of
++                // being freed the turn the PP hits zero.
++                // `<= 0`, matching Showdown's `moveSlot.pp <= 0`: the engine's own PP
++                // decrement can take an already-empty slot negative, so an `== 0`
++                // test would miss exactly the turn this is meant to catch.
++                let out_of_pp = match side.last_used_move {
++                    LastUsedMove::Move(move_index) => {
++                        side.get_active_immutable().moves[&move_index].pp <= 0
++                    }
++                    _ => false,
++                };
++                if out_of_pp {
++                    end_encore(state, side_ref, &mut incoming_instructions);
++                } else {
++                    incoming_instructions
++                        .instruction_list
++                        .push(Instruction::ChangeVolatileStatusDuration(
++                            ChangeVolatileStatusDurationInstruction {
++                                side_ref: *side_ref,
++                                volatile_status: PokemonVolatileStatus::ENCORE,
++                                amount: 1,
++                            },
++                        ));
++                    side.volatile_status_durations.encore += 1;
++                }
++            }
++        }
++
++        // 10.15 — Taunt
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0
++                && side
++                    .volatile_statuses
++                    .contains(&PokemonVolatileStatus::TAUNT)
++            {
++                match side.volatile_status_durations.taunt {
++                    0 => {
++                        incoming_instructions.instruction_list.push(
++                            Instruction::ChangeVolatileStatusDuration(
++                                ChangeVolatileStatusDurationInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::TAUNT,
++                                    amount: 1,
++                                },
++                            ),
++                        );
++                        side.volatile_status_durations.taunt += 1;
++                    }
++                    1 => {
++                        side.volatile_statuses.remove(&PokemonVolatileStatus::TAUNT);
++                        incoming_instructions
++                            .instruction_list
++                            .push(Instruction::RemoveVolatileStatus(
++                                RemoveVolatileStatusInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::TAUNT,
++                                },
++                            ));
++                        incoming_instructions.instruction_list.push(
++                            Instruction::ChangeVolatileStatusDuration(
++                                ChangeVolatileStatusDurationInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::TAUNT,
++                                    amount: -1,
++                                },
++                            ),
++                        );
++                        side.volatile_status_durations.taunt -= 1;
++                        state.re_enable_disabled_moves(
++                            side_ref,
++                            &mut incoming_instructions.instruction_list,
++                        );
++                    }
++                    _ => panic!(
++                        "Taunt duration cannot be {} when taunt volatile is active",
++                        side.volatile_status_durations.taunt
++                    ),
++                }
++            }
++        }
++
++        // 10.19 — Yawn
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        {
++            let side = state.get_side(side_ref);
++            if side.get_active_immutable().hp != 0
++                && side.volatile_statuses.contains(&PokemonVolatileStatus::YAWN)
++            {
++                match side.volatile_status_durations.yawn {
++                    0 => {
++                        incoming_instructions.instruction_list.push(
++                            Instruction::ChangeVolatileStatusDuration(
++                                ChangeVolatileStatusDurationInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::YAWN,
++                                    amount: 1,
++                                },
++                            ),
++                        );
++                        side.volatile_status_durations.yawn += 1;
++                    }
++                    1 => {
++                        side.volatile_statuses.remove(&PokemonVolatileStatus::YAWN);
++                        incoming_instructions
++                            .instruction_list
++                            .push(Instruction::RemoveVolatileStatus(
++                                RemoveVolatileStatusInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::YAWN,
++                                },
++                            ));
++                        incoming_instructions.instruction_list.push(
++                            Instruction::ChangeVolatileStatusDuration(
++                                ChangeVolatileStatusDurationInstruction {
++                                    side_ref: *side_ref,
++                                    volatile_status: PokemonVolatileStatus::YAWN,
++                                    amount: -1,
++                                },
++                            ),
++                        );
++                        side.volatile_status_durations.yawn -= 1;
++
++                        let active = side.get_active_immutable();
++                        let can_fall_asleep = active.hp > 0
++                            && active.status == PokemonStatus::NONE
++                            && ![Abilities::INSOMNIA, Abilities::VITALSPIRIT]
++                                .contains(&active.ability)
++                            && !side.has_alive_non_rested_sleeping_pkmn();
++                        if can_fall_asleep {
++                            let active = side.get_active();
++                            active.status = PokemonStatus::SLEEP;
++                            incoming_instructions.instruction_list.push(
++                                Instruction::ChangeStatus(ChangeStatusInstruction {
++                                    side_ref: *side_ref,
++                                    pokemon_index: side.active_index,
++                                    old_status: PokemonStatus::NONE,
++                                    new_status: PokemonStatus::SLEEP,
++                                }),
++                            );
++                        }
++                    }
++                    _ => panic!(
++                        "Yawn duration cannot be {} when yawn volatile is active",
++                        side.volatile_status_durations.yawn
++                    ),
++                }
++            }
++        }
++    } // end order-10 class
++
++    // ----------------------------------------------------------------- order 11
++    // Future Sight is a SLOT condition on the TARGET, so the handler carries the
++    // TARGET's speed — hence the loop is over the damaged side and reaches across
++    // for the owner. Order 11 puts it after every order-10 handler on BOTH sides,
++    // which is where the sim puts it:
++    //   |-heal|p1a: Slowbro|291/331|[from] item: Leftovers   <- 10.4, spe 96
++    //   |-end|p2a: Aipom|move: Future Sight                  <- 11, spe 206
++    for target_ref in sides {
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        let side_ref = &target_ref.get_other_side();
+         let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+         if attacking_side.future_sight.0 > 0 {
+             let decrement_future_sight_instruction =
+@@ -2916,244 +3430,116 @@
+         }
+     }
+ 
+-    // wish
++    // ----------------------------------------------------------------- order 12
++    // Perish Song. One class of its own, after everything at 10 and 11.
+     for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+         stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+-        let side_wish = side.wish;
+-        let active_pkmn = side.get_active();
++        if side.get_active_immutable().hp == 0 {
++            continue;
++        }
+ 
+-        if side_wish.0 > 0 {
+-            let decrement_wish_instruction = Instruction::DecrementWish(DecrementWishInstruction {
+-                side_ref: *side_ref,
+-            });
+-            if side_wish.0 == 1 && 0 < active_pkmn.hp && active_pkmn.hp < active_pkmn.maxhp {
+-                let heal_amount =
+-                    cmp::min(active_pkmn.maxhp - active_pkmn.hp, active_pkmn.maxhp / 2);
+-
+-                let wish_heal_instruction = Instruction::Heal(HealInstruction {
+-                    side_ref: *side_ref,
+-                    heal_amount: heal_amount,
+-                });
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(wish_heal_instruction);
+-                active_pkmn.hp += heal_amount;
+-            }
+-            side.wish.0 -= 1;
++        if side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::PERISH1)
++        {
++            let active_pkmn = side.get_active();
+             incoming_instructions
+                 .instruction_list
+-                .push(decrement_wish_instruction);
++                .push(Instruction::Damage(DamageInstruction {
++                    side_ref: *side_ref,
++                    damage_amount: active_pkmn.hp,
++                }));
++            active_pkmn.hp = 0;
+         }
+-    }
+ 
+-    // Residual order 5 item/ability effects (Leftovers, Shed Skin): resolve
+-    // BEFORE Leech Seed (8) and status damage (9/10), per Showdown gen3
+-    // residual orders. Upstream ran ALL items/abilities after status damage,
+-    // netting Toxic/burn residuals against the Leftovers heal.
+-    for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        let side = state.get_side(side_ref);
+-        let active_pkmn = side.get_active();
+-        if active_pkmn.hp == 0 {
+-            continue;
++        if side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::PERISH2)
++        {
++            side.volatile_statuses
++                .remove(&PokemonVolatileStatus::PERISH2);
++            side.volatile_statuses
++                .insert(PokemonVolatileStatus::PERISH1);
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: PokemonVolatileStatus::PERISH2,
++                    },
++                ));
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::ApplyVolatileStatus(
++                    ApplyVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: PokemonVolatileStatus::PERISH1,
++                    },
++                ));
+         }
+-        item_end_of_turn_order5(state, side_ref, &mut incoming_instructions);
+-        let shed_skin_activates = match side_ref {
+-            SideReference::SideOne => shed_skin_activations[0],
+-            SideReference::SideTwo => shed_skin_activations[1],
+-        };
+-        ability_end_of_turn_order5(
+-            state,
+-            side_ref,
+-            &mut incoming_instructions,
+-            shed_skin_activates,
+-        );
+-    }
+-
+-    // leechseed sap
+-    for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        let (leechseed_side, other_side) = state.get_both_sides(side_ref);
+-        if leechseed_side
++        if side
+             .volatile_statuses
+-            .contains(&PokemonVolatileStatus::LEECHSEED)
++            .contains(&PokemonVolatileStatus::PERISH3)
+         {
+-            let active_pkmn = leechseed_side.get_active();
+-            let other_active_pkmn = other_side.get_active();
+-            if active_pkmn.hp == 0 || other_active_pkmn.hp == 0 {
+-                continue;
+-            }
+-
+-            let health_sapped = cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
+-            let damage_ins = Instruction::Damage(DamageInstruction {
+-                side_ref: *side_ref,
+-                damage_amount: health_sapped,
+-            });
+-            active_pkmn.hp -= health_sapped;
+-            incoming_instructions.instruction_list.push(damage_ins);
+-
+-            if active_pkmn.ability == Abilities::LIQUIDOOZE {
+-                let ooze_damage = cmp::min(health_sapped, other_active_pkmn.hp);
+-                if ooze_damage > 0 {
+-                    let damage_ins = Instruction::Heal(HealInstruction {
+-                        side_ref: side_ref.get_other_side(),
+-                        heal_amount: -ooze_damage,
+-                    });
+-                    other_active_pkmn.hp -= ooze_damage;
+-                    incoming_instructions.instruction_list.push(damage_ins);
+-                }
+-            } else {
+-                let health_recovered = cmp::min(
+-                    health_sapped,
+-                    other_active_pkmn.maxhp - other_active_pkmn.hp,
+-                );
+-                if health_recovered <= 0 {
+-                    continue;
+-                }
+-                let heal_ins = Instruction::Heal(HealInstruction {
+-                    side_ref: side_ref.get_other_side(),
+-                    heal_amount: health_recovered,
+-                });
+-                other_active_pkmn.hp += health_recovered;
+-                incoming_instructions.instruction_list.push(heal_ins);
+-            }
++            side.volatile_statuses
++                .remove(&PokemonVolatileStatus::PERISH3);
++            side.volatile_statuses
++                .insert(PokemonVolatileStatus::PERISH2);
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: PokemonVolatileStatus::PERISH3,
++                    },
++                ));
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::ApplyVolatileStatus(
++                    ApplyVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: PokemonVolatileStatus::PERISH2,
++                    },
++                ));
+         }
+-    }
+-
+-    // status damage
+-    for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        let side = state.get_side(side_ref);
+-        let toxic_count = side.side_conditions.toxic_count as i16;
+-        let active_pkmn = side.get_active();
+-        if active_pkmn.hp == 0 {
+-            continue;
+-        }
+-
+-        match active_pkmn.status {
+-            PokemonStatus::BURN => {
+-                let damage_factor = 0.125;
+-
+-                let damage_amount = cmp::max(
+-                    cmp::min(
+-                        (active_pkmn.maxhp as f32 * damage_factor) as i16,
+-                        active_pkmn.hp,
+-                    ),
+-                    1,
+-                );
+-                let burn_damage_instruction = Instruction::Damage(DamageInstruction {
+-                    side_ref: *side_ref,
+-                    damage_amount,
+-                });
+-                active_pkmn.hp -= damage_amount;
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(burn_damage_instruction);
+-            }
+-            PokemonStatus::POISON => {
+-                let damage_amount = cmp::max(
+-                    1,
+-                    cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp),
+-                );
+-
+-                let poison_damage_instruction = Instruction::Damage(DamageInstruction {
+-                    side_ref: *side_ref,
+-                    damage_amount,
+-                });
+-                active_pkmn.hp -= damage_amount;
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(poison_damage_instruction);
+-            }
+-            PokemonStatus::TOXIC => {
+-                // pokezero gen3 fidelity fix: ROUNDING ORDER. Showdown's `tox`
+-                // residual is
+-                //     this.damage(this.clampIntRange(pokemon.baseMaxhp / 16, 1) * stage)
+-                // (data/conditions.ts; gen3 inherits gen4's `tox`, which only
+-                // re-orders the residual and inherits this body) — the per-stage
+-                // tick is FLOORED and clamped to a minimum of 1 FIRST, and only
+-                // then multiplied by the stage counter.
+-                //
+-                // Upstream computed `floor(maxhp * stage / 16)`, flooring after
+-                // the multiply. The two agree only when maxhp is a multiple of
+-                // 16: writing maxhp = 16q + r, Showdown deals q*stage while
+-                // upstream deals q*stage + floor(r*stage/16), so the engine
+-                // OVER-damages by up to stage-1 HP and the gap widens every turn
+-                // the toxic ladder climbs. This was 55% of the strict-matcher
+-                // residue against the real sim.
+-                //
+-                // The min-1 clamp sits INSIDE the multiply, which is a second,
+-                // opposite divergence at the bottom of the HP range: a 1 HP
+-                // Shedinja (in the gen3 randbats pool) takes `1 * stage`, not 1.
+-                let stage = toxic_count + 1;
+-                let per_stage = cmp::max(active_pkmn.maxhp / 16, 1);
+-                // Clamp against remaining HP in i32 so a deep ladder on a big
+-                // maxhp cannot overflow the i16 the instruction carries.
+-                let damage_amount = cmp::min(
+-                    per_stage as i32 * stage as i32,
+-                    active_pkmn.hp as i32,
+-                ) as i16;
+-                let toxic_damage_instruction = Instruction::Damage(DamageInstruction {
+-                    side_ref: *side_ref,
+-                    damage_amount,
+-                });
+-
+-                active_pkmn.hp -= damage_amount;
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(toxic_damage_instruction);
+-
+-                let toxic_counter_increment_instruction =
+-                    Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
++        if side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::PERISH4)
++        {
++            side.volatile_statuses
++                .remove(&PokemonVolatileStatus::PERISH4);
++            side.volatile_statuses
++                .insert(PokemonVolatileStatus::PERISH3);
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
+                         side_ref: *side_ref,
+-                        side_condition: PokemonSideCondition::ToxicCount,
+-                        amount: 1,
+-                    });
+-                side.side_conditions.toxic_count += 1;
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(toxic_counter_increment_instruction);
+-            }
+-            _ => {}
++                        volatile_status: PokemonVolatileStatus::PERISH4,
++                    },
++                ));
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::ApplyVolatileStatus(
++                    ApplyVolatileStatusInstruction {
++                        side_ref: *side_ref,
++                        volatile_status: PokemonVolatileStatus::PERISH3,
++                    },
++                ));
+         }
+     }
+ 
+-    // Residual order 10 item/ability effects (threshold berries, Rain Dish,
+-    // Speed Boost): resolve AFTER status damage, per Showdown gen3 orders.
++    // ------------------------------------------- order 28.2, then the no-order tail
++    // Slow Start is 28.2. Locked move, flinch and Protect/Endure declare NO
++    // `onResidualOrder` at all, so `resolvePriority` gives them `4294967296` and
++    // they sort dead last; within that bucket they are all `Condition` subOrder 2
++    // and therefore tie completely, which `speedSort` shuffles. Nothing in the
++    // bucket interacts with anything else — every entry is a private counter on
++    // one Pokemon — so the shuffle is unobservable and a fixed order is exact.
+     for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+         stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+-        let active_pkmn = side.get_active();
+-        if active_pkmn.hp == 0 {
+-            continue;
+-        }
+-        item_end_of_turn(state, side_ref, &mut incoming_instructions);
+-        ability_end_of_turn(state, side_ref, &mut incoming_instructions);
+-    }
+-
+-    // volatile statuses
+-    for side_ref in sides {
+-        // Showdown checks `this.ended` between residual entries; a side whose last
+-        // living Pokemon just fainted ends the battle and everything still queued is
+-        // skipped, this side's own healing included.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        let side = state.get_side(side_ref);
+         if side.get_active().hp == 0 {
+             continue;
+         }
+@@ -3260,159 +3646,6 @@
+ 
+         if side
+             .volatile_statuses
+-            .contains(&PokemonVolatileStatus::YAWN)
+-        {
+-            match side.volatile_status_durations.yawn {
+-                0 => {
+-                    incoming_instructions.instruction_list.push(
+-                        Instruction::ChangeVolatileStatusDuration(
+-                            ChangeVolatileStatusDurationInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::YAWN,
+-                                amount: 1,
+-                            },
+-                        ),
+-                    );
+-                    side.volatile_status_durations.yawn += 1;
+-                }
+-                1 => {
+-                    side.volatile_statuses.remove(&PokemonVolatileStatus::YAWN);
+-                    incoming_instructions
+-                        .instruction_list
+-                        .push(Instruction::RemoveVolatileStatus(
+-                            RemoveVolatileStatusInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::YAWN,
+-                            },
+-                        ));
+-                    incoming_instructions.instruction_list.push(
+-                        Instruction::ChangeVolatileStatusDuration(
+-                            ChangeVolatileStatusDurationInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::YAWN,
+-                                amount: -1,
+-                            },
+-                        ),
+-                    );
+-                    side.volatile_status_durations.yawn -= 1;
+-
+-                    let active = side.get_active_immutable();
+-                    let can_fall_asleep = active.hp > 0
+-                        && active.status == PokemonStatus::NONE
+-                        && ![Abilities::INSOMNIA, Abilities::VITALSPIRIT].contains(&active.ability)
+-                        && !side.has_alive_non_rested_sleeping_pkmn();
+-                    if can_fall_asleep {
+-                        let active = side.get_active();
+-                        active.status = PokemonStatus::SLEEP;
+-                        incoming_instructions
+-                            .instruction_list
+-                            .push(Instruction::ChangeStatus(ChangeStatusInstruction {
+-                                side_ref: *side_ref,
+-                                pokemon_index: side.active_index,
+-                                old_status: PokemonStatus::NONE,
+-                                new_status: PokemonStatus::SLEEP,
+-                            }));
+-                    }
+-                }
+-                _ => panic!(
+-                    "Yawn duration cannot be {} when yawn volatile is active",
+-                    side.volatile_status_durations.yawn
+-                ),
+-            }
+-        }
+-
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::PERISH1)
+-        {
+-            let active_pkmn = side.get_active();
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: *side_ref,
+-                    damage_amount: active_pkmn.hp,
+-                }));
+-            active_pkmn.hp = 0;
+-        }
+-
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::PERISH2)
+-        {
+-            side.volatile_statuses
+-                .remove(&PokemonVolatileStatus::PERISH2);
+-            side.volatile_statuses
+-                .insert(PokemonVolatileStatus::PERISH1);
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::RemoveVolatileStatus(
+-                    RemoveVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH2,
+-                    },
+-                ));
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::ApplyVolatileStatus(
+-                    ApplyVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH1,
+-                    },
+-                ));
+-        }
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::PERISH3)
+-        {
+-            side.volatile_statuses
+-                .remove(&PokemonVolatileStatus::PERISH3);
+-            side.volatile_statuses
+-                .insert(PokemonVolatileStatus::PERISH2);
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::RemoveVolatileStatus(
+-                    RemoveVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH3,
+-                    },
+-                ));
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::ApplyVolatileStatus(
+-                    ApplyVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH2,
+-                    },
+-                ));
+-        }
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::PERISH4)
+-        {
+-            side.volatile_statuses
+-                .remove(&PokemonVolatileStatus::PERISH4);
+-            side.volatile_statuses
+-                .insert(PokemonVolatileStatus::PERISH3);
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::RemoveVolatileStatus(
+-                    RemoveVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH4,
+-                    },
+-                ));
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::ApplyVolatileStatus(
+-                    ApplyVolatileStatusInstruction {
+-                        side_ref: *side_ref,
+-                        volatile_status: PokemonVolatileStatus::PERISH3,
+-                    },
+-                ));
+-        }
+-
+-        if side
+-            .volatile_statuses
+             .contains(&PokemonVolatileStatus::FLINCH)
+         {
+             side.volatile_statuses
+@@ -3427,22 +3660,6 @@
+                 ));
+         }
+ 
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+-        {
+-            let active_pkmn = side.get_active();
+-            let damage_amount = cmp::min((active_pkmn.maxhp as f32 / 16.0) as i16, active_pkmn.hp);
+-
+-            incoming_instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: *side_ref,
+-                    damage_amount,
+-                }));
+-            active_pkmn.hp -= damage_amount;
+-        }
+-
+         let possible_statuses = [
+             PokemonVolatileStatus::PROTECT,
+             PokemonVolatileStatus::ENDURE,
+@@ -3488,128 +3705,84 @@
+                 ));
+             side.side_conditions.protect -= side.side_conditions.protect;
+         }
++    } // end no-order tail
+ 
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::TAUNT)
+-        {
+-            match side.volatile_status_durations.taunt {
+-                0 => {
+-                    incoming_instructions.instruction_list.push(
+-                        Instruction::ChangeVolatileStatusDuration(
+-                            ChangeVolatileStatusDurationInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::TAUNT,
+-                                amount: 1,
+-                            },
+-                        ),
+-                    );
+-                    side.volatile_status_durations.taunt += 1;
+-                }
+-                1 => {
+-                    side.volatile_statuses.remove(&PokemonVolatileStatus::TAUNT);
+-                    incoming_instructions
+-                        .instruction_list
+-                        .push(Instruction::RemoveVolatileStatus(
+-                            RemoveVolatileStatusInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::TAUNT,
+-                            },
+-                        ));
+-                    incoming_instructions.instruction_list.push(
+-                        Instruction::ChangeVolatileStatusDuration(
+-                            ChangeVolatileStatusDurationInstruction {
+-                                side_ref: *side_ref,
+-                                volatile_status: PokemonVolatileStatus::TAUNT,
+-                                amount: -1,
+-                            },
+-                        ),
+-                    );
+-                    side.volatile_status_durations.taunt -= 1;
+-                    state.re_enable_disabled_moves(
+-                        side_ref,
+-                        &mut incoming_instructions.instruction_list,
+-                    );
+-                }
+-                _ => panic!(
+-                    "Taunt duration cannot be {} when taunt volatile is active",
+-                    side.volatile_status_durations.taunt
+-                ),
+-            }
+-        }
++    state.reverse_instructions(&incoming_instructions.instruction_list);
++}
+ 
+-        // pokezero gen3 fidelity fix: burn one ENCORE residual tick. Showdown
+-        // decrements `duration` for every effect with an `end` callback once per
+-        // turn in the residual phase (sim/battle.ts), which is exactly here — so
+-        // unlike the confusion ladder there is no timing approximation, and the
+-        // tick lands whether or not the encored Pokemon actually moved.
+-        //
+-        // Only the counter moves here. The stochastic end is a BRANCH, so it is
+-        // taken in `add_end_of_turn_branches` once this block is complete, gated
+-        // on the `+1` instruction pushed below — the same marker discipline the
+-        // confusion ladder uses, and it inherits the same composition with the
+-        // residual deferral for free: `add_end_of_turn_instructions` returns
+-        // early on a deferred ply, so no tick is emitted and no branch is taken
+-        // until the replacement ply re-attaches the block. That matches Showdown,
+-        // which defers the whole residual phase, duration decrements included.
+-        //
+-        // Re-borrows `side`: the Taunt arm above hands `state` to
+-        // `re_enable_disabled_moves`, so reusing the outer binding here would
+-        // hold a second mutable borrow across that call.
+-        let side = state.get_side(side_ref);
+-        if side
+-            .volatile_statuses
+-            .contains(&PokemonVolatileStatus::ENCORE)
+-        {
+-            // The other half of Showdown's `encore.onResidual`: Encore ends
+-            // EARLY, deterministically, the moment the encored move runs out of
+-            // PP ("early termination if you run out of PP"). Worth modelling
+-            // rather than deferring, because the engine's own option filter drops
+-            // 0-PP moves — so without this an encored Pokemon whose locked move
+-            // is exhausted has no legal move at all and falls through to "No
+-            // Move", standing still until the ladder happens to fire instead of
+-            // being freed the turn the PP hits zero.
+-            // `<= 0`, matching Showdown's `moveSlot.pp <= 0`: the engine's own PP
+-            // decrement can take an already-empty slot negative, so an `== 0`
+-            // test would miss exactly the turn this is meant to catch.
+-            let out_of_pp = match side.last_used_move {
+-                LastUsedMove::Move(move_index) => {
+-                    side.get_active_immutable().moves[&move_index].pp <= 0
+-                }
+-                _ => false,
+-            };
+-            if out_of_pp {
+-                end_encore(state, side_ref, &mut incoming_instructions);
+-            } else {
+-                incoming_instructions
+-                    .instruction_list
+-                    .push(Instruction::ChangeVolatileStatusDuration(
+-                        ChangeVolatileStatusDurationInstruction {
+-                            side_ref: *side_ref,
+-                            volatile_status: PokemonVolatileStatus::ENCORE,
+-                            amount: 1,
+-                        },
+-                    ));
+-                side.volatile_status_durations.encore += 1;
++/// The side whose residuals resolve FIRST, or `None` on an exact speed tie.
++///
++/// `Battle.comparePriority` reads the speed `resolvePriority` stamped on the
++/// handler, and that stamp is `pokemon.speed` as refreshed by `updateSpeed()`
++/// immediately before the residual phase — the same effective speed the move
++/// phase uses, boosts, weather abilities, Slow Start and paralysis included.
++/// `get_effective_speed` already computes exactly that, so residual order and
++/// move order read the same number; they differ only in that residual order has
++/// no priority term.
++///
++/// `pub` so `pokezero-search`'s residual renderer can build its positional
++/// attribution plan against the same order the engine emits in.
++pub fn residual_speed_order(state: &State) -> Option<SideReference> {
++    let side_one = get_effective_speed(state, &SideReference::SideOne);
++    let side_two = get_effective_speed(state, &SideReference::SideTwo);
++    if side_one > side_two {
++        Some(SideReference::SideOne)
++    } else if side_two > side_one {
++        Some(SideReference::SideTwo)
++    } else {
++        None
++    }
++}
++
++/// Whether the two orderings of a residual speed tie reach the SAME state, and can
++/// therefore be collapsed back into one branch.
++///
++/// The tie only ever changes the INTERLEAVING of the two sides: the per-side
++/// subsequence is identical in both candidates, because nothing inside a side is
++/// reordered. So if the two lists carry the same multiset of instructions they are
++/// the same delta applied in a different order, and every instruction that can move
++/// past another here writes to the other side's disjoint state — same state, one
++/// branch.
++///
++/// The multisets DIFFER exactly when the order mattered, and in every such case the
++/// resulting states really do differ, so both branches must be kept:
++///
++///   * battle-end truncation dropped the slower side's remaining entries;
++///   * a cross-side amount was clamped differently — a Leech Seed drain heal is
++///     `min(sapped, maxhp - hp)` at the moment it fires, so it lands on a different
++///     number depending on whether the seeder's own Leftovers went first.
++///
++/// O(n^2) over lists of a dozen or so instructions, and only on an exact tie —
++/// cheaper and more precise than comparing serialized states, and it needs nothing
++/// from `Instruction` beyond `PartialEq`.
++fn same_residual_outcome(left: &[Instruction], right: &[Instruction]) -> bool {
++    if left.len() != right.len() {
++        return false;
++    }
++    let mut unmatched: Vec<&Instruction> = right.iter().collect();
++    for instruction in left {
++        match unmatched.iter().position(|other| *other == instruction) {
++            Some(index) => {
++                unmatched.swap_remove(index);
+             }
++            None => return false,
+         }
+-    } // end volatile statuses
+-
+-    state.reverse_instructions(&incoming_instructions.instruction_list);
++    }
++    true
+ }
+ 
+-fn add_end_of_turn_branches(
+-    state: &mut State,
+-    instructions: &mut Vec<StateInstructions>,
+-    first_move_side: &SideReference,
+-) {
++/// The residual block no longer takes the move-phase order: which side resolves
++/// its residuals first is decided by SPEED alone (`residual_speed_order`), and a
++/// tie forks here rather than falling back to whoever happened to move first.
++fn add_end_of_turn_branches(state: &mut State, instructions: &mut Vec<StateInstructions>) {
+     let incoming = std::mem::take(instructions);
+     for base in incoming {
+         state.apply_instructions(&base.instruction_list);
++        let deferred = end_of_turn_is_deferred(state);
+         // A deferred residual block resolves nothing this ply, so it must not
+         // split into Shed Skin branches — that would hand search two identical
+         // instruction sets carrying 0.33/0.67 of the probability mass.
+-        let eligible = if end_of_turn_is_deferred(state) {
++        let eligible = if deferred {
+             [false, false]
+         } else {
+             [
+@@ -3627,11 +3800,24 @@
+                 },
+             ]
+         };
++        // Which side's residuals resolve first. `speedSort` shuffles an exact tie
++        // (`sim/battle.ts:455-457`), so a tie is a genuine 50/50 fork rather than
++        // a side preference — verified on the sim with two 146-speed Blisseys,
++        // which swap residual order both between seeds and between turns of one
++        // battle. A deferred ply emits nothing, so it needs no fork and the value
++        // is irrelevant there.
++        let residual_orders: Vec<SideReference> = if deferred {
++            vec![SideReference::SideOne]
++        } else {
++            match residual_speed_order(state) {
++                Some(first) => vec![first],
++                None => vec![SideReference::SideOne, SideReference::SideTwo],
++            }
++        };
+         state.reverse_instructions(&base.instruction_list);
+ 
+         let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
+         for mask in 0..combinations {
+-            let mut branch = base.clone();
+             let mut activation = [false; 2];
+             let mut probability = 1.0;
+             let mut bit = 0;
+@@ -3643,19 +3829,48 @@
+                 probability *= if activation[side] { 0.33 } else { 0.67 };
+                 bit += 1;
+             }
+-            branch.update_percentage(probability);
+-            add_end_of_turn_instructions(state, &mut branch, first_move_side, activation);
+-            // Two independent duration ladders resolve here. Chained rather than
+-            // merged so each stays readable: confusion forks first, then every
+-            // branch it produced is offered to the encore ladder. The two are
+-            // independent events on independent counters, so chaining gives the
+-            // product distribution, which is what Showdown does — the residual
+-            // phase decrements every live duration in the same pass.
+-            let mut after_confusion = Vec::with_capacity(4);
+-            add_confusion_expiry_branches(state, branch, &mut after_confusion);
+-            for branch in after_confusion {
+-                add_encore_expiry_branches(state, branch, instructions);
++
++            // Generate the tie's two orders and keep both ONLY if they actually
++            // differ. Most ties are between Pokemon whose residuals commute (two
++            // independent Leftovers heals, say), and forking those would hand
++            // search two identical children carrying half the mass each — the
++            // same defect the deferral guard above exists to avoid.
++            let mut candidates: Vec<StateInstructions> = Vec::with_capacity(2);
++            for residual_first_side in &residual_orders {
++                let mut candidate = base.clone();
++                candidate.update_percentage(probability);
++                add_end_of_turn_instructions(
++                    state,
++                    &mut candidate,
++                    residual_first_side,
++                    activation,
++                );
++                candidates.push(candidate);
+             }
++            if candidates.len() == 2
++                && same_residual_outcome(
++                    &candidates[0].instruction_list,
++                    &candidates[1].instruction_list,
++                )
++            {
++                candidates.truncate(1);
++            }
++            let tie_share = 1.0 / candidates.len() as f32;
++
++            for mut branch in candidates {
++                branch.update_percentage(tie_share);
++                // Two independent duration ladders resolve here. Chained rather than
++                // merged so each stays readable: confusion forks first, then every
++                // branch it produced is offered to the encore ladder. The two are
++                // independent events on independent counters, so chaining gives the
++                // product distribution, which is what Showdown does — the residual
++                // phase decrements every live duration in the same pass.
++                let mut after_confusion = Vec::with_capacity(4);
++                add_confusion_expiry_branches(state, branch, &mut after_confusion);
++                for branch in after_confusion {
++                    add_encore_expiry_branches(state, branch, instructions);
++                }
++            }
+         }
+     }
+ }
+@@ -4140,11 +4355,7 @@
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(state, side_one_move, side_two_move) {
+-                add_end_of_turn_branches(
+-                    state,
+-                    &mut state_instructions_vec,
+-                    &SideReference::SideOne,
+-                );
++                add_end_of_turn_branches(state, &mut state_instructions_vec);
+             }
+         }
+         SideMovesFirst::SideTwo => {
+@@ -4158,11 +4369,7 @@
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(state, side_one_move, side_two_move) {
+-                add_end_of_turn_branches(
+-                    state,
+-                    &mut state_instructions_vec,
+-                    &SideReference::SideTwo,
+-                );
++                add_end_of_turn_branches(state, &mut state_instructions_vec);
+             }
+         }
+         SideMovesFirst::SpeedTie => {
+@@ -4190,11 +4397,7 @@
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(state, side_one_move, side_two_move) {
+-                add_end_of_turn_branches(
+-                    state,
+-                    &mut state_instructions_vec,
+-                    &SideReference::SideOne,
+-                );
++                add_end_of_turn_branches(state, &mut state_instructions_vec);
+             }
+ 
+             // side_two moves first
+@@ -4209,11 +4412,7 @@
+                 branch_on_damage,
+             );
+             if end_of_turn_triggered(state, side_one_move, side_two_move) {
+-                add_end_of_turn_branches(
+-                    state,
+-                    &mut side_two_moves_first_si,
+-                    &SideReference::SideTwo,
+-                );
++                add_end_of_turn_branches(state, &mut side_two_moves_first_si);
+             }
+ 
+             // combine both vectors into the final vector
+diff -ruN a/src/gen3/items.rs b/src/gen3/items.rs
+--- a/src/gen3/items.rs	2026-07-29 01:21:34
++++ b/src/gen3/items.rs	2026-07-29 01:56:25
+@@ -315,10 +315,32 @@
+     }
+ }
+ 
+-// pokezero gen3 residual-order split: Leftovers is Showdown residual order 5
+-// (before status damage at 9/10); the HP/status-threshold berries above are
+-// order 10.4 (after status damage) and stay in item_end_of_turn.
+-pub fn item_end_of_turn_order5(
++/// Residual **order 10, subOrder 4** — every gen3 residual item shares it.
++///
++/// Resolved through the simulator's own Dex (`scripts/gen3_dex_resolve.py`
++/// convention, `Dex.mod('gen3')`), NOT base data: `data/mods/gen4/items.ts`
++/// pushes Leftovers to `onResidualOrder: 10 / onResidualSubOrder: 4` and gen3
++/// inherits it, while `data/mods/gen3/items.ts` gives every threshold berry the
++/// same 10/4. The 5/4 in `data/items.ts` is the gen5+ value and does not apply
++/// here — which is what the previous split into an "order 5" bucket was reading.
++///
++/// Consequences this function encodes:
++///   * abilities (10.3) run BEFORE every item;
++///   * the threshold berries share Leftovers' slot, so they fire BEFORE Leech
++///     Seed (10.5) and status damage (10.6) rather than after them.
++///     Ground truth, `berry_vs_status` probe against the real sim:
++///       `|-enditem|p2a: Aipom|Sitrus Berry|[eat]`
++///       `|-heal|p2a: Aipom|150/251 brn|[from] item: Sitrus Berry`
++///       `|-damage|p2a: Aipom|119/251 brn|[from] brn`
++///
++/// LUM / CHESTO are a KNOWN, SEPARATE divergence and are only carried along:
++/// gen3 gives them no residual handler at all (`onUpdate` / `onAfterSetStatus`
++/// immediates — verified: a Lum holder hit by Will-O-Wisp emits `-status`,
++/// `-enditem`, `-curestatus` in the MOVE phase and never reaches the residual
++/// block). Firing them at 10.4 instead of after the status tick is strictly
++/// closer to that — the holder stops taking a phantom burn/poison tick — but
++/// the real fix is an immediate cure and is not attempted here.
++pub fn item_end_of_turn(
+     state: &mut State,
+     side_ref: &SideReference,
+     instructions: &mut StateInstructions,
+@@ -338,18 +360,6 @@
+                 instructions.instruction_list.push(ins);
+             }
+         }
+-        _ => {}
+-    }
+-}
+-
+-pub fn item_end_of_turn(
+-    state: &mut State,
+-    side_ref: &SideReference,
+-    instructions: &mut StateInstructions,
+-) {
+-    let attacking_side = state.get_side(side_ref);
+-    let active_pkmn = attacking_side.get_active();
+-    match active_pkmn.item {
+         Items::PETAYABERRY if active_pkmn.hp <= active_pkmn.maxhp / 4 => boost_berry(
+             side_ref,
+             state,
