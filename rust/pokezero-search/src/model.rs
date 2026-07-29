@@ -790,14 +790,21 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // One extra forward on the ROOT observation prices the root
             // node's priors (the root is never a chance-branch leaf).
             let encode_started = Instant::now();
-            let encoded = leaf_ctx.encode_leaf(&state, root_fold, root_turn, None, None)?;
+            // engine_authoritative = false: unchanged search semantics. The
+            // search root's action block has always come from
+            // `get_all_options` over a CONSTRUCTED world, and the root-parity
+            // gate is calibrated against exactly that.
+            let encoded = leaf_ctx.encode_leaf(&state, root_fold, root_turn, None, None, false)?;
             let batch = ObsBatch::from_encoded(spec, std::slice::from_ref(&encoded))?;
             encode_nanos += encode_started.elapsed().as_nanos();
             let model_started = Instant::now();
             let output = evaluator.eval_batch(&batch, None)?;
             model_nanos += model_started.elapsed().as_nanos();
             model_evals += 1;
-            let map = leaf_ctx.self_action_map(&state, &root_options, None, None)?;
+            // engine_authoritative = false: unchanged search semantics (the
+            // root world is CONSTRUCTED, so the fresh-switch-in widening still
+            // applies). See LeafContext::leaf_row_inputs.
+            let map = leaf_ctx.self_action_map(&state, &root_options, None, None, false)?;
             match gather_self_priors(&output.priors[..output.action_count], &map) {
                 Some(priors)
                     if apply_self_priors(&mut tree.decisions[0], self_side_one, &priors) =>
@@ -906,6 +913,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         turn,
                         Some(&self_order),
                         Some(&meta),
+                        // Interior node: the interior option surface is correct here.
+                        false,
                     );
                     tensor_nanos += tensor_started.elapsed().as_nanos();
                     let encoded = match encoded_result {
@@ -928,6 +937,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 &options,
                                 Some(&self_order),
                                 Some(&meta),
+                                false,
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
