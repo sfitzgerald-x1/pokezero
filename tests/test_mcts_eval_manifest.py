@@ -39,7 +39,13 @@ def _contract(**overrides) -> CheckpointContract:
         numeric_feature_count=169,
         transition_token_count=64,
         architecture={"embedding_dim": 512, "transformer_layers": 3},
-        feature_masks={"transition_token_budget": 64},
+        feature_masks={
+            "transition_token_budget": 64,
+            "exact_state": True,
+            "opponent_tendency_stats_block": True,
+            "tier2_residuals": True,
+            "tier2_investment": True,
+        },
         model_device="cpu",
         showdown_source_sha256="b" * 64,
     )
@@ -122,13 +128,22 @@ class ExportReuseKeyTest(unittest.TestCase):
 
 
 class EncoderTableValidationTest(unittest.TestCase):
-    def _tables(self, path: Path, **layout_overrides) -> Path:
+    def _tables(self, path: Path, *, masks: dict | None = None, **layout_overrides) -> Path:
         layout = {
             "schema_version": "pokezero.observation.v3",
             "token_count": 87,
             "categorical_feature_count": 51,
             "numeric_feature_count": 169,
+            "default_feature_masks": {
+                "exact_state": True,
+                "stats_block": True,
+                "tier2_residuals": True,
+                "tier2_investment": True,
+                "transition_token_budget": 64,
+            },
         }
+        if masks is not None:
+            layout["default_feature_masks"] = {**layout["default_feature_masks"], **masks}
         layout.update(layout_overrides)
         path.write_text(
             json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}), encoding="utf-8"
@@ -153,6 +168,61 @@ class EncoderTableValidationTest(unittest.TestCase):
             tables = self._tables(
                 Path(temp_dir) / "tables.json", schema_version="pokezero.observation.v2.2"
             )
+            with self.assertRaisesRegex(ContractError, "root/leaf observation contract"):
+                validate_encoder_tables(_contract(), tables)
+
+    def test_feature_mask_disagreement_is_terminal(self) -> None:
+        # Regression: the shipped exporter emitted `tier2_investment: False` (the
+        # dataclass default) for every checkpoint, while every trained checkpoint
+        # carries True. Shape agreed, so this passed the width/schema checks and
+        # ran — the crate skipped the investment slots at every leaf while the
+        # Python root encode wrote them.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._tables(
+                Path(temp_dir) / "tables.json", masks={"tier2_investment": False}
+            )
+            with self.assertRaisesRegex(ContractError, "tier2_investment"):
+                validate_encoder_tables(_contract(), tables)
+
+    def test_history_budget_disagreement_is_terminal(self) -> None:
+        # Regression: a budget-0 (Markov) checkpoint was handed tables claiming the
+        # full 64-token history region, so the crate filled 64 synthesized history
+        # tokens the model was trained to never attend to.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._tables(Path(temp_dir) / "tables.json")  # budget 64
+            contract = _contract(
+                feature_masks={
+                    "transition_token_budget": 0,
+                    "exact_state": True,
+                    "opponent_tendency_stats_block": True,
+                    "tier2_residuals": True,
+                    "tier2_investment": True,
+                }
+            )
+            with self.assertRaisesRegex(ContractError, "transition_token_budget"):
+                validate_encoder_tables(contract, tables)
+
+    def test_zero_budget_tables_accepted_for_zero_budget_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._tables(
+                Path(temp_dir) / "tables.json", masks={"transition_token_budget": 0}
+            )
+            contract = _contract(
+                feature_masks={
+                    "transition_token_budget": 0,
+                    "exact_state": True,
+                    "opponent_tendency_stats_block": True,
+                    "tier2_residuals": True,
+                    "tier2_investment": True,
+                }
+            )
+            validate_encoder_tables(contract, tables)  # no raise
+
+    def test_missing_mask_block_is_terminal(self) -> None:
+        # Tables predating the masks block cannot be shown to agree, so they must
+        # not be adopted silently.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._tables(Path(temp_dir) / "tables.json", default_feature_masks={})
             with self.assertRaisesRegex(ContractError, "root/leaf observation contract"):
                 validate_encoder_tables(_contract(), tables)
 
@@ -349,15 +419,117 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
 
         from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
 
+        from pokezero.observation import ObservationFeatureMasks
+
         _, trimmed = self._specs()
-        layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        # The masks a real checkpoint carries, not the dataclass defaults — passing
+        # only the spec is exactly the hole that shipped wrong tables to every run.
+        masks = ObservationFeatureMasks(
+            transition_token_budget=trimmed.transition_token_count,
+            tier2_investment=True,
+        )
+        layout = exporter._layout_payload(
+            OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed, masks=masks
+        )
         contract = _contract(
             token_count=trimmed.token_count,
             transition_token_count=trimmed.transition_token_count,
+            numeric_feature_count=layout["numeric_feature_count"],
+            categorical_feature_count=layout["categorical_feature_count"],
+            feature_masks={
+                "transition_token_budget": trimmed.transition_token_count,
+                "exact_state": masks.exact_state,
+                "opponent_tendency_stats_block": masks.opponent_tendency_stats_block,
+                "tier2_residuals": masks.tier2_residuals,
+                "tier2_investment": masks.tier2_investment,
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tables.json"
+            path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
+            validate_encoder_tables(contract, path)  # must not raise
+
+    def test_schema_default_masks_are_rejected_for_a_real_checkpoint(self) -> None:
+        # The shipped path, pinned as a failure: build tables WITHOUT the
+        # checkpoint's masks and the guard must now refuse them.
+        import json
+        import tempfile
+
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        contract = _contract(
             numeric_feature_count=layout["numeric_feature_count"],
             categorical_feature_count=layout["categorical_feature_count"],
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "tables.json"
             path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
-            validate_encoder_tables(contract, path)  # must not raise
+            with self.assertRaisesRegex(ContractError, "tier2_investment"):
+                validate_encoder_tables(contract, path)
+
+
+class EncoderTableVocabValidationTest(unittest.TestCase):
+    """The stale-artifact hole: tables are adopted whenever the file exists, and the
+    reuse key cannot see a vocabulary change. A cached file written before a token
+    was added renumbers every token after it at leaf encode."""
+
+    def _write(self, path: Path, tokens: list[str]) -> Path:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": TABLES_SCHEMA_VERSION,
+                    "vocab": {"tokens": tokens, "size": len(tokens) + 1},
+                    "layout": {
+                        "schema_version": "pokezero.observation.v3",
+                        "token_count": 87,
+                        "categorical_feature_count": 51,
+                        "numeric_feature_count": 169,
+                        "default_feature_masks": {
+                            "exact_state": True,
+                            "stats_block": True,
+                            "tier2_residuals": True,
+                            "tier2_investment": True,
+                            "transition_token_budget": 64,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_vocab_is_not_checked_without_a_showdown_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._write(Path(temp_dir) / "t.json", ["a", "b"])
+            validate_encoder_tables(_contract(), tables)  # no raise
+
+    def test_stale_vocab_is_terminal(self) -> None:
+        import unittest.mock as mock
+
+        class _Vocab:
+            tokens = ["a", "b", "c"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Tables predate "b": every token after it is renumbered.
+            tables = self._write(Path(temp_dir) / "t.json", ["a", "c"])
+            with mock.patch(
+                "pokezero.randbat_vocab.gen3_category_vocabulary", return_value=_Vocab()
+            ):
+                with self.assertRaisesRegex(ContractError, "vocab.tokens"):
+                    validate_encoder_tables(_contract(), tables, showdown_root="/opt/showdown")
+
+    def test_current_vocab_accepted(self) -> None:
+        import unittest.mock as mock
+
+        class _Vocab:
+            tokens = ["a", "b", "c"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tables = self._write(Path(temp_dir) / "t.json", ["a", "b", "c"])
+            with mock.patch(
+                "pokezero.randbat_vocab.gen3_category_vocabulary", return_value=_Vocab()
+            ):
+                validate_encoder_tables(_contract(), tables, showdown_root="/opt/showdown")

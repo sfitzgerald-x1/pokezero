@@ -33,11 +33,14 @@ from typing import Any, Mapping
 # so previously exported artifacts are not adopted across an exporter change.
 # v2: encoder tables are derived from the checkpoint (--checkpoint) rather than
 # the schema default, so region-trimmed models get tables of THEIR width.
-# Bumping this invalidates every artifact exported by v1 — which is the whole
+# v3: `default_feature_masks` is derived from the checkpoint too. v2 only threaded
+# the observation SPEC through, so the masks stayed at the dataclass defaults and
+# the tables described feature gating no trained checkpoint actually used.
+# Bumping this invalidates every artifact exported by v1/v2 — which is the whole
 # point of having the field: a behaviour change in the exporter must not be
 # silently reused. (Missing this bump caused a trimmed run to reuse cached
 # 87-token tables and fail the root/leaf contract check.)
-EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v2"
+EXPORTER_REVISION = "pokezero.mcts-eval.exporter.v3"
 
 # Schemas the engine encoder (rust/pokezero-search encoder tables) can express.
 SUPPORTED_OBSERVATION_SCHEMAS = ("pokezero.observation.v2.2", "pokezero.observation.v3")
@@ -238,12 +241,25 @@ def resolve_checkpoint_contract(
     return contract
 
 
-def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Path) -> None:
+def validate_encoder_tables(
+    contract: CheckpointContract,
+    tables_path: str | Path,
+    *,
+    showdown_root: str | Path | None = None,
+) -> None:
     """Fail closed when the leaf encoder describes a different observation than the root.
 
     The crate encodes leaves from these tables while Python encodes the root from
     the checkpoint's spec; a silent disagreement is the census-mismatch class —
     the model would score states it never trained on.
+
+    Pass ``showdown_root`` to also check the tables' categorical VOCABULARY against
+    the one this build produces. Artifacts are reused whenever the file exists, and
+    the reuse key cannot see a vocabulary change (it keys on the checkpoint and the
+    exporter revision, not on the code that enumerates tokens). A cached tables file
+    written before a token was added stays adoptable forever, and since the vocab is
+    a positional list, one inserted token renumbers every token after it — the crate
+    would look up a different embedding row than the root encode for the same value.
     """
     payload = json.loads(Path(tables_path).read_text(encoding="utf-8"))
     if payload.get("schema_version") != TABLES_SCHEMA_VERSION:
@@ -262,6 +278,54 @@ def validate_encoder_tables(contract: CheckpointContract, tables_path: str | Pat
         )
         if layout.get(key) != expected
     }
+    # The four scalars above describe the observation's SHAPE. They were the only
+    # thing checked, and shape agreement is not contract agreement: the crate also
+    # gates encode work on `default_feature_masks`, so tables of the right width
+    # can still fill regions the checkpoint masks (or blank regions it expects).
+    # That hole let every engine-search eval run with `tier2_investment: false`
+    # tables against `tier2_investment: True` checkpoints, and fed a budget-0
+    # Markov checkpoint a full 64-token synthesized history region.
+    table_masks = layout.get("default_feature_masks") or {}
+    contract_masks = dict(contract.feature_masks)
+    # Tables name this field `stats_block`; the checkpoint config spells it out.
+    expected_masks = {
+        "exact_state": contract_masks.get("exact_state"),
+        "stats_block": contract_masks.get("opponent_tendency_stats_block"),
+        "tier2_residuals": contract_masks.get("tier2_residuals"),
+        "tier2_investment": contract_masks.get("tier2_investment"),
+        # The exporter clamps the budget to the physical region, so compare against
+        # the same clamp rather than the raw config value.
+        "transition_token_budget": min(
+            int(contract_masks.get("transition_token_budget") or 0),
+            contract.transition_token_count,
+        ),
+    }
+    mismatches.update(
+        {
+            f"default_feature_masks.{key}": (table_masks.get(key), expected)
+            for key, expected in expected_masks.items()
+            if expected is not None and table_masks.get(key) != expected
+        }
+    )
+    if showdown_root is not None:
+        from ..randbat_vocab import gen3_category_vocabulary
+
+        current = list(
+            gen3_category_vocabulary(str(showdown_root), include_turn_merged=True).tokens
+        )
+        stored = list((payload.get("vocab") or {}).get("tokens") or [])
+        if stored != current:
+            missing = [token for token in current if token not in set(stored)]
+            extra = [token for token in stored if token not in set(current)]
+            first_shift = next(
+                (i for i, (a, b) in enumerate(zip(stored, current)) if a != b), None
+            )
+            mismatches["vocab.tokens"] = (
+                f"{len(stored)} tokens (first divergence at index {first_shift}; "
+                f"absent here: {missing[:5]}; unknown to this build: {extra[:5]})",
+                f"{len(current)} tokens",
+            )
+
     if mismatches:
         detail = ", ".join(
             f"{key}: tables={got!r} checkpoint={expected!r}" for key, (got, expected) in sorted(mismatches.items())
