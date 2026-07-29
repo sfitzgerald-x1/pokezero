@@ -2601,3 +2601,83 @@ provenance. Verified against the payload rather than inherited, as instructed.
   would materially change the acceptance arithmetic — so it deserves the sample
   before anyone banks it.
 * No fixes in this pass, per the §K standard.
+
+---
+
+# Appendix N — the extra-half sample: SPLIT, no widening
+
+Stratified sample of 16 of the 40 extra-half rows (8 `extra:itemleftovers`,
+5 `extra:psn`, 3 `extra:itemleftovers,psn`), each replayed and verdicted.
+
+## N.1 Result: the hypothesis fails — 2 of 16
+
+| Verdict | n | share |
+| --- | --- | --- |
+| **(a)** roll-divergent lethality, vanished residuals | **2** | 12.5 % |
+| (b) faint IS reproducible by an engine branch | **9** | 56 % |
+| (b) no faint in the step at all | **5** | 31 % |
+
+**The classifier widening is NOT drafted.** §M.3's characterization — built on a
+single row — does not survive a sample. Had it been banked, ~40 rows would have
+moved into an adjudicated limit class on a mechanism that holds for 2 of them,
+which would have lowered the acceptance bar on a false premise. This is the
+outcome the sample requirement existed to produce.
+
+## N.2 The three sub-populations
+
+**(b) faint reproducible — 9 rows.** Showdown faints a mon *and* an engine branch
+faints the same mon. So this is **not** roll-divergent lethality: the engine can
+reach the outcome. Something else in those branches disagrees. Undiagnosed.
+
+**(b) no faint at all — 5 rows, every `extra:psn` row sampled.** Diagnosed, and
+it is a new engine bug (N.3).
+
+**(a) genuine roll-divergent lethality — 2 rows.** Real, but a small minority.
+
+## N.3 CONFIRMED ENGINE BUG: gen3 Toxic never misses
+
+`seed 1500027 step 4`:
+
+```
+Showdown: |move|p2a: Tentacruel|Toxic|p1a: Corsola|[miss]
+          |-miss|p2a: Tentacruel|p1a: Corsola      <- Corsola is NOT poisoned
+engine:   every branch carries  p1 exact=psn=-16   <- Toxic landed in all of them
+```
+
+Isolation probe:
+
+```
+Toxic  -> pct=100.00  ['ChangeStatus SideOne-P0: NONE -> TOXIC', ...]   ONE branch
+```
+
+**The engine applies Toxic at 100 %.** Ground truth, read from the vendored
+simulator: `data/moves.ts` gives Toxic `accuracy: 90`, and
+`data/mods/gen4/moves.ts` overrides it to **85**; gen3 has no override of its own
+and therefore inherits gen4's 85 (the same inheritance rule as Wish and Sleep
+Talk).
+
+| | |
+| --- | --- |
+| Verdict | **ENGINE — move accuracy**, patch lane |
+| Rule | gen3 Toxic accuracy **85** (base 90 -> gen4 85 -> inherited by gen3) |
+| Engine | 100 % — no miss branch generated at all |
+| Repro | `seed 1500027 step 4`; isolation probe above |
+| Reachability | Toxic is in **152 of 393 sets (39 %)** and **443 of 1,682 variants (26 %)** — one of the most common moves in the pool |
+| Residue reach | **54 of 298 divergent rows (18 %)** have a player choosing Toxic. That is an upper bound on what this could explain, not a claim about how many it does. |
+
+Because the miss branch is absent entirely rather than mis-weighted, every
+Toxic use in search is priced as a guaranteed poison — a systematic optimism on a
+move that appears in a quarter of all sets.
+
+## N.4 Deliverable summary
+
+| Item | Outcome |
+| --- | --- |
+| Classifier widening | **NOT drafted** — sample split 2/16 |
+| Adversarial review | not required; nothing to review |
+| New engine spec | **gen3 Toxic accuracy 85 %** (N.3) |
+| Still undiagnosed | 9 sampled "faint reproducible" rows; the mechanism is not lethality divergence |
+| Retired | §M.3's characterization of the extra half — superseded by this sample |
+
+The Rest-provenance fix (§M.2, 51 rows) remains dispatched to the
+world-construction lane and is unaffected by this result.
