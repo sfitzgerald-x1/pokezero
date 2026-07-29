@@ -273,6 +273,126 @@ fn a_mid_rest_counter_spends_one_attempt_without_waking() {
 }
 
 // ---------------------------------------------------------------------------
+// The wake convention: engine rest_turns and showdown time are the SAME number
+// ---------------------------------------------------------------------------
+
+/// THE PIN THAT KEEPS `3 - k` FROM BEING "FIXED" TO `4 - k`. Read this before
+/// changing the conversion in `engine_world._rest_turns_from_row`.
+///
+/// It is tempting to read "the engine wakes at `rest_turns == 1`" against
+/// "Showdown wakes at `time == 0`" and conclude the engine runs one ahead. It does
+/// not — that compares Showdown's counter AFTER its decrement against the engine's
+/// BEFORE its own. Both decrement on the attempt, and both wake on the attempt whose
+/// PRE-decrement counter is 1:
+///
+/// ```text
+///   showdown (data/mods/gen3/conditions.ts): time--;  if (time <= 0) cure and move
+///   engine   (gen3/generate_instructions.rs): match rest_turns { 1 => wake, 2|3 => stay }
+/// ```
+///
+/// So a Rest (`time = 3` / `rest_turns = 3`) costs THREE attempts on both sides, of
+/// which exactly the first two are non-acting. This test walks the engine's ladder
+/// attempt by attempt; `scripts/gen3_switch_differential.py --only restattemptclock`
+/// walks the real sim's and gets the same 2-then-act shape. The public counter k
+/// counts those two non-acting attempts, so `rest_turns = 3 - k` maps one to the
+/// other exactly, and `4 - k` would leave every partially-elapsed Rest one attempt
+/// further from waking than it is.
+#[test]
+fn a_rest_costs_three_attempts_of_which_exactly_two_do_not_act() {
+    let mut state = State::default();
+    let active = state.side_one.get_active();
+    active.status = PokemonStatus::SLEEP;
+    active.rest_turns = REST_TURNS_ON_REST;
+    // A boost move: deterministic, single-branch, and its Boost instruction is an
+    // unambiguous "the Pokemon actually acted this attempt".
+    active.replace_move(PokemonMoveIndex::M0, Choices::SWORDSDANCE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+
+    let mut non_acting = 0;
+    let mut acted_on_attempt = None;
+    for attempt in 1..=4 {
+        let list = only_branch(generate(
+            &mut state,
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+            &MoveChoice::Move(PokemonMoveIndex::M0),
+        ));
+        let woke = wakes_up(&list, SideReference::SideOne);
+        let boosted = list.iter().any(|instruction| match instruction {
+            Instruction::Boost(boost) => boost.side_ref == SideReference::SideOne,
+            _ => false,
+        });
+        state.apply_instructions(&list);
+        if woke {
+            assert!(
+                boosted,
+                "waking is not enough -- gen3 cures and FALLS THROUGH into the move, \
+                 so the waking attempt must also act; got {:?}",
+                list
+            );
+            acted_on_attempt = Some(attempt);
+            break;
+        }
+        assert!(!boosted, "a sleeping Pokemon must not act; got {:?}", list);
+        non_acting += 1;
+    }
+
+    assert_eq!(
+        acted_on_attempt,
+        Some(3),
+        "a fresh Rest must wake on the THIRD attempt, matching showdown's time=3 ladder"
+    );
+    assert_eq!(
+        non_acting, 2,
+        "exactly two attempts are spent asleep -- these are the two public |cant| \
+         lines, so k is capped at 2 and rest_turns = 3 - k"
+    );
+}
+
+/// The conversion table itself, asserted end to end against the engine rather than
+/// restated: for each public attempt count k, building at `3 - k` leaves exactly the
+/// attempts the real battle has left. `4 - k` fails every row but k = 0 -- which is
+/// precisely why a k = 0 spot-check cannot catch it, since `4 - 0` clamps back to 3.
+#[test]
+fn each_public_attempt_count_builds_the_attempts_the_battle_has_left() {
+    // k -> (rest_turns to build, non-acting attempts still ahead)
+    for (k, rest_turns, remaining_cants) in [(0, 3, 2), (1, 2, 1), (2, 1, 0)] {
+        let mut state = State::default();
+        let active = state.side_one.get_active();
+        active.status = PokemonStatus::SLEEP;
+        active.rest_turns = rest_turns;
+        active.replace_move(PokemonMoveIndex::M0, Choices::SWORDSDANCE);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+
+        let mut non_acting = 0;
+        loop {
+            let list = only_branch(generate(
+                &mut state,
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+                &MoveChoice::Move(PokemonMoveIndex::M0),
+            ));
+            let woke = wakes_up(&list, SideReference::SideOne);
+            state.apply_instructions(&list);
+            if woke {
+                break;
+            }
+            non_acting += 1;
+            assert!(non_acting <= 3, "k={} never woke", k);
+        }
+        assert_eq!(
+            non_acting, remaining_cants,
+            "k={} built at rest_turns={} must have {} non-acting attempt(s) left",
+            k, rest_turns, remaining_cants
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Provenance survives the bench
 // ---------------------------------------------------------------------------
 

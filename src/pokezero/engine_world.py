@@ -1425,6 +1425,30 @@ def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
     ``3 - k`` on the counter — 3, 2 or 1, never 0, since the attempt that would take it
     to 0 is the one that wakes the mon and clears the tracker entry instead.
 
+    IT IS ``3 - k``, NOT ``4 - k``. This has been "corrected" once; do not do it again
+    without re-reading this paragraph. The off-by-one argument goes: the engine wakes at
+    ``rest_turns == 1`` while Showdown wakes at ``time == 0``, so the engine must run one
+    ahead. That compares Showdown's counter AFTER its decrement against the engine's
+    BEFORE its own. Both decrement on the attempt, and both wake on the attempt whose
+    PRE-decrement counter is 1::
+
+        showdown  data/mods/gen3/conditions.ts:  time--;  if (time <= 0) cure and move
+        engine    gen3/generate_instructions.rs: match rest_turns { 1 => wake, 2|3 => stay }
+
+    Measured rather than argued — a Rest (``time``/``rest_turns`` = 3) costs three
+    attempts on both sides, of which exactly the first two are the non-acting ones that
+    emit ``|cant|``:
+
+        k=0  ->  rest_turns 3  ->  2 more cants, then it acts
+        k=1  ->  rest_turns 2  ->  1 more cant,  then it acts
+        k=2  ->  rest_turns 1  ->  0 more cants; the very next attempt acts
+
+    ``scripts/gen3_switch_differential.py --only restattemptclock`` walks that ladder at
+    the real sim; ``gen3_rest_sleep_clause.rs`` walks the engine's and asserts the table
+    above row by row. ``4 - k`` matches only the k=0 row — and only because 4 clamps to
+    3 — while leaving a k=1 or k=2 Rest a full attempt further from waking than it is.
+    That is why a k=0 spot-check cannot catch the error and the table is pinned per-row.
+
     Why this matters beyond the wake timer: gen3's Sleep Clause Mod exempts a Rest sleep
     (``rulesets.ts`` skips a sleeper whose ``statusState.source`` is its own ally), and
     the engine spells that exemption as ``rest_turns == 0`` in

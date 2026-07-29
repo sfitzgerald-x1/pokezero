@@ -1028,6 +1028,11 @@ class ShowdownReplayState:
     #
     # k <= 2 by construction: Rest sets time 3, attempts take it 3->2->1, and the third attempt
     # wakes the mon and emits ``-curestatus`` which clears the entry.
+    #
+    # The entry is RETIRED if the mon ever selects a ``sleepUsable`` move (Sleep Talk /
+    # Snore). Those turns emit ``|cant|`` like any other but gen3 refunds them on the next
+    # switch-in (``slp.onSwitchIn``: ``time += skippedTime``), so k stops tracking the sim's
+    # clock — measured at four ``|cant|`` lines for a single Rest. See ``_update_induced_sleep``.
     rest_sleep_counts: Mapping[str, int] = field(default_factory=dict)
     # Public consecutive-stall counter (spec v3, docs/observation_v3_spec.md change 3): per side,
     # the number of consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3 shares
@@ -1730,6 +1735,32 @@ class _ReplayParser:
                 key = self._induced_sleep_victim_key(victim_slot, parts[2])
                 if key in self.rest_sleep_counts:
                     self.rest_sleep_counts[key] = min(2, self.rest_sleep_counts[key] + 1)
+            return
+        if event_type == "move" and len(parts) >= 4:
+            # RETIRE the Rest clock when a ``sleepUsable`` move is selected. Sleep Talk and
+            # Snore are the only moves a sleeping mon can act with, and gen3 REFUNDS the turns
+            # spent on them the next time it switches in:
+            #
+            #     slp.onSwitchIn: this.effectState.time += this.effectState.skippedTime
+            #
+            # Those turns still emit ``|cant|SLOT|slp`` — the line comes first, then the move
+            # resolves — so the public count keeps rising while the sim's clock is handed back.
+            # Measured: one Rest by a Sleep Talk user that then pivots emits FOUR ``|cant|``
+            # lines, not two (scripts/gen3_switch_differential.py --only restsleeptalkrefund).
+            # k is then no longer the elapsed attempt count and ``3 - k`` would build a mon that
+            # is awake in the world and asleep in the battle.
+            #
+            # Deliberately retired rather than refund-corrected. Reproducing ``skippedTime``
+            # exactly needs the TRAILING-contiguous-run bookkeeping the belief engine already
+            # carries (``sleep_skipped_turns``, reset by any non-sleepUsable sleep turn), and a
+            # second copy of that in the parser is a second chance to get it subtly wrong.
+            # Dropping the entry costs these mons their exact gating and returns them to the
+            # pre-existing sleep handling — never a wrong world, only a declined one.
+            actor_slot = _slot_from_ident(parts[2])
+            if actor_slot in {"p1", "p2"} and _normalize_identifier(parts[3]) in _SLEEP_USABLE_MOVES:
+                self.rest_sleep_counts.pop(
+                    self._induced_sleep_victim_key(actor_slot, parts[2]), None
+                )
             return
         if event_type == "-cureteam" and len(parts) >= 3:
             # Aromatherapy cures every living team member with a SINGLE ``|-cureteam|SOURCE``
@@ -2590,6 +2621,12 @@ _CHARGE_MOVE_VOLATILES = frozenset({"solarbeam"})
 # `noCopy` flag is false. This is the tracked subset. The parser preserves these
 # public facts through Baton Pass, then direct materialization rejects any whose
 # serialized state is not yet fully public and reconstructable.
+# gen3's ``sleepUsable`` moves: the only two a sleeping Pokemon can act with, and so the
+# only two that accrue the ``skippedTime`` a later switch-in refunds. Mirrors
+# ``belief._SLEEP_USABLE_MOVES``; kept local rather than imported because belief.py imports
+# this module.
+_SLEEP_USABLE_MOVES = frozenset({"sleeptalk", "snore"})
+
 _BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
     "confusion", "leechseed", "substitute", "taunt", "curse", "ingrain", "lockon",
     "grudge", "focusenergy", "charge", "bide", "uproar", "magiccoat", "snatch",

@@ -213,6 +213,48 @@ class RestTurnsReconstructionTests(unittest.TestCase):
                 self.assertEqual(sleeper.status, "sleep")
                 self.assertEqual(sleeper.rest_turns, expected)
 
+    def test_the_conversion_is_three_minus_k_and_not_four_minus_k(self) -> None:
+        """The wake-convention pin. See ``engine_world._rest_turns_from_row``.
+
+        Both engines decrement on the attempt and both wake on the attempt whose
+        PRE-decrement counter is 1, so their counters are the SAME number at the same
+        moment -- there is no +1 offset to correct for. Reading Showdown's counter
+        after its decrement against the engine's before its own is what makes ``4 - k``
+        look right.
+
+        Asserted as an explicit table because ``4 - k`` agrees with the truth on
+        exactly one row -- k=0, where 4 would clamp back to 3 -- so any spot-check that
+        only builds a fresh Rest passes under both. The k=1 and k=2 rows are the ones
+        that separate them, and under ``4 - k`` each would sit a full attempt further
+        from waking than the real battle.
+        """
+
+        three_minus_k = {0: 3, 1: 2, 2: 1}
+        four_minus_k_clamped = {0: 3, 1: 3, 2: 2}
+
+        for attempts, expected in three_minus_k.items():
+            with self.subTest(k=attempts):
+                self.assertEqual(self._sleeper(rest_attempts=attempts).rest_turns, expected)
+
+        # And the rows that actually discriminate really do discriminate: if this ever
+        # stops being true, the table above has been rewritten to the wrong convention.
+        discriminating = [k for k in three_minus_k if three_minus_k[k] != four_minus_k_clamped[k]]
+        self.assertEqual(discriminating, [1, 2])
+        for attempts in discriminating:
+            with self.subTest(k=attempts):
+                self.assertNotEqual(
+                    self._sleeper(rest_attempts=attempts).rest_turns,
+                    four_minus_k_clamped[attempts],
+                )
+
+    def test_a_fresh_rest_builds_the_full_counter_with_no_clamping_needed(self) -> None:
+        # The k=0 edge, pinned so it is clear nothing is being clamped into range:
+        # 3 - 0 is 3, which is exactly what Rest sets, and the reachable output range
+        # is 1..3 with no value ever landing outside it.
+        self.assertEqual(self._sleeper(rest_attempts=0).rest_turns, 3)
+        built = {self._sleeper(rest_attempts=k).rest_turns for k in (0, 1, 2)}
+        self.assertEqual(built, {1, 2, 3})
+
     def test_a_rest_sleep_carries_no_elapsed_turn_count(self) -> None:
         # The engine branches on rest_turns first and reads sleep_turns only in its
         # 0 arm, so a Rest sleep has no elapsed-turn count to carry. Setting one
@@ -328,6 +370,51 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             "|turn|3",
             "|move|p1a: Snorlax|Body Slam|p2a: Starmie",
             "|turn|4",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+
+    def test_a_sleep_talk_user_retires_its_rest_clock(self) -> None:
+        """gen3 refunds Sleep Talk / Snore turns, so k stops meaning "attempts elapsed".
+
+        A sleepUsable move emits ``|cant|...|slp`` and THEN acts, and gen3 banks the turn
+        as ``skippedTime``, handing it back at the next switch-in
+        (``slp.onSwitchIn``: ``time += skippedTime``). Measured at the sim, one Rest by a
+        Sleep Talk user that pivots emits FOUR cants rather than two
+        (``--only restsleeptalkrefund``). Rather than keep counting a number that no
+        longer tracks the clock, the entry is retired and the mon falls back to the
+        pre-existing sleep handling — a declined world, never a wrong one.
+        """
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_snore_retires_it_too(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+        ])
+        self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_an_ordinary_sleeping_turn_keeps_the_clock(self) -> None:
+        # The control: only sleepUsable moves accrue skippedTime, so an ordinary Rest
+        # is untouched by this rule and stays exactly gated.
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+
+    def test_the_other_seats_sleep_talk_does_not_retire_this_ones_clock(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p1a: Snorlax|Sleep Talk|p1a: Snorlax",
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
