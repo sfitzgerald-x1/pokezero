@@ -354,6 +354,18 @@ def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
                           moves=("Splash",))
 
 
+def _rester():
+    """Xatu: the repro species, and a real Rest carrier in the pool (55 sets)."""
+
+    return FixturePokemon(species="Xatu", ability="Synchronize", item="None",
+                          moves=("Rest", "Splash"))
+
+
+def _toxic_chipper():
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Toxic", "Seismic Toss", "Splash"))
+
+
 def _poison_toxicer():
     """Muk: pure Poison and a real Toxic carrier in the pool.
 
@@ -2081,6 +2093,32 @@ def _spec(name):
                     "berry_eaten": True},
             landmark=lambda L: bool(_residual_sequence(L)),
             landmark_desc="the residual block emitted HP lines")
+    # --- Rest fails at full HP ----------------------------------------------
+    if name in ("restfullhp", "restdamagedcontrol"):
+        # `rest.onTry` (data/moves.ts; no gen mod overrides Rest, so gen3
+        # inherits the base) fails the move outright when hp === maxhp:
+        # `-fail <user> heal`, no sleep and no heal. Upstream guarded only the
+        # already-asleep case, so a full-HP Rest slept the user — and that sleep
+        # SUPPRESSED the incoming Toxic, which is the divergence: a status-level
+        # change to the legal action set, not just one turn of HP.
+        #
+        # The control rests one Seismic Toss below full, where Rest still works.
+        full = name == "restfullhp"
+        turns = ([("move rest", "move toxic")] if full
+                 else [("move splash", "move seismictoss"), ("move rest", "move splash")])
+        return dict(
+            p1=[_rester()], p2=[_toxic_chipper()],
+            turns=turns,
+            measured=0 if full else 1, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "rest_failed": _has(L, "|-fail|p1a: Xatu|heal"),
+                "slept": _has(L, "|-status|p1a: Xatu|slp"),
+                "toxic_landed": _has(L, "|-status|p1a: Xatu|tox"),
+            },
+            expect=({"rest_failed": True, "slept": False, "toxic_landed": True} if full
+                    else {"rest_failed": False, "slept": True, "toxic_landed": False}),
+            landmark=lambda L: _has(L, "|move|p1a: Xatu|Rest"),
+            landmark_desc="Rest was used")
     raise ValueError(name)
 
 
@@ -2120,7 +2158,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "residualspeedmajor", "residualspeedmajorfast",
              "residualspeedpara", "residualspeedparacontrol",
              "residualspeedtie", "residualspeedsand", "residualspeedleech",
-             "residualsuborder", "residualberrybeforestatus")
+             "residualsuborder", "residualberrybeforestatus",
+             "restfullhp", "restdamagedcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

@@ -783,6 +783,44 @@ poke-engine-gen3-battle-end-residuals.patch
 # native pins in rust/pokezero-search/tests/gen3_residual_speed_order.rs.
 # Touches gen3/{abilities,items,generate_instructions}.rs.
 poke-engine-gen3-residual-speed-order.patch
+# gen3 Rest FAILS at full HP.
+#
+# `rest.onTry` (data/moves.ts — NO gen mod anywhere in the chain overrides Rest,
+# so gen3 inherits the base directly) fails in this order:
+#
+#     1. status === 'slp' || hasAbility('comatose')  -> return false
+#     2. hp === maxhp   -> `-fail <user> heal`, return null
+#     3. hasAbility('insomnia')     -> `-fail ... ability: Insomnia`
+#     4. hasAbility('vitalspirit')  -> `-fail ... ability: Vital Spirit`
+#
+# Upstream guarded only (1), so a full-HP Rest slept the user. The divergence is
+# STATUS-level rather than heal-level: the spurious sleep SUPPRESSED an incoming
+# status that Showdown lets land, changing the legal action set for the rest of
+# the battle. Verified against the real sim on the repro shape — a full-HP Xatu
+# Resting into a Toxic answers `-fail|p1a: Xatu|heal` and then `-status|p1a:
+# Xatu|tox`, where upstream slept it and the Toxic never landed.
+#
+# (3) and (4) are deliberately NOT modelled: Comatose is a gen7 ability, and no
+# gen3 randbats set pairs Rest with Insomnia or Vital Spirit (0 of the 55 Rest
+# sets), so neither is reachable. If they ever become reachable, note that the
+# full-HP check comes FIRST, so a full-HP Insomnia user fails with the heal
+# message rather than the ability one.
+#
+# The failure costs the turn AND the PP, in both engines: Showdown deducts PP in
+# `runMove` (battle-actions.ts:282) before `useMove` fires the `Try` event
+# (:585), and the engine decrements PP in generate_instructions.rs:2370, well
+# before this dispatcher at :2417. So skipping the effect reproduces `-fail`
+# exactly, with no PP plumbing needed.
+#
+# Reachability: Rest is on 55 of 393 sets, and the full-HP case is the one the
+# ledger's residue rows are made of (14/14).
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# restfullhp / restdamagedcontrol); pinned by
+# rust/pokezero-search/tests/gen3_rest_fidelity.rs. Touches
+# gen3/choice_effects.rs only; applied before the fixture refresh.
+poke-engine-gen3-rest-fullhp.patch
+
 
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
