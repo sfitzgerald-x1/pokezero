@@ -313,6 +313,26 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         _apply_rest_sleep_provenance(rows, replay, "p1")
         self.assertNotIn("restSleepAttempts", rows[0])
 
+    def test_a_baton_pass_does_not_disturb_a_benched_rest_sleeper(self) -> None:
+        # Composition guard against PR #879, which landed in the same parser file
+        # and widened which Baton-Passed volatiles transfer and materialize
+        # (perish counters, confusion, partial trap). Sleep is a STATUS, not a
+        # volatile: ``copyVolatileFrom`` never moves it, and #879 changed only the
+        # two BP allowlists -- none of the ``-curestatus`` / ``-cureteam`` /
+        # ``faint`` handlers this tracker's clears ride on. A benched Rest must
+        # therefore come through a pass with its provenance and count intact.
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|turn|2",
+            "|-start|p2a: Starmie|perish3",
+            "|move|p2a: Starmie|Baton Pass|p2a: Starmie",
+            "|switch|p2a: Starmie|Starmie, L79|100/100|[from] Baton Pass",
+            "|-start|p2a: Starmie|perish2",
+            "|turn|3",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+
     def test_a_malformed_row_is_skipped_rather_than_crashing(self) -> None:
         replay = parse_showdown_replay(self._RESTED, battle_id="rest-build")
         rows = [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}]
