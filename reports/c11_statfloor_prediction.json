@@ -1,0 +1,40 @@
+{
+  "registered_before": "the cycle-eleven full differential run (300 games, seeds 1500000-1500299, strict, --repros-per-game 40) at fingerprint a987f3db8a9b8f0d837ff577ed1d54e68e663e453bfc5294ce7159fea157d490 (35 patches)",
+  "method": "mechanism SIGNATURE, not family label: all 96 surviving outside-limits rows regenerated at the 33-patch base build (fingerprint 887a722dd2d6cd9b, all 96 reproduced) and marker-scanned for stat-modifier and type-netting markers (attacker item/ability + status, defender item/ability + status, move type/category incl. Hidden Power typing recovered from the chosen ids, defender type-pair order). The two prior label-trust under-counts are why the scan runs on row payloads.",
+  "will_clear": {
+    "comment": "replay- and arithmetic-verified at both builds (single-seed regeneration cleared each on the patched build; base-build arithmetic reproduces the recorded engine branch values exactly)",
+    "rows": [
+      {"seed": 1500024, "step": 9, "mechanism": "guts x1.5 on boosted stat (sim max 118 vs engine 120)"},
+      {"seed": 1500126, "step": 13, "mechanism": "choice band (sim max 104 vs engine 105)"},
+      {"seed": 1500221, "step": 13, "mechanism": "choice band (sim max 121 vs engine 123)"},
+      {"seed": 1500267, "step": 77, "mechanism": "choice band (sim max 75 vs engine 76)"},
+      {"seed": 1500076, "step": 96, "mechanism": "type netting: net-neutral (0.5,2) pair, odd v (sim max 29 vs engine 28)"}
+    ]
+  },
+  "will_not_clear": {
+    "comment": "the sixth mechanism2-labelled row is NOT stat flooring: engine max = sim max = 19 at the recorded state; the divergence is the heal-cap component-shape artifact (matcher/instrument lane). Family label was wrong for this row.",
+    "rows": [{"seed": 1500028, "step": 44, "actual_mechanism": "matcher_heal_cap_structural"}]
+  },
+  "candidates_may_clear": {
+    "comment": "mechanism marker present on a damage-carrying move in the row's boundary; per-row arithmetic shift NOT individually verified (the modifier only moves the max when the fixed-point floor loses a fraction that survives /50). Clearing any of these is in-mechanism; clearing none is also consistent.",
+    "rows": [
+      {"seed": 1500036, "step": 14, "family": "damage_calc_one_point_family", "marker": "netting (Ice Beam)"},
+      {"seed": 1500054, "step": 125, "family": "roll_divergent_lethality_shape_compound", "marker": "netting (Surf)"},
+      {"seed": 1500059, "step": 1, "family": "damage_calc_one_point_family", "marker": "choiceband (Earthquake) + netting (Hidden Power)"},
+      {"seed": 1500060, "step": 49, "family": "damage_calc_one_point_family", "marker": "netting (Hidden Power)"},
+      {"seed": 1500084, "step": 31, "family": "measurement_boundary_residual_truncation", "marker": "choiceband + hustle (Double-Edge)"},
+      {"seed": 1500174, "step": 43, "family": "sleeptalk_callee_union", "marker": "netting (Ice Beam)"},
+      {"seed": 1500253, "step": 70, "family": "matcher_roll_inherited_cap", "marker": "choiceband (Brick Break)"}
+    ]
+  },
+  "limit_rows_that_may_move": {
+    "comment": "three of the eleven c9 capped-lethal walk rows carry a mechanism marker; their branch values may legitimately shift or the row may clear. The walk evidence for any that move is stale and would need re-derivation; the other EIGHT walk rows are a hard zero-change control.",
+    "rows": [
+      {"seed": 1500012, "step": 24, "marker": "choiceband (Hidden Power)"},
+      {"seed": 1500074, "step": 57, "marker": "netting (Hidden Power)"},
+      {"seed": 1500242, "step": 60, "marker": "netting (Hidden Power)"}
+    ]
+  },
+  "zero_change": "every other row: the remaining 83 outside-limits rows (96 - 5 will_clear - 1 will_not_clear(stays) - 7 candidates) and the 8 unmarked capped-lethal walk rows. No new divergence classes, no new rows on any seed.",
+  "spurious_marker_dropped": {"seed": 1500162, "step": 115, "reason": "defender Milotic carries Marvel Scale but is UNSTATUSED at the boundary; the ability is inert there"}
+}
