@@ -1,0 +1,336 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -43,6 +43,8 @@
+ pub const BASE_CRIT_CHANCE: f32 = 1.0 / 16.0;
+ pub const MAX_SLEEP_TURNS: i8 = 4;
+ pub const MAX_CONFUSION_TURNS: i8 = 4;
++pub const MIN_ENCORE_TURNS: i8 = 3;
++pub const MAX_ENCORE_TURNS: i8 = 6;
+ pub const HIT_SELF_IN_CONFUSION_CHANCE: f32 = 1.0 / 2.0;
+ pub const ATTRACT_IMMOBILIZE_CHANCE: f32 = 1.0 / 2.0;
+ pub const CONSECUTIVE_PROTECT_CHANCE: f32 = 1.0 / 2.0;
+@@ -113,6 +115,80 @@
+     }
+ }
+ 
++/// pokezero gen3 fidelity fix: ENCORE is a BOUNDED stochastic duration too, and
++/// upstream never expires it in gen3 — the `volatile_status_durations.encore`
++/// counter exists and is serialized, but the only code that advances it is
++/// `#[cfg]`-gated to gen5+, so a gen3 Encore locks its victim FOREVER.
++///
++/// gen3 overrides the duration explicitly: `data/mods/gen3/moves.ts` gives
++/// `encore.condition.durationCallback() { return this.random(3, 7); }`, uniform
++/// on {3,4,5,6}. Unlike confusion this is Showdown's GENERIC `duration`
++/// machinery, not an `onBeforeMove` counter: `sim/battle.ts` decrements
++/// `handler.state.duration` once per turn during the RESIDUAL phase and calls
++/// `end` when it reaches 0. So the counter burns one tick per TURN — whether or
++/// not the encored Pokemon got to move — and the engine's end-of-turn block is
++/// the same point in the turn, not an approximation of one.
++///
++/// `turns_encored` counts residual ticks already burned, INCLUDING the current
++/// turn's. Conditioned on having survived `n` of them, the chance this was the
++/// last is `P(duration == n | duration >= n)` for `duration ~ Uniform{3,4,5,6}`:
++/// 0 while `n < MIN_ENCORE_TURNS` (a gen3 Encore can never end before its third
++/// tick), then `1 / (1 + MAX_ENCORE_TURNS - n)` — the identical hazard shape
++/// `chance_confusion_ends` and `chance_to_wake_up` already use.
++///
++///   n = 3 -> 1/4   n = 4 -> 1/3   n = 5 -> 1/2   n = 6 -> 1
++///
++/// Exact, not an approximation — the marginal is uniform by construction:
++///
++///   P(3) = 1/4
++///   P(4) = 3/4 * 1/3                 = 1/4
++///   P(5) = 3/4 * 2/3 * 1/2           = 1/4
++///   P(6) = 3/4 * 2/3 * 1/2 * 1       = 1/4
++///
++/// and nothing survives a seventh tick, because the `n >= MAX` arm is forced.
++/// One extra branch per encored turn, and only from the third tick onward,
++/// versus the four-way fan-out a roll-at-application model would need.
++fn chance_encore_ends(turns_encored: i8) -> f32 {
++    if turns_encored < MIN_ENCORE_TURNS {
++        0.0
++    } else if turns_encored >= MAX_ENCORE_TURNS {
++        1.0
++    } else {
++        1.0 / (1 + MAX_ENCORE_TURNS - turns_encored) as f32
++    }
++}
++
++/// Drop ENCORE from `side_ref` and zero its duration counter. Same invariant as
++/// `end_confusion`: `volatile_status_durations.encore` is 0 whenever the ENCORE
++/// volatile is absent, so a later Encore on that side starts at the bottom of
++/// the ladder rather than mid-way up it.
++fn end_encore(state: &mut State, side_ref: &SideReference, instructions: &mut StateInstructions) {
++    let side = state.get_side(side_ref);
++    let duration = side.volatile_status_durations.encore;
++    if duration != 0 {
++        instructions
++            .instruction_list
++            .push(Instruction::ChangeVolatileStatusDuration(
++                ChangeVolatileStatusDurationInstruction {
++                    side_ref: *side_ref,
++                    volatile_status: PokemonVolatileStatus::ENCORE,
++                    amount: -duration,
++                },
++            ));
++        side.volatile_status_durations.encore = 0;
++    }
++    instructions
++        .instruction_list
++        .push(Instruction::RemoveVolatileStatus(
++            RemoveVolatileStatusInstruction {
++                side_ref: *side_ref,
++                volatile_status: PokemonVolatileStatus::ENCORE,
++            },
++        ));
++    side.volatile_statuses
++        .remove(&PokemonVolatileStatus::ENCORE);
++}
++
+ /// Drop CONFUSION from `side_ref` and zero its duration counter, maintaining the
+ /// invariant the ladder relies on: `volatile_status_durations.confusion` is 0
+ /// whenever the CONFUSION volatile is absent.
+@@ -553,6 +629,46 @@
+                     },
+                 ));
+             side.volatile_status_durations.confusion = 0;
++        }
++
++        // ENCORE seeds its counter rather than merely zeroing it, because
++        // Showdown's `encore.onStart` ends with:
++        //
++        //     if (!this.queue.willMove(target)) this.effectState.duration!++;
++        //
++        // The residual tick at the end of the APPLICATION turn is free when the
++        // target has already moved — it burns a turn on which the target was
++        // never actually locked — so Showdown hands back a turn to compensate.
++        // The net effect is that the victim is locked for exactly `duration`
++        // turns either way, which is what makes the gen3 roll of {3,4,5,6} read
++        // as "Encore lasts 3-6 turns" regardless of move order.
++        //
++        // Counting UP to a threshold instead of down, the same compensation is a
++        // counter that starts one BELOW zero. `attacker_choice.first_move` is the
++        // engine's `willMove(target)`: if the encorer moved first the target has
++        // not acted yet and is locked from this very turn (start at 0); if the
++        // encorer moved second the target already acted and the first turn it can
++        // be locked is the next one (start at -1).
++        //
++        // Re-seeding also covers a stale nonzero counter arriving from outside
++        // the engine — a deserialized state string, or the Python world builder's
++        // `volatile_durations["encore"]` seed for an observed mid-battle Encore,
++        // neither of which may survive into a LATER, freshly applied Encore.
++        if volatile_status.volatile_status == PokemonVolatileStatus::ENCORE {
++            let start = if attacker_choice.first_move { 0 } else { -1 };
++            let delta = start - side.volatile_status_durations.encore;
++            if delta != 0 {
++                incoming_instructions
++                    .instruction_list
++                    .push(Instruction::ChangeVolatileStatusDuration(
++                        ChangeVolatileStatusDurationInstruction {
++                            side_ref: target_side,
++                            volatile_status: PokemonVolatileStatus::ENCORE,
++                            amount: delta,
++                        },
++                    ));
++                side.volatile_status_durations.encore = start;
++            }
+         }
+ 
+         side.volatile_statuses
+@@ -3122,6 +3238,62 @@
+                 ),
+             }
+         }
++
++        // pokezero gen3 fidelity fix: burn one ENCORE residual tick. Showdown
++        // decrements `duration` for every effect with an `end` callback once per
++        // turn in the residual phase (sim/battle.ts), which is exactly here — so
++        // unlike the confusion ladder there is no timing approximation, and the
++        // tick lands whether or not the encored Pokemon actually moved.
++        //
++        // Only the counter moves here. The stochastic end is a BRANCH, so it is
++        // taken in `add_end_of_turn_branches` once this block is complete, gated
++        // on the `+1` instruction pushed below — the same marker discipline the
++        // confusion ladder uses, and it inherits the same composition with the
++        // residual deferral for free: `add_end_of_turn_instructions` returns
++        // early on a deferred ply, so no tick is emitted and no branch is taken
++        // until the replacement ply re-attaches the block. That matches Showdown,
++        // which defers the whole residual phase, duration decrements included.
++        //
++        // Re-borrows `side`: the Taunt arm above hands `state` to
++        // `re_enable_disabled_moves`, so reusing the outer binding here would
++        // hold a second mutable borrow across that call.
++        let side = state.get_side(side_ref);
++        if side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::ENCORE)
++        {
++            // The other half of Showdown's `encore.onResidual`: Encore ends
++            // EARLY, deterministically, the moment the encored move runs out of
++            // PP ("early termination if you run out of PP"). Worth modelling
++            // rather than deferring, because the engine's own option filter drops
++            // 0-PP moves — so without this an encored Pokemon whose locked move
++            // is exhausted has no legal move at all and falls through to "No
++            // Move", standing still until the ladder happens to fire instead of
++            // being freed the turn the PP hits zero.
++            // `<= 0`, matching Showdown's `moveSlot.pp <= 0`: the engine's own PP
++            // decrement can take an already-empty slot negative, so an `== 0`
++            // test would miss exactly the turn this is meant to catch.
++            let out_of_pp = match side.last_used_move {
++                LastUsedMove::Move(move_index) => {
++                    side.get_active_immutable().moves[&move_index].pp <= 0
++                }
++                _ => false,
++            };
++            if out_of_pp {
++                end_encore(state, side_ref, &mut incoming_instructions);
++            } else {
++                incoming_instructions
++                    .instruction_list
++                    .push(Instruction::ChangeVolatileStatusDuration(
++                        ChangeVolatileStatusDurationInstruction {
++                            side_ref: *side_ref,
++                            volatile_status: PokemonVolatileStatus::ENCORE,
++                            amount: 1,
++                        },
++                    ));
++                side.volatile_status_durations.encore += 1;
++            }
++        }
+     } // end volatile statuses
+ 
+     state.reverse_instructions(&incoming_instructions.instruction_list);
+@@ -3174,11 +3346,104 @@
+             }
+             branch.update_percentage(probability);
+             add_end_of_turn_instructions(state, &mut branch, first_move_side, activation);
+-            add_confusion_expiry_branches(state, branch, instructions);
++            // Two independent duration ladders resolve here. Chained rather than
++            // merged so each stays readable: confusion forks first, then every
++            // branch it produced is offered to the encore ladder. The two are
++            // independent events on independent counters, so chaining gives the
++            // product distribution, which is what Showdown does — the residual
++            // phase decrements every live duration in the same pass.
++            let mut after_confusion = Vec::with_capacity(4);
++            add_confusion_expiry_branches(state, branch, &mut after_confusion);
++            for branch in after_confusion {
++                add_encore_expiry_branches(state, branch, instructions);
++            }
+         }
+     }
+ }
+ 
++/// pokezero gen3 fidelity fix: resolve the bounded ENCORE duration for any side
++/// whose residual tick just landed, forking `branch` on the hazard ladder in
++/// `chance_encore_ends`. Structural twin of `add_confusion_expiry_branches`
++/// below — see that function for why an end-of-turn fork is the only place a
++/// stochastic volatile end can be modelled without restructuring move
++/// generation, and why the fork is keyed on a marker instruction rather than on
++/// the counter's value.
++///
++/// The marker here is the `+1` ENCORE duration instruction emitted by
++/// `add_end_of_turn_instructions`. It is the ONLY `+1` on this counter in gen3
++/// (upstream's encore decrement is `#[cfg]`-gated to gen5+ and never compiles
++/// in), so its presence means precisely "this ply burned a residual tick", which
++/// is the event the ladder is conditioned on. A ply whose residual block was
++/// deferred past a forced replacement emits no tick and therefore no branch.
++fn add_encore_expiry_branches(
++    state: &mut State,
++    branch: StateInstructions,
++    instructions: &mut Vec<StateInstructions>,
++) {
++    let mut ticked = [false; 2];
++    for instruction in &branch.instruction_list {
++        if let Instruction::ChangeVolatileStatusDuration(change) = instruction {
++            if change.volatile_status == PokemonVolatileStatus::ENCORE && change.amount == 1 {
++                ticked[change.side_ref as usize] = true;
++            }
++        }
++    }
++    if ticked == [false, false] {
++        instructions.push(branch);
++        return;
++    }
++
++    state.apply_instructions(&branch.instruction_list);
++    let mut chances = [0.0f32; 2];
++    for (index, side_ref) in [SideReference::SideOne, SideReference::SideTwo]
++        .iter()
++        .enumerate()
++    {
++        let side = state.get_side_immutable(side_ref);
++        if ticked[index]
++            && side
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::ENCORE)
++            && side.get_active_immutable().hp > 0
++        {
++            chances[index] = chance_encore_ends(side.volatile_status_durations.encore);
++        }
++    }
++    state.reverse_instructions(&branch.instruction_list);
++
++    if chances == [0.0, 0.0] {
++        instructions.push(branch);
++        return;
++    }
++
++    let mut pending = vec![branch];
++    for (index, side_ref) in [SideReference::SideOne, SideReference::SideTwo]
++        .iter()
++        .enumerate()
++    {
++        let chance = chances[index];
++        if chance == 0.0 {
++            continue;
++        }
++        let mut next = Vec::with_capacity(pending.len() * 2);
++        for base in pending {
++            let mut expired = base.clone();
++            if chance < 1.0 {
++                let mut survived = base;
++                survived.update_percentage(1.0 - chance);
++                next.push(survived);
++                expired.update_percentage(chance);
++            }
++            state.apply_instructions(&expired.instruction_list);
++            end_encore(state, side_ref, &mut expired);
++            state.reverse_instructions(&expired.instruction_list);
++            next.push(expired);
++        }
++        pending = next;
++    }
++    instructions.extend(pending);
++}
++
+ /// pokezero gen3 fidelity fix: resolve the bounded CONFUSION duration for any
+ /// side whose confusion check ran this turn, forking `branch` on the hazard
+ /// ladder in `chance_confusion_ends`.
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -1010,6 +1010,25 @@
+                     side.volatile_status_durations.taunt = 0;
+                     false
+                 }
++                // pokezero gen3 fidelity fix: Encore dies with the switch, and its
++                // residual-tick counter has to die with it. `Pokemon.clearVolatile()`
++                // drops the volatile in Showdown; the counter is ours, and leaking a
++                // nonzero value would start that side's NEXT Encore part-way up the
++                // `chance_encore_ends` ladder (and desync `reverse_instructions`).
++                // Mirrors the LOCKEDMOVE / YAWN / TAUNT arms above; Encore was
++                // previously falling through to the bare `_ => false`, which was
++                // harmless only because nothing in gen3 ever wrote the counter.
++                PokemonVolatileStatus::ENCORE => {
++                    instructions.push(Instruction::ChangeVolatileStatusDuration(
++                        ChangeVolatileStatusDurationInstruction {
++                            side_ref: *side_ref,
++                            volatile_status: *pkmn_volatile_status,
++                            amount: -1 * side.volatile_status_durations.encore,
++                        },
++                    ));
++                    side.volatile_status_durations.encore = 0;
++                    false
++                }
+                 _ => false,
+             };
+ 

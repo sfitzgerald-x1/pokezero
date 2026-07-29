@@ -161,6 +161,21 @@ def _blissey_confusable():  # confusion victim: no Own Tempo, no Substitute, no 
                           moves=("Splash",))
 
 
+def _smeargle_encorer():  # spe 75: encores Blissey BEFORE it moves (no duration bump)
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Encore", "Splash"))
+
+
+def _shuckle_encorer():  # spe 5: encores Blissey AFTER it moves (onStart bumps duration)
+    return FixturePokemon(species="Shuckle", ability="Sturdy", item="None",
+                          moves=("Encore", "Splash"))
+
+
+def _blissey_encore_victim():  # spe 55, two moves so the lock is a real restriction
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Splash", "Soft-Boiled"))
+
+
 def _smeargle_bp():  # Baton Pass carrier, no Perish Song (confusion is the payload)
     return FixturePokemon(species="Smeargle", ability="Technician", item="None",
                           moves=("Baton Pass", "Splash"))
@@ -267,6 +282,28 @@ def _spikes_cleared(lines) -> bool:
     return any(
         line.startswith("|-sideend|p2") and "Spikes" in line for line in lines
     )
+
+
+def _encore_span(lines, seat: str) -> int:
+    """Turns from ``-start ... Encore`` to ``-end ... Encore`` inclusive, 0 if absent.
+
+    ``lines`` is the flattened per-step protocol, so a step boundary is counted by
+    tracking which step each marker fell in. Showdown emits the ``-end`` in the
+    residual phase of the last locked turn, so this span is exactly the value the
+    duration model has to reproduce.
+    """
+    start = end = None
+    step = 0
+    for line in lines:
+        if line.startswith("|turn|"):
+            step += 1
+        elif line.startswith(f"|-start|{seat}|Encore"):
+            start = step
+        elif line.startswith(f"|-end|{seat}|Encore"):
+            end = step
+    if start is None or end is None:
+        return 0
+    return end - start + 1
 
 
 def _count(lines, prefix: str) -> int:
@@ -813,6 +850,52 @@ def _spec(name):
                                              and _has(L, "|faint|p2a: Snorlax")},
             expect={"perish0": True, "both_fainted": True},
             landmark=lambda L: True, landmark_desc="")
+    if name in ("encoreduration", "encoreoutlivesshortest", "encoredurationslow",
+                "encoredurationcontrol"):
+        # p2 Blissey (spe 55) is the victim. Smeargle (spe 75) encores it BEFORE
+        # it moves; Shuckle (spe 5) encores it AFTER. `encore.onStart` bumps the
+        # duration in the second case (`if (!queue.willMove(target)) duration++`),
+        # so the victim is locked for the same `duration` turns either way and the
+        # `-end` lands one step later for the slow encorer. Both windows are
+        # asserted, which is what pins the compensation.
+        #
+        # The victim is scripted onto the locked move throughout: Showdown's
+        # `onDisableMove` marks every other move disabled, and the fixture's
+        # choice validation refuses an unavailable choice outright — itself a
+        # standing proof of the lock, which the engine side pins natively in
+        # rust/pokezero-search/tests/gen3_encore_fidelity.rs.
+        slow = name == "encoredurationslow"
+        control = name == "encoredurationcontrol"
+        opener = "move splash" if control else "move encore"
+        turns = [("move splash", "move splash"), (opener, "move splash")]
+        turns += [("move splash", "move splash")] * 9
+        spec = dict(
+            p1=[_shuckle_encorer() if slow else _smeargle_encorer()],
+            p2=[_blissey_encore_victim()],
+            turns=turns, measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {"span": _encore_span(L, "p2a: Blissey")},
+            landmark=lambda L: control or _has(L, "|-start|p2a: Blissey|Encore"),
+            landmark_desc="Encore applied")
+        if control:
+            # No Encore at all -> `_encore_span` reports 0, and nothing may end.
+            spec["expect"] = {"span": 0}
+            return spec
+        spec["expect"] = {}
+        if slow:
+            # duration + 1: the victim had already moved when Encore landed.
+            spec["expect_in"] = {"span": (4, 5, 6, 7)}
+        elif name == "encoreoutlivesshortest":
+            # Seeds chosen so EVERY one runs past the 3-turn floor, covering 4, 5
+            # and 6. A model that always ended at the minimum roll passes
+            # `encoreduration` on three of its four seeds but fails every one of
+            # these.
+            spec["expect_in"] = {"span": (4, 5, 6)}
+            spec["seeds"] = (1003, 1004, 1005, 1006)
+        else:
+            # `this.random(3, 7)` -> uniform {3,4,5,6}. The default seeds happen
+            # to cover both ends of the window (3, 3, 3, 6).
+            spec["expect_in"] = {"span": (3, 4, 5, 6)}
+        return spec
     raise ValueError(name)
 
 
@@ -828,7 +911,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "meanlookprotect", "meanlooksub", "meanlooktrapperleaves",
              "meanlookbatonpass", "meanlooktrapperbatonpass",
              "meanlooktrapperbatonpassfreed",
-             "perishladderfirsttick", "perishladder")
+             "perishladderfirsttick", "perishladder",
+             "encoreduration", "encoreoutlivesshortest", "encoredurationslow",
+             "encoredurationcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
