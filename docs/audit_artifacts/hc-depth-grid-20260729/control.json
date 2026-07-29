@@ -1,0 +1,3262 @@
+{
+  "c_puct": null,
+  "cell": "control",
+  "checkpoint": "checkpoints/pz-v2-2-1m.pt",
+  "deep_ko_split": null,
+  "depth": null,
+  "games": 400,
+  "provenance": {
+    "engine_build_fingerprint": {
+      "count": 27,
+      "crate_sources": 8,
+      "fingerprint": "32a9b325db5f2655c5e780d7d9bd92912d52c2e2ded6c5f4ae8f5c567ce075e1",
+      "patches": [
+        "poke-engine-gen3-residual-order.patch",
+        "poke-engine-gen3-attract.patch",
+        "poke-engine-gen3-struggle-typeless.patch",
+        "poke-engine-gen3-rapidspin-fidelity.patch",
+        "poke-engine-gen3-ability-fidelity.patch",
+        "poke-engine-gen3-batonpass-perish.patch",
+        "poke-engine-gen3-spikes-layers.patch",
+        "poke-engine-gen3-residual-defer-on-faint.patch",
+        "poke-engine-gen3-confusion-duration.patch",
+        "poke-engine-gen3-transform.patch",
+        "poke-engine-gen3-state-roundtrip.patch",
+        "poke-engine-gen3-move-trapping.patch",
+        "poke-engine-gen3-terminal-options.patch",
+        "poke-engine-gen3-encore-duration.patch",
+        "poke-engine-gen3-encore-failencore.patch",
+        "poke-engine-gen3-residual-rounding.patch",
+        "poke-engine-gen3-lastmove-semantics.patch",
+        "poke-engine-gen3-phaze-protect.patch",
+        "poke-engine-gen3-variable-bp.patch",
+        "poke-engine-gen3-pp-ordering.patch",
+        "poke-engine-gen3-lockedmove-pp.patch",
+        "poke-engine-gen3-solarbeam-weather.patch",
+        "poke-engine-gen3-fixed-damage-substitute.patch",
+        "poke-engine-gen3-toxic-accuracy.patch",
+        "poke-engine-gen3-battle-end-residuals.patch",
+        "poke-engine-gen3-residual-speed-order.patch",
+        "poke-engine-gen3-upstream-fixture-refresh.patch"
+      ]
+    },
+    "poke_engine_module": "/Users/scott/workspace/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/poke_engine/__init__.py",
+    "pokezero_module": "/Users/scott/workspace/agents/pokezero-agent/pokezero-hceval/src/pokezero/__init__.py",
+    "pokezero_search_engine_features": "gen3 (residual-order patched)",
+    "pokezero_search_model_feature": false,
+    "pokezero_search_module": "/Users/scott/workspace/agents/pokezero-agent/hceval-venv/lib/python3.13/site-packages/pokezero_search/__init__.py",
+    "python": "3.13.13"
+  },
+  "raw_spec": "neural:checkpoints/pz-v2-2-1m.pt?deterministic=true&device=cpu",
+  "results": [
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 1.1828767920378596,
+      "score": 1.0,
+      "seed": 600000,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 86,
+      "elapsed_seconds": 1.3478350000223145,
+      "score": 0.0,
+      "seed": 600001,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 0.8230434999568388,
+      "score": 0.0,
+      "seed": 600002,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 188,
+      "elapsed_seconds": 3.458691457984969,
+      "score": 0.0,
+      "seed": 600003,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 94,
+      "elapsed_seconds": 1.6627855419646949,
+      "score": 1.0,
+      "seed": 600004,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 84,
+      "elapsed_seconds": 1.4137137500802055,
+      "score": 1.0,
+      "seed": 600005,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 104,
+      "elapsed_seconds": 1.8839541249908507,
+      "score": 0.0,
+      "seed": 600006,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 73,
+      "elapsed_seconds": 1.2476982499938458,
+      "score": 0.0,
+      "seed": 600007,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 59,
+      "elapsed_seconds": 0.915406540967524,
+      "score": 0.0,
+      "seed": 600008,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 91,
+      "elapsed_seconds": 1.3332797499606386,
+      "score": 0.0,
+      "seed": 600009,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 178,
+      "elapsed_seconds": 3.2303264170186594,
+      "score": 1.0,
+      "seed": 600010,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 57,
+      "elapsed_seconds": 0.8873254590434954,
+      "score": 0.0,
+      "seed": 600011,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 74,
+      "elapsed_seconds": 1.189232207951136,
+      "score": 1.0,
+      "seed": 600012,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 78,
+      "elapsed_seconds": 1.3434295420302078,
+      "score": 1.0,
+      "seed": 600013,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 68,
+      "elapsed_seconds": 1.1169422919629142,
+      "score": 0.0,
+      "seed": 600014,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 56,
+      "elapsed_seconds": 0.8425605830270797,
+      "score": 1.0,
+      "seed": 600015,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 118,
+      "elapsed_seconds": 2.056517958990298,
+      "score": 0.0,
+      "seed": 600016,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 103,
+      "elapsed_seconds": 1.7945077910553664,
+      "score": 1.0,
+      "seed": 600017,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 62,
+      "elapsed_seconds": 0.9931534579955041,
+      "score": 0.0,
+      "seed": 600018,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 92,
+      "elapsed_seconds": 1.5319935410516337,
+      "score": 0.0,
+      "seed": 600019,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 70,
+      "elapsed_seconds": 1.1595045839203522,
+      "score": 1.0,
+      "seed": 600020,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 86,
+      "elapsed_seconds": 1.4552105830516666,
+      "score": 0.0,
+      "seed": 600021,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 132,
+      "elapsed_seconds": 2.252851124969311,
+      "score": 0.0,
+      "seed": 600022,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 143,
+      "elapsed_seconds": 2.2809869579505175,
+      "score": 1.0,
+      "seed": 600023,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 209,
+      "elapsed_seconds": 3.6858578749233857,
+      "score": 1.0,
+      "seed": 600024,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 121,
+      "elapsed_seconds": 2.04086891701445,
+      "score": 0.0,
+      "seed": 600025,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 285,
+      "elapsed_seconds": 5.587357665994205,
+      "score": 0.0,
+      "seed": 600026,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 106,
+      "elapsed_seconds": 1.735466541023925,
+      "score": 1.0,
+      "seed": 600027,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 48,
+      "elapsed_seconds": 0.7886291249888018,
+      "score": 0.0,
+      "seed": 600028,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 73,
+      "elapsed_seconds": 1.2003072920488194,
+      "score": 0.0,
+      "seed": 600029,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 119,
+      "elapsed_seconds": 1.994036083924584,
+      "score": 0.0,
+      "seed": 600030,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 80,
+      "elapsed_seconds": 1.2406727079069242,
+      "score": 0.0,
+      "seed": 600031,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 238,
+      "elapsed_seconds": 4.482490916969255,
+      "score": 0.0,
+      "seed": 600032,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 81,
+      "elapsed_seconds": 1.415144084021449,
+      "score": 0.0,
+      "seed": 600033,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 64,
+      "elapsed_seconds": 0.9734210830647498,
+      "score": 0.0,
+      "seed": 600034,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 122,
+      "elapsed_seconds": 1.9710640410194173,
+      "score": 0.0,
+      "seed": 600035,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 61,
+      "elapsed_seconds": 0.8695735420333222,
+      "score": 1.0,
+      "seed": 600036,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 92,
+      "elapsed_seconds": 1.4665556669933721,
+      "score": 1.0,
+      "seed": 600037,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 56,
+      "elapsed_seconds": 0.8414379580644891,
+      "score": 0.0,
+      "seed": 600038,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 131,
+      "elapsed_seconds": 2.32718149991706,
+      "score": 0.0,
+      "seed": 600039,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 95,
+      "elapsed_seconds": 1.5595852909609675,
+      "score": 1.0,
+      "seed": 600040,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 70,
+      "elapsed_seconds": 1.20852037507575,
+      "score": 1.0,
+      "seed": 600041,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 57,
+      "elapsed_seconds": 0.9149306659819558,
+      "score": 0.0,
+      "seed": 600042,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 45,
+      "elapsed_seconds": 0.6897843750193715,
+      "score": 1.0,
+      "seed": 600043,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 84,
+      "elapsed_seconds": 1.5918126670876518,
+      "score": 1.0,
+      "seed": 600044,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 88,
+      "elapsed_seconds": 1.3372753750300035,
+      "score": 1.0,
+      "seed": 600045,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 125,
+      "elapsed_seconds": 2.2519268339965492,
+      "score": 0.0,
+      "seed": 600046,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 82,
+      "elapsed_seconds": 1.3507114999229088,
+      "score": 1.0,
+      "seed": 600047,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 0.8070872500538826,
+      "score": 0.0,
+      "seed": 600048,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 120,
+      "elapsed_seconds": 2.191489666933194,
+      "score": 1.0,
+      "seed": 600049,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 83,
+      "elapsed_seconds": 1.354545708047226,
+      "score": 1.0,
+      "seed": 600050,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 101,
+      "elapsed_seconds": 1.6842624580021948,
+      "score": 1.0,
+      "seed": 600051,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 60,
+      "elapsed_seconds": 0.9638135840650648,
+      "score": 1.0,
+      "seed": 600052,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 51,
+      "elapsed_seconds": 0.7767123330850154,
+      "score": 0.0,
+      "seed": 600053,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 156,
+      "elapsed_seconds": 2.558754291967489,
+      "score": 0.0,
+      "seed": 600054,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 117,
+      "elapsed_seconds": 1.8695797079708427,
+      "score": 1.0,
+      "seed": 600055,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 163,
+      "elapsed_seconds": 2.822349875001237,
+      "score": 1.0,
+      "seed": 600056,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 59,
+      "elapsed_seconds": 0.9511703329626471,
+      "score": 1.0,
+      "seed": 600057,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 64,
+      "elapsed_seconds": 1.1113851249683648,
+      "score": 0.0,
+      "seed": 600058,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 78,
+      "elapsed_seconds": 1.2795800419989973,
+      "score": 0.0,
+      "seed": 600059,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 96,
+      "elapsed_seconds": 1.6938969169277698,
+      "score": 1.0,
+      "seed": 600060,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 88,
+      "elapsed_seconds": 1.541344958008267,
+      "score": 0.0,
+      "seed": 600061,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 66,
+      "elapsed_seconds": 1.1654464579187334,
+      "score": 1.0,
+      "seed": 600062,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 71,
+      "elapsed_seconds": 1.2560915830545127,
+      "score": 1.0,
+      "seed": 600063,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 112,
+      "elapsed_seconds": 2.089062958024442,
+      "score": 1.0,
+      "seed": 600064,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 183,
+      "elapsed_seconds": 3.6291471659205854,
+      "score": 1.0,
+      "seed": 600065,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 48,
+      "elapsed_seconds": 0.8981440418865532,
+      "score": 1.0,
+      "seed": 600066,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 87,
+      "elapsed_seconds": 1.692326041054912,
+      "score": 0.0,
+      "seed": 600067,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 107,
+      "elapsed_seconds": 1.9879542919807136,
+      "score": 0.0,
+      "seed": 600068,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 39,
+      "elapsed_seconds": 0.6419229169841856,
+      "score": 1.0,
+      "seed": 600069,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 158,
+      "elapsed_seconds": 3.208323041908443,
+      "score": 0.0,
+      "seed": 600070,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 84,
+      "elapsed_seconds": 1.5213283750927076,
+      "score": 1.0,
+      "seed": 600071,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 56,
+      "elapsed_seconds": 0.9584189580054954,
+      "score": 0.0,
+      "seed": 600072,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 110,
+      "elapsed_seconds": 2.0152481659315526,
+      "score": 0.0,
+      "seed": 600073,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 107,
+      "elapsed_seconds": 1.98802033404354,
+      "score": 1.0,
+      "seed": 600074,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 63,
+      "elapsed_seconds": 1.0840816249838099,
+      "score": 0.0,
+      "seed": 600075,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 91,
+      "elapsed_seconds": 1.6146057500736788,
+      "score": 0.0,
+      "seed": 600076,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 137,
+      "elapsed_seconds": 2.5355284999823198,
+      "score": 1.0,
+      "seed": 600077,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 58,
+      "elapsed_seconds": 1.1732800839236006,
+      "score": 1.0,
+      "seed": 600078,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 60,
+      "elapsed_seconds": 1.2239190000109375,
+      "score": 0.0,
+      "seed": 600079,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 47,
+      "elapsed_seconds": 0.8437053329544142,
+      "score": 1.0,
+      "seed": 600080,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 102,
+      "elapsed_seconds": 2.0071183750405908,
+      "score": 1.0,
+      "seed": 600081,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 108,
+      "elapsed_seconds": 2.911480874987319,
+      "score": 0.0,
+      "seed": 600082,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 109,
+      "elapsed_seconds": 3.167473250068724,
+      "score": 0.0,
+      "seed": 600083,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 71,
+      "elapsed_seconds": 1.8454232920194045,
+      "score": 1.0,
+      "seed": 600084,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 72,
+      "elapsed_seconds": 1.787743084016256,
+      "score": 1.0,
+      "seed": 600085,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 59,
+      "elapsed_seconds": 1.2718176249181852,
+      "score": 1.0,
+      "seed": 600086,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 56,
+      "elapsed_seconds": 1.2715721660060808,
+      "score": 1.0,
+      "seed": 600087,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 150,
+      "elapsed_seconds": 3.8161642079940066,
+      "score": 0.0,
+      "seed": 600088,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 107,
+      "elapsed_seconds": 2.0496574169956148,
+      "score": 0.0,
+      "seed": 600089,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 42,
+      "elapsed_seconds": 0.7540661250241101,
+      "score": 1.0,
+      "seed": 600090,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 95,
+      "elapsed_seconds": 2.0754438329022378,
+      "score": 1.0,
+      "seed": 600091,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 66,
+      "elapsed_seconds": 1.5116377919912338,
+      "score": 0.0,
+      "seed": 600092,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 70,
+      "elapsed_seconds": 1.450217750039883,
+      "score": 1.0,
+      "seed": 600093,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 98,
+      "elapsed_seconds": 2.097855292027816,
+      "score": 0.0,
+      "seed": 600094,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 77,
+      "elapsed_seconds": 1.4903489999705926,
+      "score": 1.0,
+      "seed": 600095,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 95,
+      "elapsed_seconds": 1.8233023750362918,
+      "score": 0.0,
+      "seed": 600096,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 41,
+      "elapsed_seconds": 0.6954141249880195,
+      "score": 1.0,
+      "seed": 600097,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 126,
+      "elapsed_seconds": 2.7945492080179974,
+      "score": 1.0,
+      "seed": 600098,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 86,
+      "elapsed_seconds": 1.7436063330387697,
+      "score": 0.0,
+      "seed": 600099,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 68,
+      "elapsed_seconds": 1.2233395000221208,
+      "score": 0.0,
+      "seed": 600100,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 113,
+      "elapsed_seconds": 2.1497018749359995,
+      "score": 0.0,
+      "seed": 600101,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 98,
+      "elapsed_seconds": 1.7711708329152316,
+      "score": 1.0,
+      "seed": 600102,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 47,
+      "elapsed_seconds": 0.7710763750365004,
+      "score": 1.0,
+      "seed": 600103,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 172,
+      "elapsed_seconds": 3.2270361660048366,
+      "score": 0.0,
+      "seed": 600104,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 76,
+      "elapsed_seconds": 1.2567410840420052,
+      "score": 0.0,
+      "seed": 600105,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 133,
+      "elapsed_seconds": 2.415439249947667,
+      "score": 0.0,
+      "seed": 600106,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 86,
+      "elapsed_seconds": 1.4708179170265794,
+      "score": 1.0,
+      "seed": 600107,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 112,
+      "elapsed_seconds": 1.964809583965689,
+      "score": 1.0,
+      "seed": 600108,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 113,
+      "elapsed_seconds": 2.038522500079125,
+      "score": 0.0,
+      "seed": 600109,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 95,
+      "elapsed_seconds": 1.7712778750574216,
+      "score": 1.0,
+      "seed": 600110,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 62,
+      "elapsed_seconds": 1.0164099589455873,
+      "score": 1.0,
+      "seed": 600111,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 189,
+      "elapsed_seconds": 3.695317499921657,
+      "score": 0.0,
+      "seed": 600112,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 232,
+      "elapsed_seconds": 6.546053416910581,
+      "score": 1.0,
+      "seed": 600113,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 77,
+      "elapsed_seconds": 1.881854375009425,
+      "score": 0.0,
+      "seed": 600114,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 69,
+      "elapsed_seconds": 1.4019648749381304,
+      "score": 0.0,
+      "seed": 600115,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 42,
+      "elapsed_seconds": 0.7932084579952061,
+      "score": 1.0,
+      "seed": 600116,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 69,
+      "elapsed_seconds": 1.4255662080831826,
+      "score": 0.0,
+      "seed": 600117,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 46,
+      "elapsed_seconds": 0.9247431670082733,
+      "score": 1.0,
+      "seed": 600118,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 112,
+      "elapsed_seconds": 2.4881805409677327,
+      "score": 1.0,
+      "seed": 600119,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 47,
+      "elapsed_seconds": 0.943231665994972,
+      "score": 0.0,
+      "seed": 600120,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 65,
+      "elapsed_seconds": 1.4671032920014113,
+      "score": 0.0,
+      "seed": 600121,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 169,
+      "elapsed_seconds": 3.994798041996546,
+      "score": 1.0,
+      "seed": 600122,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 53,
+      "elapsed_seconds": 1.0437701659975573,
+      "score": 1.0,
+      "seed": 600123,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 201,
+      "elapsed_seconds": 5.426404041936621,
+      "score": 0.0,
+      "seed": 600124,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 99,
+      "elapsed_seconds": 2.312311416026205,
+      "score": 0.0,
+      "seed": 600125,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 73,
+      "elapsed_seconds": 1.7030665409984067,
+      "score": 1.0,
+      "seed": 600126,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 67,
+      "elapsed_seconds": 1.7070223750779405,
+      "score": 0.0,
+      "seed": 600127,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 67,
+      "elapsed_seconds": 1.5044803329510614,
+      "score": 1.0,
+      "seed": 600128,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 184,
+      "elapsed_seconds": 4.30895495810546,
+      "score": 1.0,
+      "seed": 600129,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 163,
+      "elapsed_seconds": 3.6728184169624,
+      "score": 0.0,
+      "seed": 600130,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 94,
+      "elapsed_seconds": 1.8202405420597643,
+      "score": 1.0,
+      "seed": 600131,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 71,
+      "elapsed_seconds": 1.2666396249551326,
+      "score": 1.0,
+      "seed": 600132,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 96,
+      "elapsed_seconds": 1.8882529169786721,
+      "score": 0.0,
+      "seed": 600133,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 70,
+      "elapsed_seconds": 1.2647544170031324,
+      "score": 0.0,
+      "seed": 600134,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 97,
+      "elapsed_seconds": 1.7647900000447407,
+      "score": 1.0,
+      "seed": 600135,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 38,
+      "elapsed_seconds": 0.5756610840326175,
+      "score": 1.0,
+      "seed": 600136,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 139,
+      "elapsed_seconds": 2.6336487090447918,
+      "score": 1.0,
+      "seed": 600137,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 120,
+      "elapsed_seconds": 2.3043020829791203,
+      "score": 0.0,
+      "seed": 600138,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 62,
+      "elapsed_seconds": 1.1482498339610174,
+      "score": 1.0,
+      "seed": 600139,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 78,
+      "elapsed_seconds": 1.3519252919359133,
+      "score": 0.0,
+      "seed": 600140,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 71,
+      "elapsed_seconds": 1.3020822500111535,
+      "score": 0.0,
+      "seed": 600141,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 57,
+      "elapsed_seconds": 1.009338999981992,
+      "score": 1.0,
+      "seed": 600142,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 78,
+      "elapsed_seconds": 1.503836124902591,
+      "score": 0.0,
+      "seed": 600143,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 58,
+      "elapsed_seconds": 1.0629870410775766,
+      "score": 1.0,
+      "seed": 600144,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 65,
+      "elapsed_seconds": 1.1351062080357224,
+      "score": 1.0,
+      "seed": 600145,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 79,
+      "elapsed_seconds": 1.4563252500956878,
+      "score": 0.0,
+      "seed": 600146,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 1.040276666986756,
+      "score": 0.0,
+      "seed": 600147,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 92,
+      "elapsed_seconds": 1.6390770829748362,
+      "score": 0.0,
+      "seed": 600148,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 95,
+      "elapsed_seconds": 1.624613874941133,
+      "score": 0.0,
+      "seed": 600149,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 177,
+      "elapsed_seconds": 3.3703249999089167,
+      "score": 0.0,
+      "seed": 600150,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 50,
+      "elapsed_seconds": 0.8101449590176344,
+      "score": 0.0,
+      "seed": 600151,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 87,
+      "elapsed_seconds": 1.5392637919867411,
+      "score": 0.0,
+      "seed": 600152,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 247,
+      "elapsed_seconds": 5.145331750041805,
+      "score": 0.0,
+      "seed": 600153,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 29,
+      "elapsed_seconds": 0.470996959018521,
+      "score": 1.0,
+      "seed": 600154,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 77,
+      "elapsed_seconds": 1.3391544159967452,
+      "score": 0.0,
+      "seed": 600155,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 0.8829567079665139,
+      "score": 0.0,
+      "seed": 600156,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 88,
+      "elapsed_seconds": 1.4982160410145298,
+      "score": 0.0,
+      "seed": 600157,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 97,
+      "elapsed_seconds": 1.6241966669913381,
+      "score": 0.0,
+      "seed": 600158,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 86,
+      "elapsed_seconds": 1.5153634171001613,
+      "score": 1.0,
+      "seed": 600159,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 62,
+      "elapsed_seconds": 1.023698708973825,
+      "score": 0.0,
+      "seed": 600160,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 72,
+      "elapsed_seconds": 1.233471667044796,
+      "score": 1.0,
+      "seed": 600161,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 76,
+      "elapsed_seconds": 1.2223016250645742,
+      "score": 1.0,
+      "seed": 600162,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 83,
+      "elapsed_seconds": 1.4849561670562252,
+      "score": 0.0,
+      "seed": 600163,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 42,
+      "elapsed_seconds": 0.6985565420472994,
+      "score": 1.0,
+      "seed": 600164,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 49,
+      "elapsed_seconds": 0.7550144999986514,
+      "score": 0.0,
+      "seed": 600165,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 51,
+      "elapsed_seconds": 0.8773556670639664,
+      "score": 1.0,
+      "seed": 600166,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 53,
+      "elapsed_seconds": 0.9183743329485878,
+      "score": 0.0,
+      "seed": 600167,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 115,
+      "elapsed_seconds": 2.1031642499146983,
+      "score": 1.0,
+      "seed": 600168,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 52,
+      "elapsed_seconds": 0.8927159589948133,
+      "score": 0.0,
+      "seed": 600169,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 112,
+      "elapsed_seconds": 2.004207583027892,
+      "score": 0.0,
+      "seed": 600170,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 76,
+      "elapsed_seconds": 1.2719372919527814,
+      "score": 1.0,
+      "seed": 600171,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 75,
+      "elapsed_seconds": 1.3601405839435756,
+      "score": 1.0,
+      "seed": 600172,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 118,
+      "elapsed_seconds": 2.3130197919672355,
+      "score": 0.0,
+      "seed": 600173,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 101,
+      "elapsed_seconds": 1.8169501669472083,
+      "score": 0.0,
+      "seed": 600174,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 72,
+      "elapsed_seconds": 1.4263032919261605,
+      "score": 1.0,
+      "seed": 600175,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 92,
+      "elapsed_seconds": 1.8415983750019222,
+      "score": 1.0,
+      "seed": 600176,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 97,
+      "elapsed_seconds": 1.9736755420453846,
+      "score": 0.0,
+      "seed": 600177,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 105,
+      "elapsed_seconds": 2.015069500077516,
+      "score": 0.0,
+      "seed": 600178,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 100,
+      "elapsed_seconds": 1.8873294160002843,
+      "score": 0.0,
+      "seed": 600179,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 61,
+      "elapsed_seconds": 1.0680454580578953,
+      "score": 1.0,
+      "seed": 600180,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 108,
+      "elapsed_seconds": 2.2840525000356138,
+      "score": 0.0,
+      "seed": 600181,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 95,
+      "elapsed_seconds": 1.9636171660386026,
+      "score": 0.0,
+      "seed": 600182,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 64,
+      "elapsed_seconds": 1.1823225839762017,
+      "score": 0.0,
+      "seed": 600183,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 0.9829322909936309,
+      "score": 1.0,
+      "seed": 600184,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 60,
+      "elapsed_seconds": 1.055314042023383,
+      "score": 0.0,
+      "seed": 600185,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 122,
+      "elapsed_seconds": 2.2948084169765934,
+      "score": 0.0,
+      "seed": 600186,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 53,
+      "elapsed_seconds": 0.9822754580527544,
+      "score": 1.0,
+      "seed": 600187,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 56,
+      "elapsed_seconds": 1.0487966670189053,
+      "score": 0.5,
+      "seed": 600188,
+      "winner": null
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 56,
+      "elapsed_seconds": 1.0579414999810979,
+      "score": 1.0,
+      "seed": 600189,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 68,
+      "elapsed_seconds": 1.3095592090394348,
+      "score": 0.0,
+      "seed": 600190,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 71,
+      "elapsed_seconds": 1.2806607079692185,
+      "score": 0.0,
+      "seed": 600191,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 82,
+      "elapsed_seconds": 1.5029372909339145,
+      "score": 1.0,
+      "seed": 600192,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 74,
+      "elapsed_seconds": 1.3078075830126181,
+      "score": 0.0,
+      "seed": 600193,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 145,
+      "elapsed_seconds": 2.680932458024472,
+      "score": 1.0,
+      "seed": 600194,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 75,
+      "elapsed_seconds": 1.2908601670060307,
+      "score": 1.0,
+      "seed": 600195,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 97,
+      "elapsed_seconds": 1.72318266693037,
+      "score": 0.0,
+      "seed": 600196,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 31,
+      "elapsed_seconds": 0.5119154169224203,
+      "score": 0.0,
+      "seed": 600197,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 493,
+      "elapsed_seconds": 12.256447166088037,
+      "score": 0.5,
+      "seed": 600198,
+      "winner": null
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 80,
+      "elapsed_seconds": 1.3149766250280663,
+      "score": 1.0,
+      "seed": 600199,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 89,
+      "elapsed_seconds": 1.4704058750066906,
+      "score": 1.0,
+      "seed": 600200,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 0.9192230829503387,
+      "score": 0.0,
+      "seed": 600201,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 44,
+      "elapsed_seconds": 0.6815758340526372,
+      "score": 0.0,
+      "seed": 600202,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 62,
+      "elapsed_seconds": 0.9968871250748634,
+      "score": 0.0,
+      "seed": 600203,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 43,
+      "elapsed_seconds": 0.6803847909905016,
+      "score": 1.0,
+      "seed": 600204,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 92,
+      "elapsed_seconds": 1.5639155409298837,
+      "score": 1.0,
+      "seed": 600205,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 121,
+      "elapsed_seconds": 2.0587676250142977,
+      "score": 1.0,
+      "seed": 600206,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 114,
+      "elapsed_seconds": 1.9801725000143051,
+      "score": 1.0,
+      "seed": 600207,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 105,
+      "elapsed_seconds": 1.709311957936734,
+      "score": 0.0,
+      "seed": 600208,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 118,
+      "elapsed_seconds": 1.979814957943745,
+      "score": 1.0,
+      "seed": 600209,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 175,
+      "elapsed_seconds": 2.987272624974139,
+      "score": 1.0,
+      "seed": 600210,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 228,
+      "elapsed_seconds": 4.285599209018983,
+      "score": 0.0,
+      "seed": 600211,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 140,
+      "elapsed_seconds": 2.3469475420424715,
+      "score": 1.0,
+      "seed": 600212,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 152,
+      "elapsed_seconds": 2.710136290988885,
+      "score": 1.0,
+      "seed": 600213,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 90,
+      "elapsed_seconds": 1.5633802500087768,
+      "score": 0.0,
+      "seed": 600214,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 57,
+      "elapsed_seconds": 0.9796093750046566,
+      "score": 1.0,
+      "seed": 600215,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 45,
+      "elapsed_seconds": 0.7004762080032378,
+      "score": 1.0,
+      "seed": 600216,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 146,
+      "elapsed_seconds": 2.8102499169763178,
+      "score": 0.0,
+      "seed": 600217,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 106,
+      "elapsed_seconds": 2.09460187505465,
+      "score": 1.0,
+      "seed": 600218,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 99,
+      "elapsed_seconds": 1.8702276250114664,
+      "score": 1.0,
+      "seed": 600219,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 78,
+      "elapsed_seconds": 1.347820374998264,
+      "score": 1.0,
+      "seed": 600220,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 135,
+      "elapsed_seconds": 2.2893964999821037,
+      "score": 0.0,
+      "seed": 600221,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 51,
+      "elapsed_seconds": 0.7917442499892786,
+      "score": 0.0,
+      "seed": 600222,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 73,
+      "elapsed_seconds": 1.187117874971591,
+      "score": 1.0,
+      "seed": 600223,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 300,
+      "elapsed_seconds": 5.5491924999514595,
+      "score": 1.0,
+      "seed": 600224,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 42,
+      "elapsed_seconds": 0.576712999958545,
+      "score": 1.0,
+      "seed": 600225,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 63,
+      "elapsed_seconds": 0.9370170830516145,
+      "score": 0.0,
+      "seed": 600226,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 98,
+      "elapsed_seconds": 1.6040565830189735,
+      "score": 0.0,
+      "seed": 600227,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 101,
+      "elapsed_seconds": 1.673302207957022,
+      "score": 1.0,
+      "seed": 600228,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 52,
+      "elapsed_seconds": 0.8870579999638721,
+      "score": 0.0,
+      "seed": 600229,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 110,
+      "elapsed_seconds": 1.7997562909731641,
+      "score": 1.0,
+      "seed": 600230,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 177,
+      "elapsed_seconds": 2.875042875064537,
+      "score": 1.0,
+      "seed": 600231,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 118,
+      "elapsed_seconds": 1.9056855000089854,
+      "score": 0.0,
+      "seed": 600232,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 140,
+      "elapsed_seconds": 2.463545833947137,
+      "score": 1.0,
+      "seed": 600233,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 54,
+      "elapsed_seconds": 0.8767758749891073,
+      "score": 0.0,
+      "seed": 600234,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 64,
+      "elapsed_seconds": 0.976894999970682,
+      "score": 1.0,
+      "seed": 600235,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 51,
+      "elapsed_seconds": 0.8122179170604795,
+      "score": 0.0,
+      "seed": 600236,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 131,
+      "elapsed_seconds": 2.179946208023466,
+      "score": 0.0,
+      "seed": 600237,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 80,
+      "elapsed_seconds": 1.2967979999957606,
+      "score": 0.0,
+      "seed": 600238,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 60,
+      "elapsed_seconds": 0.9451772080501541,
+      "score": 0.0,
+      "seed": 600239,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 75,
+      "elapsed_seconds": 1.2021841669920832,
+      "score": 0.0,
+      "seed": 600240,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 61,
+      "elapsed_seconds": 0.906304124975577,
+      "score": 1.0,
+      "seed": 600241,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 71,
+      "elapsed_seconds": 1.1265700830845162,
+      "score": 0.0,
+      "seed": 600242,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 52,
+      "elapsed_seconds": 0.7658829160500318,
+      "score": 0.0,
+      "seed": 600243,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 58,
+      "elapsed_seconds": 0.9331621660385281,
+      "score": 0.0,
+      "seed": 600244,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 77,
+      "elapsed_seconds": 1.2593310000374913,
+      "score": 1.0,
+      "seed": 600245,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 71,
+      "elapsed_seconds": 1.2587965000420809,
+      "score": 1.0,
+      "seed": 600246,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 44,
+      "elapsed_seconds": 0.621987042017281,
+      "score": 1.0,
+      "seed": 600247,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 78,
+      "elapsed_seconds": 1.2245518330018967,
+      "score": 1.0,
+      "seed": 600248,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 98,
+      "elapsed_seconds": 1.5083184579852968,
+      "score": 0.0,
+      "seed": 600249,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 102,
+      "elapsed_seconds": 1.6066902090096846,
+      "score": 1.0,
+      "seed": 600250,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 100,
+      "elapsed_seconds": 1.6784500839421526,
+      "score": 0.0,
+      "seed": 600251,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 55,
+      "elapsed_seconds": 0.8945195419946685,
+      "score": 1.0,
+      "seed": 600252,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 493,
+      "elapsed_seconds": 12.852768208016641,
+      "score": 0.5,
+      "seed": 600253,
+      "winner": null
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 90,
+      "elapsed_seconds": 1.45322787493933,
+      "score": 1.0,
+      "seed": 600254,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 0.8990553749026731,
+      "score": 0.0,
+      "seed": 600255,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 174,
+      "elapsed_seconds": 3.094608624931425,
+      "score": 1.0,
+      "seed": 600256,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 282,
+      "elapsed_seconds": 5.396538167027757,
+      "score": 0.0,
+      "seed": 600257,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 44,
+      "elapsed_seconds": 0.7857471250463277,
+      "score": 1.0,
+      "seed": 600258,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 151,
+      "elapsed_seconds": 2.4948852089000866,
+      "score": 0.0,
+      "seed": 600259,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 74,
+      "elapsed_seconds": 1.2045507499715313,
+      "score": 0.0,
+      "seed": 600260,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 191,
+      "elapsed_seconds": 3.40412025002297,
+      "score": 1.0,
+      "seed": 600261,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 109,
+      "elapsed_seconds": 1.8551479160087183,
+      "score": 0.0,
+      "seed": 600262,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 105,
+      "elapsed_seconds": 1.7254567499039695,
+      "score": 0.0,
+      "seed": 600263,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 40,
+      "elapsed_seconds": 0.5960513750324026,
+      "score": 1.0,
+      "seed": 600264,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 54,
+      "elapsed_seconds": 0.8296370409661904,
+      "score": 1.0,
+      "seed": 600265,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 146,
+      "elapsed_seconds": 2.2114572080317885,
+      "score": 0.0,
+      "seed": 600266,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 122,
+      "elapsed_seconds": 2.077605583006516,
+      "score": 1.0,
+      "seed": 600267,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 61,
+      "elapsed_seconds": 1.0449326250236481,
+      "score": 1.0,
+      "seed": 600268,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 54,
+      "elapsed_seconds": 0.8732770420610905,
+      "score": 1.0,
+      "seed": 600269,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 75,
+      "elapsed_seconds": 1.2317202909616753,
+      "score": 0.0,
+      "seed": 600270,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 35,
+      "elapsed_seconds": 0.570489542093128,
+      "score": 0.0,
+      "seed": 600271,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 188,
+      "elapsed_seconds": 3.428438709001057,
+      "score": 0.0,
+      "seed": 600272,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 49,
+      "elapsed_seconds": 0.7900506249861792,
+      "score": 1.0,
+      "seed": 600273,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 105,
+      "elapsed_seconds": 1.7559205410070717,
+      "score": 0.0,
+      "seed": 600274,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 83,
+      "elapsed_seconds": 1.4025552499806508,
+      "score": 1.0,
+      "seed": 600275,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 72,
+      "elapsed_seconds": 1.2497700829990208,
+      "score": 0.0,
+      "seed": 600276,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 188,
+      "elapsed_seconds": 3.7848994999658316,
+      "score": 1.0,
+      "seed": 600277,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 103,
+      "elapsed_seconds": 2.001929874997586,
+      "score": 0.0,
+      "seed": 600278,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 49,
+      "elapsed_seconds": 0.7458162090042606,
+      "score": 1.0,
+      "seed": 600279,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 140,
+      "elapsed_seconds": 2.6008146669482812,
+      "score": 1.0,
+      "seed": 600280,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 182,
+      "elapsed_seconds": 3.4583298749057576,
+      "score": 0.0,
+      "seed": 600281,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 115,
+      "elapsed_seconds": 2.1310533749638125,
+      "score": 1.0,
+      "seed": 600282,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 55,
+      "elapsed_seconds": 0.8732784580206499,
+      "score": 1.0,
+      "seed": 600283,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 151,
+      "elapsed_seconds": 2.7371329170418903,
+      "score": 1.0,
+      "seed": 600284,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 122,
+      "elapsed_seconds": 1.9920862499857321,
+      "score": 1.0,
+      "seed": 600285,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 280,
+      "elapsed_seconds": 5.713780875084922,
+      "score": 0.0,
+      "seed": 600286,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 65,
+      "elapsed_seconds": 0.9942517500603572,
+      "score": 1.0,
+      "seed": 600287,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 86,
+      "elapsed_seconds": 1.324200583039783,
+      "score": 1.0,
+      "seed": 600288,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 153,
+      "elapsed_seconds": 3.225825791945681,
+      "score": 1.0,
+      "seed": 600289,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 244,
+      "elapsed_seconds": 5.622051458922215,
+      "score": 0.0,
+      "seed": 600290,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 139,
+      "elapsed_seconds": 2.674601290957071,
+      "score": 1.0,
+      "seed": 600291,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 92,
+      "elapsed_seconds": 1.7555783340940252,
+      "score": 0.0,
+      "seed": 600292,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 110,
+      "elapsed_seconds": 1.9066047919914126,
+      "score": 0.0,
+      "seed": 600293,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 85,
+      "elapsed_seconds": 1.4573039580136538,
+      "score": 0.0,
+      "seed": 600294,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 72,
+      "elapsed_seconds": 1.2949993750080466,
+      "score": 1.0,
+      "seed": 600295,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 54,
+      "elapsed_seconds": 0.9763535000383854,
+      "score": 1.0,
+      "seed": 600296,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 64,
+      "elapsed_seconds": 1.066634124959819,
+      "score": 0.0,
+      "seed": 600297,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 62,
+      "elapsed_seconds": 1.0307807909557596,
+      "score": 0.0,
+      "seed": 600298,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 1.0303833750076592,
+      "score": 1.0,
+      "seed": 600299,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 61,
+      "elapsed_seconds": 1.1829389169579372,
+      "score": 0.0,
+      "seed": 600300,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 45,
+      "elapsed_seconds": 0.7867963750613853,
+      "score": 0.0,
+      "seed": 600301,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 53,
+      "elapsed_seconds": 0.9622475830838084,
+      "score": 1.0,
+      "seed": 600302,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 60,
+      "elapsed_seconds": 0.9943921669619158,
+      "score": 1.0,
+      "seed": 600303,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 70,
+      "elapsed_seconds": 1.208844583015889,
+      "score": 1.0,
+      "seed": 600304,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 73,
+      "elapsed_seconds": 2.2228616250213236,
+      "score": 0.0,
+      "seed": 600305,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 62,
+      "elapsed_seconds": 1.9358857079641894,
+      "score": 1.0,
+      "seed": 600306,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 36,
+      "elapsed_seconds": 0.9942482499172911,
+      "score": 1.0,
+      "seed": 600307,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 77,
+      "elapsed_seconds": 2.2795429590623826,
+      "score": 0.0,
+      "seed": 600308,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 1.7005727500654757,
+      "score": 1.0,
+      "seed": 600309,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 85,
+      "elapsed_seconds": 2.6098097920184955,
+      "score": 0.0,
+      "seed": 600310,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 112,
+      "elapsed_seconds": 3.914278915966861,
+      "score": 1.0,
+      "seed": 600311,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 90,
+      "elapsed_seconds": 2.322771125007421,
+      "score": 0.0,
+      "seed": 600312,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 79,
+      "elapsed_seconds": 1.6161765001015738,
+      "score": 0.0,
+      "seed": 600313,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 67,
+      "elapsed_seconds": 1.4331762091023847,
+      "score": 1.0,
+      "seed": 600314,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 44,
+      "elapsed_seconds": 0.8380456659942865,
+      "score": 1.0,
+      "seed": 600315,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 73,
+      "elapsed_seconds": 1.5483542500296608,
+      "score": 1.0,
+      "seed": 600316,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 106,
+      "elapsed_seconds": 2.176912291906774,
+      "score": 0.0,
+      "seed": 600317,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 199,
+      "elapsed_seconds": 3.9223674999084324,
+      "score": 1.0,
+      "seed": 600318,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 98,
+      "elapsed_seconds": 1.7535698330029845,
+      "score": 0.0,
+      "seed": 600319,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 143,
+      "elapsed_seconds": 2.5279135000891984,
+      "score": 1.0,
+      "seed": 600320,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 142,
+      "elapsed_seconds": 2.635607957956381,
+      "score": 0.0,
+      "seed": 600321,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 59,
+      "elapsed_seconds": 1.0244124580640346,
+      "score": 0.0,
+      "seed": 600322,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 42,
+      "elapsed_seconds": 0.6608967080246657,
+      "score": 1.0,
+      "seed": 600323,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 76,
+      "elapsed_seconds": 1.2670617080293596,
+      "score": 0.0,
+      "seed": 600324,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 97,
+      "elapsed_seconds": 1.672099250019528,
+      "score": 1.0,
+      "seed": 600325,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 76,
+      "elapsed_seconds": 1.170088625047356,
+      "score": 0.0,
+      "seed": 600326,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 151,
+      "elapsed_seconds": 2.7159253749996424,
+      "score": 1.0,
+      "seed": 600327,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 88,
+      "elapsed_seconds": 1.5857260000193492,
+      "score": 1.0,
+      "seed": 600328,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 70,
+      "elapsed_seconds": 1.094457458006218,
+      "score": 1.0,
+      "seed": 600329,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 36,
+      "elapsed_seconds": 0.5939085830468684,
+      "score": 1.0,
+      "seed": 600330,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 64,
+      "elapsed_seconds": 1.075310833984986,
+      "score": 1.0,
+      "seed": 600331,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 28,
+      "elapsed_seconds": 0.4221050830092281,
+      "score": 1.0,
+      "seed": 600332,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 107,
+      "elapsed_seconds": 1.8263385830214247,
+      "score": 1.0,
+      "seed": 600333,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 101,
+      "elapsed_seconds": 1.698048415943049,
+      "score": 1.0,
+      "seed": 600334,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 215,
+      "elapsed_seconds": 4.115415583946742,
+      "score": 0.0,
+      "seed": 600335,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 72,
+      "elapsed_seconds": 1.220728375017643,
+      "score": 1.0,
+      "seed": 600336,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 120,
+      "elapsed_seconds": 2.0981698340037838,
+      "score": 0.0,
+      "seed": 600337,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 48,
+      "elapsed_seconds": 0.7518742079846561,
+      "score": 0.0,
+      "seed": 600338,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 469,
+      "elapsed_seconds": 11.36049920890946,
+      "score": 0.0,
+      "seed": 600339,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 87,
+      "elapsed_seconds": 1.5809975829906762,
+      "score": 1.0,
+      "seed": 600340,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 84,
+      "elapsed_seconds": 1.467741540982388,
+      "score": 0.0,
+      "seed": 600341,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 80,
+      "elapsed_seconds": 1.3766538340132684,
+      "score": 1.0,
+      "seed": 600342,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 139,
+      "elapsed_seconds": 2.4783557079499587,
+      "score": 1.0,
+      "seed": 600343,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 95,
+      "elapsed_seconds": 1.5573449580697343,
+      "score": 0.0,
+      "seed": 600344,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 90,
+      "elapsed_seconds": 1.5254962500184774,
+      "score": 0.0,
+      "seed": 600345,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 66,
+      "elapsed_seconds": 1.0564594579627737,
+      "score": 0.0,
+      "seed": 600346,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 69,
+      "elapsed_seconds": 1.1903084170771763,
+      "score": 0.0,
+      "seed": 600347,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 75,
+      "elapsed_seconds": 1.2938048340147361,
+      "score": 0.0,
+      "seed": 600348,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 99,
+      "elapsed_seconds": 1.8161245420342311,
+      "score": 0.0,
+      "seed": 600349,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 105,
+      "elapsed_seconds": 1.8244735419284552,
+      "score": 0.0,
+      "seed": 600350,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 80,
+      "elapsed_seconds": 1.3689510420663282,
+      "score": 0.0,
+      "seed": 600351,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 128,
+      "elapsed_seconds": 2.3701952919363976,
+      "score": 0.0,
+      "seed": 600352,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 131,
+      "elapsed_seconds": 2.4288089589681476,
+      "score": 1.0,
+      "seed": 600353,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 63,
+      "elapsed_seconds": 1.0503192089963704,
+      "score": 0.0,
+      "seed": 600354,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 30,
+      "elapsed_seconds": 0.5078332920093089,
+      "score": 1.0,
+      "seed": 600355,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 45,
+      "elapsed_seconds": 0.7209509171079844,
+      "score": 1.0,
+      "seed": 600356,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 59,
+      "elapsed_seconds": 0.9689830420538783,
+      "score": 1.0,
+      "seed": 600357,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 41,
+      "elapsed_seconds": 0.63406145805493,
+      "score": 1.0,
+      "seed": 600358,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 271,
+      "elapsed_seconds": 5.704548415960744,
+      "score": 1.0,
+      "seed": 600359,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 83,
+      "elapsed_seconds": 1.5048730409471318,
+      "score": 0.0,
+      "seed": 600360,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 69,
+      "elapsed_seconds": 1.1472720419988036,
+      "score": 0.0,
+      "seed": 600361,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 128,
+      "elapsed_seconds": 2.4156268750084564,
+      "score": 1.0,
+      "seed": 600362,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 133,
+      "elapsed_seconds": 2.3335202919552103,
+      "score": 0.0,
+      "seed": 600363,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 48,
+      "elapsed_seconds": 0.7708262500818819,
+      "score": 1.0,
+      "seed": 600364,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 66,
+      "elapsed_seconds": 1.0368248330196366,
+      "score": 0.0,
+      "seed": 600365,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 106,
+      "elapsed_seconds": 1.86072774999775,
+      "score": 1.0,
+      "seed": 600366,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 43,
+      "elapsed_seconds": 0.6629897080129012,
+      "score": 1.0,
+      "seed": 600367,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 47,
+      "elapsed_seconds": 0.8007488329894841,
+      "score": 1.0,
+      "seed": 600368,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 0.9711096249520779,
+      "score": 1.0,
+      "seed": 600369,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 90,
+      "elapsed_seconds": 1.6706677919719368,
+      "score": 0.0,
+      "seed": 600370,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 45,
+      "elapsed_seconds": 0.739101207931526,
+      "score": 1.0,
+      "seed": 600371,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 73,
+      "elapsed_seconds": 1.3184301670407876,
+      "score": 1.0,
+      "seed": 600372,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 58,
+      "elapsed_seconds": 1.0233405840117484,
+      "score": 1.0,
+      "seed": 600373,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 242,
+      "elapsed_seconds": 4.902920790947974,
+      "score": 1.0,
+      "seed": 600374,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 204,
+      "elapsed_seconds": 4.058204583008774,
+      "score": 0.0,
+      "seed": 600375,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 90,
+      "elapsed_seconds": 1.606164374970831,
+      "score": 0.0,
+      "seed": 600376,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 53,
+      "elapsed_seconds": 0.8930266250390559,
+      "score": 1.0,
+      "seed": 600377,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 146,
+      "elapsed_seconds": 2.5878193749813363,
+      "score": 0.0,
+      "seed": 600378,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 104,
+      "elapsed_seconds": 2.1213867500191554,
+      "score": 0.0,
+      "seed": 600379,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 113,
+      "elapsed_seconds": 2.2702117500593886,
+      "score": 1.0,
+      "seed": 600380,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 139,
+      "elapsed_seconds": 2.526083500008099,
+      "score": 0.0,
+      "seed": 600381,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 81,
+      "elapsed_seconds": 1.445038832956925,
+      "score": 0.0,
+      "seed": 600382,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 74,
+      "elapsed_seconds": 1.2217530000489205,
+      "score": 1.0,
+      "seed": 600383,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 116,
+      "elapsed_seconds": 1.9799472920130938,
+      "score": 0.0,
+      "seed": 600384,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 51,
+      "elapsed_seconds": 0.8375388749409467,
+      "score": 0.0,
+      "seed": 600385,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 56,
+      "elapsed_seconds": 0.9224871249170974,
+      "score": 1.0,
+      "seed": 600386,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 78,
+      "elapsed_seconds": 1.3731358340010047,
+      "score": 1.0,
+      "seed": 600387,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 111,
+      "elapsed_seconds": 1.9729716249275953,
+      "score": 0.0,
+      "seed": 600388,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 72,
+      "elapsed_seconds": 1.1495624580420554,
+      "score": 0.0,
+      "seed": 600389,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 55,
+      "elapsed_seconds": 0.908103916910477,
+      "score": 0.0,
+      "seed": 600390,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 39,
+      "elapsed_seconds": 0.6110735840629786,
+      "score": 0.0,
+      "seed": 600391,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 41,
+      "elapsed_seconds": 0.6524883749661967,
+      "score": 0.0,
+      "seed": 600392,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 91,
+      "elapsed_seconds": 1.6250843330053613,
+      "score": 0.0,
+      "seed": 600393,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 41,
+      "elapsed_seconds": 0.6830318330321461,
+      "score": 1.0,
+      "seed": 600394,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 62,
+      "elapsed_seconds": 1.1806150000775233,
+      "score": 0.0,
+      "seed": 600395,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 63,
+      "elapsed_seconds": 1.1779893330531195,
+      "score": 1.0,
+      "seed": 600396,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 32,
+      "elapsed_seconds": 0.5896364590153098,
+      "score": 0.0,
+      "seed": 600397,
+      "winner": "p1"
+    },
+    {
+      "candidate_seat": "p1",
+      "decisions": 71,
+      "elapsed_seconds": 1.3650502499658614,
+      "score": 0.0,
+      "seed": 600398,
+      "winner": "p2"
+    },
+    {
+      "candidate_seat": "p2",
+      "decisions": 146,
+      "elapsed_seconds": 2.8419700419763103,
+      "score": 1.0,
+      "seed": 600399,
+      "winner": "p2"
+    }
+  ],
+  "score": 0.49625,
+  "seed_start": 600000,
+  "sims": null,
+  "wall_seconds": 717.0976947920863,
+  "wilson95": [
+    0.44752153377556236,
+    0.5450498084319448
+  ],
+  "worlds": null
+}

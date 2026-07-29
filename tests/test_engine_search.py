@@ -1385,5 +1385,186 @@ class FallbackAlertTests(unittest.TestCase):
         self.assertIn("reason=no_public_state", str(caught.exception))
 
 
+class _FakeState:
+    def __init__(self, serialized: str = "state") -> None:
+        self._serialized = serialized
+
+    def to_string(self) -> str:
+        return self._serialized
+
+
+class _FakeWorld:
+    def __init__(self, side: str = "side_one") -> None:
+        self.slot_sides = {"p1": side, "p2": "side_two" if side == "side_one" else "side_one"}
+
+
+class _FakeCrate:
+    """Stand-in for the native module; records the call and returns a report."""
+
+    def __init__(self, reports, *, error: Exception | None = None) -> None:
+        self._reports = list(reports)
+        self._error = error
+        self.calls: list[dict] = []
+
+    def puct_search_multi(self, state_str, iterations, **kwargs):
+        self.calls.append({"state_str": state_str, "iterations": iterations, **kwargs})
+        if self._error is not None:
+            raise self._error
+        return json.dumps(self._reports.pop(0))
+
+
+def _crate_report(side_one, side_two, *, max_depth_reached, iterations=1024):
+    return {
+        "iterations": iterations,
+        "max_depth_reached": max_depth_reached,
+        "side_one": side_one,
+        "side_two": side_two,
+    }
+
+
+class HandcraftedCrateSearchTests(unittest.TestCase):
+    """leaf_eval='hp_fraction_crate': the crate tree with handcrafted leaves.
+
+    The depth-decay study's control arm (docs/mcts_handcrafted_leaf_depth_findings.md)
+    depends on this path pricing leaves WITHOUT a model while keeping every other
+    knob identical to model mode, and on its depth-reached telemetry being real
+    rather than the configured cap echoed back.
+    """
+
+    def setUp(self) -> None:
+        self.policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=object(),
+            config=EngineMctsConfig(
+                leaf_eval="hp_fraction_crate", search_sims=64, search_depth=4, worlds=2
+            ),
+        )
+        mask = (True, True, False, False, True, False, False, False, False)
+        self.context = _FakeContext(_FakeObservation(mask, _candidates()))
+
+    def _run(self, crate, worlds):
+        with patch.dict(sys.modules, {"pokezero_search": crate}):
+            return self.policy._search_hp_fraction_crate(
+                self.context, worlds, random.Random(7)
+            )
+
+    def test_config_needs_no_model_artifacts_but_needs_a_budget(self) -> None:
+        EngineMctsConfig(leaf_eval="hp_fraction_crate")  # no model/tables required
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="hp_fraction_crate", search_depth=0)
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="hp_fraction_crate", search_sims=0)
+
+    def test_search_config_reaches_the_crate_unchanged(self) -> None:
+        crate = _FakeCrate(
+            [
+                _crate_report(
+                    [{"move": "earthquake", "visits": 64, "q": 0.6}], [], max_depth_reached=3
+                )
+            ]
+        )
+        self._run(crate, [(_FakeWorld(), _FakeState("STATE-1"))])
+        call = crate.calls[0]
+        self.assertEqual(call["state_str"], "STATE-1")
+        self.assertEqual(call["iterations"], 64)
+        self.assertEqual(call["max_depth"], 4)
+        self.assertEqual(call["c_puct"], 1.4)
+        self.assertTrue(call["deep_ko_split"])
+
+    def test_visit_shares_aggregate_across_worlds(self) -> None:
+        # World A prefers the switch 3:1; world B prefers earthquake 3:1 but the
+        # switch still carries a quarter — the normalized sum decides.
+        crate = _FakeCrate(
+            [
+                _crate_report(
+                    [
+                        {"move": "switch starmie", "visits": 30, "q": 0.7},
+                        {"move": "earthquake", "visits": 10, "q": 0.4},
+                    ],
+                    [],
+                    max_depth_reached=2,
+                ),
+                _crate_report(
+                    [
+                        {"move": "earthquake", "visits": 30, "q": 0.6},
+                        {"move": "switch starmie", "visits": 10, "q": 0.5},
+                    ],
+                    [],
+                    max_depth_reached=3,
+                ),
+            ]
+        )
+        decision = self._run(
+            crate, [(_FakeWorld(), _FakeState()), (_FakeWorld(), _FakeState())]
+        )
+        aggregated = decision.metadata["engine_mcts"]["aggregated_choices"]
+        self.assertAlmostEqual(aggregated["earthquake"], 1.0, places=4)
+        self.assertAlmostEqual(aggregated["switch starmie"], 1.0, places=4)
+        self.assertEqual(decision.metadata["engine_mcts"]["leaf_eval"], "hp_fraction_crate")
+        self.assertEqual(decision.metadata["engine_mcts"]["worlds_searched"], 2)
+
+    def test_p2_reads_side_two(self) -> None:
+        context = _FakeContext(
+            _FakeObservation(
+                (True, True, False, False, True, False, False, False, False), _candidates()
+            ),
+            player_id="p2",
+        )
+        crate = _FakeCrate(
+            [
+                _crate_report(
+                    [{"move": "hiddenpowergrass70", "visits": 64, "q": 0.9}],
+                    [{"move": "earthquake", "visits": 64, "q": 0.2}],
+                    max_depth_reached=1,
+                )
+            ]
+        )
+        with patch.dict(sys.modules, {"pokezero_search": crate}):
+            decision = self.policy._search_hp_fraction_crate(
+                context, [(_FakeWorld(), _FakeState())], random.Random(7)
+            )
+        # p2 sits on side_two in this world, so the side_two entry decides.
+        self.assertEqual(decision.action_index, 0)
+
+    def test_depth_reached_is_measured_not_the_configured_cap(self) -> None:
+        crate = _FakeCrate(
+            [
+                _crate_report(
+                    [{"move": "earthquake", "visits": 64, "q": 0.5}], [], max_depth_reached=1
+                ),
+                _crate_report(
+                    [{"move": "earthquake", "visits": 64, "q": 0.5}], [], max_depth_reached=3
+                ),
+            ]
+        )
+        decision = self._run(
+            crate, [(_FakeWorld(), _FakeState()), (_FakeWorld(), _FakeState())]
+        )
+        stats = self.policy.stats.to_dict()
+        self.assertEqual(stats["depth_reached_samples"], 2)
+        self.assertEqual(stats["depth_reached_max"], 3)
+        self.assertEqual(stats["depth_reached_mean"], 2.0)
+        self.assertEqual(stats["depth_reached_histogram"], {"1": 1, "3": 1})
+        self.assertEqual(decision.metadata["engine_mcts"]["max_depth_reached"], 3)
+        self.assertEqual(decision.metadata["engine_mcts"]["depths_reached"], (1, 3))
+
+    def test_crate_failure_is_attributed_and_falls_back(self) -> None:
+        crate = _FakeCrate([], error=ValueError("battle is already over at the root"))
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            decision = self._run(crate, [(_FakeWorld(), _FakeState())])
+        stats = self.policy.stats.to_dict()
+        self.assertEqual(stats["worlds_searched"], 0)
+        self.assertEqual(stats["fallback_decisions"], 1)
+        self.assertIn(
+            "crate_search_hp: battle is already over at the root",
+            stats["world_failure_reasons"],
+        )
+        self.assertIn(decision.action_index, (0, 1, 4))
+
+
 if __name__ == "__main__":
     unittest.main()
