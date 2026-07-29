@@ -197,7 +197,11 @@ def check(*, strict_mtime: bool = True) -> list[str]:
             print(
                 "note: reproducible-build timestamps on "
                 f"{', '.join(sorted(undatable))} — freshness rests on the content "
-                "fingerprint, which is exact.",
+                "fingerprint alone. That fingerprint spans the PATCH SET, not the "
+                "built artifact, so an artifact built from the right patches at the "
+                "wrong crate-source commit is invisible in this state (states 1-2 "
+                "catch it by mtime). Unreachable for the acceptance run, where each "
+                "shard rebuilds from a clean vendor.",
                 file=sys.stderr,
             )
     return problems

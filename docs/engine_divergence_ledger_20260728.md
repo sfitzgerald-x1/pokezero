@@ -1706,6 +1706,13 @@ Fixed with a three-step ladder, failure direction unchanged:
 Verified in all three states. A pre-2000 stamp is now evidence of *nothing*
 rather than evidence of staleness, and an honest rebuild can satisfy the gate.
 
+**What state 3 does not cover.** The content fingerprint spans the **patch
+set**, not the built artifact, so an artifact built from the right patches but
+at the wrong `rust/pokezero-search` source commit is invisible in state 3 —
+states 1-2 catch that by mtime, and it is unreachable for the acceptance run
+because each shard rebuilds from a clean vendor.
+
+
 ### F.5's containment was described more narrowly than it is implemented
 
 F.5 said the reclassification applies to "the called move's damage". **It does
@@ -1745,3 +1752,78 @@ outstanding — but the gate now passes at 20 patches and Flail is fixed:
 Census, seeds 1350000-1350059, `acceptance_eligible: true`:
 **128 / 5,310 = 2.41 %** (from 2.47 % at 19 patches), 97.65 % measured, 0 harness
 errors, `unclassified` 0.
+
+---
+
+# Appendix G — pre-flight for the final re-measurement
+
+Branch `scott/final-remeasurement`. **Not the final pass** — #904 (locked-move
+PP) is still open, so the base is 21 patches, not 22.
+
+## G.1 Base and census
+
+Fresh build per protocol (vendor → touch → wheel → touch → crate → stamp);
+gate reports current at **21 patches** (`2567011c59245daf`), report
+`acceptance_eligible: true`.
+
+| base | diverged / measured | rate |
+| --- | --- | --- |
+| 19 patches | 131 / 5,310 | 2.47 % |
+| 20 patches (variable-BP) | 128 / 5,310 | 2.41 % |
+| **21 patches (PP-ordering)** | **128 / 5,310** | **2.41 %** |
+
+PP-ordering moved nothing on this seed set, as expected: charging PP correctly
+does not change any HP component. 97.65 % measured, 0 harness errors,
+`unclassified` 0.
+
+## G.2 Replay-verified verdict on the dominant class
+
+`roll_scaled_component` (37 rows, 28.9 %) triaged; its largest bucket is
+`structural_component_count` (16 rows, 43 %). Per the method rule the label was
+replayed, not read — and it was wrong again.
+
+`seed 1350004 step 66`:
+
+```
+|move|p1a: Mew|Soft-Boiled|p1a: Mew
+|-heal|p1a: Mew|263/263
+|move|p2a: Exeggutor|Solar Beam|p1a: Mew|[from] lockedmove   <- RELEASE turn
+|-damage|p1a: Mew|189/263
+|-heal|p1a: Mew|205/263|[from] item: Leftovers
+
+observed  p1: rolled = heal_to_full +27, move -74   p2: exact = itemleftovers +18
+engine    p1: rolled = heal_to_full +27             p2: exact = itemleftovers +18
+raw instructions: Heal SideOne: 27        <- and nothing else
+```
+
+Showdown is on the **second** turn of a two-turn move (`[from] lockedmove`); the
+engine executed no Solar Beam at all.
+
+**Root cause — a world-construction gap, and a silent one.** `lockedmove` is not
+in `_SUPPORTED_VOLATILES` (`engine_world.py:91`) and no allowlist branch adds it,
+so a payload reporting it would fail closed. This boundary was *measured*
+(`gating=exact`), which means the public materialization **never carried the
+charge state at all**. The world is therefore built with the charging mon free to
+act, and submitting the move starts a **fresh charge** instead of releasing —
+the engine loses a whole turn of damage and neither errors nor falls back.
+
+| | |
+| --- | --- |
+| Verdict | **WORLD CONSTRUCTION** (`engine_world` / materialization payload), not the matcher |
+| Class | silent wrongness — no error, no fallback, a plausible wrong state |
+| Repro | seed 1350004 step 66 (`softboiled` vs `solarbeam`) |
+| Spec | the two-turn charge state (`|-prepare|`, Showdown's `lockedmove`) is public and must either be expressed on the engine world or fail the boundary closed; today it does neither |
+| Related | the same two-turn family the Sleep Talk probe found unhandled in the callee exclusion set (E.2) |
+
+This is a candidate explanation for a meaningful share of the
+`structural_component_count` bucket, whose signature is "the engine is missing a
+damage component" — but that share is **not** asserted here on one replay. It
+needs the same per-row treatment before the final table.
+
+## G.3 What remains before the acceptance run
+
+1. #904 merges → rebuild to 22 patches, re-run 300 games strict.
+2. Finish replay-verified verdicts for the remaining named classes.
+3. Adjudicate: engine lane, harness, or a named `limit:` class with a mechanism.
+4. If clean against the bar — zero divergent transitions outside the adjudicated
+   `limit:` classes — proceed to 8x1250 from seed 2,000,000 per F.6/the plan.
