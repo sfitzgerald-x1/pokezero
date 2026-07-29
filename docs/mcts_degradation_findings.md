@@ -835,6 +835,39 @@ staged `d6-s4096` config exists for this and is owner-gated.
   served a table cached from before it, would be reused silently. The durable
   fix is to put the vocabulary hash (or its length) into the observation
   contract so the reuse key and the validator both see it.
+- **Root encode was BUILD-anchored, not checkpoint-anchored (bounded caveat, not
+  a retraction).** `scripts/mcts_acceptance_h2h.py` built its env as
+  `LocalShowdownConfig(showdown_root=…, set_belief_source=True)` and passed
+  **no `category_vocab`**; `env_config_with_checkpoint_masks` latches the mask
+  and schema axes but not the vocabulary one, and `local_showdown` then falls
+  back to `self.config.category_vocab or gen3_category_vocabulary(root, …)` —
+  i.e. the *build's* enumeration. Both arms did this, identically. Scope, which
+  is narrower than it first looks:
+
+  - The **crate** path — the search arm's own model calls, root priors and every
+    leaf value — ran on the materialized checkpoint-matched tables, measured at
+    1216 (above). The root *inputs* handed to the crate are row-input JSON
+    (species and ledger strings), re-encoded by the crate from those tables, so
+    the build vocab does not reach the search arm's model evaluations.
+  - What the build vocab did drive is the **raw policy's** own forwards: the
+    opponent in the search arm, and both players in the control arm. Against a
+    1233-row trained embedding, a build vocab carrying `volatile:solarbeam`
+    shifts the 13-token volatile tail from index 1204 by one row.
+  - The **control is unaffected in its pooled number by construction** — both
+    runs of a seed are the same battle relabelled, so it is exactly 0.500
+    whatever the encode. And because the search arm's opponent *is* that same
+    raw policy, the control remains the right baseline for it: the comparison is
+    internally consistent.
+  - The direction of any residual bias is that a weakened raw opponent would
+    **overstate** the +0.115 delta. The k0 lane's k64c reproduction bounds the
+    shift's effect far below that margin, so this is a caveat on the margin's
+    exact size, not on its sign or on the §8 verdict. The seat-split and DiD
+    results are untouched: the shift is common-mode across seats.
+
+  The fix for future runs is one argument — pass the checkpoint's
+  `category_vocab` into `LocalShowdownConfig` — and it belongs with the
+  observation-contract hardening item above, since both are the same root cause:
+  vocabulary is not part of any latch.
 - **Telemetry.** #939 single-counts model-mode s/decision. This campaign's wall
   figures are not comparable to the pre-#939 grid without saying so; strength scores
   are unaffected.
