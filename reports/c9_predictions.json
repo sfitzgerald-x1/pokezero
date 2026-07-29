@@ -1,0 +1,37 @@
+{
+ "registered_before_measurement": true,
+ "cycle": 9, "patches": 33,
+ "commit_sha": "c496b1beb8d95dcc8e197b5eddef7b5b56f113ea",
+ "fingerprint": "887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d",
+ "baseline_c8": {"diverged": 151, "outside_limits": 108, "coverage": 0.978,
+                 "note": "c8 committed class counts only; row identities come from this cycle's regeneration with --checkpoint retention (per #956 review note - do NOT reconstruct c8's 19 cleared rows from class arithmetic)"},
+ "predictions": [
+  {"id": "P1", "claim": "regeneration identity: same commit-lineage code, same fingerprint, same seeds 1500000-1500299 reproduce c8's aggregates exactly",
+   "expect": "diverged 151, outside_limits 108, coverage 0.978, engine_errors 0, divergence_classes identical to reports/c8_summary.json"},
+  {"id": "P2", "claim": "all 16 W.6 known-mislabel rows persist with unchanged majority-miss classes; consequently ZERO of the 11 capped_lethal rows cross off via Appendix Z findings",
+   "basis": "patches 31/33 were IN the c8 build; a row those patches explain would have cleared in c8, and c8's class counts (missing:itemleftovers 11 = 9 capped + 2 attributed, psn 4 = 2 + 2, brn 1 = 0 + 1) match W.6 persistence exactly. Refutable at row level: if any W.6 seed/step is absent from the regeneration, the cross-off happens and P2 is scored wrong",
+   "expect": "cross-off count 0; all 11 rows proceed to the X.2-X.4 walk"},
+  {"id": "P3", "claim": "pre-registered split for the 11-row capped_lethal walk (four exits, X.3.3, mass floor 1%)",
+   "basis": "the #946 row-walk found the residual absent exactly in a 6.25% crit-lethal minority branch on the same signature; 6.25% clears the 1% floor, so rows whose lethal branch is a plain crit walk to limit. Rows needing crit AND a specific roll conjunction (~0.39%) take limit_not_established; expect at least one row to fail enumeration (world unbuildable / no engine_states) and at least one where the engine's lethal branch cannot reproduce the observed survivor HP vector",
+   "expect": {"limit:roll_divergent_lethality": 7, "limit_not_established": 2, "damage_calc": 1, "cannot_enumerate": 1},
+   "sample_first": "walk 4 of 11 before generalizing (X.4.2); rows chosen before walking: s1500012 st24, s1500219 st62 (93.8% majority = crit-only minority), s1500242 st60 (39.5% majority = rich branch set), s1500168 st97 (psn, not itemleftovers)"},
+  {"id": "P4", "claim": "decomposition of the 108 outside-limits rows lands on the documented shape",
+   "expect": {"mechanism_2_documented_followup": "~8 (interval 6-10) incl. 1500024/9, 1500221/13, 1500126/13",
+              "kecleon_typechange_world_drift": "4 = 1500204/83, 1500191/20, 1500074/12, 1500074/32",
+              "heal_cap_matcher_artifact": "2 = 1500206/45, 1500040/70",
+              "encore_gap_documented": "1 = 1500051/124",
+              "explosion_frz_slp_signature": "2 (WHAT-not-WHY, carried from Appendix U)",
+              "sleeptalk_callee_union": "1 = 1500174/43",
+              "w6_capped_lethal": 11, "w6_attributed_components": 5,
+              "unreplayed_extremes_carried_from_Z6": "5 = 1500180/35, 1500028/44, 1500051/117, 1500121/67, 1500207/27 - to be replayed this cycle",
+              "remainder": "structural roll_scaled + small classes from c7's buckets; predict <= 5 rows resist attribution after replay-first triage"}},
+  {"id": "P5", "claim": "no new divergence classes, coverage unchanged, engine_errors 0"}
+ ],
+ "probe_status": {
+   "painsplit_clamp": "PASS",
+   "protect_ladder_k0_to_k4": "PASS (100/50/25/12.5/12.5 - k4 floor holds)",
+   "stepwise_STAB_odd_278": "PASS (engine 278; old float pipeline would give 279)",
+   "burned_struggle_crit_58": "PASS (engine 58; old trailing halving would give 56)",
+   "runner": "scripts/engine_behavioral_probes.py (committed this cycle; fixtures transcribed from the #955 battery artifacts)"
+ }
+}

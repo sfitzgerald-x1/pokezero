@@ -1,0 +1,800 @@
+{
+ "cycle": 9,
+ "commit_sha": "c496b1beb8d95dcc8e197b5eddef7b5b56f113ea",
+ "fingerprint": "887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d",
+ "vendored_patches": 33,
+ "population": "the 108 outside-limits rows of the regenerated c8 strict run (seeds 1500000-1500299); regeneration reproduced c8's aggregates and class census exactly",
+ "lanes": {
+  "matcher_instrument": 52,
+  "engine_gap_named": 20,
+  "damage_calc_lane": 13,
+  "limit_shape_candidate": 11,
+  "world_construction_instrument": 7,
+  "adjudicated_limit": 5
+ },
+ "families": {
+  "encore_redirect_gap": 11,
+  "matcher_accounting_best_branch": 10,
+  "matcher_heal_cap_structural": 9,
+  "measurement_boundary_residual_truncation": 8,
+  "roll_divergent_lethality_shape_compound": 7,
+  "sleeptalk_callee_union": 7,
+  "mechanism2_stat_modifier_flooring": 6,
+  "damage_calc_one_point_family": 6,
+  "matcher_overreport_window": 6,
+  "adjudicated_limit_roll_divergent_lethality": 5,
+  "matcher_overreport_legal_roll": 4,
+  "kecleon_typechange_world_drift": 4,
+  "limit_not_established_keeps_label": 3,
+  "attribution_heal_vs_leechseed_I2": 3,
+  "fixed_damage_skips_contact_abilities": 3,
+  "counter_mirrorcoat_damage_dealt_semantics": 3,
+  "matcher_roll_inherited_painsplit": 3,
+  "explosion_incapacitated_status_signature": 2,
+  "boundary_builder_traced_ability_drift": 2,
+  "confusion_fanout_roll": 1,
+  "engine_waterabsorb_fires_on_raindance": 1,
+  "recoil_rounding_candidate": 1,
+  "battle_end_residual_truncation_attribution": 1,
+  "boundary_builder_toxic_stage_stale": 1,
+  "matcher_roll_inherited_cap": 1
+ },
+ "rows": [
+  {
+   "seed": 1500005,
+   "step": 67,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. the literal U.3.2 row"
+  },
+  {
+   "seed": 1500012,
+   "step": 24,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.343%"
+  },
+  {
+   "seed": 1500014,
+   "step": 69,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500016,
+   "step": 87,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500017,
+   "step": 55,
+   "divergence_class": "component_mismatch:heal|itemleftovers,psn",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs heal +31 vs engine leechseed +31 - same magnitude, different label; #908/I.2 lineage (U.3.3 row)"
+  },
+  {
+   "seed": 1500024,
+   "step": 9,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "Z.4 proven row: Guts+psn, -1 atk Ursaring"
+  },
+  {
+   "seed": 1500028,
+   "step": 44,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "replay: fresh Intimidate -1 atk on attacker; obs 18 vs eng 17 one point; stat x2/3 flooring family; CANDIDATE (no item marker)"
+  },
+  {
+   "seed": 1500033,
+   "step": 227,
+   "divergence_class": "component_mismatch:heal|leechseed",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs heal +21 vs engine leechseed +21"
+  },
+  {
+   "seed": 1500036,
+   "step": 14,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "p2 finding: obs 49 = 1 above legal max (m=48, rolls 40..48); p1 finding obs 56 IS legal (matcher over-report)"
+  },
+  {
+   "seed": 1500037,
+   "step": 28,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "triage: observed magnitude in engine legal roll set"
+  },
+  {
+   "seed": 1500040,
+   "step": 70,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "Z.1 documented (16=16)"
+  },
+  {
+   "seed": 1500050,
+   "step": 33,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=6.592%"
+  },
+  {
+   "seed": 1500050,
+   "step": 48,
+   "divergence_class": "roll_scaled_component",
+   "family": "confusion_fanout_roll",
+   "basis": "confusion self-hit roll + hidden-counter fan; comparison-limit shape (WHAT recorded)"
+  },
+  {
+   "seed": 1500051,
+   "step": 117,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "replay: chosen icebeam, executed Hidden Power (Encored)"
+  },
+  {
+   "seed": 1500051,
+   "step": 124,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "Z.1 documented row (Illumise Encore redirects Wailord Surf -> Ice Beam)"
+  },
+  {
+   "seed": 1500053,
+   "step": 26,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500054,
+   "step": 21,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: obs Fire Punch -15 + leftovers _to_full +15 (245 cap) vs engine avg -16 + plain +15; shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500054,
+   "step": 125,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: engine sleep-talk Surf branch kills at avg (capped -318), observed legal roll -301 survives; limit-family shape, candidate for future cross-off"
+  },
+  {
+   "seed": 1500055,
+   "step": 60,
+   "divergence_class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: obs Return -91 survives tick at 6; engine avg -99 -> capped tick kill; obs roll legal"
+  },
+  {
+   "seed": 1500057,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "direct calculate_damage: obs 22 in legal set {22..26} of m=26; run-time legal-set path failed (Sleep Talk turn)"
+  },
+  {
+   "seed": 1500059,
+   "step": 1,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "obs 61 = 1 above legal max (m=60, rolls 51..60); direct calculate_damage evidence"
+  },
+  {
+   "seed": 1500060,
+   "step": 49,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "obs 71 = 1 above crit-arm legal max vs incoming Zapdos"
+  },
+  {
+   "seed": 1500062,
+   "step": 9,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500068,
+   "step": 79,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family."
+  },
+  {
+   "seed": 1500072,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500072,
+   "step": 48,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "1.10 ratio, +2 atk toxic Ledian attacker; candidate (x2 boost is exact so marker weak)"
+  },
+  {
+   "seed": 1500074,
+   "step": 12,
+   "divergence_class": "roll_scaled_component",
+   "family": "kecleon_typechange_world_drift",
+   "basis": "Z.1 documented; ownership resolved this cycle: engine_world/payload never consume live_type_override"
+  },
+  {
+   "seed": 1500074,
+   "step": 32,
+   "divergence_class": "roll_scaled_component",
+   "family": "kecleon_typechange_world_drift",
+   "basis": "Z.1 documented; ownership resolved this cycle: engine_world/payload never consume live_type_override"
+  },
+  {
+   "seed": 1500074,
+   "step": 57,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "explosion_incapacitated_status_signature",
+   "basis": "X-walk: damage_calc, mass=0.000%; U.3.1 signature extended to par (|cant|par + engine blocked-branch drops residuals)"
+  },
+  {
+   "seed": 1500076,
+   "step": 96,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "-1 spd on defender Shuckle (x2/3 defense-stat flooring family); CANDIDATE"
+  },
+  {
+   "seed": 1500079,
+   "step": 17,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500080,
+   "step": 11,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500084,
+   "step": 31,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family."
+  },
+  {
+   "seed": 1500086,
+   "step": 66,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500099,
+   "step": 5,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500099,
+   "step": 49,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500103,
+   "step": 76,
+   "divergence_class": "component_missing_in_engine:abilityroughskin",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: Rough Skin recoil from Seismic Toss absent (100% branch)"
+  },
+  {
+   "seed": 1500105,
+   "step": 64,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500105,
+   "step": 111,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.343%"
+  },
+  {
+   "seed": 1500105,
+   "step": 118,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. switch-only boundary, engine runs EOT block"
+  },
+  {
+   "seed": 1500108,
+   "step": 67,
+   "divergence_class": "component_missing_in_engine:itemleftovers,movewish",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: crit arm - obs crit -107 survives (Wish+leftovers follow); engine crit avg kills (capped -115)"
+  },
+  {
+   "seed": 1500112,
+   "step": 40,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: engine called-Surf branch kills Crobat at avg (capped -85), observed -80 survives; limit-family shape"
+  },
+  {
+   "seed": 1500118,
+   "step": 16,
+   "divergence_class": "component_extra_in_engine:itemleftovers,psn",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family."
+  },
+  {
+   "seed": 1500121,
+   "step": 67,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "replay: chosen hiddenpowerfire70, executed Psychic (same-turn Encore); Z.1 documented gap"
+  },
+  {
+   "seed": 1500123,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500123,
+   "step": 79,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "0.91 ratio band, no stat-modifier marker; 1-2 pt family candidate"
+  },
+  {
+   "seed": 1500124,
+   "step": 58,
+   "divergence_class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "engine_waterabsorb_fires_on_raindance",
+   "basis": "replay: Heal SideTwo 72 (= maxhp/4) immediately after ChangeWeather RAIN; NEW engine defect candidate"
+  },
+  {
+   "seed": 1500125,
+   "step": 45,
+   "divergence_class": "component_missing_in_engine:abilityliquidooze",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs itemleftovers +21 vs engine leechseed +21; liquidooze label from 10% minority"
+  },
+  {
+   "seed": 1500126,
+   "step": 13,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "Choice Band Aerodactyl (Z.6 named)"
+  },
+  {
+   "seed": 1500130,
+   "step": 53,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family."
+  },
+  {
+   "seed": 1500136,
+   "step": 27,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500137,
+   "step": 132,
+   "divergence_class": "component_missing_in_engine:heal",
+   "family": "sleeptalk_callee_union",
+   "basis": "replay: LOSSY sleeptalk_called_unidentified; callee union renders generic residual"
+  },
+  {
+   "seed": 1500150,
+   "step": 10,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500150,
+   "step": 39,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500155,
+   "step": 22,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: INVERSE: Showdown Mirror Coat did not retaliate, engine fired 2x59=-118 (ChangeDamageDealtMoveCatagory Physical->Special evidence); WHY open"
+  },
+  {
+   "seed": 1500155,
+   "step": 145,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500161,
+   "step": 44,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500162,
+   "step": 115,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "triage: observed magnitude in engine legal roll set"
+  },
+  {
+   "seed": 1500168,
+   "step": 97,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=4.980%"
+  },
+  {
+   "seed": 1500174,
+   "step": 43,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY)"
+  },
+  {
+   "seed": 1500174,
+   "step": 72,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY)"
+  },
+  {
+   "seed": 1500175,
+   "step": 67,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY)"
+  },
+  {
+   "seed": 1500180,
+   "step": 35,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "replay: chosen earthquake, executed Hidden Power (Encored)"
+  },
+  {
+   "seed": 1500182,
+   "step": 25,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence)"
+  },
+  {
+   "seed": 1500182,
+   "step": 60,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY)"
+  },
+  {
+   "seed": 1500188,
+   "step": 33,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "explosion_incapacitated_status_signature",
+   "basis": "X-walk: damage_calc, mass=0.000%; U.3.1 signature extended to par (|cant|par + engine blocked-branch drops residuals)"
+  },
+  {
+   "seed": 1500188,
+   "step": 57,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500189,
+   "step": 61,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500191,
+   "step": 20,
+   "divergence_class": "roll_scaled_component",
+   "family": "kecleon_typechange_world_drift",
+   "basis": "Z.1 documented; ownership resolved this cycle: engine_world/payload never consume live_type_override"
+  },
+  {
+   "seed": 1500192,
+   "step": 91,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: engine emitted NO Counter damage after Seismic Toss; grep: apply_fixed_damage + SEISMICTOSS arm never register damage_dealt (choice_effects.rs) - fixed-damage-path candidate"
+  },
+  {
+   "seed": 1500196,
+   "step": 35,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500200,
+   "step": 47,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence)"
+  },
+  {
+   "seed": 1500204,
+   "step": 83,
+   "divergence_class": "roll_scaled_component",
+   "family": "kecleon_typechange_world_drift",
+   "basis": "Z.1 documented; ownership resolved this cycle: engine_world/payload never consume live_type_override"
+  },
+  {
+   "seed": 1500206,
+   "step": 45,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "Z.1 documented (13=13 magnitudes agree, shapes differ)"
+  },
+  {
+   "seed": 1500207,
+   "step": 27,
+   "divergence_class": "roll_scaled_component",
+   "family": "recoil_rounding_candidate",
+   "basis": "replay: DE damage 75 legal (m=75); recoil obs 25 = round(75/3) vs engine trunc(0.33*75)=24; NEW rounding candidate"
+  },
+  {
+   "seed": 1500208,
+   "step": 40,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108"
+  },
+  {
+   "seed": 1500210,
+   "step": 32,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500211,
+   "step": 46,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500214,
+   "step": 36,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108"
+  },
+  {
+   "seed": 1500214,
+   "step": 37,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108"
+  },
+  {
+   "seed": 1500217,
+   "step": 112,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence)"
+  },
+  {
+   "seed": 1500219,
+   "step": 62,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=5.859%"
+  },
+  {
+   "seed": 1500221,
+   "step": 13,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "Choice Band Pidgeot (Z.6 named)"
+  },
+  {
+   "seed": 1500223,
+   "step": 70,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable)"
+  },
+  {
+   "seed": 1500226,
+   "step": 71,
+   "divergence_class": "component_extra_in_engine:itemleftovers,sandstorm",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. switch-only boundary"
+  },
+  {
+   "seed": 1500226,
+   "step": 83,
+   "divergence_class": "component_mismatch:sandstorm|brn",
+   "family": "battle_end_residual_truncation_attribution",
+   "basis": "replay: battle ends (|win|) mid-residuals; obs sandstorm -16 vs engine brn -16, equal magnitude, label tie at faint-capped boundary"
+  },
+  {
+   "seed": 1500231,
+   "step": 109,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting"
+  },
+  {
+   "seed": 1500232,
+   "step": 54,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500239,
+   "step": 60,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap"
+  },
+  {
+   "seed": 1500242,
+   "step": 56,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=4.980%"
+  },
+  {
+   "seed": 1500242,
+   "step": 60,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.659%"
+  },
+  {
+   "seed": 1500243,
+   "step": 79,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "boundary_builder_toxic_stage_stale",
+   "basis": "replay: engine tick -75 (stage 5) vs observed fresh stage-1 -15 after Rest cure + re-tox; world carried stale toxic_count; instrument lane candidate"
+  },
+  {
+   "seed": 1500248,
+   "step": 77,
+   "divergence_class": "roll_scaled_component",
+   "family": "boundary_builder_traced_ability_drift",
+   "basis": "replay+state: world ability=TRACE with FLASHFIRE volatile; engine damages through traced Flash Fire immunity; instrument lane, Kecleon-ownership class"
+  },
+  {
+   "seed": 1500248,
+   "step": 78,
+   "divergence_class": "roll_scaled_component",
+   "family": "boundary_builder_traced_ability_drift",
+   "basis": "replay+state: world ability=TRACE with FLASHFIRE volatile; engine damages through traced Flash Fire immunity; instrument lane, Kecleon-ownership class"
+  },
+  {
+   "seed": 1500251,
+   "step": 56,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "damage_calc_one_point_family",
+   "basis": "X-walk: damage_calc, mass=0.000%; obs 116 not in m=130 roll set, 1-pt gap, no mechanism-2 marker (Wailord Leftovers/WaterVeil)"
+  },
+  {
+   "seed": 1500253,
+   "step": 70,
+   "divergence_class": "component_magnitude:heal",
+   "family": "matcher_roll_inherited_cap",
+   "basis": "replay: leech sap capped by KO inherits move roll (obs 27 vs eng 28); magnitudes track the roll exactly"
+  },
+  {
+   "seed": 1500255,
+   "step": 55,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=5.859%"
+  },
+  {
+   "seed": 1500264,
+   "step": 40,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: same shape as s1500155/22; WHY open"
+  },
+  {
+   "seed": 1500266,
+   "step": 79,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500267,
+   "step": 77,
+   "divergence_class": "roll_scaled_component",
+   "family": "mechanism2_stat_modifier_flooring",
+   "basis": "Choice Band Crobat (context marker)"
+  },
+  {
+   "seed": 1500274,
+   "step": 15,
+   "divergence_class": "roll_scaled_component",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: same, Togetic Seismic Toss into Rough Skin Sharpedo"
+  },
+  {
+   "seed": 1500278,
+   "step": 30,
+   "divergence_class": "roll_scaled_component",
+   "family": "encore_redirect_gap",
+   "basis": "mechanical marker: -start Encore + executed move != chosen move (verified on s1500232/54 by replay)"
+  },
+  {
+   "seed": 1500285,
+   "step": 14,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family."
+  },
+  {
+   "seed": 1500286,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "triage: observed magnitude in engine legal roll set"
+  },
+  {
+   "seed": 1500287,
+   "step": 76,
+   "divergence_class": "component_missing_in_engine:brn",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: Flame Body burn from Seismic Toss absent in engine branch (100%); Appendix K fixed-damage-path family; NEW candidate"
+  },
+  {
+   "seed": 1500290,
+   "step": 26,
+   "divergence_class": "component_missing_in_engine:heal",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: engine world on avg roll caps Leftovers _to_full (+7) vs observed uncapped +17; Z.1 heal-cap mechanism verbatim"
+  },
+  {
+   "seed": 1500291,
+   "step": 83,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY)"
+  },
+  {
+   "seed": 1500294,
+   "step": 110,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "sleeptalk_callee_union",
+   "basis": "replay: LOSSY sleeptalk_called_unidentified across 49 candidates; documented mapper insufficiency"
+  }
+ ]
+}
