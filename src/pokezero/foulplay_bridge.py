@@ -357,6 +357,14 @@ class ControlledFoulPlayGameResult:
     pokezero_decisions: int
     root_puct_searches: int
     root_puct_fallbacks: int
+    # engine-mcts (policy_mode='engine-mcts') counterparts. The native searcher
+    # records its own fallbacks in decision metadata exactly as Root-PUCT does;
+    # without these the FoulPlay summary reported no fallback at all for that
+    # mode, so a run could not tell a clean measurement from one where the
+    # searcher was playing uniform-legal on FoulPlay-side states.
+    engine_mcts_decisions: int = 0
+    engine_mcts_fallbacks: int = 0
+    engine_mcts_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     # Actual planner identities emitted by executed Root-PUCT decisions. This
     # is evidence for the primary hidden-information capstone contract.
     root_puct_opponent_action_policies: Mapping[str, int] = field(default_factory=dict)
@@ -601,6 +609,12 @@ class ControlledFoulPlayBenchmarkResult:
     def to_dict(self) -> dict[str, Any]:
         root_searches = sum(game.root_puct_searches for game in self.games)
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
+        engine_decisions = sum(game.engine_mcts_decisions for game in self.games)
+        engine_fallbacks = sum(game.engine_mcts_fallbacks for game in self.games)
+        engine_fallback_reasons: dict[str, int] = {}
+        for game in self.games:
+            for reason, count in (game.engine_mcts_fallback_reasons or {}).items():
+                engine_fallback_reasons[reason] = engine_fallback_reasons.get(reason, 0) + count
         root_total_visits = sum(game.root_puct_total_visits for game in self.games)
         root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
@@ -723,6 +737,21 @@ class ControlledFoulPlayBenchmarkResult:
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
             "belief_set_source": self.config.belief_set_source_enabled(),
+            # Sibling of root_puct, populated only when policy_mode is
+            # engine-mcts. Fallback here means the native searcher could not
+            # construct a single belief world and played uniform-legal instead,
+            # so a run without this block cannot distinguish a clean strength
+            # measurement from a contaminated one.
+            "engine_mcts": {
+                "decisions": engine_decisions,
+                "fallback_decisions": engine_fallbacks,
+                "fallback_rate": (engine_fallbacks / engine_decisions) if engine_decisions else None,
+                "fallback_reasons": dict(sorted(engine_fallback_reasons.items())),
+                "depth": self.config.engine_depth,
+                "sims": self.config.engine_sims,
+                "batch": self.config.engine_batch,
+                "worlds": self.config.engine_worlds,
+            } if self.config.policy_mode == "engine-mcts" else None,
             "root_puct": {
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
@@ -2737,6 +2766,16 @@ async def _run_single_game(
         and not decision.metadata.get("root_puct_fallback")
     )
     root_fallbacks = sum(1 for decision in state.decisions if decision.metadata.get("root_puct_fallback"))
+    engine_decisions = sum(
+        1 for decision in state.decisions if "engine_mcts" in (decision.metadata or {})
+    )
+    engine_fallback_reasons: dict[str, int] = {}
+    for decision in state.decisions:
+        block = (decision.metadata or {}).get("engine_mcts") or {}
+        reason = block.get("fallback") if isinstance(block, Mapping) else None
+        if reason:
+            engine_fallback_reasons[str(reason)] = engine_fallback_reasons.get(str(reason), 0) + 1
+    engine_fallbacks = sum(engine_fallback_reasons.values())
     root_fallback_reasons: dict[str, int] = {}
     root_fallback_categories: dict[str, int] = {}
     root_opponent_action_policies: dict[str, int] = {}
@@ -2946,6 +2985,9 @@ async def _run_single_game(
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
         root_puct_fallbacks=root_fallbacks,
+        engine_mcts_decisions=engine_decisions,
+        engine_mcts_fallbacks=engine_fallbacks,
+        engine_mcts_fallback_reasons=dict(engine_fallback_reasons),
         root_puct_opponent_action_policies=root_opponent_action_policies,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
