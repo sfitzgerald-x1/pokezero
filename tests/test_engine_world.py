@@ -1376,10 +1376,20 @@ class BridgeBuiltTransformRevertsLiveTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
+        from pokezero.poke_engine_adapter import (
+            PokeEngineTransformRevertUnsupportedError,
+            require_pre_transform_support,
+        )
         from pokezero.poke_engine_backend import probe_poke_engine
 
         if not probe_poke_engine().ready:
             self.skipTest("poke-engine is not installed/ready")
+        # A wheel predating the Transform patch rejects `pre_transform` outright,
+        # which would surface here as a TypeError ERROR rather than a skip.
+        try:
+            require_pre_transform_support()
+        except PokeEngineTransformRevertUnsupportedError as exc:
+            self.skipTest(str(exc))
 
     def _switch_out_fields(self, transformer: PokemonSpec):
         from pokezero.poke_engine_adapter import BattleSpec, build_poke_engine_state

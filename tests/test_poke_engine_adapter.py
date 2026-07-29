@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import sys
 from types import ModuleType, SimpleNamespace
@@ -7,6 +8,7 @@ import unittest
 
 from pokezero.poke_engine_adapter import (
     BattleSpec,
+    PokeEngineTransformRevertUnsupportedError,
     MoveSpec,
     PokeEngineAttractUnsupportedError,
     PokemonSpec,
@@ -14,6 +16,7 @@ from pokezero.poke_engine_adapter import (
     _serialize_pre_transform,
     build_poke_engine_state,
     minimal_gen3_fixture,
+    require_pre_transform_support,
     run_adapter_reversible_smoke,
 )
 from pokezero.poke_engine_backend import PokeEngineUnavailableError, probe_poke_engine
@@ -409,6 +412,20 @@ class AdapterReversibleSmokeTest(unittest.TestCase):
         self.assertIn("charmander", message)
 
 
+@contextlib.contextmanager
+def _stubbed_pre_transform_probe():
+    """Neutralise the pre_transform capability probe for fake-module tests."""
+
+    import pokezero.poke_engine_adapter as adapter
+
+    original = adapter.require_pre_transform_support
+    adapter.require_pre_transform_support = lambda engine=None: None
+    try:
+        yield
+    finally:
+        adapter.require_pre_transform_support = original
+
+
 def _transform_specs(*, with_snapshot: bool):
     """A BRIDGE-BUILT transformed active: the copied form baked into the spec.
 
@@ -565,9 +582,14 @@ class PreTransformSerializationTest(unittest.TestCase):
         self.assertIn("engine limit", str(caught.exception))
 
     def test_reaches_the_built_state(self) -> None:
-        state = build_poke_engine_state(
-            _transform_specs(with_snapshot=True), module=fake_construction_module()
-        )
+        # The fake module records kwargs instead of round-tripping them, so it
+        # cannot satisfy the capability probe; stub the probe the way
+        # tests/test_engine_world.py does for move-trapping. The REAL probe runs
+        # against a real wheel in BridgeBuiltTransformRevertsTest below.
+        with _stubbed_pre_transform_probe():
+            state = build_poke_engine_state(
+                _transform_specs(with_snapshot=True), module=fake_construction_module()
+            )
         active = state.kwargs["side_one"].pokemon[0]
         self.assertEqual(
             active.pre_transform,
@@ -610,6 +632,12 @@ class BridgeBuiltTransformRevertsTest(unittest.TestCase):
     def setUp(self) -> None:
         if not probe_poke_engine().ready:
             self.skipTest("poke-engine is not installed/ready")
+        # A wheel predating the Transform patch rejects `pre_transform` outright,
+        # which would surface here as a TypeError ERROR rather than a skip.
+        try:
+            require_pre_transform_support()
+        except PokeEngineTransformRevertUnsupportedError as exc:
+            self.skipTest(str(exc))
 
     def test_bridge_built_transform_reverts_on_switch_out(self) -> None:
         fields = self._switch_out(with_snapshot=True)

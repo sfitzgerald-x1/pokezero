@@ -51,6 +51,18 @@ class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
     """
 
 
+class PokeEngineTransformRevertUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a spec carries a pre-transform base form the binding cannot take.
+
+    ``Pokemon.pre_transform`` is what lets a CONSTRUCTED Transform end: without
+    it the engine has no base form to restore and the copy is stuck for the rest
+    of the search. A wheel built before that field existed rejects the keyword
+    outright, so this is a loud failure rather than a silent drop — but the check
+    exists so the failure names the cause and the fix instead of surfacing as a
+    bare TypeError from deep inside construction.
+    """
+
+
 class PokeEngineAttractUnsupportedError(PokeEngineUnavailableError):
     """Raised when a state needs Attract but the native patch is absent.
 
@@ -232,6 +244,8 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
         _require_attract_immobilization(engine)
     if _spec_requires_move_trap(spec):
         require_move_trap_support(engine)
+    if _spec_requires_pre_transform(spec):
+        require_pre_transform_support(engine)
 
     return _build_poke_engine_state_unchecked(spec, engine)
 
@@ -321,6 +335,68 @@ def _move_trap_supported(engine: Any) -> bool:
             return False
         # #878 made serialization a fixed point; a volatile that survives the
         # first write but not the read would still corrupt a search root.
+        return str(state_type.from_string(serialized).to_string()) == serialized
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
+
+
+def _spec_requires_pre_transform(spec: BattleSpec) -> bool:
+    return any(
+        member.pre_transform is not None
+        for side in (spec.side_one, spec.side_two)
+        for member in side.pokemon
+    )
+
+
+def require_pre_transform_support(engine: Any | None = None) -> None:
+    """Prove that the installed binding carries the gen3 Transform patch's snapshot.
+
+    Same shape as :func:`require_move_trap_support`: there is no version marker
+    for a local patch, so probe the CAPABILITY rather than the install. The
+    round trip matters as much as the keyword being accepted — a binding that
+    took the field and dropped it on serialization would leave a constructed
+    Transform unrevertible in exactly the way the field exists to prevent.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_pre_transform_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable; production modules are not.
+        supported = _pre_transform_supported(engine)
+    if not supported:
+        raise PokeEngineTransformRevertUnsupportedError(
+            "A constructed Transform carries its pre-transform base form, which "
+            "requires the patched poke-engine wheel; the installed engine does "
+            "not round-trip Pokemon.pre_transform, so a transformed Pokemon "
+            "could never revert on switch-out. Rebuild with "
+            "scripts/setup_poke_engine.sh (patch list entry "
+            "third_party/poke-engine-gen3-transform.patch)."
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_pre_transform_supported(engine: Any) -> bool:
+    return _pre_transform_supported(engine)
+
+
+def _pre_transform_supported(engine: Any) -> bool:
+    """Return whether the binding preserves a pre-transform record end to end."""
+
+    state_type = getattr(engine, "State", None)
+    side_type = getattr(engine, "Side", None)
+    pokemon_type = getattr(engine, "Pokemon", None)
+    if state_type is None or side_type is None or pokemon_type is None:
+        return False
+    record = "ditto;1;2;3;4;5;transform:8;none:0;none:0;none:0"
+    try:
+        state = state_type(
+            side_one=side_type(pokemon=[pokemon_type(id="ditto", pre_transform=record)]),
+            side_two=side_type(),
+        )
+        serialized = str(state.to_string())
+        if record.upper() not in serialized.upper():
+            return False
         return str(state_type.from_string(serialized).to_string()) == serialized
     except Exception:  # noqa: BLE001 - capability checks must fail closed
         return False
