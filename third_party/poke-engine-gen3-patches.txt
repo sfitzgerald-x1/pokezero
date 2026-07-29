@@ -163,3 +163,50 @@ poke-engine-gen3-transform.patch
 # rust/pokezero-search/tests/gen3_state_roundtrip.rs. Touches src/state.rs only;
 # authored against the transform-patched tree.
 poke-engine-gen3-state-roundtrip.patch
+
+# gen3 move-trapping: Mean Look, Spider Web and Block. All three resolve to
+# `target.addVolatile('trapped', source, move, 'trapper')` in Showdown, leaving
+# the victim with `trapped: true` and NO switch options until the trapper leaves
+# the field. Upstream defined all three as pure no-ops (no volatile_status, no
+# effect anywhere in src/), so the engine believed they did nothing — which made
+# every real Mean Look / Spider Web turn unrepresentable to the search world and
+# fell the whole root back to a non-search choice. Both are in the gen3 randbats
+# pool (Misdreavus / Ariados); Block is not, and rides along only because it is
+# literally the same Showdown handler.
+#
+# Semantics pinned against the real sim (scripts/gen3_switch_differential.py:
+# meanlook / spiderweb / meanlookprotect / meanlooksub / meanlooktrapperleaves /
+# meanlookbatonpass): the trap has no duration and no residual; Ghost types are
+# NOT exempt (the trapping immunity arrives in gen6 — gen5's typechart override
+# drops the `trapped: 3` entry gen3 would otherwise inherit); Protect blocks it
+# (gen3 inherits the gen5 mod's protect flag on Mean Look and Block); a
+# Substitute blocks it (no bypasssub — the sim answers `-fail`); the volatile is
+# LINKED, so an ordinary switch-out by the trapper, or its faint, frees the
+# victim; and gen3/4 alone re-declare BOTH `trapped` and `trapper` with
+# `noCopy: false`, which makes Baton Pass carry the trap in either direction.
+#
+# The Baton Pass asymmetry is the subtle part and is pinned from both ends. The
+# VICTIM passing carries its own trap to the receiver. The TRAPPER passing does
+# NOT release the victim: `copyVolatileFrom` copies `trapper` to the receiver,
+# DELETES the old trapper's linkedPokemon/linkedStatus, and only then runs
+# `clearVolatile()` — which finds no link left to release — while the victim's
+# link is re-pointed to the receiver. So the trap changes OWNER, and the
+# RECEIVER's later departure is what frees the victim. This is the line the pool
+# is built around: 2 of the 3 gen3 randbats Ariados sets carry Spider Web AND
+# Baton Pass. The release is therefore gated on the switching side not
+# baton-passing; the pre-existing PARTIALLYTRAPPED release next to it is
+# deliberately left unconditional, because Wrap/Fire Spin is not a linked
+# volatile at all — `partiallytrapped.onResidual` releases on `!source.isActive`,
+# which holds however the source left the field.
+#
+# Adds a TRAPPED variant to the gen3 volatile enum (distinct from
+# PARTIALLYTRAPPED, the Wrap/Fire Spin residual family) and applies it from
+# gen3/choice_effects.rs rather than as a declarative volatile_status on the
+# Choice, because the MOVES table in src/choices.rs is shared by all four
+# compiled generations and only gen3 gains the variant. The one shared-file edit
+# is the gen3-gated protect flag, in the same `cfg!(feature = ...)` style the
+# struggle-typeless patch already uses. Pinned by
+# rust/pokezero-search/tests/gen3_trap_perish_fidelity.rs. Touches
+# gen3/state.rs, gen3/choice_effects.rs, gen3/generate_instructions.rs and
+# choices.rs; authored against the confusion-patched tree, applied last.
+poke-engine-gen3-move-trapping.patch

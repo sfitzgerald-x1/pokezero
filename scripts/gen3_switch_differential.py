@@ -72,6 +72,37 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   transformrevert : Transform, switch out, switch back, Transform again ->
                   ``Pokemon.clearVolatile()`` restored ``baseMoveSlots`` and the
                   base species, so Ditto has its own move again.
+  meanlook / spiderweb : the target is trapped -- ``-activate|...|trapped`` and a
+                  standing request with ``trapped: true`` and no switch slots.
+                  The divergence
+                  ``third_party/poke-engine-gen3-move-trapping.patch`` fixes:
+                  upstream defined all three trapping moves as pure no-ops.
+                  ``meanlookcontrol`` is the same line without the move.
+  meanlookghost : gen3 has NO Ghost trapping immunity (it arrives in gen6), so a
+                  Misdreavus is trapped like anything else.
+  meanlookprotect / meanlooksub : Protect blocks the trap (gen3 inherits the gen5
+                  mod's protect flag on Mean Look and Block) and a Substitute
+                  makes it outright ``-fail`` (no bypasssub flag).
+  meanlooktrapperleaves : the trap is a LINKED volatile, so the trapper switching
+                  out runs ``removeLinkedVolatiles`` and frees the victim.
+  meanlooktrapperbatonpass / ...freed : but a BATON PASS by the trapper does not.
+                  ``copyVolatileFrom`` moves ``trapper`` to the receiver, DELETES
+                  the old trapper's link, and only then runs ``clearVolatile()``,
+                  which finds nothing left to release; the victim's link is
+                  re-pointed, so the trap changes OWNER and the RECEIVER's later
+                  departure is what frees the victim. This is the line 2 of the 3
+                  gen3 randbats Ariados sets are built around (Spider Web + Baton
+                  Pass).
+  meanlookbatonpass : gen3/gen4 alone re-declare ``trapped`` with
+                  ``noCopy: false``, so the trap rides a Baton Pass and the
+                  RECEIVER is still stuck.
+  perishladderfirsttick / perishladder : the Perish Song ladder announces
+                  ``perish3`` in the residual block of the move's OWN turn, then
+                  ``perish2``, ``perish1``, and ``perish0`` + ``|faint|`` on the
+                  FOURTH block, with both seats replacing at one shared boundary.
+                  These are a VERDICT pin rather than a fix -- the engine already
+                  matches -- and they exist because the ladder only lines up
+                  while the end-of-turn block runs exactly once on every ply.
 
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
@@ -170,6 +201,41 @@ def _sand_tyranitar():  # permanent gen3 sandstorm + a Leftovers residual to wat
                           moves=("Crunch", "Splash"))
 
 
+def _umbreon():  # Mean Look user (the pool's user is Misdreavus; any is fine here)
+    return FixturePokemon(species="Umbreon", ability="Synchronize", item="None",
+                          moves=("Mean Look", "Splash"))
+
+
+def _ariados():  # Spider Web user, straight out of the gen3 randbats pool
+    return FixturePokemon(species="Ariados", ability="Insomnia", item="None",
+                          moves=("Spider Web", "Splash"))
+
+
+def _trap_victim():  # can also answer with Protect / Substitute
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Splash", "Protect", "Substitute"))
+
+
+def _ariados_batonpass():  # the pool's own Spider Web + Baton Pass set
+    return FixturePokemon(species="Ariados", ability="Insomnia", item="None",
+                          moves=("Spider Web", "Baton Pass", "Splash"))
+
+
+def _smeargle_receiver():  # takes the pass, and the trap's ownership with it
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Splash",))
+
+
+def _misdreavus_batonpass():  # Ghost trap victim that can pass the trap on
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Splash", "Baton Pass"))
+
+
+def _misdreavus_perishsong():  # the pool's Perish Song carrier
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Perish Song", "Splash"))
+
+
 def _abra():  # 191 max HP: dies to Crunch on any roll, chips Tyranitar meanwhile
     return FixturePokemon(species="Abra", ability="Synchronize", item="None",
                           moves=("Night Shade", "Splash"))
@@ -247,6 +313,23 @@ def _residual_block_ran(lines) -> bool:
     block — not just the parts that happen to damage or heal someone.
     """
     return any(line.startswith(_SAND_UPKEEP) for line in lines)
+
+
+def _seat_trapped(requests, seat: str):
+    """Whether ``seat``'s standing request reports the hard move-trap.
+
+    Showdown answers a trapped seat with ``active[0].trapped: true`` and offers
+    it no switch slots at all; an untrapped seat carries no such key. ``None``
+    means the seat has no move request at this boundary (it is waiting on the
+    other seat's forced switch), which every caller treats as "not trapped".
+    """
+    request = requests.get(seat)
+    if not isinstance(request, dict):
+        return False
+    active = request.get("active")
+    if not active:
+        return False
+    return bool(active[0].get("trapped"))
 
 
 def _index_of(lines, prefix: str):
@@ -589,6 +672,147 @@ def _spec(name):
             },
             expect={"retransformed": True},
             landmark=lambda L: True, landmark_desc="")
+
+    # --- move-trapping (Mean Look / Spider Web) -----------------------------
+    # p1 traps p2's lead. The trap is announced ONCE with `-activate ... trapped`
+    # and never mentioned again, so every "still trapped?" fact below is read off
+    # the switch options in p2's standing request instead of the protocol.
+    _trapped = lambda R: {"p2_trapped": _seat_trapped(R, "p2")}
+    if name in ("meanlook", "spiderweb"):
+        return dict(
+            p1=[_umbreon() if name == "meanlook" else _ariados(), _blissey()],
+            p2=[_trap_victim(), _blissey()],
+            turns=[("move meanlook" if name == "meanlook" else "move spiderweb",
+                    "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-activate|p2a: Snorlax|trapped")},
+            request_facts=_trapped,
+            expect={"announced": True, "p2_trapped": True},
+            landmark=lambda L: _has(L, "|move|p1a:"),
+            landmark_desc="the trapping move was used")
+    if name == "meanlookcontrol":
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_trap_victim(), _blissey()],
+            turns=[("move splash", "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-activate|p2a: Snorlax|trapped")},
+            request_facts=_trapped,
+            expect={"announced": False, "p2_trapped": False},
+            landmark=lambda L: True, landmark_desc="")
+    if name == "meanlookghost":
+        # Gen 3 has no Ghost trapping immunity — that arrives in gen6, and gen5's
+        # typechart override drops the `trapped: 3` entry gen3 would inherit.
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_misdreavus_batonpass(), _blissey()],
+            turns=[("move meanlook", "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-activate|p2a: Misdreavus|trapped")},
+            request_facts=_trapped,
+            expect={"announced": True, "p2_trapped": True},
+            landmark=lambda L: _has(L, "|move|p1a: Umbreon|Mean Look"),
+            landmark_desc="Mean Look was used on the Ghost")
+    if name == "meanlookprotect":
+        # gen3 inherits the gen5 mod's protect flag on Mean Look.
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_trap_victim(), _blissey()],
+            turns=[("move meanlook", "move protect")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-activate|p2a: Snorlax|trapped")},
+            request_facts=_trapped,
+            expect={"announced": False, "p2_trapped": False},
+            landmark=lambda L: _has(L, "|-activate|p2a: Snorlax|Protect"),
+            landmark_desc="Protect activated")
+    if name == "meanlooksub":
+        # No bypasssub flag, so the Substitute makes the move outright fail.
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_trap_victim(), _blissey()],
+            turns=[("move splash", "move substitute"), ("move meanlook", "move splash")],
+            measured=1, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-activate|p2a: Snorlax|trapped"),
+                             "failed": _has(L, "|-fail|p1a: Umbreon")},
+            request_facts=_trapped,
+            expect={"announced": False, "failed": True, "p2_trapped": False},
+            landmark=lambda L: _has(L, "|move|p1a: Umbreon|Mean Look"),
+            landmark_desc="Mean Look was used into the Substitute")
+    if name == "meanlooktrapperleaves":
+        # `addVolatile('trapped', source, move, 'trapper')` LINKS the volatiles,
+        # so the trapper leaving runs removeLinkedVolatiles and frees the victim.
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_trap_victim(), _blissey()],
+            turns=[("move meanlook", "move splash"), ("switch 2", "move splash")],
+            measured=1, setup_step=None, setup_landed=None,
+            facts=lambda L: {"trapper_left": _has(L, "|switch|p1a: Blissey")},
+            request_facts=_trapped,
+            expect={"trapper_left": True, "p2_trapped": False},
+            landmark=lambda L: True, landmark_desc="")
+    if name in ("meanlooktrapperbatonpass", "meanlooktrapperbatonpassfreed"):
+        # The line the randbats set is built around: Ariados webs, then Baton
+        # Passes. The trap does NOT break — `copyVolatileFrom` moves `trapper` to
+        # the receiver (gen3 inherits gen4's `noCopy: false` for BOTH halves of
+        # the link), DELETES the old trapper's link, and only then runs
+        # `clearVolatile()`, which finds nothing left to release. The victim's
+        # link is re-pointed, so the trap changes OWNER — and the receiver's own
+        # departure is what finally frees the victim (measured step 3).
+        freed = name.endswith("freed")
+        return dict(
+            p1=[_ariados_batonpass(), _smeargle_receiver(), _blissey()],
+            p2=[_trap_victim(), _blissey()],
+            turns=[("move spiderweb", "move splash"),
+                   ("move batonpass", "move splash"),
+                   ("switch 2", None)]
+                  + ([("switch 3", "move splash")] if freed else []),
+            measured=3 if freed else 2, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "receiver_in": _has(L, "|switch|p1a: Blissey" if freed
+                                    else "|switch|p1a: Smeargle"),
+            },
+            request_facts=_trapped,
+            expect={"receiver_in": True, "p2_trapped": not freed},
+            landmark=lambda L: True, landmark_desc="")
+    if name == "meanlookbatonpass":
+        # gen3/gen4 alone re-declare `trapped` with `noCopy: false`, so the trap
+        # rides the pass and the RECEIVER is still stuck.
+        return dict(
+            p1=[_umbreon(), _blissey()], p2=[_misdreavus_batonpass(), _blissey()],
+            turns=[("move meanlook", "move splash"), ("move splash", "move batonpass"),
+                   (None, "switch 2")],
+            measured=2, setup_step=None, setup_landed=None,
+            facts=lambda L: {"receiver_in": _has(L, "|switch|p2a: Blissey")},
+            request_facts=_trapped,
+            expect={"receiver_in": True, "p2_trapped": True},
+            landmark=lambda L: _has(L, "[from] Baton Pass"),
+            landmark_desc="Baton Pass resolved")
+
+    # --- Perish Song ladder (verdict, no engine change) ---------------------
+    # Perish Song on turn 1; the residual block of that SAME turn announces
+    # perish3, then perish2, perish1, and perish0 + faint on the FOURTH block.
+    _perish_p1 = [_misdreavus_perishsong(), _blissey()]
+    _perish_p2 = [_snorlax_hazard_victim(), _blissey()]
+    _perish_turns = [("move perishsong", "move splash"),
+                     ("move splash", "move splash"),
+                     ("move splash", "move splash"),
+                     ("move splash", "move splash"),
+                     ("switch 2", "switch 2")]
+    if name == "perishladderfirsttick":
+        return dict(
+            p1=_perish_p1, p2=_perish_p2, turns=_perish_turns,
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"announced": _has(L, "|-start|p1a: Misdreavus|perish3")
+                                          and _has(L, "|-start|p2a: Snorlax|perish3"),
+                             "fainted": _has(L, "|faint|")},
+            expect={"announced": True, "fainted": False},
+            landmark=lambda L: _has(L, "|-fieldactivate|move: Perish Song"),
+            landmark_desc="Perish Song resolved")
+    if name == "perishladder":
+        return dict(
+            p1=_perish_p1, p2=_perish_p2, turns=_perish_turns,
+            measured=3, setup_step=None, setup_landed=None,
+            facts=lambda L: {"perish0": _has(L, "|-start|p1a: Misdreavus|perish0")
+                                        and _has(L, "|-start|p2a: Snorlax|perish0"),
+                             "both_fainted": _has(L, "|faint|p1a: Misdreavus")
+                                             and _has(L, "|faint|p2a: Snorlax")},
+            expect={"perish0": True, "both_fainted": True},
+            landmark=lambda L: True, landmark_desc="")
     raise ValueError(name)
 
 
@@ -599,7 +823,12 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "confusionduration", "confusiondurationcontrol",
              "confusionbatonpass", "confusionbatonpasscontrol",
              "transform", "transformcontrol", "transformsub", "transformmirror",
-             "transformrevert")
+             "transformrevert",
+             "meanlook", "meanlookcontrol", "spiderweb", "meanlookghost",
+             "meanlookprotect", "meanlooksub", "meanlooktrapperleaves",
+             "meanlookbatonpass", "meanlooktrapperbatonpass",
+             "meanlooktrapperbatonpassfreed",
+             "perishladderfirsttick", "perishladder")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
@@ -638,6 +867,17 @@ def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
                 f"  seed {seed}: landmark not observed ({spec['landmark_desc']})"
             ]
         facts = spec["facts"](lines)
+        # Some ground truth is only visible in the REQUEST, not the protocol: a
+        # trap is announced once with `-activate ... trapped` and then never
+        # mentioned again, so "is this seat still trapped" can only be read off
+        # the switch options Showdown offers at the boundary. `request_facts`
+        # sees the requests standing AFTER the measured step, and its results are
+        # merged into `facts` so `expect` stays one flat mapping.
+        request_facts = spec.get("request_facts")
+        if request_facts is not None:
+            if spec["measured"] is None:
+                raise ValueError(f"{name}: request_facts needs a measured step")
+            facts = {**facts, **request_facts(steps[spec["measured"]].requests)}
         for key, want in spec["expect"].items():
             if facts[key] != want:
                 return False, notes + [
