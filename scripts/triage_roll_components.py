@@ -211,6 +211,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--class", dest="klass", default="roll_scaled_component")
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="triage a deliberate sample; shares are then over the sample, "
+                         "not the class")
     args = ap.parse_args(argv)
 
     report = json.loads(args.report.read_text())
@@ -219,7 +222,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         if r.get("kind") == "transition_diverged"
         and args.klass in str(r.get("divergence_class", ""))
     ]
-    print(f"triaging {len(rows)} rows of class {args.klass!r}\n")
+
+    # POPULATION GUARD. Percentages here are quoted as shares of a class, so they
+    # are only meaningful over the WHOLE class. `--repros-per-game` (default 8)
+    # silently caps games with many divergences: the first run of this triage
+    # covered 64 of 86 rows and produced confident-looking percentages over an
+    # incomplete population. The census records the true class total; refuse
+    # rather than narrate the shortfall.
+    expected = int((report.get("divergence_classes") or {}).get(args.klass, -1))
+    if expected < 0:
+        # Substring match (e.g. a class family) has no single census total.
+        matching = [
+            v for k, v in (report.get("divergence_classes") or {}).items()
+            if args.klass in k
+        ]
+        expected = sum(matching) if matching else -1
+    if expected >= 0 and len(rows) < expected and not args.allow_partial:
+        raise SystemExit(
+            f"\nINCOMPLETE POPULATION — refusing to compute shares.\n"
+            f"  census says class {args.klass!r} has {expected} rows; this report "
+            f"carries only {len(rows)} repros for it.\n"
+            f"  The repro set is capped per game. Regenerate with a higher cap:\n"
+            f"    --keep-repro 5000 --repros-per-game 300\n"
+            f"  or pass --allow-partial to triage a deliberate sample (shares will "
+            f"then be over the sample, not the class).\n"
+        )
+    scope = "class" if expected >= 0 and len(rows) >= expected else "sample"
+    print(f"triaging {len(rows)} rows of class {args.klass!r} "
+          f"(census total {expected if expected >= 0 else 'unknown'}; shares over the {scope})\n")
 
     results = [triage_row(r, verbose=args.verbose) for r in rows]
     buckets: Counter = Counter(r["bucket"] for r in results)

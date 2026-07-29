@@ -50,4 +50,7 @@ echo "vendored poke-engine $VERSION (gen3-patched) at third_party/poke-engine-sr
 
 # Record which patch set this build came from, so the differential harness can
 # refuse to measure against a stale install (scripts/engine_build_fingerprint.py).
-"$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write || true
+# NOT tolerated to fail: a missing or stale stamp is exactly the state the gate
+# exists to catch, and swallowing the error would leave a freshly built engine
+# carrying someone else's fingerprint.
+"$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write
