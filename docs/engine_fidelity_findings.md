@@ -732,3 +732,58 @@ emits `DecrementPP`). Distinct observable, needs its own pins and differential.
 **Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
 --only ppimmobilizedfree ppimmobilizedcontrol`; engine side pinned by
 `rust/pokezero-search/tests/gen3_pp_ordering.rs` (14 tests).
+## Confirmed deviation 9: PP charged on locked continuation turns
+
+The tail of deviation 8, and the last known engine divergence. Showdown guards
+the deduction on `getLockedMove()` (`sim/battle-actions.ts:280-283`):
+
+    const lockedMove = pokemon.getLockedMove();
+    if (!lockedMove) {
+        if (!pokemon.deductPP(baseMove, null, target) && move.id !== 'struggle') { ... }
+    } else {
+        sourceEffect = this.dex.conditions.get('lockedmove');
+    }
+
+`getLockedMove` fires the `LockMove` priority event. Its providers in gen3's
+chain are the `lockedmove` condition (Outrage / Thrash / Petal Dance,
+`data/conditions.ts:282`), **`twoturnmove`** (Solar Beam, Sky Attack, Dig, Fly,
+Razor Wind, Skull Bash, `data/conditions.ts:317`), `mustrecharge`
+(`data/conditions.ts:377`), and `rollout` / `bide` in `data/moves.ts`. So a whole
+lock costs ONE PP, charged on the turn that starts it — which is why Showdown
+tags the second half of a two-turn move `[from] lockedmove`.
+
+**Reachability changed the shape of this fix.** The `lockedmove` trio is
+**absent from the gen3 randbats pool** — 0 carriers each for Outrage, Thrash and
+Petal Dance (`data/random-battles/gen3/sets.json`). The reachable half of the
+same bug is `twoturnmove`: **Solar Beam is on 4 species** (victreebel, exeggutor,
+tangela, sunflora), and the engine charged **two PP per use instead of one**.
+Hyper Beam (slaking) is the `mustrecharge` case and was already correct, because
+the engine models the recharge turn as No Move and `Choices::NONE` returns before
+the deduction. One guard covers all of them.
+
+This also corrects an earlier, imprecise claim in this doc's deviation 8 entry:
+the engine did not charge on *every* turn of an Outrage. It charged on the turn
+that started the lock and on the first continuation; later turns often fell on a
+confusion branch that (post-deviation 8) charges nothing. The divergence was two
+PP where Showdown spends one, not N where Showdown spends one.
+
+**PP exhaustion mid-lock, verified rather than assumed.** A two-turn move STARTED
+on the last PP still completes, because the execute turn never consults PP again
+— `getLockedMove()` short-circuits the whole deduction-and-abort block. Confirmed
+against the real sim: 8 PP of Sky Attack yields eight complete uses, the eighth
+beginning at 1 PP, and only then Struggle.
+
+**Lock-end confusion does not interact with PP.** `lockedmove.onEnd` adds the
+`confusion` volatile after the lock expires; that is a volatile application, not
+a move attempt, so it reaches no deduction site.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-lockedmove-pp.patch`. The charge-move execute turn
+needs a local, because the engine clears the charge volatile before the deduction
+runs; the LOCKEDMOVE volatile covers Outrage-class continuations, where it is
+still present. Both are absent on the turn that starts the lock, so the first
+turn pays exactly once and the next use pays again.
+
+**Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
+--only lockedmoveppdrain lockedmoveppcontrol`; engine side pinned by
+`rust/pokezero-search/tests/gen3_lockedmove_pp.rs` (7 tests).

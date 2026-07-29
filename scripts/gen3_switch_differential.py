@@ -214,6 +214,16 @@ def _pp_grinder():  # sole move, 5 base PP -> 8 with PP Ups, harmless
                           moves=("Mind Reader",))
 
 
+def _lock_tank():  # Steel/Ground wall: survives eight Sky Attacks without fainting
+    return FixturePokemon(species="Steelix", ability="Sturdy", item="None",
+                          moves=("Splash",))
+
+
+def _lock_charger():  # Sky Attack: two-turn, 5 base PP -> 8 with PP Ups, sole move
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Sky Attack",))
+
+
 def _lastmove_encorer():  # spe 85: out-speeds Smeargle, so Encore resolves first
     return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
                           moves=("Encore", "Splash", "Thunder Wave", "Confuse Ray"))
@@ -1294,6 +1304,37 @@ def _spec(name):
             landmark=lambda L: (_has(L, "|cant|p2a: Smeargle|flinch") if flinch
                                else _has(L, "|move|p2a: Smeargle|Mind Reader")),
             landmark_desc="Fake Out flinched the victim" if flinch else "victim moved")
+    if name in ("lockedmoveppdrain", "lockedmoveppcontrol"):
+        # Does a LOCKED continuation turn cost PP? Showdown guards the deduction
+        # on getLockedMove(), and `twoturnmove` is one of its onLockMove
+        # providers -- which is why it tags the execute turn `[from] lockedmove`.
+        # So a two-turn move costs ONE PP for the pair.
+        #
+        # Both arms give the victim a sole move with 8 PP (5 base, x8/5 from PP
+        # Ups) and drive it to Struggle, which makes the PP count observable in
+        # the protocol without reading requests. Sky Attack spends those 8 PP over
+        # SIXTEEN boundaries; Mind Reader spends them over eight. Had the engine's
+        # per-turn charging been right, Sky Attack would manage only four uses.
+        #
+        # This also answers the PP-exhaustion question empirically rather than by
+        # reasoning: the eighth Sky Attack STARTS on the last PP and still
+        # completes its lock, because the execute turn never consults PP again.
+        drain = name == "lockedmoveppdrain"
+        move = "skyattack" if drain else "mindreader"
+        turns = [("move splash", f"move {move}")] * (16 if drain else 8)
+        turns += [("move splash", "move struggle")]
+        marker = "[from] lockedmove" if drain else "|move|p2a: Smeargle|Mind Reader"
+        return dict(
+            p1=[_lock_tank()], p2=[_lock_charger() if drain else _pp_grinder()],
+            turns=turns, measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "completed_uses": sum(1 for line in L if marker in line),
+                "struggled": _has(L, "|move|p2a: Smeargle|Struggle"),
+                "fainted": _has(L, "|faint|"),
+            },
+            expect={"completed_uses": 8, "struggled": True, "fainted": False},
+            landmark=lambda L: _has(L, "|-prepare|p2a: Smeargle") if drain else True,
+            landmark_desc="Sky Attack charged" if drain else "")
     raise ValueError(name)
 
 
@@ -1320,7 +1361,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "whirlwindprotect", "roarprotect", "whirlwinddrag",
              "whirlwindsub",
              "flailladder", "reversalladder", "flailladdercontrol",
-             "ppimmobilizedfree", "ppimmobilizedcontrol")
+             "ppimmobilizedfree", "ppimmobilizedcontrol",
+             "lockedmoveppdrain", "lockedmoveppcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
