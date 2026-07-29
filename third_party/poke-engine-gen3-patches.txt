@@ -124,3 +124,42 @@ poke-engine-gen3-residual-defer-on-faint.patch
 # forks each branch right where Shed Skin does), so it is authored against the
 # residual-defer-patched tree and applied last.
 poke-engine-gen3-confusion-duration.patch
+
+# gen3 Transform (Ditto / Mew) implemented in rollouts. Upstream defines
+# Choices::TRANSFORM in the MOVES table and NOWHERE else — no effect arm in any
+# generation, no tests — so clicking Transform changed nothing at all, which is
+# why it dominated the engine-search world-construction failure census. Copies
+# species, the target's CURRENT types, the five non-HP stats, all seven boosts,
+# the target's ability (`gen > 2` — a Ditto that copies Flygon is `-immune` to
+# Earthquake) and the moveset at Math.min(5, move.pp) = 5 PP per slot; copies
+# neither HP nor status; fails only against an already-transformed target (gen3
+# lets it bypass Substitute, and Protect does not block it); reverts on
+# switch-out. Expressed entirely through the instruction system — FormeChange,
+# ChangeType (plus the TYPECHANGE volatile, whose switch-out arm already restores
+# types -> base_types), the five stat deltas, Boost, ChangeAbility — plus two NEW
+# instructions, ChangeMoveId (upstream had no reversible move-slot instruction at
+# all) and ChangeTransformSnapshot, backed by a new Pokemon::pre_transform record
+# of the transformer's base form, so every mutation inverts exactly and
+# size_of::<Instruction>() stays 6. Deliberate approximations (weight not copied
+# — its only gen3 consumer is Low Kick, absent from all 220 gen3 randbats sets;
+# max PP not modelled — the engine has no such field) are spelled out in the
+# patch header. Verified vs real gen3 Showdown
+# (scripts/gen3_switch_differential.py: transform + 4 more); pinned by
+# rust/pokezero-search/tests/gen3_transform_fidelity.rs. Touches src/instruction.rs,
+# src/state.rs, gen3/state.rs, gen3/choice_effects.rs and poke-engine-py/src/lib.rs.
+# Authored against the confusion-patched tree.
+poke-engine-gen3-transform.patch
+
+# State serialization must be a fixed point. Side::serialize writes the volatile
+# set with a TRAILING ":" and Side::deserialize split on ":" without discarding
+# the empty tail; PokemonVolatileStatus::from_str("") does not fail (the
+# define_enum_with_from_str! macro declares `default = NONE`), so every state
+# carrying a volatile silently gained a NONE and re-serializing emitted it back.
+# State::deserialize is how pokezero_search receives its root world, so this made
+# search read a different state than the caller built, and the phantom volatile
+# reached the instruction stream as a RemoveVolatileStatus(NONE) on every
+# switch-out. Fixed on the READER, so the wire format is unchanged and every
+# previously written state string still parses. Pinned by
+# rust/pokezero-search/tests/gen3_state_roundtrip.rs. Touches src/state.rs only;
+# authored against the transform-patched tree.
+poke-engine-gen3-state-roundtrip.patch
