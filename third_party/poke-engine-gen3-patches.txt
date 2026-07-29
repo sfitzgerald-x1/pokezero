@@ -639,8 +639,11 @@ poke-engine-gen3-solarbeam-weather.patch
 # normal damage path applies. None of these moves carries `bypasssub` in the gen3
 # data, so all five must be absorbed by a Substitute; all five wrote damage
 # STRAIGHT to the Pokemon instead:
-#   SEISMICTOSS (17/393 sets, on-distribution — the confirmed bug)
-#   SUPERFANG, ENDEAVOR, COUNTER, MIRRORCOAT (0/393 each, same handler)
+#   SEISMICTOSS            17/393 sets, on-distribution — the confirmed bug
+#   COUNTER, MIRRORCOAT     1/393 each (Wobbuffet, which carries BOTH on its one
+#                           set — so the counter-move half of this fix is live in
+#                           the pool, not latent)
+#   SUPERFANG, ENDEAVOR     0/393 each — fixed anyway, same handler
 #
 # Showdown's rule is substitute.onTryPrimaryHit (data/moves.ts; gen3 adds no
 # override): the move's own damage is computed against the POKEMON — Super Fang
@@ -662,7 +665,9 @@ poke-engine-gen3-solarbeam-weather.patch
 #              Ghost test and Mirror Coat's Dark test match their real types.
 #   PAINSPLIT — already skips entirely when a Substitute is up, which is what
 #              Showdown does (no bypasssub, and getDamage returns nothing, so the
-#              move fails).
+#              move fails). 4/393 sets (Dusclops, Misdreavus, Swalot, Weezing),
+#              so this is the second most reachable arm here and its
+#              already-correct verdict is load-bearing, not incidental.
 #
 # Left unimplemented, documented per the reachability convention: NIGHTSHADE and
 # DRAGONRAGE emit no instructions at all (the Flail gap shape), both 0 of 393
