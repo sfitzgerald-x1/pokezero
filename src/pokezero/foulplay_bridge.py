@@ -3748,7 +3748,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-time-ms", type=int, default=1000, help="foul-play search time per move.")
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
-    parser.add_argument("--policy-mode", choices=("raw", "root-puct"), default="root-puct")
+    parser.add_argument(
+        "--policy-mode", choices=("raw", "root-puct", "engine-mcts"), default="root-puct",
+        help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
+             "engine-mcts = the native Rust search over sampled belief worlds.",
+    )
+    # engine-mcts axes. Every one changes search semantics or wall time, so the
+    # config treats them as a frozen contract -- surfaced here rather than
+    # defaulted silently, so a run's config_id is reconstructable from argv.
+    parser.add_argument("--engine-model-path", type=Path, default=None,
+                        help="TorchScript trace for the in-crate leaf evaluator.")
+    parser.add_argument("--engine-tables-path", type=Path, default=None,
+                        help="Encoder tables JSON matching the checkpoint's contract.")
+    parser.add_argument("--engine-depth", type=int, default=4)
+    parser.add_argument("--engine-sims", type=int, default=1024)
+    parser.add_argument("--engine-batch", type=int, default=64)
+    parser.add_argument("--engine-worlds", type=int, default=4)
+    parser.add_argument("--engine-c-puct", type=float, default=1.4)
+    parser.add_argument("--no-engine-model-priors", action="store_true",
+                        help="Disable model priors in the native search (default: enabled).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -4036,6 +4054,14 @@ def _config_from_args(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
+        engine_model_path=getattr(args, "engine_model_path", None),
+        engine_tables_path=getattr(args, "engine_tables_path", None),
+        engine_depth=getattr(args, "engine_depth", 4),
+        engine_sims=getattr(args, "engine_sims", 1024),
+        engine_batch=getattr(args, "engine_batch", 64),
+        engine_worlds=getattr(args, "engine_worlds", 4),
+        engine_c_puct=getattr(args, "engine_c_puct", 1.4),
+        engine_model_priors=not getattr(args, "no_engine_model_priors", False),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,
