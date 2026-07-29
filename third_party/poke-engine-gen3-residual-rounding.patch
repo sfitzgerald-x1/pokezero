@@ -1,0 +1,83 @@
+diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs	2026-07-28 18:47:17
++++ b/src/gen3/generate_instructions.rs	2026-07-28 18:45:46
+@@ -2594,8 +2594,14 @@
+                 continue;
+             }
+ 
+-            let damage_amount =
+-                cmp::min((active_pkmn.maxhp as f32 * 0.0625) as i16, active_pkmn.hp);
++            // pokezero gen3 fidelity fix: the MINIMUM-1 clamp. Showdown's hail
++            // `onWeather` is `this.damage(target.baseMaxhp / 16)`, and every
++            // `damage()` call runs through `clampIntRange(damage, 1)` in
++            // `spreadDamage` — floor, then a hard floor of 1 HP. Upstream
++            // truncated `maxhp * 0.0625` with no clamp, so anything under 16 max
++            // HP took ZERO chip damage forever. Shedinja (1 max HP) is in the
++            // gen3 randbats pool, and in the real sim hail/sand kills it.
++            let damage_amount = cmp::min(cmp::max(active_pkmn.maxhp / 16, 1), active_pkmn.hp);
+             let hail_damage_instruction = Instruction::Damage(DamageInstruction {
+                 side_ref: *side_ref,
+                 damage_amount: damage_amount,
+@@ -2615,8 +2621,9 @@
+             {
+                 continue;
+             }
+-            let damage_amount =
+-                cmp::min((active_pkmn.maxhp as f32 * 0.0625) as i16, active_pkmn.hp);
++            // Same minimum-1 clamp as hail above: sandstorm's `onWeather` is the
++            // identical `this.damage(target.baseMaxhp / 16)`.
++            let damage_amount = cmp::min(cmp::max(active_pkmn.maxhp / 16, 1), active_pkmn.hp);
+             let sand_damage_instruction = Instruction::Damage(DamageInstruction {
+                 side_ref: *side_ref,
+                 damage_amount: damage_amount,
+@@ -2765,7 +2772,7 @@
+     // status damage
+     for side_ref in sides {
+         let side = state.get_side(side_ref);
+-        let toxic_count = side.side_conditions.toxic_count as f32;
++        let toxic_count = side.side_conditions.toxic_count as i16;
+         let active_pkmn = side.get_active();
+         if active_pkmn.hp == 0 {
+             continue;
+@@ -2807,14 +2814,33 @@
+                     .push(poison_damage_instruction);
+             }
+             PokemonStatus::TOXIC => {
+-                let toxic_multiplier = (1.0 / 16.0) * toxic_count + (1.0 / 16.0);
+-                let damage_amount = cmp::max(
+-                    cmp::min(
+-                        (active_pkmn.maxhp as f32 * toxic_multiplier) as i16,
+-                        active_pkmn.hp,
+-                    ),
+-                    1,
+-                );
++                // pokezero gen3 fidelity fix: ROUNDING ORDER. Showdown's `tox`
++                // residual is
++                //     this.damage(this.clampIntRange(pokemon.baseMaxhp / 16, 1) * stage)
++                // (data/conditions.ts; gen3 inherits gen4's `tox`, which only
++                // re-orders the residual and inherits this body) — the per-stage
++                // tick is FLOORED and clamped to a minimum of 1 FIRST, and only
++                // then multiplied by the stage counter.
++                //
++                // Upstream computed `floor(maxhp * stage / 16)`, flooring after
++                // the multiply. The two agree only when maxhp is a multiple of
++                // 16: writing maxhp = 16q + r, Showdown deals q*stage while
++                // upstream deals q*stage + floor(r*stage/16), so the engine
++                // OVER-damages by up to stage-1 HP and the gap widens every turn
++                // the toxic ladder climbs. This was 55% of the strict-matcher
++                // residue against the real sim.
++                //
++                // The min-1 clamp sits INSIDE the multiply, which is a second,
++                // opposite divergence at the bottom of the HP range: a 1 HP
++                // Shedinja (in the gen3 randbats pool) takes `1 * stage`, not 1.
++                let stage = toxic_count + 1;
++                let per_stage = cmp::max(active_pkmn.maxhp / 16, 1);
++                // Clamp against remaining HP in i32 so a deep ladder on a big
++                // maxhp cannot overflow the i16 the instruction carries.
++                let damage_amount = cmp::min(
++                    per_stage as i32 * stage as i32,
++                    active_pkmn.hp as i32,
++                ) as i16;
+                 let toxic_damage_instruction = Instruction::Damage(DamageInstruction {
+                     side_ref: *side_ref,
+                     damage_amount,

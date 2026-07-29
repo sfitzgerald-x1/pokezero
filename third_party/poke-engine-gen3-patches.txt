@@ -262,6 +262,41 @@ poke-engine-gen3-terminal-options.patch
 # gen3/generate_instructions.rs and gen3/state.rs; authored against the
 # terminal-options-patched tree, applied last of the BEHAVIOUR patches.
 poke-engine-gen3-encore-duration.patch
+# gen3 residual ROUNDING ORDER, the toxic ladder and the weather minimum.
+#
+# (1) Toxic. Showdown's `tox` residual is
+#       this.damage(this.clampIntRange(pokemon.baseMaxhp / 16, 1) * stage)
+# (data/conditions.ts; gen3 inherits gen4's `tox`, which only re-orders the
+# residual and inherits this body): the per-stage tick is FLOORED and clamped to
+# a minimum of 1 FIRST, and only then multiplied by the stage counter. Upstream
+# computed floor(maxhp * stage / 16) — flooring AFTER the multiply. Writing
+# maxhp = 16q + r, Showdown deals q*stage while upstream deals
+# q*stage + floor(r*stage/16), so the two agree only when maxhp is a multiple of
+# 16 and the engine otherwise OVER-damages by up to stage-1 HP, widening every
+# turn the ladder climbs. This was 55% of the strict-matcher residue against the
+# real sim. Verified: a 651 max HP Blissey (651 % 16 == 11, floor(651/16) == 40)
+# ticks 40/80/120/160/200 in the sim, where upstream dealt 40/81/122/162/203.
+#
+# (2) Hail and sandstorm. `onWeather` is `this.damage(target.baseMaxhp / 16)`,
+# and every damage() call runs through `clampIntRange(damage, 1)` in
+# spreadDamage — floor, then a hard floor of 1 HP. Upstream truncated
+# `maxhp * 0.0625` with no clamp, so anything under 16 max HP took ZERO chip
+# damage forever. Shedinja (1 max HP) is in the gen3 randbats pool and the real
+# sim kills it with sand/hail.
+#
+# Burn and poison were checked in the same sweep and are CORRECT: gen3 inherits
+# gen6's brn override (baseMaxhp / 8, not the modern /16) and the base psn
+# (baseMaxhp / 8), both of which upstream already matches, and both already carry
+# the minimum-1 clamp. Neither has a stage multiplier, so neither can express the
+# rounding-order bug. Pinned so that stays true.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# toxicladder + toxicladdercontrol + sandminimum); pinned by
+# rust/pokezero-search/tests/gen3_residual_rounding_fidelity.rs. Touches the
+# end-of-turn block in gen3/generate_instructions.rs only; authored against the
+# encore-patched tree, applied before the fixture refresh.
+poke-engine-gen3-residual-rounding.patch
+
 
 # gen3 Encore's APPLICATION-failure set. The duration patch above bounded how
 # long an Encore lasts; this one bounds when it may start at all. Upstream asked
