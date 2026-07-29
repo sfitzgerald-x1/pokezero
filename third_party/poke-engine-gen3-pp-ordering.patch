@@ -1,0 +1,97 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2196,29 +2196,6 @@
+     if incoming_instructions.percentage == 0.0 {
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         return;
+-    }
+-
+-    // most of the time pp decrement doesn't matter and just adds another instruction
+-    // so we only decrement pp if the move is at 10 or less pp since that is when it starts
+-    // to matter
+-    let (attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+-    let active = attacker_side.get_active();
+-    if active.moves[&choice.move_index].pp < 10 {
+-        let pp_decrement_amount = if choice.target == MoveTarget::Opponent
+-            && defender_side.get_active_immutable().ability == Abilities::PRESSURE
+-        {
+-            2
+-        } else {
+-            1
+-        };
+-        incoming_instructions
+-            .instruction_list
+-            .push(Instruction::DecrementPP(DecrementPPInstruction {
+-                side_ref: attacking_side,
+-                move_index: choice.move_index,
+-                amount: pp_decrement_amount,
+-            }));
+-        active.moves[&choice.move_index].pp -= pp_decrement_amount;
+     }
+ 
+     if !choice.sleep_talk_move {
+@@ -2279,6 +2256,64 @@
+         return;
+     }
+ 
++    // pokezero gen3 fidelity fix: charge PP HERE, not before the status branch,
++    // and immediately ABOVE the last_used_move record below — Showdown does both
++    // in the same `if (!externalMove)` block, deduction first
++    // (sim/battle-actions.ts:282) and `moveUsed` second (line 291), once the
++    // `BeforeMove` gate has already passed:
++    //
++    //     const willTryMove = this.battle.runEvent('BeforeMove', ...);
++    //     if (!willTryMove) { ...; return; }              // no PP charged
++    //     ...
++    //     if (!pokemon.deductPP(baseMove, null, target) && move.id !== 'struggle') {
++    //         this.battle.add('cant', pokemon, 'nopp', move); ...; return;
++    //     }
++    //     pokemon.moveUsed(move, targetLoc);
++    //
++    // So an immobilized turn is FREE: full paralysis, staying asleep, staying
++    // frozen, flinching, a confusion self-hit and infatuation all return false
++    // from their onBeforeMove and never reach the deduction. The engine charged
++    // before `generate_instructions_from_existing_status_conditions`, so a
++    // paralyzed Pokemon burned PP for turns it never acted on — and that phantom
++    // drain is load-bearing now that Encore reads PP: `encore.onResidual` ends
++    // Encore the moment the locked move hits 0, and `encore.onStart` refuses a
++    // target already at 0, so draining PP the sim never spent frees a seat
++    // Showdown keeps locked.
++    //
++    // It stays ABOVE `move_has_no_effect` and the accuracy roll for the same
++    // reason the record does: the deduction precedes `useMove`, so a move that
++    // misses, fails outright or is blocked by Protect still costs its PP.
++    //
++    // `!choice.sleep_talk_move` is Showdown's `if (!externalMove)`: Sleep Talk
++    // pays for itself, and the move it calls runs through `useMove`, which never
++    // deducts. Pressure needs no separate placement — Showdown charges its extra
++    // point inside `useMove` (line 482), downstream of this same gate, so the
++    // engine's combined 1-or-2 decrement moves as one unit.
++    if !choice.sleep_talk_move {
++        // most of the time pp decrement doesn't matter and just adds another
++        // instruction so we only decrement pp if the move is at 10 or less pp
++        // since that is when it starts to matter
++        let (attacker_side, defender_side) = state.get_both_sides(&attacking_side);
++        let active = attacker_side.get_active();
++        if active.moves[&choice.move_index].pp < 10 {
++            let pp_decrement_amount = if choice.target == MoveTarget::Opponent
++                && defender_side.get_active_immutable().ability == Abilities::PRESSURE
++            {
++                2
++            } else {
++                1
++            };
++            incoming_instructions
++                .instruction_list
++                .push(Instruction::DecrementPP(DecrementPPInstruction {
++                    side_ref: attacking_side,
++                    move_index: choice.move_index,
++                    amount: pp_decrement_amount,
++                }));
++            active.moves[&choice.move_index].pp -= pp_decrement_amount;
++        }
++    }
++
+     // pokezero gen3 fidelity fix: record the move as "last used" HERE, not before
+     // the status branch. Showdown sets `lastMove` in `Pokemon.moveUsed()`, called
+     // from `BattleActions.runMove` (sim/battle-actions.ts) only AFTER the

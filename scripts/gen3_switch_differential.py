@@ -204,6 +204,16 @@ def _smeargle_encorer():  # spe 75: encores Blissey BEFORE it moves (no duration
                           moves=("Encore", "Splash"))
 
 
+def _pp_faker():  # Fake Out on a fast body: a 100%-deterministic immobilized turn
+    return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
+                          moves=("Fake Out", "Splash"))
+
+
+def _pp_grinder():  # sole move, 5 base PP -> 8 with PP Ups, harmless
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Mind Reader",))
+
+
 def _lastmove_encorer():  # spe 85: out-speeds Smeargle, so Encore resolves first
     return FixturePokemon(species="Misdreavus", ability="Levitate", item="None",
                           moves=("Encore", "Splash", "Thunder Wave", "Confuse Ray"))
@@ -1252,6 +1262,38 @@ def _spec(name):
             expect={"climbs": not control},
             landmark=lambda L: _has(L, "|-weather|Sandstorm|[upkeep]"),
             landmark_desc="the sandstorm chipped the attacker")
+    if name in ("ppimmobilizedfree", "ppimmobilizedcontrol"):
+        # Does an immobilized turn cost PP? Showdown deducts in runMove only
+        # after the BeforeMove gate, so it must not -- and the cleanest way to
+        # SEE that is to count uses to Struggle.
+        #
+        # The victim's only move is Mind Reader (5 base PP -> 8 with PP Ups), so
+        # it is forced onto Struggle the moment the slot empties. Fake Out gives a
+        # 100% deterministic flinch on turn 1, with no seed dependence at all: if
+        # that flinched turn had cost a PP the victim would get only SEVEN uses
+        # and Struggle a turn early, which `mindreader_uses` reads off directly.
+        #
+        # The control is the same line with the flinch removed, and pins the 8 on
+        # its own so the number is not taken on faith.
+        flinch = name == "ppimmobilizedfree"
+        opener = "move fakeout" if flinch else "move splash"
+        # 8 grinding turns either way; the flinch line needs one extra boundary
+        # because turn 1 is consumed by the flinch and spends nothing.
+        turns = [(opener, "move mindreader")]
+        turns += [("move splash", "move mindreader")] * (8 if flinch else 7)
+        turns += [("move splash", "move struggle")]
+        return dict(
+            p1=[_pp_faker()], p2=[_pp_grinder()], turns=turns,
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "mindreader_uses": _count(L, "|move|p2a: Smeargle|Mind Reader"),
+                "struggled": _has(L, "|move|p2a: Smeargle|Struggle"),
+            },
+            # Exactly 8, flinch or no flinch: the immobilized turn is free.
+            expect={"mindreader_uses": 8, "struggled": True},
+            landmark=lambda L: (_has(L, "|cant|p2a: Smeargle|flinch") if flinch
+                               else _has(L, "|move|p2a: Smeargle|Mind Reader")),
+            landmark_desc="Fake Out flinched the victim" if flinch else "victim moved")
     raise ValueError(name)
 
 
@@ -1277,7 +1319,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "lastmoveflinchencore", "lastmoveexecutedcontrol",
              "whirlwindprotect", "roarprotect", "whirlwinddrag",
              "whirlwindsub",
-             "flailladder", "reversalladder", "flailladdercontrol")
+             "flailladder", "reversalladder", "flailladdercontrol",
+             "ppimmobilizedfree", "ppimmobilizedcontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
