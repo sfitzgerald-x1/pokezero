@@ -128,6 +128,20 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
   whirlwindsub  : ``bypasssub`` is in the gen3 flag set, so a Substitute does not
                   stop the drag.
 
+  flailladder / reversalladder : gen3 declares its OWN base-power ladder for both
+                  moves (``data/mods/gen3/moves.ts:273`` and ``:496``) —
+                  ``ratio = floor(hp * 48 / maxhp)`` clamped to >= 1, then
+                  200/150/100/80/40/20 — and does NOT inherit gen4's 64-scale.
+                  Sandstorm chips the attacker a fixed 16 HP a turn, so repeating
+                  the move walks the ladder and its damage must climb. This is
+                  the divergence
+                  ``third_party/poke-engine-gen3-variable-bp.patch`` fixes:
+                  upstream Flail was INERT (no arm, no base power) and Reversal
+                  used rounded float ratios that misclassify the boundary bands.
+  flailladdercontrol : the same line with a FIXED-power move (Body Slam), whose
+                  damage must NOT climb — separating "the ladder works" from
+                  "the attacker is taking chip-damage variance".
+
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
 seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
@@ -263,6 +277,33 @@ def _spikes_skarmory():  # hazard setter with an inert filler move
 def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
     return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
                           moves=("Splash",))
+
+
+def _flailer(move: str = "Flail"):
+    """261 max HP Dodrio — the pool's own Flail user. One 48th is 5.4 HP, so a
+    sandstorm's 16 HP/turn walks the ladder from 20 BP to 200 BP in ~16 turns."""
+
+    return FixturePokemon(species="Dodrio", ability="Run Away", item="None",
+                          moves=(move, "Splash"))
+
+
+def _sand_anvil(move: str):
+    """Sets permanent gen3 sandstorm and soaks the ladder move under test.
+
+    Sand Stream chips the Flail user 16 HP a turn with no accuracy roll, which is
+    what walks the ladder deterministically. The anvil has to RESIST the move
+    being laddered, or the line ends before the climb finishes — so it is chosen
+    per move: Rock/Dark against Flail's Normal (and against the control's Body
+    Slam), Poison/Flying against Reversal's Fighting, which it takes at 0.25x.
+    Sand Stream rides a non-native species in the Reversal case deliberately:
+    Custom Game does not validate abilities, and only the weather matters here.
+    """
+
+    if move == "Reversal":
+        return FixturePokemon(species="Crobat", ability="Sand Stream", item="None",
+                              moves=("Splash",), evs={"hp": 252})
+    return FixturePokemon(species="Tyranitar", ability="Sand Stream", item="None",
+                          moves=("Splash",), evs={"hp": 252})
 
 
 def _phazer():  # Skarmory carries Whirlwind AND Protect on its own randbats set
@@ -470,6 +511,31 @@ def _toxic_ladder_hp(lines, maxhp: int):
         current = condition.split(" ")[0].split("/")[0]
         ladder.append(int(current))
     return ladder
+
+
+def _damage_climbs(lines, seat: str, *, factor: float) -> bool:
+    """True if `seat`'s LAST attack-damage reading is `factor`x its first.
+
+    Reads only plain `-damage` lines (no `[from]` tag), so residual chip on the
+    same seat cannot be mistaken for the attack itself.
+    """
+
+    hits = []
+    hp = None
+    for line in lines:
+        if line.startswith(f"|switch|{seat}") or line.startswith(f"|drag|{seat}"):
+            hp = int(line.split("|")[4].split(" ")[0].split("/")[0])
+            continue
+        if not line.startswith(f"|-damage|{seat}"):
+            continue
+        condition = line.split("|")[3]
+        current = 0 if condition.startswith("0 fnt") else int(condition.split(" ")[0].split("/")[0])
+        if hp is not None and "[from]" not in line:
+            hits.append(hp - current)
+        hp = current
+    if len(hits) < 2:
+        return False
+    return hits[-1] >= hits[0] * factor
 
 
 def _index_of(lines, prefix: str):
@@ -1166,6 +1232,26 @@ def _spec(name):
             expect={"dragged": True},
             landmark=lambda L: _has(L, "|move|p1a: Skarmory|Whirlwind"),
             landmark_desc="Whirlwind was used into the Substitute")
+    # --- variable base power (Flail / Reversal) ------------------------------
+    if name in ("flailladder", "reversalladder", "flailladdercontrol"):
+        # gen3 declares its OWN ladder for both moves (data/mods/gen3/moves.ts:273
+        # and :496): ratio = floor(hp * 48 / maxhp) clamped to >= 1, then
+        # 200/150/100/80/40/20. Sandstorm chips the attacker 16 HP a turn, so a
+        # fixed Flail every turn walks the ladder upward and the damage must
+        # climb with it. The control swaps Flail for a FIXED-power move on the
+        # same line: its damage must NOT climb, which is what separates "the
+        # ladder works" from "the attacker is just getting chip-damage variance".
+        control = name.endswith("control")
+        move = "Body Slam" if control else ("Reversal" if name.startswith("reversal") else "Flail")
+        move_id = move.replace(" ", "").lower()
+        return dict(
+            p1=[_flailer(move)], p2=[_sand_anvil(move)],
+            turns=[(f"move {move_id}", "move splash")] * 12,
+            measured=None, setup_step=None, setup_landed=None,
+            facts=lambda L: {"climbs": _damage_climbs(L, "p2a", factor=3.0)},
+            expect={"climbs": not control},
+            landmark=lambda L: _has(L, "|-weather|Sandstorm|[upkeep]"),
+            landmark_desc="the sandstorm chipped the attacker")
     raise ValueError(name)
 
 
@@ -1190,7 +1276,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "lastmoveparaencore", "lastmoveconfusionencore",
              "lastmoveflinchencore", "lastmoveexecutedcontrol",
              "whirlwindprotect", "roarprotect", "whirlwinddrag",
-             "whirlwindsub")
+             "whirlwindsub",
+             "flailladder", "reversalladder", "flailladdercontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

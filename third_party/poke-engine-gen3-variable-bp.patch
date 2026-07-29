@@ -1,0 +1,82 @@
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-28 20:31:38
++++ b/src/gen3/choice_effects.rs	2026-07-28 20:35:04
+@@ -61,22 +61,64 @@
+ ) {
+     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
+     match attacker_choice.move_id {
+-        Choices::REVERSAL => {
++        // pokezero gen3 fidelity fix: Flail and Reversal share one base-power
++        // ladder, and gen3 has its OWN override for BOTH — verified
++        // independently at data/mods/gen3/moves.ts:273 (flail) and :496
++        // (reversal). Neither inherits gen4's.
++        //
++        // THE INHERITANCE TRAP HAS THREE DIRECTIONS, and this patch set has now
++        // been bitten by all of them. Check every one before trusting a rule:
++        //   1. inherit-from-gen4 — gen3 Spikes takes gen4's layer fractions
++        //      (poke-engine-gen3-spikes-layers.patch);
++        //   2. inherit-from-further-up — gen3 burn takes GEN6's baseMaxhp/8, not
++        //      the modern /16 (poke-engine-gen3-residual-rounding.patch);
++        //   3. gen3-overrides-everything — THIS patch: gen3 re-declares the move
++        //      itself, so no ancestor's table applies at all.
++        // The only safe procedure is to read gen3's own mod file first and walk
++        // up only from where it is silent.
++        //
++        // data/mods/gen3/moves.ts:
++        //
++        //     const ratio = Math.max(Math.floor(pokemon.hp * 48 / pokemon.maxhp), 1);
++        //     if (ratio < 2)  bp = 200;
++        //     else if (ratio < 5)  bp = 150;
++        //     else if (ratio < 10) bp = 100;
++        //     else if (ratio < 17) bp = 80;
++        //     else if (ratio < 33) bp = 40;
++        //     else bp = 20;
++        //
++        // Gen 4 re-declares the same shape over 64ths with different cut points
++        // (2/6/13/22/43). At 100 max HP the two ladders disagree at exactly four
++        // percentages — 4%, 10%, 35% and 68% — where gen3 scores 200/150/80/40
++        // and gen4 would score 150/100/40/20. Gen 3 is the HIGHER one at every
++        // divergence, so borrowing gen4's table under-powers both moves in
++        // precisely the desperation region they exist for.
++        //
++        // Two upstream bugs, one per move. FLAIL had no arm at all and no
++        // base_power, so it was inert — literally zero damage at every HP
++        // fraction. REVERSAL had this ladder written as ROUNDED FLOAT ratios
++        // (0.688 / 0.354 / 0.208 / 0.104 / 0.042), which is where this formula
++        // family classically breaks: 33/48 is 0.6875 and 17/48 is 0.35416..., so
++        // the rounded constants misclassify a thin band on the wrong side of
++        // four of the five breakpoints (e.g. hp/maxhp in [0.6875, 0.688) scored
++        // 40 where the sim scores 20). Reproducing the integer floor exactly
++        // removes the bands entirely.
++        Choices::FLAIL | Choices::REVERSAL => {
+             let attacker = attacking_side.get_active_immutable();
+-            let hp_ratio = attacker.hp as f32 / attacker.maxhp as f32;
+-            if hp_ratio >= 0.688 {
+-                attacker_choice.base_power = 20.0;
+-            } else if hp_ratio >= 0.354 {
+-                attacker_choice.base_power = 40.0;
+-            } else if hp_ratio >= 0.208 {
+-                attacker_choice.base_power = 80.0;
+-            } else if hp_ratio >= 0.104 {
+-                attacker_choice.base_power = 100.0;
+-            } else if hp_ratio >= 0.042 {
+-                attacker_choice.base_power = 150.0;
++            let ratio = cmp::max(attacker.hp as i32 * 48 / attacker.maxhp as i32, 1);
++            attacker_choice.base_power = if ratio < 2 {
++                200.0
++            } else if ratio < 5 {
++                150.0
++            } else if ratio < 10 {
++                100.0
++            } else if ratio < 17 {
++                80.0
++            } else if ratio < 33 {
++                40.0
+             } else {
+-                attacker_choice.base_power = 200.0;
+-            }
++                20.0
++            };
+         }
+         Choices::FAKEOUT => match attacking_side.last_used_move {
+             LastUsedMove::Move(_) => attacker_choice.remove_all_effects(),
