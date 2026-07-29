@@ -9,19 +9,39 @@ new identity (execution_id).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
-from pokezero.mcts_eval import ContractError, export_reuse_key, sha256_file
-from pokezero.mcts_eval.manifest import (
+# `scripts/` is not a package, so the exporter is imported by module name. Resolve
+# it from THIS FILE rather than the cwd: a relative sys.path entry only works when
+# the runner happens to start at the repo root, and when it does not the affected
+# tests raise ModuleNotFoundError, which reads as an environment problem rather
+# than as coverage that silently stopped running.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _add_scripts_to_path() -> None:
+    scripts = os.path.join(ROOT, "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+
+
+# Done at import time, not inside a helper: the tests below import the exporter at
+# the top of the test body, before any helper of theirs has run.
+_add_scripts_to_path()
+
+from pokezero.mcts_eval import ContractError, export_reuse_key, sha256_file  # noqa: E402
+from pokezero.mcts_eval.manifest import (  # noqa: E402
     DEFAULT_BATCH,
     MatrixManifest,
     ResourceProfile,
     SearchConfig,
     default_lattice,
 )
-from pokezero.mcts_eval.resolver import (
+from pokezero.mcts_eval.resolver import (  # noqa: E402
     TABLES_SCHEMA_VERSION,
     CheckpointContract,
     validate_encoder_tables,
@@ -377,9 +397,8 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
 
     def _specs(self):
         import dataclasses
-        import sys
 
-        sys.path.insert(0, "scripts")
+        _add_scripts_to_path()
         from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3, observation_spec_for_schema
 
         full = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
