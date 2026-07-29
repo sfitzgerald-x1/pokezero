@@ -5103,3 +5103,139 @@ set is not a diff.**
 - patch: `third_party/poke-engine-gen3-explosion-selfdestruct-gate.patch` (34 of 35;
   fixture-refresh last)
 - pins: `rust/pokezero-search/tests/gen3_selfdestruct_gate.rs`
+
+---
+
+# Appendix Z6 — Live typechange reaches the world; and retention becomes verifiable
+
+Branch `scott/engine-world-kecleon-typechange`. **No vendored patch** — parser payload +
+`engine_world` only. Engine 34 patches, fingerprint `5b29e611468d3baa…`, unchanged by this
+change.
+
+## Z6.1 The parser knew for months; only the observation path listened
+
+`live_type_override` has been produced since the v3 observation work
+(`showdown.py::_update_live_type_override`), and exactly one consumer existed:
+`_apply_live_type_override`, on the **observation** path. The world was still assembled from
+base Pokédex types, so a Kecleon whose Color Change had retyped it arrived at the engine as
+plain Normal.
+
+This is the same shape as the `last_used_move` gap (Z4) — a publicly-observed fact the parser
+already derived and the world silently dropped — and it is now the second instance. Worth
+naming as a class: **a parser field with exactly one consumer is a latent world gap.** The
+obs path and the world path read the same protocol for different purposes, and a field added
+for one of them does not reach the other by default.
+
+**Wrong in both directions from one field**, which is why the two replayed rows look unrelated
+until you notice they share a cause:
+
+| row | direction | Showdown | engine |
+| --- | --- | --- | --- |
+| 1500074/12 | Kecleon **attacks** (Return) | 27 — no Normal STAB | 43 (43 / 1.5 = 28.7) |
+| 1500191/20 | Kecleon **is hit** (HP Ice) | 16, `-resisted` | 34, neutral |
+
+Both fall out of one `types` field, so one seeding fixes both.
+
+## Z6.2 Precedence, and why the observed arm goes last
+
+Three arms can retype the active mon. Applied **transform -> forecast -> typechange**:
+
+| arm | source | kind |
+| --- | --- | --- |
+| `_apply_transform` | the donor's types | derived from a rule |
+| `_apply_forecast_types` | public weather | derived from a rule |
+| `_apply_live_typechange` | an observed `typechange` line | **OBSERVED** |
+
+**Observation beats derivation.** The first two reconstruct what the types *should* be from a
+rule; the third is the sim stating what they *are*. Showdown reaches the same answer by a
+different route: Color Change's `onAfterMoveSecondary` calls `setType(type)`
+(`data/abilities.ts:554-562`), and since every arm mutates `pokemon.types` in event order,
+whichever fired most recently wins. Applying the observation last reproduces that **without
+modelling the ordering** — which matters, because the ordering is the part most likely to be
+got wrong later.
+
+`setType` REPLACES rather than appends, so a retyped mon is mono-type even if it was
+dual-typed. Pinned, because "add a type" is the plausible misreading and it would leave the
+old type resisting things it no longer resists.
+
+**Only the `type:` form is consumed.** `forme:` (Castform Forecast) is deliberately left to
+`_apply_forecast_types`, which already derives the same answer from the same public weather.
+Consuming it here too would give Castform **two writers that must agree** — precisely the
+shape that let the encoder-vocabulary bug live for months. Forecast is `onUpdate`, so the
+derived arm cannot lag the observation. Pinned as a deliberate non-consumption so a future
+reader does not "complete" the handler and reintroduce the second writer.
+
+## Z6.3 Retention provenance: the payload now records it (carry from the #959 verification)
+
+The #959 clearance numbers had no committed artifact, and the committed
+`c10_encore_differential.json` showed 25 repros with no record of which flags produced them.
+Fixed mechanically rather than by assertion — and building the fix surfaced *why* the original
+diff went wrong:
+
+**`--repros-per-game` and `--keep-repro` are different knobs, and only one of them is what a
+diff depends on.** `run_game` takes `--repros-per-game` (what each game retains, hence what
+lands in the checkpoint); `build_report` takes `--keep-repro` (what the aggregated report
+carries). A run invoked with `--repros-per-game 40` and no `--keep-repro` still writes a
+report truncated to the `--keep-repro` default. That is exactly what happened in Z5.3: the
+identity diff silently compared two 25-row samples of 130+ divergences and reported "0
+cleared, 0 new" from a real 4-row change.
+
+`build_report` now emits:
+
+```json
+"repro_retention": {
+  "repros_per_game": 40, "keep_repro": 500,
+  "repros_retained": 131, "transitions_diverged": 131, "repros_complete": true
+}
+```
+
+`repros_complete` is the field a future identity diff should check before trusting
+`report["repros"]`. Known limit, recorded rather than papered over: on the `--merge-from`
+path `repros_per_game` is `null`, because the per-game flag is not recoverable from checkpoint
+records — `repros_complete` remains valid there and is the load-bearing field.
+
+`reports/c10_explosion_differential.json` is committed with this PR, rebuilt from #959's
+retained checkpoint so it carries the full 131-row set. It independently reproduces that PR's
+headline: **92 outside-limits**.
+
+## Z6.4 Differential: predicted >= 4, cleared exactly 4 — and the refinement that matters
+
+300 games, seeds 1500000-1500299, strict matcher, 34 patches. Prediction pre-registered
+(`reports/c10_kecleon_prediction.md`).
+
+| | predicted | actual |
+| --- | --- | --- |
+| named rows | 4 clear (floor) | **4/4** |
+| more, by mechanism signature | expected | **none** |
+| outside-limits | 92 -> 88 or better | 92 -> **88** |
+| newly divergent | 0 | **0** |
+
+**Both retention blocks report `repros_complete: true`** (127 of 127 and 131 of 131), so this
+identity diff is over the FULL divergent set on both sides and that is checkable from the
+committed artifacts rather than asserted here. It is the first diff in this program for which
+that is true.
+
+**I predicted more than 4 and was wrong, and the reason refines the Z5.3 lesson rather than
+contradicting it.** The Encore and Explosion mechanisms both changed **branch structure** —
+who is alive, which move executed — so once the right branch was missing the matcher filed
+those rows wherever its accounting broke (`measurement_boundary_residual_truncation`,
+`matcher_accounting_best_branch`, `matcher_overreport_legal_roll`), scattering the family.
+This mechanism changes only a **magnitude inside an otherwise-correct branch**: the right
+branch is present, its damage number is wrong. Nothing gets re-filed, so the family stayed
+exactly where c9 put it — all four in `roll_scaled_component`.
+
+So the sharpened rule:
+
+> **Structural mechanisms scatter across matcher classes and under-count; magnitude
+> mechanisms do not.** Before predicting from a family label, ask whether the mechanism
+> changes which branch is right or only what a number inside it says.
+
+That is a cheap test and it would have called both of the previous two cycles correctly, and
+this one too.
+
+## Z6.5 Artifacts
+
+- `reports/c10_kecleon_prediction.md` — pre-registered
+- `reports/c10_kecleon_differential.json` — 127 rows, `repros_complete: true`
+- `reports/c10_explosion_differential.json` — #959's missing artifact, 131 rows, reproduces 92
+- pins: `tests/test_engine_world_live_typechange.py` (9)

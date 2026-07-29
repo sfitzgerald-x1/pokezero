@@ -1625,9 +1625,21 @@ def build_report(
     approximate_sleep: bool | None,
     matcher: str | None,
     keep_repro: int,
+    repros_per_game: int | None = None,
     sources: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Aggregate per-game records into the report schema (live and merge paths)."""
+    """Aggregate per-game records into the report schema (live and merge paths).
+
+    ``keep_repro`` and ``repros_per_game`` are DIFFERENT knobs and both are recorded in
+    the payload, because conflating them silently invalidates identity diffs.
+    ``--repros-per-game`` bounds what each GAME retains (and therefore what lands in the
+    checkpoint); ``--keep-repro`` bounds what the aggregated REPORT carries. A run invoked
+    with ``--repros-per-game 40`` and no ``--keep-repro`` still writes a report truncated to
+    the ``--keep-repro`` default, so a diff computed from ``report["repros"]`` compares two
+    truncated samples and can report "0 cleared, 0 new" from a real change. That happened on
+    2026-07-29 (Z5.3). The retention block below makes the truncation legible from the
+    artifact instead of resting on the runner's memory of the flags.
+    """
 
     totals: Counter = Counter()
     repros: list[dict[str, Any]] = []
@@ -1661,6 +1673,15 @@ def build_report(
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
         "matcher": matcher,
+        # Provenance for identity diffs: is report["repros"] the full divergent set or a
+        # truncated sample? Never assert it in prose -- read `repros_complete` here.
+        "repro_retention": {
+            "repros_per_game": repros_per_game,
+            "keep_repro": keep_repro,
+            "repros_retained": len(repros),
+            "transitions_diverged": totals["transition:diverged"],
+            "repros_complete": len(repros) >= totals["transition:diverged"],
+        },
         "gating_exact": totals["gating:exact"],
         "gating_support_based": totals["gating:support"],
         "elapsed_seconds": round(wall, 2) if wall else None,
@@ -1897,6 +1918,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         approximate_sleep=bool(args.approximate_sleep),
         matcher=args.matcher,
         keep_repro=args.keep_repro,
+        repros_per_game=args.repros_per_game,
     )
     print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
     if args.json:
