@@ -73,9 +73,21 @@ Excluded pairs are replaced from a reserved spare band in a pre-registered order
 (`mcts_eval.scoring.promote_spare_pairs`); a pair excluded from either arm is
 excluded from both, so the arms always score the same pair set.
 
-The control shares the search arm's seeds deliberately: it is the null the search
-arm is read against, and §11's two controls are what established that the harness
-carries no seat bias.
+The control shares the search arm's seeds deliberately, and under within-seed
+pairing it changes character in a way worth stating before the run:
+
+* **Pooled, it is a strict equality test, not a noisy null.** Two identical
+  deterministic policies playing the same seed from both seats produce the *same
+  battle with the labels swapped*, so the control's pooled pair mean must be
+  **exactly 0.500**. Any deviation is harness nondeterminism — something
+  seat- or battle-id-dependent — and invalidates the pairing for both arms.
+* **Per seat, it is the real payload.** The control's p1/p2 split measures how
+  this seed set's *teams* split. That is the baseline the search arm's per-seat
+  numbers must be read against: if these 220 seeds happen to favour the p1-slot
+  team, search-as-p1 will look better than search-as-p2 for reasons that have
+  nothing to do with value orientation. Within-seed pairing cancels that in the
+  pooled number but not in the seat split — and the seat split is the whole
+  point of this run.
 
 Seeds are disjoint from everything already burned — the pre-fix grids
 (600000–600099, 500000–500279), the fix-development bench seeds, and every prior
