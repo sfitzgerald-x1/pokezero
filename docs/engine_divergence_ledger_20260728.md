@@ -2074,3 +2074,128 @@ sandstorm chip and the partial-trap tick are both 20 in it.
 
 Census after both items: **84 / 5,310 = 1.58 %**, byte-identical to before —
 the hardening is measurement-neutral, as it should be. 17 crate suites green.
+
+---
+
+# Appendix J — FINAL RE-MEASUREMENT and acceptance verdict
+
+Full fix set: 22 vendored patches + charge-state world construction + the
+hardened harness. Clean vendor, both wheels rebuilt, stamped; 18 crate suites
+green; gate current (`acc9a7852528a1c9`, 22 patches + 8 crate sources).
+
+## J.1 The numbers
+
+300 games, seeds **1500000-1500299**, strict matcher, `--repros-per-game 300`.
+
+| | |
+| --- | --- |
+| games | 300 |
+| full-round boundaries | 23,860 |
+| **measured** | **23,334 — 97.80 %** |
+| matched | 23,023 |
+| **diverged** | **311 — 1.33 % of measured** |
+| harness errors | **0** |
+| `unclassified` | **0** |
+| `build_check` | `gated` |
+| `acceptance_eligible` | `true` |
+| throughput | 1,419 games/h |
+| **divergences in adjudicated `limit:` classes** | **47** |
+| **divergences OUTSIDE limit classes** | **264** |
+
+## J.2 ACCEPTANCE VERDICT: NOT MET — the acceptance run was NOT started
+
+The bar is *zero divergent transitions outside the named, adjudicated limit
+classes*. There are **264**. The 8x1250 run is therefore **not** launched: it
+would spend ~1.5 h producing a number that cannot pass, and the standing
+authorization is conditioned on a clean table.
+
+| Class | n | Verdict |
+| --- | --- | --- |
+| `roll_scaled_component` | 145 | **open** — 89 structural, 56 magnitude (J.3, J.4) |
+| `limit:roll_divergent_lethality` | 42 | adjudicated limit |
+| `component_missing_in_engine:itemleftovers` | 27 | **open** |
+| `component_extra_in_engine:itemleftovers` | 25 | **open** |
+| `component_missing_in_engine:psn` | 24 | **open** |
+| `component_extra_in_engine:psn` | 9 | **open** |
+| `component_extra_in_engine:itemleftovers,psn` | 6 | **open** |
+| `limit:world_sample_drag_target` | 5 | adjudicated limit |
+| 17 smaller classes | 28 | **open** |
+
+## J.3 NEW, CONFIRMED: Substitute is not expressed in the constructed world
+
+`seed 1500002 step 75` — Seismic Toss into a Substitute:
+
+```
+Showdown:  |move|p1a: Hypno|Seismic Toss|p2a: Lugia
+           |-end|p2a: Lugia|Substitute          <- the SUB breaks; Lugia untouched
+engine:    Damage SideTwo: 88                   <- 88 straight into Lugia
+```
+
+The engine has no Substitute, so fixed damage lands on the Pokemon instead of
+breaking the sub. Downstream, p2's HP is then wrong for the rest of the turn,
+which perturbs its residuals — so this one gap manufactures `missing`/`extra`
+Leftovers and psn components too.
+
+**Incidence: 49 of 311 divergent rows (16 %) have a Substitute in the step**,
+spread across six classes. Same silent-wrongness shape as the charge-state gap:
+no error, no fallback, a plausible wrong state.
+
+| | |
+| --- | --- |
+| Verdict | **WORLD CONSTRUCTION** — engine lane |
+| Repro | seed 1500002 step 75 (`seismictoss` vs `toxic`) |
+| Note | the harness already passes `approximate_substitute_health=True`, so the allowlist permits `substitute`; the state is not reaching the world regardless, which is where the investigation should start |
+
+## J.4 NEW: the charge-state fix works, but the release damage is wrong
+
+The fix lands — the engine now executes the release turn instead of starting a
+fresh charge. On the row originally filed (G.2, `seed 1350004 step 66`) the
+missing component is gone. But the damage disagrees, and the engine's own
+branches are internally inconsistent:
+
+| | damage |
+| --- | --- |
+| Showdown | **−74** |
+| engine, 93.75 % branch | **−41** |
+| engine, 6.25 % (crit) branch | **−163** |
+
+Gen 3 crits are 2x. 163/41 = **3.98**, so the two engine branches disagree with
+*each other* by a factor of two — consistent with the non-crit release being
+halved while the crit is not. Showdown's −74 sits within roll of the unhalved
+~81.
+
+Class-shape evidence on the fixed build (same 60-game seed set): the structural
+bucket fell 29 -> 15 while the magnitude bucket rose to 22 — rows converted from
+"component missing" to "component wrong size", which is exactly what a working
+release with wrong damage looks like.
+
+| | |
+| --- | --- |
+| Verdict | **ENGINE** — damage on the two-turn release; engine lane |
+| Repro | seed 1350004 step 66 (`softboiled` vs `solarbeam`) |
+
+## J.5 What is left before acceptance
+
+1. **Substitute world construction** (J.3) — 16 % of rows, engine lane.
+2. **Two-turn release damage** (J.4) — engine lane.
+3. Re-triage the Leftovers/psn families once 1 lands; a large share are
+   downstream of the Substitute HP error rather than independent bugs.
+4. The 56 magnitude rows in `roll_scaled_component` still need per-row replay.
+
+The measurement apparatus itself is done: 97.80 % coverage, 0 harness errors,
+0 unclassified, gated and acceptance-eligible. **Every remaining divergence is a
+simulator-fidelity question, not a measurement question** — which is the state
+this program was trying to reach, just not yet at zero.
+
+## J.6 Artifacts
+
+| Artifact | Path |
+| --- | --- |
+| final 300-game report | `<scratch>/reports/final300.json` |
+| per-game checkpoint (resumable) | `<scratch>/reports/final300.jsonl` |
+| run log | `<scratch>/reports/final300.log` |
+| triage of the dominant class | `<scratch>/reports/tri300.json` |
+| charge-fix A/B (60 games, seeds 1350000-1350059) | `<scratch>/reports/charge60.json` |
+
+`<scratch>` =
+`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
