@@ -897,8 +897,53 @@ poke-engine-gen3-painsplit-clamp.patch
 # applied before the fixture refresh.
 poke-engine-gen3-protect-floor.patch
 
+# gen3 Guts/Facade wake-turn phantom boost. before_move's choice modification
+# (ability_modify_attack_being_used / modify_choice) runs BEFORE the sleep and
+# freeze branching in generate_instructions_from_move, but a sleeping or frozen
+# attacker's move only executes on the branch that cured the status first —
+# Showdown cures in slp.onBeforeMove (data/mods/gen3/conditions.ts) and reads
+# Guts at damage time via onModifyAtk (data/abilities.ts), and the engine's own
+# wake branch sets status NONE before damage lands. Upstream keyed both boosts
+# off the PRE-turn status, so a Guts user's wake-turn attack carried a phantom
+# 1.5x (Facade: 2x). Sleep Talk-called moves execute while still asleep and
+# keep the boost. Repro rows: seeds 1500025/7,98 1500164/67 1500030/82
+# (Hariyama/Machamp, observed = unboosted rolls, engine = 1.5x high).
+# Touches the GUTS arm in gen3/abilities.rs and the FACADE arm in
+# gen3/choice_effects.rs.
+poke-engine-gen3-guts-facade-wake-turn.patch
 
+# gen3 Trace copies WITHOUT activating the copied ability. sim/pokemon.ts
+# setAbility() fires the copied ability's 'Start' event only when
+# `battle.gen > 3`, and gen3's trace override (data/mods/gen3/abilities.ts)
+# calls plain setAbility — so a gen3 traced Intimidate never drops the foe's
+# Attack and a traced weather ability never sets weather. Upstream ran the
+# switch-in activation match on the copied ability. Passive effects (the
+# status/volatile cures, Forecast recompute) still apply. Repro row: seed
+# 1500222/17 (Porygon2 traces Intimidate; Showdown shows no -unboost, engine
+# dropped Mightyena's Attack and undershot its Hidden Power by 1.5x).
+# Touches ability_on_switch_in in gen3/abilities.rs; authored against the
+# guts-facade-wake-turn tree above.
+poke-engine-gen3-trace-no-activation.patch
 
+# gen3 stepwise damage truncation. RSE applies damage modifiers in a fixed
+# order with an integer floor at EVERY step (data/mods/gen3/scripts.ts
+# modifyDamage: burn -> screens -> spread -> weather -> physical min-1 -> +2 ->
+# crit -> STAB -> per-type-step effectiveness, 85-100 roll LAST). Upstream
+# multiplied all modifiers in f32 and floored once at the end, carrying
+# fractions through the x2 steps that the sim drops: STAB on an odd (base+2)
+# into a super-effective x2 leaves the engine's max roll 1 point above the
+# sim's, so real bottom rolls (85-86%) fall just outside the engine's legal
+# roll set. That is the cycle-seven brief's 0.90-0.917 observed/engine cluster
+# (engine branch damage is the 0.925 average of an inflated max). Repro rows:
+# 1500229/3 (Jirachi Psychic: engine max 159 vs sim 158, observed 134 = sim's
+# min roll), 1500201/16 (Light Ball Pikachu Thunderbolt: 243 vs 242, observed
+# 205 = sim's min roll). Rewrites common_pkmn_damage_calc as the sim's integer
+# pipeline (burn/weather floored pre-+2, crit x2 inside, STAB floored, two
+# type steps floored) and moves the crit multiplier inside; screens and the
+# rare volatile modifiers keep their trailing float position (screens are
+# pool-unreachable). Touches gen3/damage_calc.rs only; authored against the
+# trace-no-activation tree above.
+poke-engine-gen3-damage-stepwise-truncation.patch
 
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch

@@ -4282,3 +4282,177 @@ falsifiable field existed to check it against. Where a claim partitions rows,
 the partition ships as data, not as a description of data — this is the fourth
 finding in this ledger that a reviewer could only catch because the underlying
 predicate was recoverable.
+
+# Appendix Z — damage_calc fix lane: three engine patches, and what the 45 real findings actually were
+
+Fix-lane worktree, branch `scott/damage-calc-fix`, based on the cycle-seven
+ledger commit plus main (#950/#951 instrument fixes). Baseline build verified
+behaviourally at fingerprint `814b2bd28d3983813b972ba3fd0af7fcc46871085fdea6f0e654c767d076b577`
+(30 patches; Pain Split clamp `SideOne: 0 / SideTwo: 7`, Protect ladder
+`0.5^k` — both matched §U.1's expectations). Every row below was regenerated
+from its seed with `--games 1 --keep-repro 5000` and replayed through
+`scripts/replay_residue.py` before any cause was named.
+
+## Z.0 The engine damage-value semantics, source-cited (decides the matcher window)
+
+- `calculate_damage(state, side, choice, DamageRolls::Max)` returns the 100%
+  roll: `damage.floor()` with no roll multiplier
+  (`third_party/poke-engine-src/src/gen3/damage_calc.rs`, `DamageRolls::Max`
+  arm; at the cycle-seven fingerprint, lines 326–329).
+- Both gen3 call sites pass `Max`: `gen3/generate_instructions.rs:2442`
+  (branch generation) and `:4521` (`calculate_damage_rolls`, the path under
+  the Python `poke_engine.calculate_damage` binding the matcher's legal-roll
+  set is built from).
+- But the damage the engine's branches APPLY is the truncated **average**:
+  `gen3/generate_instructions.rs:2495` `let avg_damage_dealt =
+  (max_damage_dealt as f32 * 0.925) as i16;` (and `:2541-2543` for the
+  crit/kill-branch variants).
+
+So an extract's `engine` component = `floor(0.925 × max)` while the legal set
+is anchored on `max`. A legal observation therefore sits at
+observed/engine ∈ [0.85/0.925, 1.00/0.925] = **[0.919, 1.081]** of the branch
+value, and the brief's 0.90–0.917 cluster is the band just *below* the legal
+floor — observations 0.833–0.848 of the engine's max, i.e. bottom rolls of a
+sim max that is 1–2 points LOWER than the engine's. The "~8–10% high" reading
+was the average-roll disguise on a ~1% max-roll inflation.
+
+## Z.1 The 0.462–0.674 band (14 findings): five causes, none of them type effectiveness
+
+The second-priority cluster ("candidate type-effectiveness/resist rounding")
+dissolved completely under replay:
+
+| rows | cause | verdict |
+|---|---|---|
+| 1500025/7, 1500025/98, 1500164/67(p1), 1500030/82, 1500228/70, 1500294/22 | **Guts wake-turn phantom boost** (Hariyama/Machamp asleep, `-curestatus slp [msg]` then attack; engine boosted 1.5x, sim attacks unboosted) | ENGINE DEFECT — patch 31, **all 6 cleared** |
+| 1500222/17 | **Trace-copied Intimidate activates** (Porygon2 traces Intimidate; sim gen3 fires no 'Start' on setAbility; engine dropped Mightyena's Attack and undershot the return fire) | ENGINE DEFECT — patch 32, **cleared** |
+| 1500204/83, 1500191/20, 1500074/12, 1500074/32 | **Kecleon Color Change world-drift**: Showdown's Kecleon had type-changed on an earlier turn (`-start … typechange`), the reconstructed engine state still had it NORMAL — resist appears (defender side) or STAB disappears (attacker side) | NOT an engine bug: the boundary state builder never applies typechange. Instrument lane. |
+| 1500206/45, 1500040/70 | **Heal-cap structural artifact**: engine max EXACTLY equals sim max (13=13, 16=16); the divergence is the engine world evolving on the average roll so its Leftovers heal capped `_to_full` while the observed roll's heal did not — component shapes differ, magnitudes agree | Matcher artifact. Instrument lane. |
+| 1500051/124 | **Same-turn Encore redirection**: Illumise Encores first; sim redirects Wailord's chosen Surf to its last-used Ice Beam (no STAB), engine executes Surf | Engine modeling gap, out of damage-calc scope; documented |
+
+Method note: the triage's best-branch pairing had matched several of these
+against the CRIT branch (6.25%) because the non-crit branch differed
+*structurally* (the heal-cap artifact above), which is where the "half"
+ratios came from. The label "type-effectiveness rounding" would have been a
+fit to an artifact.
+
+## Z.2 Patch 31 — `poke-engine-gen3-guts-facade-wake-turn.patch`
+
+`before_move` runs `ability_modify_attack_being_used`/`modify_choice`
+**before** `generate_instructions_from_existing_status_conditions` branches
+sleep/freeze (`gen3/generate_instructions.rs`), but a sleeping or frozen
+attacker's move only executes on the branch that cured the status. Showdown
+cures in `slp.onBeforeMove` (`data/mods/gen3/conditions.ts`) and evaluates
+Guts at damage time via `onModifyAtk` (`data/abilities.ts:1725-1731`) — so
+wake-turn attacks are unboosted. Upstream keyed Guts (and Facade's doubling,
+`gen3/choice_effects.rs`) off the pre-turn status. Sleep Talk-called moves
+execute while still asleep and keep the boost — preserved via
+`choice.sleep_talk_move`.
+
+Sim ground truth (gen3 Custom Game fixtures, `pokezero.showdown_fixture`):
+Spored Guts Machamp L80 (atk 237) Rock Slide into Smeargle L90 (def 95),
+wake-turn damages over seeds 1–8 = {116,119,122,125,126,127,129} — the roll
+set of unboosted max **129**, never of boosted max 192 (min legal 163).
+Facade wake-turn over seeds 1–10 = {108..120} = un-doubled max **120**.
+Thunder-Waved control = {165,167,176,190} ⊂ boosted max-192 set (Guts stays
+for statuses that persist). Pins: `tests/test_engine_guts_trace_fidelity.py`
+(3 divergence pins FAIL on a 31-patch-less build, 3 controls pass both ways).
+
+## Z.3 Patch 32 — `poke-engine-gen3-trace-no-activation.patch`
+
+`sim/pokemon.ts setAbility()` fires the copied ability's `Start` event only
+when `this.battle.gen > 3`; gen3's trace override
+(`data/mods/gen3/abilities.ts:186-196`) calls plain `setAbility`. So a gen3
+traced Intimidate/Drizzle/Drought/Sand Stream copies silently. Upstream's
+`ability_on_switch_in` ran the switch-in activation match on the copied
+ability by design ("tracing intimidate will activate intimidate" — gen4+
+behaviour). Fix: a `_ if ability_gained_by_trace => {}` arm short-circuits
+the activation match; the passive status/volatile cures and the Forecast
+recompute (onUpdate/onImmunity semantics) still apply. Sim probe (seed 42):
+Porygon2 switch-in vs active Intimidate Mightyena emits the `-ability …
+Trace` line and **no** `-unboost` — matching the repro row's recorded
+protocol.
+
+## Z.4 Patch 33 — `poke-engine-gen3-damage-stepwise-truncation.patch` (the 0.90–0.917 factor)
+
+Formula derivation, sim side (all vendored):
+- base: `tr(tr(tr(tr(2·L/5+2)·BP·A)/D)/50)` — `sim/battle-actions.ts` getDamage
+  (line 1722 at the vendored checkout).
+- gen3 modifier order, each step integer-floored:
+  `data/mods/gen3/scripts.ts modifyDamage` (lines 33–118): burn(×0.5) →
+  screens → spread(0.5, doubles only) → weather → physical-min-1 → **+2** →
+  crit(×2) → STAB via `battle.modify` (`tr((v·tr(1.5·4096)+2047)/4096)` =
+  `floor(v·1.5)`) → type effectiveness as TWO separate steps (`×2` exact,
+  resist `Math.floor(v/2)`) → **roll last**:
+  `battle.ts randomizer` (line 2407) `tr(tr(v·(100−random(16)))/100)`.
+
+Engine defect: `common_pkmn_damage_calc` multiplied type × weather × STAB ×
+burn × volatile in f32 and floored ONCE at the end. The STAB half-point on an
+odd (base+2) survives the ×2 type step: engine max = 3·(B+2) where the sim
+gets `floor(1.5·(B+2))·2` — one point lower whenever B+2 is odd.
+
+Row-level proofs (states replayed from the recorded extracts):
+- 1500229/3 — Jirachi L73 (spa 188) STAB Psychic vs Vileplume (2× vs Poison):
+  B+2 = 53; engine max 3·53 = **159**, sim `floor(79.5)=79 → ×2 =` **158**;
+  observed 134 = `floor(158·0.85)` — the sim's exact bottom roll, one below
+  the engine's legal floor `floor(159·0.85)=135`.
+- 1500201/16 — Light Ball Pikachu L87 STAB Thunderbolt vs Milotic (2× vs
+  Water): B+2 = 81; engine 3·81 = **243**, sim `floor(121.5)=121 → 242`;
+  observed 205 = `floor(242·0.85)`, engine legal floor 206.
+
+Fix: `common_pkmn_damage_calc` rewritten as the sim's integer pipeline
+(burn and weather floored before the +2, physical-min-1, +2, crit ×2 inside,
+STAB floored, two type steps floored; screens and the rare volatile
+modifiers keep their trailing float position — screens are pool-unreachable
+per §U.4). Guts' burn-compensation double is dropped in favour of the
+pipeline's Guts-guarded burn halving. Post-build probes reproduce the sim
+exactly on both proof rows (159→**158**, 243→**242**).
+
+**Known residual (mechanism 2, documented not fixed):** the sim applies
+Choice Band / Light Ball / Guts to the ATTACK STAT with a `modify()` floor
+*before* the base formula's `/D` and `/50` truncations (and floors boosted
+stats); the engine multiplies `base_power` in float. Exact ×2 mods (Light
+Ball) are equivalent; ×1.5 mods on odd stats are not — e.g. 1500024/9
+(Ursaring −1 atk, Guts poisoned, STAB Return: sim atk' `floor(257·2/3)=171 →
+guts 256` gives max 118; engine 120). Fixing this requires moving those
+modifiers from BP to the stat (choice-architecture change) — the right shape
+for a follow-up patch, not a rider on this one.
+
+## Z.5 Build chain and gates
+
+| build | patches | fingerprint | gates |
+|---|---|---|---|
+| baseline | 30 | `814b2bd2…` | §U.1 probes matched |
+| +guts/trace | 32 | `ebc7cb07…` | pins 6/6; probes: wake 44 (was 66), trace no-Boost, Pain Split 0/7, ladder 0.5^k |
+| +stepwise | 33 | `887a722d…` | pins 12/12; engine tree 17/17; all `rust/pokezero-search` suites green; proof rows 158/242 |
+
+Unpatched-pin evidence: a 30-patch wheel built into a throwaway venv fails
+exactly the three divergence pins (`test_guts_wake_turn_rockslide_is_unboosted`,
+`test_facade_wake_turn_not_doubled`, `test_traced_intimidate_does_not_activate`)
+and passes the three controls.
+
+## Z.6 Row clearance (per-seed reruns, same seeds/games as the cycle-seven run)
+
+Cleared by patches 31/32 (verified before patch 33 landed, then re-verified
+under 33): all six Guts rows, the Trace row — and 1500164/67 cleared whole,
+including its p2 `sleeptalk`-labelled finding, which was the same boundary's
+pairing echo. Controls (Kecleon rows, heal-cap rows, Encore row) unchanged —
+no new classes appeared on any rerun seed.
+
+Full sweep over all 32 brief seeds at 33 patches: of the 40 boundaries
+carrying at least one real (unreachable) finding, **19 cleared, 21 remain**.
+
+- Patch 33 additionally cleared both proof rows (1500229/3, 1500201/16), the
+  0.907-band rows 1500051/95 and 1500115/36, and EIGHT of the >1.0 scattered
+  extremes (1500028/66, 1500028/173, 1500059/9, 1500063/3, 1500063/73,
+  1500107/20, 1500121/32, 1500127/57) — the extremes largely explained
+  themselves once the truncation order was right, as §U.4 hoped.
+- Remaining 21, decomposed: 4 Kecleon world-drift (instrument: state builder
+  must apply `-start typechange`), 2 heal-cap structural (matcher), 1
+  same-turn Encore (engine gap, documented), 1 Sleep-Talk-called extreme
+  (1500174/43, the known callee-union path), ~8 mechanism-2 candidates
+  (Choice Band / boosted-stat flooring; 1500024/9 proven by arithmetic,
+  1500221/13 and 1500126/13 both Choice Band holders), and 5 unreplayed
+  extremes (1500180/35, 1500028/44, 1500051/117, 1500121/67, 1500207/27).
+- One prior pin updated: `test_struggle_is_physical_burn_halves` asserted the
+  engine's OLD trailing burn halving (`healthy // 2`); the sim halves before
+  the +2 and the crit x2, and the pin now asserts that stepwise relation.
