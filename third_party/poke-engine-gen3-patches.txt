@@ -595,6 +595,43 @@ poke-engine-gen3-pp-ordering.patch
 # guard wraps -- the two are one story and the guard has no meaning without it.
 poke-engine-gen3-lockedmove-pp.patch
 
+# gen3 Solar Beam is weakened by RAIN, SAND and HAIL only -- never in clear
+# weather. Showdown's `solarbeam.onBasePower` (data/moves.ts, inherited unchanged
+# by gen3) halves the base power for
+# raindance/primordialsea/sandstorm/hail/snowscape, of which gen3 has three; sun
+# is a different mechanism entirely (`onTryMove` skips the charge turn without
+# touching power).
+#
+# The engine asked `weather_is_active(&state.weather.weather_type)`. That helper
+# is `self.weather.weather_type == argument && not suppressed by Air Lock /
+# Cloud Nine`, so feeding it the CURRENT weather reduces to "weather is not
+# suppressed" -- true in clear weather too, because NONE == NONE. Every Solar
+# Beam therefore did HALF damage, in every branch.
+#
+# The idiom itself is fine and is left alone at the three other sites that use it
+# (MORNINGSUN/MOONLIGHT/SYNTHESIS, the Chlorophyll/Swift Swim speed boost, and
+# update_forecast); each pairs it with a `match` on the specific weather, so
+# Weather::NONE falls through harmlessly. Only Solar Beam used it as "some
+# weather is up".
+#
+# Found via the two-turn release-damage audit (ledger J.4), which measured
+# Showdown -74 against engine -41 non-crit / -163 crit and read the ~4x spread
+# between the engine's own branches as a second bug -- the non-crit halving base
+# power while the crit did not. It is not: `calculate_damage` derives both
+# branches from the SAME choice, so a base-power error cannot separate them. The
+# 4x is Light Screen, which gen3 crits correctly ignore, and it is now pinned in
+# both directions (2x with no screen, 4x with one) so the diagnosis cannot be
+# re-litigated. One root cause, not two: -41 doubles to ~82, and Showdown's -74
+# is that at a 0.90 roll.
+#
+# Verified vs real gen3 Showdown (Exeggutor into Blissey): clear -136, sand -71,
+# sun -131 with no charge turn at all. Pinned by
+# rust/pokezero-search/tests/gen3_solarbeam_weather.rs and the
+# solarbeamclear/solarbeamsand/solarbeamsun differential scenarios. Touches
+# modify_choice in gen3/choice_effects.rs only; authored against the
+# lockedmove-pp-patched tree.
+poke-engine-gen3-solarbeam-weather.patch
+
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
 # list, because its expectations are the behaviour every patch above it leaves

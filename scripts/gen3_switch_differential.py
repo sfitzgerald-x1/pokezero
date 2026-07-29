@@ -158,6 +158,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -212,6 +213,16 @@ def _pp_faker():  # Fake Out on a fast body: a 100%-deterministic immobilized tu
 def _pp_grinder():  # sole move, 5 base PP -> 8 with PP Ups, harmless
     return FixturePokemon(species="Smeargle", ability="Technician", item="None",
                           moves=("Mind Reader",))
+
+
+def _solarbeam_user():  # Exeggutor: the species from the release-damage repro
+    return FixturePokemon(species="Exeggutor", ability="Chlorophyll", item="None",
+                          moves=("Solar Beam", "Sunny Day", "Sandstorm", "Splash"))
+
+
+def _solarbeam_wall():  # 651 HP, survives a full-power beam so the number is readable
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Splash",))
 
 
 def _lock_tank():  # Steel/Ground wall: survives eight Sky Attacks without fainting
@@ -419,6 +430,35 @@ def _machamp():  # copy target: distinct species, types, stats, ability and move
 def _machamp_sub():  # copy target that hides behind a Substitute first
     return FixturePokemon(species="Machamp", ability="Guts", item="None",
                           moves=("Substitute", "Splash"))
+
+
+def _solarbeam_release_damage(lines) -> int:
+    """HP lost to the Solar Beam RELEASE hit, ignoring weather chip.
+
+    The release is the `-damage` line with no `[from]` tag; sandstorm upkeep
+    damage carries `[from] Sandstorm`, so tracking the most recent reported HP
+    and differencing only at the untagged line isolates the beam itself.
+    """
+    current = None
+    for line in lines:
+        m = re.search(r"\|-damage\|p2a: Blissey\|(\d+)/(\d+)", line)
+        if m:
+            after, maxhp = int(m.group(1)), int(m.group(2))
+            if "[from]" not in line:
+                # In clear weather and sun the release is the FIRST hp line of
+                # the battle, so there is no earlier reading to difference
+                # against -- full health is the baseline.
+                return (current if current is not None else maxhp) - after
+            current = after
+            continue
+        m = re.search(r"\|-heal\|p2a: Blissey\|(\d+)/(\d+)", line)
+        if m:
+            current = int(m.group(1))
+        elif line.startswith("|switch|p2a: Blissey"):
+            m = re.search(r"(\d+)/(\d+)", line)
+            if m:
+                current = int(m.group(1))
+    return 0
 
 
 def _has(lines, needle: str) -> bool:
@@ -1375,6 +1415,50 @@ def _spec(name):
             expect={"completed_uses": 8, "struggled": True, "fainted": False},
             landmark=lambda L: _has(L, "|-prepare|p2a: Smeargle") if drain else True,
             landmark_desc="Sky Attack charged" if drain else "")
+    if name in ("solarbeamclear", "solarbeamsand", "solarbeamsun"):
+        # Solar Beam's weather interaction, the root of the two-turn release
+        # damage gap. Showdown weakens it in rain / sand / hail ONLY
+        # (data/moves.ts solarbeam.onBasePower, inherited unchanged by gen3);
+        # clear weather is full power, and sun is a different mechanism entirely
+        # -- onTryMove skips the charge turn without touching power.
+        #
+        # The engine asked `weather_is_active(&state.weather.weather_type)`, which
+        # is a self-comparison and therefore true in CLEAR weather too, so every
+        # release did half damage. Blissey's 651 HP keeps the number readable and
+        # survives a full-power beam.
+        if name == "solarbeamsand":
+            turns = [("move sandstorm", "move splash"), ("move solarbeam", "move splash"),
+                     ("move solarbeam", "move splash")]
+            # Halved: 60 BP. Observed 71 at seed 1000; the band covers the roll.
+            band = (55, 90)
+        elif name == "solarbeamsun":
+            turns = [("move sunnyday", "move splash"), ("move solarbeam", "move splash")]
+            band = (110, 160)
+        else:
+            turns = [("move solarbeam", "move splash"), ("move solarbeam", "move splash")]
+            # Full power: 120 BP. Observed 136 at seed 1000. Disjoint from the
+            # weakened band above, so the two cannot be confused by any roll.
+            band = (110, 160)
+        # A crit doubles the hit, and a HALVED crit lands squarely inside the
+        # full-power non-crit band -- so the two bands stop being disjoint the
+        # moment crits are allowed in. Skip those seeds rather than widen the
+        # band into uselessness; the crit ratio itself is pinned natively in
+        # rust/pokezero-search/tests/gen3_solarbeam_weather.rs.
+        release_step = 2 if name == "solarbeamsand" else 1
+        return dict(
+            p1=[_solarbeam_user()], p2=[_solarbeam_wall()], turns=turns,
+            measured=None, setup_step=release_step,
+            setup_landed=lambda L: not _has(L, "|-crit|"),
+            facts=lambda L: {
+                "release_damage_in_band": (
+                    band[0] <= _solarbeam_release_damage(L) <= band[1]),
+                # Sun releases on the SAME turn it is selected; the other two
+                # spend a turn charging first.
+                "charged_first": _has(L, "|-prepare|p1a: Exeggutor"),
+            },
+            expect={"release_damage_in_band": True, "charged_first": True},
+            landmark=lambda L: _has(L, "[from] lockedmove") or name == "solarbeamsun",
+            landmark_desc="Solar Beam released")
     raise ValueError(name)
 
 
@@ -1403,7 +1487,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "whirlwindsub",
              "flailladder", "reversalladder", "flailladdercontrol",
              "ppimmobilizedfree", "ppimmobilizedcontrol",
-             "lockedmoveppdrain", "lockedmoveppcontrol")
+             "lockedmoveppdrain", "lockedmoveppcontrol",
+             "solarbeamclear", "solarbeamsand", "solarbeamsun")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
