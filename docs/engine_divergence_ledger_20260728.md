@@ -1148,6 +1148,31 @@ the exact step the rule says not to do by hand.
 addition would have prevented both misreads here, and is the only trap of the
 five the current probe cannot already close.
 
+**IMPLEMENTED (cycle six)** as `gen3_dex_resolve.py --sources`. It prints the mod
+owning each field and each callback **body**, and it reproduces the documented
+answer for every provenance trap unaided:
+
+```
+stall  -> inherit: true at gen4;  callback bodies from **gen5**   (the x2 ladder)
+flail  -> callback bodies from **gen3**                           (own 48-scale override)
+brn    -> callback bodies from **gen6**: onResidual               (the gen6 change)
+rest   -> values from **gen8**: pp                                (declared below gen3)
+```
+
+One line — `callback bodies from **gen5**` — is what both readers of the fifth
+trap were missing.
+
+**A second trap found while building it, worth more than the feature.**
+`Dex.mod()` merges inherited data **into the required data objects in place**,
+and `require` caches those objects. So any raw-table read performed after a
+`Dex.mod()` call *in the same process* reports the merged result: with `Dex`
+touched first, gen3 appears to own `stall` outright — `counterMax: 8` plus all
+three callbacks — when `data/mods/gen3/conditions.ts` does not mention `stall`
+anywhere. That is a **silent** wrong answer that looks authoritative, and it is
+the exact shape of the misread it was built to prevent. The scan therefore runs
+in a Dex-free process, pinned by a comment at `_SOURCE_JS` so it is not
+"simplified" back into one process later.
+
 The failure is always the same shape and always looks like diligence: someone
 opens the right file, reads a real value, and reports it — having walked a chain
 that was truncated, or not walked one at all. "gen3 inherits gen4, not gen5" is a
@@ -3519,6 +3544,56 @@ Protect ever produce a failure branch, and is its success probability
 conditioned on consecutive use? A binding that exposes the counter, or a
 Rust-side unit probe, would settle it.
 
+### T.5.1 RESOLVED (cycle six) — and the row is now credited to #942 by measurement
+
+Both open questions are answered, and the row is closed. The Rust-side probe
+T.5 asked for is what settled the mechanism (160 seeds: 2nd attempt 0.482, 3rd
+0.196 — the ×2 ladder, §"fifth direction"), and the retained-repro replay is
+what closed the row.
+
+**Cause, from the replay rather than from the story.** The pre-state carried
+`side_conditions = {"p1": [], "p2": []}`: `k = 0`, so the engine priced Protect
+at `0.5**0 = 1.0` and emitted a *single* branch. The observed failure was not
+improbable in the engine's model — it was **absent from the branch set**. The
+mechanism T.5 declined to name was right, but the reason the row diverged was
+the world never seeding the counter, not the decay rule being wrong.
+
+**Before/after, same pinned engine build** (29 patches, `7909290e14e065cd`;
+Python at `a3c98a6` before, `84a6712` after — #942 is pure Python, so the engine
+binary is byte-identical across the two runs and cannot confound them):
+
+| run | boundaries | measured | matched | diverged |
+| --- | --- | --- | --- | --- |
+| seed 1500010, pre-#942 | 65 | 64 | 63 | **1** |
+| seed 1500010, with #942 | 65 | 64 | 64 | **0** |
+
+Identical boundary counts confirm it is the same game, so the row closed rather
+than the trajectory shifting out from under the measurement.
+
+**Whole-census effect, 40 games (seeds 1500000-1500039), same two builds:**
+measured 3,580 in both; diverged **18 → 17**; the *only* class that moves is
+`roll_scaled_component` 9 → 8. **One row closed, zero regressions** — #942
+neither fixed nor broke anything else in that population.
+
+The earlier ~10-protect-row prediction is **not** supported at this seed range:
+one protect row existed and one closed. The prediction was extrapolated from a
+different census; it should not be carried forward as a pending credit.
+
+**Seam linkage (closing the #942 review carry).** `test_engine_world_stall_counter.py`
+asserts the `0.5 ** k` pricing in two linked halves because the shared fixture's
+dex has no Protect. Both *one-sided* renames are caught by the halves
+themselves; the residual gap was **joint drift** — engine field renamed, half 2
+updated to match, half 1 left stale — which no unit assertion inside the file
+can see. That gap is closed by this end-to-end replay, and only by it: the
+replay drives the real field through parser → `engine_world` → engine branch
+probabilities, so joint drift would surface as the row failing to close. Keeping
+this row in the retained-repro set is therefore load-bearing for the seam, not
+just a historical record.
+
+**Process note:** this replay is the first cash-out of the retention proposal in
+§"Process gap" — the row T.5 could not re-examine was recoverable this cycle
+only because `--checkpoint` retained its `engine_state`.
+
 ## T.6 Carry: shard vintage is now a lineage boundary (#936 review, Finding 1)
 
 The §S.2 mapper fix changes the *encoder's* output on the engine-as-environment
@@ -3555,3 +3630,138 @@ claim is written down where the next person will look.
 - report `reports/c5.json`, checkpoint `reports/c5.jsonl`, log `reports/c5.log`
 - triage `reports/c5_tri.json` (82/82 rows, population guard satisfied)
 - prior cycle for comparison: `reports/c4.json`, `reports/c4b.json`
+
+---
+
+# Appendix U — Cycle six: adjudicating `itemleftovers` and `psn`
+
+Branch `scott/residue-triage-leftovers-psn`. Engine 29 patches, fingerprint
+`7909290e14e065cd`, `--check` current; Python at `84a6712` (post-#942/#943).
+Every verdict below comes from replaying a retained `engine_state`, not from a
+class name. Reports are committed under `reports/` — see U.5.
+
+## U.1 The assignment's counts were pre-#908/#930 and are stale
+
+Re-running the **C.9 census verbatim** — 60 games, seeds 1350000-1350059, strict
+matcher — on the current build gives the *identical denominator*, so the
+comparison is like-for-like rather than a re-scoped population:
+
+| | C.9 (19-patch) | now (29-patch, #908/#930/#942 in) |
+| --- | --- | --- |
+| measured | 5,310 / 5,438 | **5,310 / 5,438** (identical) |
+| diverged | 160 = 3.01 % | **50 = 0.94 %** |
+| `roll_scaled_component` | 86 | 21 |
+| `component_extra_in_engine:itemleftovers` | 9 | **0** |
+| `component_mismatch:sandstorm\|psn` | 9 | **0** |
+| `component_missing_in_engine:psn` | 9 | **2** |
+| `component_missing_in_engine:itemleftovers` | 11 | 9 |
+
+Two of the three assigned classes are already **closed or nearly closed** by
+merged work — chiefly #908's positional attributor, which lives in the Rust
+mapper (`rust/pokezero-search/src/events.rs`), not in the differential script.
+The brief's "22 missing + 6 extra / 9 psn" figures describe a pre-#908
+population and should not be carried forward as open work.
+
+## U.2 The headline: 8 of 12 rows are not residual bugs at all
+
+Pooling both populations (the 1350000 census and the 1500000 40-game sweep)
+gives 12 rows across `itemleftovers` / `psn` / `brn`. Classifying each by what
+its **highest-probability** branch actually disagrees on:
+
+| top-branch failure mode | rows |
+| --- | --- |
+| roll-scaled **move damage** | **8** |
+| the named residual component | 4 |
+
+In all 8, the named residual is **present and numerically identical** in the
+engine's majority branch. The class label is produced by *minority* branches
+where the residual is correctly absent — and those branches are exactly the ones
+a correct engine must have:
+
+| row | label | majority branch | why the label appears |
+| --- | --- | --- | --- |
+| s1500034 st6 | `missing:brn` | `brn=-29` **present** | 4.69 %+ lethal branches — mon dies to the move, so no burn tick |
+| s1350007 st76 | `missing:psn` | `psn=-17` **present** | 15 % of branches = Toxic **missed** (85 % accuracy) |
+| s1500014 st69 | `missing:itemleftovers` | `+18/+14` **present** | 6.25 % = the **crit** branch, lethal in engine |
+
+The real disagreement in these rows is move damage — s1350007 st76 is observed
+−66 vs engine −106, s1500014 st69 is −214 vs −116 — which is the
+`roll_scaled_component` / damage_calc lane, **explicitly not this lane's scope**
+this cycle. C.9 already flagged that family as substantive rather than roll
+noise (seed 1350001 step 49, −116 vs −170); these rows are further instances of
+it wearing a residual's name.
+
+**Method note.** This is the fourth cycle in which a class name turned out to be
+a symptom rather than a mechanism. Had these been "fixed" as residual bugs,
+the fix would have targeted components the engine already gets right.
+
+## U.3 The 4 genuine rows, and they are three different things
+
+### U.3.1 NEW SIGNATURE (open): Explosion + a can't-move status
+
+Two rows, one shape, and it is not a residual bug either:
+
+| row | Showdown | engine |
+| --- | --- | --- |
+| s1350013 st38 | `\|cant\|p2a: Forretress\|frz` — move blocked, upkeep runs, Leftovers `+15` | `Damage SideTwo: 67` + `ToggleSideTwoForceSwitch` — Explosion **resolves**, self-KO |
+| s1350022 st34 | `\|cant\|p2a: Nosepass\|slp` — move blocked, upkeep runs, Leftovers both sides | `Damage SideTwo: 215` + `ToggleSideTwoForceSwitch` — Explosion **resolves** |
+
+No branch in either sweep reproduces the observed transition, and **none emits
+the Leftovers tick**, which is what produces the `missing:itemleftovers` label.
+Both rows pair **Explosion** with a fully-incapacitating status.
+
+Per the standing rule — *the probe shows WHAT, the WHY needs its own evidence* —
+the mechanism is recorded as **open**. What is established is the WHAT above;
+what is **not** established is whether the cause is the status gate, the
+forced-switch toggle suppressing `add_end_of_turn_instructions`, or the
+hidden-counter sweep failing to include a stays-incapacitated candidate. The
+narrow signature (Explosion + frz/slp) makes this cheaply reproducible for
+whoever takes it.
+
+### U.3.2 Boundary artifact, not an engine bug: s1500005 st67
+
+Showdown's slice **ends at the faint with no `|upkeep`** — Crunch crit-KOs
+Electabuzz, Static fires, protocol stops. The residual block has not been
+deferred *incorrectly*; it has not run **yet**, because a replacement is pending.
+The engine, given the same joint action, completes the turn and emits
+`Heal SideOne: 17` (+ toxic `-15`). The engine is right about the game; the
+*measurement boundary* is what disagrees. Same family as the #876 deferral work.
+
+### U.3.3 Mapper attribution, #908/I.2 lineage: s1500017 st55
+
+90 % branch: observed `heal +31` vs engine `leechseed +31` — **same magnitude,
+different label**. This is the I.2 shape (Showdown emits the seeder's drain bare
+/ `[silent]`, tagging only the victim's damage) surviving in one direction.
+Cited, not re-derived.
+
+## U.4 Adjudication summary
+
+| verdict | rows | lane |
+| --- | --- | --- |
+| symptom of move-damage divergence; residual is correct | 8 | damage_calc — **not this lane** |
+| Explosion + can't-move status | 2 | **OPEN, new signature** |
+| measurement-boundary truncation at a faint | 1 | harness — #876 family |
+| mapper attribution `heal` vs `leechseed` | 1 | harness — #908/I.2 family |
+
+**No engine fix is proposed by this cycle for `itemleftovers` or `psn`, and that
+is the finding.** Both classes are adjudicated: the bulk are mislabelled
+damage-calc rows, and the genuine remainder belongs to a different mechanism
+(U.3.1) that deserves its own investigation rather than a residual patch.
+
+## U.5 Artifacts — the retention proposal, discharged
+
+The §"Process gap" entry proposed persisting repro states because a cycle-five
+row could not be re-examined. That proposal is **executed here**, not just
+restated: these reports carry the `engine_state` for every divergent row and are
+replayable with `scripts/replay_residue.py --report <file>`.
+
+- `reports/c6_census1350.json` — 60 games, seeds 1350000-1350059 (U.1, U.2)
+- `reports/c6_1500_pre942.json` — 40 games, seeds 1500000-1500039, **pre-#942**
+- `reports/c6_1500010_post942.json` — seed 1500010, **post-#942** (T.5.1 pair)
+
+The last two are the before/after that closed T.5, and are the first artifacts
+in this repo that make a specific row re-examinable after main advances.
+
+**Caveat that travels with them:** the reports pin the engine fingerprint but a
+fingerprint alone is not a build identity once main moves — the repo SHA is
+recorded above for exactly that reason.
