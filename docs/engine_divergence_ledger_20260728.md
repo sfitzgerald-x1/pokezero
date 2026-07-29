@@ -5243,11 +5243,16 @@ this one too.
 
 # Appendix Z7 — Cycle eleven: mechanism-2 stat-modifier flooring (patches 35-36), and what the family label got right and wrong
 
-Fix-lane worktree, branch `scott/engine-gen3-stat-modifier-flooring`, based on main at
-#958 (33 patches). Baseline build verified at the c9/c10 fingerprint
-`887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d` (behavioral probes
-9/9); all six `mechanism2_stat_modifier_flooring` rows regenerated from seed and
-replayed through `scripts/replay_residue.py` before any design.
+Fix-lane worktree, branch `scott/engine-gen3-stat-modifier-flooring`. The work was
+authored against main at #958 (33 patches, fingerprint `887a722dd2d6cd9b...`, probes
+9/9), where all six `mechanism2_stat_modifier_flooring` rows were regenerated from seed
+and replayed through `scripts/replay_residue.py` before any design; #959 (patch 34,
+explosion-selfdestruct-gate) and #961 (Kecleon world seeding) merged mid-review, so the
+branch carries a merge of main, the two patches renumbered to slots 35-36
+(fixture-refresh still last), and the binding measurement below re-run against the
+88-row post-#961 baseline. The pre-merge run (96-frame, fingerprint `a987f3db...`,
+outside-limits 96 -> 86) measured the identical ten-row clearance and is retained in
+branch history; every number in Z7.5 is from the post-merge tree.
 
 ## Z7.1 Derivation: where gen3 Showdown puts the stat modifiers (all vendored-source citations)
 
@@ -5321,8 +5326,11 @@ subsumed, its pins still pass. Folded in, each sim-cited and pinned:
 - **gen3 Plus/Minus added** (x1.5 SpA vs the opposing partner ability; live-probed
   Minun vs Plusle: observed {78..90} = the boosted roll set of max 90, control vs
   Slowbro unboosted). Both species are in the randbats pool, so the pair is reachable.
-- **CONFIRMED LIVE BUG, fixed: burned Guts was 3x.** Z.4 recorded the upstream Guts
-  burn-compensation double as "dropped"; it was NOT — it survived in abilities.rs, and
+- **CONFIRMED LIVE BUG, fixed: burned Guts was 3x — and Z.4's record of it is WRONG.**
+  Z.4 states patch 33 dropped the upstream Guts burn-compensation double ("Guts'
+  burn-compensation double is dropped in favour of the pipeline's Guts-guarded burn
+  halving"). It did not: patch 33 only touched damage_calc.rs, the double survived in
+  abilities.rs, and
   once patch 33's Guts-guarded burn halving stopped halving, a burned Guts attacker
   multiplied BP by 1.5*2 with nothing compensating (probe: burned Guts Machamp Rock
   Slide dealt the 226-hp cap where paralyzed dealt 177). No prior residue row carried
@@ -5340,7 +5348,11 @@ Replay-first decomposition of the six `mechanism2_stat_modifier_flooring` rows:
 | 1500028/44 | label WRONG — not an engine defect | heal-cap structural matcher artifact: engine max = sim max = **19** at the recorded state (Vigoroth -1 atk Shadow Ball vs Mightyena — the -1 costs nothing, 183*2/3 is exact); the divergence is the engine world's avg-roll Leftovers heal capping `_to_full` while the observed roll's heal did not. Instrument lane, predicted NOT to clear, did not clear. |
 
 1500076/96 (HP Grass into Shuckle, -1 SpD): the boost flooring is identical on both
-sides (floor(506/1.5)=337 both); the point is lost at the TYPE step. The sim NETS the
+sides (floor(506/1.5)=337 both); the point is lost at the TYPE step. **This is a defect
+in the SHIPPED patch 33** (merged in the damage_calc lane, Appendix Z.4): its rewrite of
+common_pkmn_damage_calc mis-transcribed the sim's type block. Found by this lane's
+replay-first decomposition, fixed by patch 36; cycle history should read patch 33 as
+correct on the modifier ORDER and truncation points but wrong on type-step NETTING. The sim NETS the
 type exponent first (`typeMod = runEffectiveness` sums +1/-1 across the defender's
 types) and applies only the net (data/mods/gen3/scripts.ts:88-104); patch 33's
 transcription applied the two types as independent steps, so a net-neutral (0.5, 2)
@@ -5361,49 +5373,56 @@ unpatched branch value — and the 4 controls pass. On the 35-patch build: 18/18
 
 | build | patches | fingerprint | gates |
 |---|---|---|---|
-| baseline | 33 | `887a722d...` | probes 9/9; six family rows reproduce |
-| +stat-flooring +netting | 35 | `a987f3db8a9b8f0d837ff577ed1d54e68e663e453bfc5294ce7159fea157d490` | probes 9/9 (no expectation moved); pins 18/18; engine tree 17/17; pokezero-search suites 264/264; test_gen3_damage + engine fidelity suites green; fuzz=0 apply verified through both builders |
+| authoring baseline (#958 main) | 33 | `887a722d...` | probes 9/9; six family rows reproduce |
+| pre-merge (+stat-flooring +netting) | 35 | `a987f3db...` | probes 9/9 (no expectation moved); pins 18/18; engine tree 17/17; pokezero-search 264/264; first differential (96-frame): 96 -> 86 |
+| **post-merge (binding)** — main@#961 + slots 35-36 | 36 | `bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5` | fuzz=0 through both builders in the merged order (explosion-selfdestruct-gate applies BEFORE these two); probes 9/9 (no expectation moved by the netting patch); pins 18/18 + #961's typechange pins green; engine tree 17/17; pokezero-search 270/270 (incl. #959's gate tests) |
 
-The fixture-refresh patch stays LAST and needed no extension: no upstream expectation
-moved.
+The fixture-refresh patch stays LAST and needed no extension on any of the three
+builds: no upstream expectation moved.
 
-## Z7.5 Prediction and the identity diff (registered BEFORE the run)
+## Z7.5 Prediction and the identity diff (registered BEFORE each run)
 
 Per the standing rule (two prior fixes under-counted by trusting family labels), the
-prediction was made by MECHANISM SIGNATURE: all 96 surviving outside-limits rows
-regenerated at the base build (96/96 reproduced) and marker-scanned on the row payloads
-(`reports/c11_statfloor_prediction.json`). Run: 300 games, seeds 1500000-1500299,
-strict, `--repros-per-game 40`, fingerprint `a987f3db...`
-(`reports/c11_statfloor_differential.json`).
+prediction was made by MECHANISM SIGNATURE: all 96 then-surviving outside-limits rows
+regenerated at the 33-patch authoring baseline (96/96 reproduced) and marker-scanned on
+the row payloads (`reports/c11_statfloor_prediction.json`). The pre-merge run scored it
+on the 96-frame (5/5 arithmetic-verified rows cleared, 4/7 marker candidates cleared,
+1500028/44 stayed as predicted, one extra netting clearance — 1500072/48, Silver Wind
+into Metagross, missed by the scan because Silver Wind was absent from its move-type
+table, named by identity diff and diagnosed by arithmetic: sim 85 vs engine 84).
+
+After #959/#961 merged, the prediction was RESTATED against the new baseline before the
+binding run (same artifact, `postmerge_restatement`): the same ten rows clear, 88 -> 78,
+zero interaction with the eight rows #959/#961 cleared, nine remaining walk rows stay,
+limit census unchanged. Binding run: 300 games, seeds 1500000-1500299, strict,
+`--repros-per-game 40 --keep-repro 500`, fingerprint `bdb6ad30...`
+(`reports/c11_statfloor_differential.json`). **Both sides of the identity diff carry
+`repro_retention.repros_complete: true`** (baseline `reports/c10_kecleon_differential.json`
+127/127; this run 117/117), so the diff is over the full divergent sets.
 
 | | predicted | actual |
 |---|---|---|
-| will clear (arithmetic-verified) | 5 | **5/5 cleared** |
-| will NOT clear (1500028/44, heal-cap artifact) | stays | **stayed** |
-| marker candidates (may clear) | 7 | **4 cleared** (1500036/14, 1500059/1, 1500060/49, 1500084/31), 3 stayed (1500054/125, 1500174/43, 1500253/70) |
-| zero change elsewhere | 83 rows | **82 held, 1 extra clearance** (below) |
-| capped-lethal walk 11 | present (3 marker rows may move) | **11/11 present** |
-| limit:* population | 39, unchanged | **39, same classes** (34 roll_divergent_lethality + 5 world_sample_drag_target) |
-| outside-limits population | — | **96 -> 86**; diverged 135 -> 125 on identical boundary counts (23335 measured, matched 23200 -> 23210) |
-
-The extra clearance is **1500072/48** (`damage_calc_one_point_family`): toxic'd +2
-Ledian Silver Wind into Metagross (STEEL/PSYCHIC — resist first, 2x second, net 0).
-Sim max 85 (observed = exactly that 100% roll), base engine 84 by the per-type floor.
-It is the netting mechanism; the scan missed it because Silver Wind was absent from the
-scan's move-type table — a marker-coverage miss, found by the identity diff and
-diagnosed by arithmetic, the same healthy direction as cycle ten's 12th row.
+| the ten rows (5 verified + 4 scored candidates + 1500072/48) | all clear | **10/10 cleared** |
+| 1500028/44 (heal-cap matcher artifact) | stays | **stayed** |
+| #959/#961's eight cleared rows | stay absent (zero interaction) | **all absent** |
+| remaining marker candidates (1500054/125, 1500174/43, 1500253/70) | stay, labels kept | **stayed** |
+| capped-lethal walk (9 of 11 remain post-#959) | 9 present | **9/9 present** |
+| limit:* population | 39, unchanged | **39, same classes** |
+| new rows / class changes | 0 / 0 | **0 / 0** |
+| outside-limits population | 88 -> 78 | **88 -> 78**; diverged 127 -> 117 on identical boundary counts (23335 measured) |
 
 ## Z7.6 Honest coverage statement
 
-- The three surviving marker candidates keep their labels: a marker on a boundary move
-  does not make the modifier's fixed-point floor the row's divergence (the shift only
-  exists when the fraction survives /50, and the row's divergence may sit elsewhere).
-  They remain where c9 filed them.
-- Three of the eleven capped-lethal walk rows (1500012/24 CB, 1500074/57 and 1500242/60
-  netting) carry markers; all three remain divergent and keep their adjudications, but
-  their recorded branch VALUES may have shifted by a point — the walk evidence for
-  those three is stale-in-detail until the walker is rerun. The other eight are a clean
-  zero-change control.
+- The three surviving marker candidates (1500054/125, 1500174/43, 1500253/70) keep
+  their labels: a marker on a boundary move does not make the modifier's fixed-point
+  floor the row's divergence (the shift only exists when the fraction survives /50, and
+  the row's divergence may sit elsewhere). They remain where c9 filed them.
+- Of the eleven c9 capped-lethal walk rows, #959 already cleared two (1500074/57,
+  1500188/33); nine remain on the post-#961 baseline. Two of those nine carry markers
+  from this lane's scan (1500012/24 Choice Band, 1500242/60 netting); both remain
+  divergent and keep their adjudications, but their recorded branch VALUES may have
+  shifted by a point — the walk evidence for those two is stale-in-detail until the
+  walker is rerun. The other seven are a clean zero-change control.
 - Documented BP-side one-point residue this lane deliberately did NOT touch (the sim
   floors the BasePower event's result to an integer; the engine carries f32): pinch
   abilities (x1.5 on odd BP), Thick Fat (0.5 on odd BP), Facade, the weakened-condition
@@ -5424,6 +5443,7 @@ diagnosed by arithmetic, the same healthy direction as cycle ten's 12th row.
   `third_party/poke-engine-gen3-type-effectiveness-netting.patch` (35), fixture-refresh
   still last
 - `tests/test_engine_stat_modifier_fidelity.py` — 14 divergence pins + 4 controls
-- `reports/c11_statfloor_prediction.json` — pre-registered, scored in Z5.5
-- `reports/c11_statfloor_differential.json` — the cycle-eleven run (25 repro payloads
-  retained, c10 size policy)
+- `reports/c11_statfloor_prediction.json` — pre-registered on the 96-frame, restated
+  pre-run on the 88-frame (`postmerge_restatement`), both scored in Z7.5
+- `reports/c11_statfloor_differential.json` — the binding post-merge run
+  (`repros_complete: true`, 117/117)
