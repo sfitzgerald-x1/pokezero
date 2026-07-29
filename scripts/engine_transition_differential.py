@@ -310,8 +310,18 @@ _ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion", "capped_le
 _IGNORED_SOURCES = frozenset({"lockedmove"})
 
 
-def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
+def damage_components(
+    lines: Sequence[str], initial_hp: Mapping[str, int] | None = None
+) -> dict[str, list[tuple[str, int]]]:
     """Per-source HP deltas from a protocol slice, keyed by slot.
+
+    ``initial_hp`` seeds the running HP per slot with the PRE-STEP value. Without
+    it the first HP line for a slot only established the baseline and its delta
+    was dropped — which silently hid the step's PRIMARY move damage whenever the
+    slot had no earlier line (no switch, no second hit), i.e. most steps. Found
+    by replaying a `roll_scaled_component` row (seed 1340001 step 47): the label
+    said "roll disagreement", the replay showed the Hidden Power damage was not
+    in the component list at all.
 
     Returns ``{"p1": [(source, delta), ...], "p2": [...]}`` where ``delta`` is
     signed (negative = damage) and ``source`` is the normalized ``[from]`` tag
@@ -320,7 +330,7 @@ def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
     components sum to its net change and each is independently comparable.
     """
 
-    running: dict[str, int] = {}
+    running: dict[str, int] = dict(initial_hp or {})
     out: dict[str, list[tuple[str, int]]] = {"p1": [], "p2": []}
     for line in lines:
         parts = line.split("|")
@@ -364,7 +374,13 @@ def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
             # exonerated by the engine lane in #893). Bucket it as roll-scaled.
             source = "capped_lethal"
         previous = running.get(slot)
-        if previous is not None:
+        if previous is not None and new_hp != previous:
+            # ZERO deltas are dropped. The engine emits no-op instructions
+            # (`Heal SideTwo: 0` for a Rest that cannot heal a full-HP mon)
+            # where Showdown emits `|-fail|` and no HP line at all. A component
+            # that changed nothing carries no information, and recording it made
+            # the component LISTS differ in length — surfacing as a spurious
+            # roll-scaled mismatch (seed 1340000 step 110).
             out[slot].append((source, new_hp - previous))
         running[slot] = new_hp
     return out
@@ -431,6 +447,13 @@ def legal_roll_damages(base_rolls: Sequence[int]) -> set[int]:
     return values
 
 
+def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
+    """Total roll-scaled DAMAGE on a slot this step (the spread that can move a
+    capped heal). Heals are positive and excluded; only damage carries a roll."""
+
+    return sum(abs(delta) for _source, delta in components if delta < 0)
+
+
 def roll_components_agree(
     observed: Sequence[tuple[str, int]],
     engine: Sequence[tuple[str, int]],
@@ -452,11 +475,27 @@ def roll_components_agree(
     ):
         if obs == eng:
             continue
-        if obs_source == "capped_lethal" or obs_source.endswith("_to_full"):
-            # A residual that killed, or a heal that topped out, was clipped by
-            # the HP that happened to remain, so it can be ARBITRARILY smaller
-            # than the uncapped value the engine branch carries. Clipping only
-            # ever reduces, so the sound test is an inequality, not a window.
+        if obs_source.endswith("_to_full"):
+            # A heal that tops the mon out restores `maxhp - hp_before`, so the
+            # two sims differ by exactly their difference in `hp_before` — which
+            # is bounded by the 85-100 % spread of the damage that preceded it in
+            # THIS step. Crucially this caps in BOTH directions: a larger
+            # preceding roll leaves less HP and makes the heal LARGER, so
+            # `obs > eng` is legitimate and the one-sided `obs <= eng + 1` test
+            # is inverted for this class (it rejected the motivating Rest case,
+            # 251 vs 247, while accepting a 24x-too-small 10 vs 247).
+            #
+            # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
+            # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
+            # of flooring slack.
+            scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
+            if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
+                continue
+            return False
+        if obs_source == "capped_lethal":
+            # A residual that KILLED was clipped by the HP that happened to
+            # remain, so it can only ever be SMALLER than the uncapped tick the
+            # engine carries — here the one-sided inequality IS the sound test.
             if abs(obs) <= abs(eng) + 1:
                 continue
             return False
@@ -804,6 +843,7 @@ def evaluate_boundary_strict(
     choices: Mapping[str, str],
     party_display: Mapping[str, Sequence[str]],
     turn: int,
+    pre_features: TurnFeatures,
     observed: TurnFeatures,
     step_lines: Sequence[str],
     observed_boosts: Mapping[str, Mapping[str, int]],
@@ -824,7 +864,10 @@ def evaluate_boundary_strict(
         "turn": int(turn),
     })
 
-    observed_components = damage_components(step_lines)
+    # Both sides start from the same pre-state (the pre-state gate proved the
+    # HP equal), so both extractions are seeded with it.
+    pre_hp = {"p1": pre_features.p1_hp, "p2": pre_features.p2_hp}
+    observed_components = damage_components(step_lines, pre_hp)
     obs_exact = {slot: _split_components(observed_components[slot])[0] for slot in ("p1", "p2")}
     obs_rolled = {slot: _split_components(observed_components[slot])[1] for slot in ("p1", "p2")}
 
@@ -865,7 +908,10 @@ def evaluate_boundary_strict(
                 counts["strict:lossy_render"] += 1
                 continue
             usable_branches += 1
-            engine_components = damage_components(branch.get("events") or [])
+            engine_components = damage_components(
+                branch.get("events") or [],
+                {engine_label_for_slot[slot]: pre_hp[slot] for slot in ("p1", "p2")},
+            )
             ok = True
             reason = None
             for slot in ("p1", "p2"):
@@ -1075,6 +1121,7 @@ def run_game(
                     choices=prepared["choices"],
                     party_display=prepared["party_display"],
                     turn=prepared["turn"],
+                    pre_features=prepared["pre_features"],
                     observed=observed,
                     step_lines=step_lines,
                     observed_boosts=observed_boost_deltas(step_lines),
@@ -1111,6 +1158,12 @@ def run_game(
                         "error": f"{type(error).__name__}: {error}",
                         "choices": prepared["choices"],
                         "engine_state": prepared["states"][0].to_string(),
+                    # EVERY hidden-counter candidate, so scripts/replay_residue.py
+                    # reproduces the exact branch union the matcher judged rather
+                    # than only the first sweep rung.
+                    "engine_states": [st.to_string() for st in prepared["states"]],
+                    "gating": prepared["gating"],
+                        "engine_states": [st.to_string() for st in prepared["states"]],
                     }
                 )
             continue
@@ -1129,6 +1182,11 @@ def run_game(
                     "step": steps,
                     "choices": prepared["choices"],
                     "engine_state": prepared["states"][0].to_string(),
+                    # EVERY hidden-counter candidate, so scripts/replay_residue.py
+                    # reproduces the exact branch union the matcher judged rather
+                    # than only the first sweep rung.
+                    "engine_states": [st.to_string() for st in prepared["states"]],
+                    "gating": prepared["gating"],
                     "pre_features": _features_payload(prepared["pre_features"]),
                     "observed": _features_payload(observed),
                     "observed_boost_deltas": observed_boost_deltas(step_lines),

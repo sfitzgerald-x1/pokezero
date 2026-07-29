@@ -2217,6 +2217,14 @@ fn residual_damage_cause(state: &State, side: SideReference, amount: i16) -> Str
 ///
 /// so the wish heal is exactly the one IMMEDIATELY FOLLOWED by `DecrementWish`
 /// for the same side. `next_ins` is the lookahead the caller supplies.
+///
+/// WHY THIS SURVIVES #876's RESIDUAL DEFERRAL. The deferral relocates the WHOLE
+/// end-of-turn residual block past a forced replacement — it does not reorder,
+/// split, or interleave the block's contents. `Heal`/`DecrementWish` are emitted
+/// as a unit at the wish's residual slot, so wherever the block is emitted the
+/// pair stays adjacent. The invariant is therefore structural (a property of how
+/// the block is constructed), not an observation about where the block happens
+/// to land, and it holds equally on the deferred ply.
 fn residual_heal_cause(
     state: &State,
     side: SideReference,

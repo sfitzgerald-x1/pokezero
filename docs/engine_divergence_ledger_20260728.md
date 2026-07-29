@@ -1053,6 +1053,30 @@ Seeds burned by this appendix: 981000–981149 (A/B, re-used deliberately),
 
 ---
 
+# Method rule — replay before you label
+
+**Triaging a residue class starts by replaying the recorded boundary through the
+engine. The class label is a hypothesis about a symptom; the replay is the
+experiment.** This is step one, not the fallback after a diagnosis fails.
+
+The rule was earned three times over. #893 re-attributed a "spikes" class to
+Whirlwind from branch-count reasoning; #895 then disproved that same lead by
+replay before finding the real bug (Protect blocks phazing) during source
+verification. Applying it here immediately disproved two more of my own labels —
+`roll_scaled_component` turned out to be an extractor bug hiding the primary
+move damage (C.7), and a second instance of the same label turned out to be a
+32 % damage disagreement rather than roll noise.
+
+    PYTHONPATH=src python scripts/replay_residue.py --report <report>.json \
+        [--seed N] [--step N] [--class <substring>] [--limit K]
+
+It deserializes every recorded candidate `engine_state` (the whole
+hidden-counter sweep — those states ARE the union the matcher judged), re-runs
+the exact recorded joint action through `generate_instructions` and the
+instruction->event mapper, and prints each branch's attributed components beside
+the observation's. **A class verdict in this ledger requires a replay, not a
+label read.**
+
 # Appendix C — mapper attribution, matcher component semantics, full classification
 
 Branch `scott/mapper-attribution-fixes`, stacked on #890. Measured on the
@@ -1169,3 +1193,73 @@ by excluding them by name.
 
 Seeds burned: 1320000–1320299, 1330000–1330059, plus single-game repro checks at
 1310000, 1310002, 1310005.
+
+## C.7 Replay-first found two matcher bugs the labels hid
+
+Both surfaced on the first two rows replayed, and both were mine:
+
+* **The primary move damage was invisible.** `damage_components` used the first
+  HP line for a slot to establish its baseline, so that line's delta was
+  dropped — hiding the step's main damage whenever the slot had no earlier line,
+  i.e. most steps. Seeded from the pre-state now (the pre-state gate proves it
+  equal on both sides). Seed 1340001 step 47.
+* **Zero-delta components were recorded.** The engine emits `Heal SideTwo: 0`
+  for a Rest that cannot heal a full-HP mon, where Showdown emits `|-fail|` and
+  no HP line at all. The no-op made the component lists differ in length and
+  surfaced as a spurious roll mismatch. Seed 1340000 step 110.
+
+## C.8 Comparator tolerances, and why the census had to be regenerated
+
+Review of #896 caught that `capped_lethal` and `*_to_full` shared one
+**one-sided** test, `abs(obs) <= abs(eng) + 1`. They cap in **opposite**
+directions:
+
+| class | mechanism | correct test |
+| --- | --- | --- |
+| `capped_lethal` | residual clipped by remaining HP — can only shrink | `obs <= eng + 1` |
+| `*_to_full` | heal restores `maxhp - hp_before`; a bigger preceding roll leaves less HP, so the heal is **larger** | two-sided, bounded by the preceding roll spread |
+
+Shared, the test was inverted for heals: it rejected the motivating Rest case
+(251 vs 247) while accepting a heal 24x too small (10 vs 247) — and unbounded
+below. `*_to_full` is now bounded symmetrically by `0.18 x` the roll-scaled
+damage on that slot this step (observed `d >= 0.85 * base`, so the spread
+`0.15 * base <= 0.176 * d`), plus 1 HP of flooring slack.
+
+`tests/test_transition_differential_matcher.py` pins both reviewer cases plus
+the extraction rules — 11 tests. The comparator decides every acceptance
+verdict, so it is tested directly rather than only through census aggregates: a
+lenient comparator produces clean aggregates, which is precisely the failure
+mode that looks like success.
+
+**Every number below was regenerated through the fixed comparator**, and it moved
+the wrong way on purpose: 1.65 % under the lenient version, **3.01 %** under the
+correct one.
+
+## C.9 Census on the 19-patch base (#893/#894/#895 merged)
+
+60 games, seeds 1350000-1350059, strict matcher, support gating.
+Build currency verified by probe (Encore expires turn 6), not assumed.
+
+| Metric | Value |
+| --- | --- |
+| measured | 5,310 / 5,438 = **97.65 %** |
+| diverged | 160 = **3.01 %** of measured |
+| harness errors | **0** |
+| `unclassified` | **0** |
+
+| Class | n | Share |
+| --- | --- | --- |
+| `roll_scaled_component` | 86 | 53.8 % |
+| `limit:roll_divergent_lethality` | 11 | 6.9 % |
+| `component_extra_in_engine:itemleftovers` | 9 | 5.6 % |
+| `component_mismatch:sandstorm|psn` | 9 | 5.6 % |
+| `component_missing_in_engine:psn` | 9 | 5.6 % |
+| 11 further named classes | 36 | 22.5 % |
+
+**`roll_scaled_component` is NOT triaged.** Replaying one row (seed 1350001
+step 49) shows p1 −95 vs engine −100 (inside the roll spread, fine) but p2
+**−116 vs engine −170** — a 32 % damage disagreement, well outside any roll. That
+is a substantive candidate, not roll noise, and the class name says nothing
+about how many of the 86 are like it. Per the method rule above it needs
+per-row replay triage before the acceptance run, and one sample does not license
+a verdict on the class.
