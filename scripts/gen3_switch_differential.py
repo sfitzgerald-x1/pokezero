@@ -116,6 +116,18 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   a 1 max HP Shedinja takes 1 and FAINTS. Upstream truncated to
                   zero and left it standing in the sand forever.
 
+  whirlwindprotect / roarprotect : gen3 phazing IS blocked by Protect —
+                  ``-activate <target> Protect`` and no ``|drag|``. This is the
+                  divergence ``third_party/poke-engine-gen3-phaze-protect.patch``
+                  fixes: gen3 inherits gen4's flag override
+                  (``{ protect: 1, mirror: 1, bypasssub: 1, metronome: 1 }``) and
+                  upstream carried no protect flag, so the target was dragged out
+                  through its own Protect.
+  whirlwinddrag : the no-regression control — the same turn WITHOUT Protect must
+                  still drag.
+  whirlwindsub  : ``bypasssub`` is in the gen3 flag set, so a Substitute does not
+                  stop the drag.
+
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
 seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
@@ -251,6 +263,16 @@ def _spikes_skarmory():  # hazard setter with an inert filler move
 def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
     return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
                           moves=("Splash",))
+
+
+def _phazer():  # Skarmory carries Whirlwind AND Protect on its own randbats set
+    return FixturePokemon(species="Skarmory", ability="Keen Eye", item="None",
+                          moves=("Whirlwind", "Roar", "Splash"))
+
+
+def _phaze_target():  # can Protect, sub, or simply stand there
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Protect", "Substitute", "Splash"))
 
 
 def _toxic_user():  # lays the ladder, then idles while it climbs
@@ -1115,6 +1137,35 @@ def _spec(name):
             expect={"encored_move_is_splash": True},
             landmark=lambda L: _has(L, "|-start|p2a: Smeargle|Encore"),
             landmark_desc="Encore applied")
+    # --- phazing (Whirlwind / Roar) -----------------------------------------
+    if name in ("whirlwindprotect", "roarprotect", "whirlwinddrag"):
+        # gen3 inherits gen4's flag override, which ADDS protect and drops
+        # reflectable, so a phaze is stopped by Protect but still goes through a
+        # Substitute. `whirlwinddrag` is the no-regression control: the same turn
+        # without Protect must still drag.
+        blocked = name.endswith("protect")
+        phaze = "roar" if name.startswith("roar") else "whirlwind"
+        answer = "move protect" if blocked else "move splash"
+        return dict(
+            p1=[_phazer()], p2=[_phaze_target(), _blissey(), _snorlax_hazard_victim()],
+            turns=[(f"move {phaze}", answer)],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"dragged": _has(L, "|drag|p2a:"),
+                             "protect_activated": _has(L, "|-activate|p2a: Snorlax|Protect")},
+            expect={"dragged": not blocked, "protect_activated": blocked},
+            landmark=lambda L: _has(L, "|move|p1a: Skarmory"),
+            landmark_desc="the phaze was used")
+    if name == "whirlwindsub":
+        # bypasssub: a Substitute does NOT stop the drag.
+        return dict(
+            p1=[_phazer()], p2=[_phaze_target(), _blissey(), _snorlax_hazard_victim()],
+            turns=[("move splash", "move substitute"), ("move whirlwind", "move splash")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-start|p2a: Snorlax|Substitute"),
+            facts=lambda L: {"dragged": _has(L, "|drag|p2a:")},
+            expect={"dragged": True},
+            landmark=lambda L: _has(L, "|move|p1a: Skarmory|Whirlwind"),
+            landmark_desc="Whirlwind was used into the Substitute")
     raise ValueError(name)
 
 
@@ -1137,7 +1188,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "encoreappliescontrol",
              "toxicladder", "toxicladdercontrol", "sandminimum",
              "lastmoveparaencore", "lastmoveconfusionencore",
-             "lastmoveflinchencore", "lastmoveexecutedcontrol")
+             "lastmoveflinchencore", "lastmoveexecutedcontrol",
+             "whirlwindprotect", "roarprotect", "whirlwinddrag",
+             "whirlwindsub")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

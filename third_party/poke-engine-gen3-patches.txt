@@ -394,6 +394,41 @@ poke-engine-gen3-residual-rounding.patch
 # Touches generate_instructions_from_move in gen3/generate_instructions.rs only;
 # authored against the failencore-patched tree.
 poke-engine-gen3-lastmove-semantics.patch
+# gen3 phazing is blocked by Protect. Whirlwind and Roar inherit gen4's flag
+# override (data/mods/gen4/moves.ts):
+#     flags: { protect: 1, mirror: 1, bypasssub: 1, metronome: 1 }
+# so in gen3 a phaze IS stopped by Protect, goes THROUGH a Substitute, and is NOT
+# bounced by Magic Coat (reflectable arrives with gen5's override). Upstream
+# carried no protect flag on either move, so `before_move` never reached
+# `remove_effects_for_protect()` — which is what clears `flags.drag` — and the
+# target was dragged out through its own Protect. Verified against the real sim:
+# Whirlwind into Protect answers `-activate <target> Protect` with no `|drag|`.
+#
+# Reachable and common: Protect is on 43 of the gen3 randbats species, and the
+# pool's own Whirlwind user (Skarmory) carries Protect AND Whirlwind on the same
+# set. Roar is carried by Blastoise and Steelix.
+#
+# Scope, deliberately: the `reflectable: true` upstream puts on both moves is
+# WRONG for gen3, but is left alone because gen3 models no reflect/Magic Coat
+# path at all (the flag is inert) and Magic Coat appears on 0 of 393 gen3
+# randbats sets (220 species). Gen 3 Ingrain also blocks phazing (sim-verified)
+# and is likewise not modelled — Ingrain is on 0 of 393 sets too, so it is
+# unreachable in this format.
+#
+# Everything else in the phaze path was verified CORRECT while chasing this and
+# is pinned rather than changed: the fan-out is uniform over the target's alive,
+# non-active reserve (Showdown's `this.sample(possibleSwitches)`), the dragged-in
+# Pokemon eats entry hazards, the outgoing Pokemon's boosts are cleared, a
+# Substitute does not block, and a phaze with no living reserve is a no-op.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# whirlwindprotect / roarprotect / whirlwinddrag / whirlwindspikes); pinned by
+# rust/pokezero-search/tests/gen3_phaze_fidelity.rs. Touches two flag literals in
+# the shared src/choices.rs, both gen3-gated in the same `cfg!(feature = ...)`
+# style as the struggle-typeless and move-trapping patches; authored against the
+# residual-rounding tree, applied before the fixture refresh.
+poke-engine-gen3-phaze-protect.patch
+
 
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this

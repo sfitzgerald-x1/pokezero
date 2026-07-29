@@ -1,0 +1,53 @@
+diff --color -ruN a/src/choices.rs b/src/choices.rs
+--- a/src/choices.rs	2026-07-28 19:09:24
++++ b/src/choices.rs	2026-07-28 19:10:25
+@@ -13614,6 +13614,24 @@
+             priority: -6,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
++                // pokezero gen3 fix: gen3 phazing IS blocked by Protect. The
++                // modern move data carries no protect flag, but gen3 inherits
++                // gen4's override (data/mods/gen4/moves.ts), which declares
++                // `flags: { protect: 1, mirror: 1, bypasssub: 1, metronome: 1 }`.
++                // Verified against real gen3 Showdown: Whirlwind into Protect
++                // answers `-activate <target> Protect` and nothing is dragged.
++                // `remove_effects_for_protect()` already clears `flags.drag`, so
++                // this one flag is the whole fix. The MOVES map is built
++                // per-compiled-gen, so this compile-time gate leaves gen1/gen2/
++                // genx untouched (mirrors the Struggle typing and Mean Look
++                // gates).
++                //
++                // The `reflectable: true` below is WRONG for gen3 — Magic Coat
++                // bounce arrives with gen5's override — but it is left alone
++                // deliberately: gen3 models no reflect/Magic Coat path at all, so
++                // the flag is inert, and Magic Coat appears on 0 of 393 gen3
++                // randbats sets (220 species).
++                protect: cfg!(feature = "gen3"),
+                 drag: true,
+                 reflectable: true,
+                 sound: true,
+@@ -18858,6 +18876,24 @@
+             priority: -6,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
++                // pokezero gen3 fix: gen3 phazing IS blocked by Protect. The
++                // modern move data carries no protect flag, but gen3 inherits
++                // gen4's override (data/mods/gen4/moves.ts), which declares
++                // `flags: { protect: 1, mirror: 1, bypasssub: 1, metronome: 1 }`.
++                // Verified against real gen3 Showdown: Whirlwind into Protect
++                // answers `-activate <target> Protect` and nothing is dragged.
++                // `remove_effects_for_protect()` already clears `flags.drag`, so
++                // this one flag is the whole fix. The MOVES map is built
++                // per-compiled-gen, so this compile-time gate leaves gen1/gen2/
++                // genx untouched (mirrors the Struggle typing and Mean Look
++                // gates).
++                //
++                // The `reflectable: true` below is WRONG for gen3 — Magic Coat
++                // bounce arrives with gen5's override — but it is left alone
++                // deliberately: gen3 models no reflect/Magic Coat path at all, so
++                // the flag is inert, and Magic Coat appears on 0 of 393 gen3
++                // randbats sets (220 species).
++                protect: cfg!(feature = "gen3"),
+                 drag: true,
+                 reflectable: true,
+                 wind: true,
