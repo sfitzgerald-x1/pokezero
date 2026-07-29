@@ -173,6 +173,17 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   so both arms spend a turn on Mind Reader first and the measured
                   Hypnosis cannot miss.
 
+  restattemptclock : the ladder a gen3 Rest actually runs, and the ground truth behind
+                  the ``rest_turns = 3 - k`` conversion. Rest sets
+                  ``statusState.time = 3`` (``data/moves.ts`` ``rest.onHit``) and
+                  ``slp.onBeforeMove`` DECREMENTS FIRST, then wakes on ``time <= 0``:
+                  attempts 1 and 2 emit ``|cant|`` and attempt 3 cures and FALLS
+                  THROUGH into the move. Exactly two cants, then it acts — which is
+                  why the public counter k tops out at 2, and why the engine's
+                  ``rest_turns`` (matched at 1 => wake, 2|3 => stay, i.e. also read
+                  BEFORE its decrement) is the SAME number as Showdown's ``time``
+                  rather than one more. ``4 - k`` would agree only at k=0.
+
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
 seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
@@ -589,6 +600,26 @@ def _encore_span(lines, seat: str) -> int:
 
 def _count(lines, prefix: str) -> int:
     return sum(1 for line in lines if line.startswith(prefix))
+
+
+def _rest_cants_before_wake(lines, seat: str):
+    """(cants seen before the wake, whether it woke) for a Rest sleep on ``seat``.
+
+    The measurement behind ``rest_turns = 3 - k``: counting is started by the Rest
+    ``-status`` line, so an earlier induced sleep cannot contribute, and stopped by
+    ``-curestatus``. gen3 emits ``|cant|...|slp`` on exactly the attempts that tick
+    the timer and on none that do not, so this IS the public attempt count.
+    """
+    cants = 0
+    counting = False
+    for line in lines:
+        if line.startswith(f"|-status|{seat}") and "|slp" in line and "move: Rest" in line:
+            counting, cants = True, 0
+        elif counting and line.startswith(f"|cant|{seat}") and line.endswith("|slp"):
+            cants += 1
+        elif counting and line.startswith(f"|-curestatus|{seat}") and "|slp" in line:
+            return cants, True
+    return cants, False
 
 
 def _activates_after_end(lines, seat: str) -> bool:
@@ -1710,6 +1741,38 @@ def _spec(name):
             landmark=lambda L: _has(L, "|move|p1a: Smeargle|Hypnosis|p2a: Blissey")
                                and not _has(L, "[miss]"),
             landmark_desc="the measured Hypnosis was used at Blissey and did not miss")
+    if name == "restattemptclock":
+        # The measurement that fixes the k -> rest_turns conversion. A gen3 Rest is
+        # `statusState.time = 3` (data/moves.ts rest.onHit) and slp.onBeforeMove
+        # DECREMENTS FIRST, then wakes on `time <= 0` -- so the ladder is:
+        #   attempt 1: 3 -> 2, cant   (k becomes 1)
+        #   attempt 2: 2 -> 1, cant   (k becomes 2)
+        #   attempt 3: 1 -> 0, CURES AND MOVES  (no cant; k is never 3)
+        # Exactly two cants, and the mon acts on the third attempt. That is why k is
+        # capped at 2 upstream and why `rest_turns = 3 - k` is right: the engine's
+        # counter is read BEFORE its own decrement too (gen3/generate_instructions.rs
+        # matches rest_turns 1 -> wake, 2|3 -> stay), so engine rest_turns and
+        # showdown time are the SAME number at the same moment, not off by one.
+        return dict(
+            p1=[_clause_hypnotist()], p2=[_clause_sleeper()],
+            turns=[("move seismictoss", "move splash"),   # chip, so Rest can land
+                   ("move splash", "move rest"),
+                   ("move splash", "move splash"),        # attempt 1
+                   ("move splash", "move splash"),        # attempt 2
+                   ("move splash", "move splash"),        # attempt 3 -> wakes
+                   ("move splash", "move splash")],
+            measured=None, setup_step=1,
+            setup_landed=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
+            facts=lambda L: {
+                "cants_before_wake": _rest_cants_before_wake(L, "p2a: Snorlax")[0],
+                "woke": _rest_cants_before_wake(L, "p2a: Snorlax")[1],
+                # It does not merely wake, it ACTS on that same third attempt --
+                # `cureStatus(); return;` falls through into the move.
+                "acted_after_waking": _has(L, "|move|p2a: Snorlax|Splash"),
+            },
+            expect={"cants_before_wake": 2, "woke": True, "acted_after_waking": True},
+            landmark=lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest"),
+            landmark_desc="Rest landed and started the clock")
     raise ValueError(name)
 
 
@@ -1744,7 +1807,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "seismictosssub", "seismictosssubbreak", "seismictosscontrol",
              "seismictossghost",
              "toxicmiss", "toxichit",
-             "hypnosisrestclause", "hypnosisrestclausecontrol")
+             "hypnosisrestclause", "hypnosisrestclausecontrol",
+             "restattemptclock")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
