@@ -2346,3 +2346,130 @@ and gen3 emits `-activate` with no amount when a sub is hit, so **post-hit sub
 health genuinely is not public**. That remains a real approximation in the
 harness — it simply is not what produced this row, where the sub was untouched
 since creation and `maxhp/4` was therefore exact.
+
+---
+
+# Appendix L — acceptance cycle on the 24-patch set
+
+Fresh clean vendor, both wheels rebuilt, stamped
+(`faba658cf3432251`, 24 patches + 8 crate sources); 21 crate suites green;
+freshness ladder live.
+
+## L.1 ACCEPTANCE VERDICT: NOT MET — run not started (second hold)
+
+300 games, seeds **1500000-1500299**, strict, `--repros-per-game 300`.
+
+| | 22-patch (§J) | **24-patch (this)** |
+| --- | --- | --- |
+| measured | 23,334 / 23,860 = 97.80 % | **23,334 / 23,860 = 97.80 %** |
+| matched | 23,023 | 23,036 |
+| **diverged** | 311 | **298 — 1.28 %** |
+| harness errors | 0 | **0** |
+| `unclassified` | 0 | **0** |
+| adjudicated `limit:` | 47 | **47** |
+| **OUTSIDE limit classes** | 264 | **251** |
+| throughput | 1,419 games/h | 1,510 games/h |
+
+Bar is zero outside adjudicated limit classes. **251.** The 8x1250 was **not**
+started; seed block 2,000,000+ remains unconsumed (§J.7 invariant holds).
+
+## L.2 Both fixes verified — and the collapse predictions, scored honestly
+
+Direct probes confirm both landed:
+
+* **#915 fixed-damage routing** — Seismic Toss and Super Fang into a 66 HP sub
+  now leave the mon at 264/264 and take the sub to 0. Previously they put 88 and
+  132 straight into the Pokemon.
+* **#914 Solar Beam** — release damage now varies with weather (166 none / 117
+  sand / 249 sun) where it was previously a single wrong value.
+
+Scoring the predictions on record:
+
+| Prediction | Outcome |
+| --- | --- |
+| 15 Seismic Toss rows collapse | **13 of 15 resolved.** Sub-adjacent rows 49 -> 36. |
+| Solar Beam drives broad movement in `roll_scaled_component` | **Not testable here — there are ZERO Solar Beam rows in seeds 1500000-1500299**, in either run. Verified separately on seeds 1350000-1350059, where the filed row lives: `seed 1350004 step 66` is **RESOLVED** (83 -> 81 diverged). |
+| sub-adjacent cascade rows collapse | partially — the cascade was smaller than the 49-row figure implied; only the 13 fixed-damage rows moved |
+
+**Net −13 divergences, and all 13 are the Seismic Toss rows.** The honest reading
+is that both fixes work and neither had the breadth I projected: I sized the
+Solar Beam impact from a row in a *different seed set* and let that imply
+movement in this one, and I let "49 sub-adjacent" imply a cascade when only the
+15 fixed-damage rows were ever attributable.
+
+## L.3 The Leftovers/psn families did not move AT ALL
+
+| Class | 22-patch | 24-patch |
+| --- | --- | --- |
+| `component_missing_in_engine:itemleftovers` | 27 | **27** |
+| `component_extra_in_engine:itemleftovers` | 25 | **25** |
+| `component_missing_in_engine:psn` | 24 | **24** |
+| `component_extra_in_engine:psn` | 9 | **9** |
+| `component_extra_in_engine:itemleftovers,psn` | 6 | **6** |
+
+Identical counts across two independent builds. These 91 rows (36 % of the
+residue outside limit classes) are demonstrably independent of everything fixed
+so far, and they are the largest unexplained block.
+
+## L.4 A surviving row replayed — and the obvious hypothesis falsified
+
+`seed 1500004 step 73` (`seismictoss` vs `hypnosis`), one of the 78 structural
+rows:
+
+```
+Showdown: |-status|p1a: Registeel|slp|[from] move: Hypnosis
+          |cant|p1a: Registeel|slp          <- Seismic Toss never happens
+engine:   Damage SideTwo: 78                 <- it happens anyway
+```
+
+The obvious reading is "the engine lets a mon slept this turn still move". **That
+is false.** Isolation probe, faster sleeper vs slower attacker:
+
+| sleep move | engine behaviour |
+| --- | --- |
+| `spore` (100 %) | 1 branch: target slept, **attack blocked** — correct |
+| `hypnosis` (60 %) | 2 branches: 60 % slept+blocked, 40 % missed+attacked — correct |
+
+So the engine's sleep gating is right, and the divergence is something about
+*this boundary's constructed world* — the replayed branch had no Hypnosis outcome
+at all (single 100 % branch, no status instruction), which a 60 %-accurate move
+cannot produce from a healthy target. **Mechanism not established; not
+attributed.** It needs a payload dump like §K.1, which is the method that worked
+last time and which I did not have budget to complete this cycle.
+
+## L.5 Residue table with verdicts
+
+| Class | n | Verdict |
+| --- | --- | --- |
+| `roll_scaled_component` | 133 | **OPEN** — 78 structural, 55 magnitude. One replayed (L.4), obvious hypothesis falsified, mechanism unknown |
+| `limit:roll_divergent_lethality` | 42 | adjudicated limit |
+| `component_missing_in_engine:itemleftovers` | 27 | **OPEN** — untouched by 2 builds |
+| `component_extra_in_engine:itemleftovers` | 25 | **OPEN** — untouched |
+| `component_missing_in_engine:psn` | 24 | **OPEN** — untouched |
+| `component_extra_in_engine:psn` | 9 | **OPEN** — untouched |
+| `component_extra_in_engine:itemleftovers,psn` | 6 | **OPEN** — untouched |
+| `limit:world_sample_drag_target` | 5 | adjudicated limit |
+| 16 smaller classes | 27 | **OPEN** |
+
+## L.6 Recommended next step
+
+The Leftovers/psn block (91 rows, stable across builds) is the highest-value
+target and has never been replayed. §K showed that a payload dump turns an
+unexplained observation into a precise mechanism in one pass; the same treatment
+applied to `component_extra_in_engine:itemleftovers` and
+`component_missing_in_engine:psn` is what I would do next, before any further
+engine work is scoped from class names.
+
+## L.7 Artifacts
+
+| Artifact | Path (under `<scratch>/reports/`) |
+| --- | --- |
+| 24-patch 300-game report | `cyc300.json` |
+| per-game checkpoint | `cyc300.jsonl` |
+| run log | `cyc300.log` |
+| triage of dominant class | `tri_cyc.json` |
+| Solar Beam verification (60 games) | `sb60.json` |
+| prior 22-patch run for comparison | `final300.json` |
+
+`<scratch>` =
+`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
