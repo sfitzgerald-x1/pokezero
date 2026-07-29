@@ -4456,3 +4456,75 @@ carrying at least one real (unreachable) finding, **19 cleared, 21 remain**.
 - One prior pin updated: `test_struggle_is_physical_burn_halves` asserted the
   engine's OLD trailing burn halving (`healthy // 2`); the sim halves before
   the +2 and the crit x2, and the pin now asserts that stepwise relation.
+
+---
+
+# Appendix Z2 — Cycle eight (33 patches): the seventh hold
+
+Commit `57ea9a62e7a935448eaab459618985375270339e`, fingerprint
+`887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d`, 33 patches,
+28 crate suites green. Seeds 1,500,000–1,500,299.
+
+## Z2.1 Result, against predictions registered BEFORE the run
+
+| | c7 | c8 | predicted |
+|---|---|---|---|
+| diverged | 170 | 151 | — |
+| **outside limits** | 127 | **108** | 105 (interval 95–115) |
+| coverage | 0.978 | 0.978 | unchanged ✓ |
+| engine errors | 0 | 0 | 0 ✓ |
+| new classes | — | 0 | 0 ✓ |
+
+- **P1 (relabels) — exact.** `missing:itemleftovers` 22 -> 11, `psn` 6 -> 4,
+  `brn` 2 -> 1: the 14 known-mislabels moved mechanically, as designed.
+- **P2 (stepwise/Guts/Trace) — inside interval.** 19 rows cleared.
+  `roll_scaled_component` went 72 -> 67 while *gaining* the 14 relabels, so the
+  damage clearance is 72 + 14 - 67 = **19 rows** — matching Z.6's measured 19/40
+  on the brief seeds almost exactly.
+
+## Z2.2 ACCEPTANCE: not authorized to fire (seventh hold)
+
+108 rows outside limits. The gate is *non-damage_calc, non-documented-follow-up
+residue fully attributed*, and the decomposition below is not yet done. The sweep
+was not started; seed block 2,000,000+ remains unconsumed after eight cycles.
+
+## Z2.3 Window constant corrected
+
+`_ROLL_LOW` 0.92 -> **0.919**. The engine reports `trunc(0.925 * max)`, so
+against Showdown's 85–100% ladder the honest low edge is `0.85 / 0.925 = 0.919`.
+The old 0.92 was invented, and an invented threshold is exactly what made an
+eleven-row band look like a filter artifact in §W.3 — the reasoning was sound,
+the constant was a guess. Roll-set membership remains preferred wherever
+available: it needs no constant and cannot grow a floor artifact.
+
+## Z2.4 Probe status — two adopted, two NOT RUN
+
+| probe | status |
+|---|---|
+| Pain Split clamp | PASS |
+| Protect k=1 = 50% | PASS |
+| STAB-odd non-crit max 278 | **NOT RUN** |
+| burned-Struggle crit 58 | **NOT RUN** |
+
+The two stepwise discriminators could not be run: the battery is not vendored,
+the constants appear in no test in this checkout, and `generate_instructions.rs`
+does not have the cited content at line 2495 here. **I did not reconstruct the
+fixtures from the expected values** — a probe built backwards from its own answer
+verifies nothing, and asserting PASS on a fixture I invented would be the §Y
+failure with the stakes reversed. Adopting them as standing probes requires the
+fixtures themselves; until then the build evidence is fingerprint + 28 green
+suites + the two probes that did run.
+
+## Z2.5 Carried forward, not done
+
+Remaining for cycle nine, all explicitly open:
+
+1. **The 11-row `capped_lethal` cross-off** under §X as amended — cross off rows
+   patch 31/33 formula fixes already explain (citing the Z finding), then walk
+   the remainder with the mass-gated four-exit standard, split pre-registered.
+2. **Residue decomposition** of the 108 into the expected shape: mechanism-2
+   (~8, documented follow-up, needs a choice-architecture change and is not this
+   lane's), Kecleon typechange world-drift (4), heal-cap matcher artifact (2),
+   Encore gap (1), small classes.
+3. **The Kecleon question specifically**: whether the boundary builder's failure
+   to apply `-start typechange` is mine or `engine_world`'s — unassessed.

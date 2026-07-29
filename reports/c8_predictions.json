@@ -1,0 +1,23 @@
+{
+ "registered_before_measurement": true,
+ "cycle": 8, "patches": 33,
+ "commit_sha": "57ea9a62e7a935448eaab459618985375270339e",
+ "fingerprint": "887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d",
+ "baseline_c7": {"diverged": 170, "outside_limits": 127, "coverage": 0.978},
+ "predictions": [
+  {"id":"P1","claim":"the 14 known-mislabels relabel mechanically (#950 classifier live)",
+   "expect":"roll_scaled_component +14; missing:itemleftovers 22->11, psn 6->4, brn 2->1; NO change to totals"},
+  {"id":"P2","claim":"stepwise truncation + Guts + Trace clear real damage boundaries",
+   "basis":"Z.6 measured 19/40 real damage boundaries cleared on the brief seeds (~48%)",
+   "expect_conservative":"c7 had 45 real damage findings; predict 40-50% clear at 300 games",
+   "predicted_outside_limits": 105, "interval": "95-115"},
+  {"id":"P3","claim":"no new classes, coverage unchanged at 0.978, engine_errors 0"},
+  {"id":"P4","claim":"residue should decompose into mechanism-2 (~8, documented follow-up), Kecleon typechange world-drift (4), heal-cap matcher artifact (2), Encore gap (1), small classes"}
+ ],
+ "probe_status": {
+   "painsplit_clamp": "PASS",
+   "protect_k1_50pct": "PASS",
+   "stepwise_STAB_odd_278": "NOT RUN - fixture not sourceable in this checkout; battery is not vendored",
+   "burned_struggle_crit_58": "NOT RUN - same"
+ }
+}

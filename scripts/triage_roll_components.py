@@ -60,7 +60,16 @@ _MULTIPLIER_BUCKETS = (
     (2.00, "double (crit, or type 2x)"),
     (4.00, "quadruple (type 4x)"),
 )
-_ROLL_LOW, _ROLL_HIGH = 0.92, 1.09
+# The engine reports `trunc(0.925 * max_damage)`, so its value is NOT the mean
+# roll and NOT the maximum. Against Showdown's 85%-100% ladder the honest low
+# edge is 0.85/0.925 = 0.919, not 0.92. The old 0.92 was a guess, and a guessed
+# threshold is what made an eleven-row band look like a filter artifact in the
+# first place (Appendix Y) -- the reasoning was sound, the constant was invented.
+#
+# Prefer `observed_in_legal_set` (roll-set membership) wherever it is available:
+# it needs no constant and cannot grow a floor artifact. These bounds remain only
+# for the descriptive ratio labels.
+_ROLL_LOW, _ROLL_HIGH = 0.919, 1.09
 
 
 def _state_context(state: Any) -> dict[str, Any]:
