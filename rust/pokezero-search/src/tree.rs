@@ -871,6 +871,22 @@ mod tests {
     /// HP: tackle's damage rolls (max 52, min 44) straddle Chansey's HP, so
     /// KO-threshold splits are reachable at every ply.
     const STRADDLE: &str = include_str!("test_fixtures/straddle.state");
+    /// `minimal.state` with side two replaced by a verbatim copy of side one:
+    /// the two seats are IDENTICAL (same species, moves, stats, HP, speed), so
+    /// the position is exactly mirror-symmetric. Used by the depth-parity
+    /// pins below — see `depth_parity_invariance_on_a_mirrored_position`.
+    const SYMMETRIC: &str = include_str!("test_fixtures/symmetric.state");
+
+    /// Swap the two seats of a serialized engine state. The wire format is
+    /// `side_one/side_two/weather/...`, so mirroring a position is a swap of
+    /// the first two fields — a construction-level mirror, not an engine
+    /// round trip.
+    fn mirrored(state_str: &str) -> String {
+        let mut parts: Vec<&str> = state_str.trim().split('/').collect();
+        assert!(parts.len() >= 2, "state has both side fields");
+        parts.swap(0, 1);
+        parts.join("/")
+    }
 
     fn run(
         state_str: &str,
@@ -1149,6 +1165,194 @@ mod tests {
             "prior skew must raise toxic visits ({toxic_skewed} <= {toxic_uniform})"
         );
         assert!(toss_skewed > toxic_skewed, "argmax must stay on the KO");
+    }
+
+    // -----------------------------------------------------------------
+    // Value-orientation pins (docs/mcts_degradation_findings.md §10).
+    //
+    // These exist to keep the "ply-parity-dependent value orientation"
+    // hypothesis dead. The tree's value is SIDE-ONE win probability at every
+    // level: terminal branches come from `battle_is_over` (+1 = side one won),
+    // backup adds the chance-node expectation to BOTH seats' stats unchanged,
+    // and the only seat flip lives in `MoveStats::puct` (`1 - mean` for side
+    // two). Nothing negates or re-seats per ply. Every expectation below is
+    // derived from that construction or from the fixture's symmetry, never
+    // from a recorded engine number.
+    // -----------------------------------------------------------------
+
+    /// A leaf value and its mirror reflect about 0.5, at any state.
+    ///
+    /// This is the crate-level form of "encode a mirrored state pair at a leaf
+    /// and assert v01 reflects about 0.5": `HpFractionEval` is the crate's
+    /// side-one-oriented leaf contract (lib.rs: `0.5 + 0.5 * (s1 - s2)`), so
+    /// swapping the seats must map v -> 1 - v exactly.
+    #[test]
+    fn leaf_value_reflects_about_half_under_seat_mirror() {
+        for fixture in [MINIMAL, ANALYTIC_TOXIC, DEPTH_BENEFIT, STRADDLE, SYMMETRIC] {
+            let state = parse_state(fixture.trim()).expect("fixture parses");
+            let flipped = parse_state(mirrored(fixture).trim()).expect("mirror parses");
+            let v = HpFractionEval.eval(&state);
+            let v_mirror = HpFractionEval.eval(&flipped);
+            assert!(
+                (v + v_mirror - 1.0).abs() < 1e-6,
+                "leaf value {v} and its mirror {v_mirror} do not reflect about 0.5"
+            );
+        }
+        // A perfectly mirrored position is its own mirror: exactly 0.5.
+        let symmetric = parse_state(SYMMETRIC.trim()).expect("fixture parses");
+        assert!((HpFractionEval.eval(&symmetric) - 0.5).abs() < 1e-6);
+    }
+
+    /// Backed-up root value on a mirror-symmetric position is 0.5 at EVERY
+    /// depth, with no even/odd split.
+    ///
+    /// The fixture's two seats are byte-identical, so side one's exact win
+    /// probability is 0.5 by symmetry, independently of the model, the depth
+    /// or the engine's branch structure. A per-level sign or perspective error
+    /// — the mechanism that would leave depth 1 clean and corrupt deeper plies
+    /// — moves this off 0.5 in a depth-parity-dependent way. It does not.
+    #[test]
+    fn depth_parity_invariance_on_a_mirrored_position() {
+        let mut by_depth: Vec<(u8, f32)> = Vec::new();
+        for depth in 1..=6u8 {
+            let outcome = run(SYMMETRIC, 4_000, depth, 20_260_729, true);
+            let root = &outcome.tree.decisions[0];
+            let visits: u32 = root.s1_stats.iter().map(|s| s.visits).sum();
+            let total: f32 = root.s1_stats.iter().map(|s| s.total_value).sum();
+            let root_value = total / visits as f32;
+            by_depth.push((depth, root_value));
+            assert!(
+                (root_value - 0.5).abs() < 0.02,
+                "depth {depth}: mirrored root value {root_value} is not 0.5"
+            );
+            // Both seats read the SAME side-one-oriented quantity: side two's
+            // stats are not stored on a flipped or shifted scale.
+            let s2_total: f32 = root.s2_stats.iter().map(|s| s.total_value).sum();
+            let s2_visits: u32 = root.s2_stats.iter().map(|s| s.visits).sum();
+            assert!(
+                ((s2_total / s2_visits as f32) - root_value).abs() < 1e-4,
+                "depth {depth}: side-two mean {} != side-one mean {root_value}",
+                s2_total / s2_visits as f32
+            );
+            for stat in root.s1_stats.iter().chain(root.s2_stats.iter()) {
+                assert!(
+                    (0.0..=1.0).contains(&stat.mean()),
+                    "depth {depth}: arm {} mean {} left [0, 1]",
+                    stat.display,
+                    stat.mean()
+                );
+            }
+        }
+        // No even/odd structure: the deviations from 0.5 must not separate by
+        // depth parity (a per-ply sign error is exactly such a separation).
+        let even: Vec<f32> = by_depth
+            .iter()
+            .filter(|(d, _)| d % 2 == 0)
+            .map(|(_, v)| v - 0.5)
+            .collect();
+        let odd: Vec<f32> = by_depth
+            .iter()
+            .filter(|(d, _)| d % 2 == 1)
+            .map(|(_, v)| v - 0.5)
+            .collect();
+        let mean = |xs: &[f32]| xs.iter().sum::<f32>() / xs.len() as f32;
+        assert!(
+            (mean(&even) - mean(&odd)).abs() < 0.02,
+            "even-depth deviation {:?} separates from odd-depth deviation {:?}",
+            mean(&even),
+            mean(&odd)
+        );
+    }
+
+    /// The whole tree is mirror-equivariant: mirroring the ROOT swaps the two
+    /// seats' statistics and maps the root value to `1 - v`, at every depth.
+    ///
+    /// A per-level perspective error would break this at deep plies while
+    /// leaving depth 1 intact; a seat-constant one breaks it everywhere.
+    #[test]
+    fn seat_mirror_maps_root_value_to_its_complement_at_every_depth() {
+        let flipped_fixture = mirrored(MINIMAL);
+        for depth in 1..=4u8 {
+            let straight = run(MINIMAL, 3_000, depth, 4, true);
+            let flipped = run(&flipped_fixture, 3_000, depth, 4, true);
+            let value = |outcome: &MultiPlyOutcome| {
+                let root = &outcome.tree.decisions[0];
+                let visits: u32 = root.s1_stats.iter().map(|s| s.visits).sum();
+                root.s1_stats.iter().map(|s| s.total_value).sum::<f32>() / visits as f32
+            };
+            let v = value(&straight);
+            let v_mirror = value(&flipped);
+            assert!(
+                (v + v_mirror - 1.0).abs() < 0.03,
+                "depth {depth}: root value {v} and mirrored root value {v_mirror} \
+                 do not reflect about 0.5"
+            );
+        }
+    }
+
+    /// The `- 1.0` on `s2_stats` in `finalize` is virtual-loss REPLACEMENT, not
+    /// a seat convention: over one traversal side two's arm accumulates exactly
+    /// the chance-node expectation, the same [0, 1] quantity side one's arm
+    /// gets. (Q ranges are therefore seat-symmetric and `c_puct` weighs the
+    /// exploration term against the same scale on both sides.)
+    #[test]
+    fn side_two_stats_accumulate_the_same_expectation_as_side_one() {
+        let mut state = parse_state(STRADDLE.trim()).expect("fixture parses");
+        let cfg = MultiPlyConfig {
+            max_depth: 3,
+            c_puct: 1.4,
+            deep_ko_split: true,
+        };
+        let mut tree = Tree::from_root(&state).expect("root builds");
+        let mut counters = SearchCounters::default();
+        let mut rng = StdRng::seed_from_u64(99);
+        let evaluator = HpFractionEval;
+        for _ in 0..500 {
+            let traversal = traverse(
+                &mut tree,
+                &mut state,
+                &mut rng,
+                &cfg,
+                &mut counters,
+                &mut |leaf: &State, _seam: &BranchSeam| LeafPrice::Ready(evaluator.eval(leaf)),
+            );
+            let backed = finalize(&mut tree, &traversal, &[]);
+            assert!(
+                (0.0..=1.0).contains(&backed),
+                "backed-up root sample {backed} left [0, 1]"
+            );
+        }
+        for node in &tree.decisions {
+            for stat in node.s1_stats.iter().chain(node.s2_stats.iter()) {
+                assert!(
+                    (0.0..=1.0).contains(&stat.mean()),
+                    "arm {} mean {} left [0, 1] — side two is NOT on a [-1, 0] scale",
+                    stat.display,
+                    stat.mean()
+                );
+            }
+        }
+    }
+
+    /// Terminal orientation is absolute, not relative to whoever is acting: a
+    /// guaranteed side-TWO win prices at 0.0, the exact complement of the
+    /// side-one KO that `analytic_expectation_depth1` pins at 1.0.
+    #[test]
+    fn terminal_orientation_is_absolute_across_the_seat_mirror() {
+        let flipped = mirrored(ANALYTIC_TOXIC);
+        let outcome = run(&flipped, 400, 1, 0, true);
+        let root = &outcome.tree.decisions[0];
+        let toss = root
+            .s2_stats
+            .iter()
+            .find(|s| s.display == "seismictoss")
+            .expect("mirrored fixture puts seismictoss on side two");
+        assert!(toss.visits > 0);
+        assert!(
+            toss.mean().abs() < 1e-6,
+            "side-two guaranteed KO priced at {} (side-one win probability must be 0.0)",
+            toss.mean()
+        );
     }
 
     /// Terminal branches never grow children and keep their exact value.

@@ -14,9 +14,15 @@
 //! are real; leaf OBSERVATION CONTENT is not (values/priors are placeholders
 //! until the Rust encoder plugs into exactly this boundary).
 //!
-//! Value contract: the checkpoint's value head is tanh-activated ([-1, 1],
-//! searching seat = side one). The tree operates on [0, 1] side-one win
-//! probability, so values are mapped v01 = (v + 1) / 2 before backprop.
+//! Value contract: the checkpoint's value head is tanh-activated ([-1, 1])
+//! and SELF-RELATIVE — the value is +1 when the seat the observation was
+//! encoded for wins, whichever engine side that seat occupies. The tree
+//! operates on [0, 1] SIDE-ONE win probability, so values are mapped
+//! v01 = (v + 1) / 2 and then reflected once, at the seat boundary, when the
+//! searching seat is side two (`multiply_batched_encoded_core`). The two
+//! template-stub cores below carry placeholder observations with no seat at
+//! all, so they leave v01 unreflected; they are throughput benches, never a
+//! strength path.
 //! Priors are masked softmax over the policy logits under a caller-supplied
 //! legal-action mask (action schema v1: 9 actions). Mapping action indices
 //! onto poke-engine `MoveChoice`s is encoder-stream territory; until then the
@@ -1016,7 +1022,25 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     None => prior_fallbacks += 1,
                 }
             }
-            output.values01
+            // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
+            // observation is encoded from `leaf_ctx`'s own seat (SELF /
+            // OPPONENT token blocks), and the checkpoint's value target is +1
+            // iff THAT seat won the game
+            // (dataset.py `_terminal_value_for_player`). The tree, by
+            // contrast, is side-one-absolute: terminal branches are priced
+            // from `battle_is_over` (+1 = side ONE won), backup adds the
+            // chance expectation to both seats' stats unchanged, and only
+            // `MoveStats::puct` flips for side two. When the searching seat is
+            // side TWO (`slot_sides = {"p1": side_one, "p2": side_two}`, so
+            // whenever we are p2) the two conventions are complements, and
+            // feeding v01 through raw makes every model leaf disagree with
+            // every terminal branch in the same tree. Reflect once, here, at
+            // the seat boundary — never per ply.
+            if self_side_one {
+                output.values01
+            } else {
+                output.values01.iter().map(|v| 1.0 - v).collect()
+            }
         };
         let finalize_started = Instant::now();
         for traversal in &traversals {
