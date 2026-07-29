@@ -194,5 +194,8 @@ def materialize_search_artifacts(
              "--out", str(tables_path)],
             check=True,
         )
-    validate_encoder_tables(contract, tables_path)  # fail closed on root/leaf drift
+    # Fail closed on root/leaf drift. showdown_root is passed so the check covers a
+    # REUSED artifact whose vocabulary predates this build — the reuse key cannot
+    # see that, and the file above is adopted whenever it merely exists.
+    validate_encoder_tables(contract, tables_path, showdown_root=showdown_root)
     return {"model_path": str(model_path), "tables_path": str(tables_path)}

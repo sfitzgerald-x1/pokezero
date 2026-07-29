@@ -1,0 +1,129 @@
+{
+  "arm": "c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/transformer-policy.pt",
+  "checkpoint_sha256": "5ac9d88b26f79f27ac02127d9ec0998d776f4ad17358e60bfac787c47212e772",
+  "config": "d4-s1024-b64-w4",
+  "depth": 4,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600060,
+  "games": 10,
+  "search_wins": 5,
+  "draws": 0,
+  "score_vs_raw": 0.5,
+  "clean_games": 9,
+  "total_decisions": 460,
+  "fallback_decisions": 6,
+  "fallback_rate": 0.013043,
+  "fallback_reasons": {
+    "no_worlds_constructed": 6
+  },
+  "world_failure_reasons": {
+    "self_moveset_mismatch: p1: request-known move 'hiddenpower' is absent from the sampled moveset (Transform/Mimic-class desync)": 96
+  },
+  "search_wall_per_decision": 3.8499,
+  "provenance": {
+    "arm": "c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k0/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/.mcts-eval-artifacts-15084cf6cf33b225/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 0
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 0
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600060,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 30,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600061,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 55,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600062,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 33,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600063,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 36,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600064,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 76,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600065,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 59,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600066,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 25,
+      "fallbacks": 6,
+      "world_failures": {
+        "self_moveset_mismatch: p1: request-known move 'hiddenpower' is absent from the sampled moveset (Transform/Mimic-class desync)": 96
+      }
+    },
+    {
+      "seed": 600067,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600068,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 64,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600069,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 54,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

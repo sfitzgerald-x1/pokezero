@@ -1,0 +1,286 @@
+{
+  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "config": "d6-s1024-b64-w4",
+  "games": 32,
+  "search_wins": 13,
+  "draws": 0,
+  "score_vs_raw": 0.4062,
+  "clean_games": 29,
+  "total_decisions": 1748,
+  "fallback_decisions": 3,
+  "fallback_rate": 0.001716,
+  "fallback_reasons": {
+    "no_worlds_constructed": 3
+  },
+  "world_failure_reasons": {
+    "encore_move_unknown: side 'p2' is encored but the locked move cannot be determined": 16,
+    "self_moveset_mismatch: p2: request-known move 'swordsdance' is absent from the sampled moveset (Transform/Mimic-class desync)": 16,
+    "volatile_unsupported: side 'p1': ['perish0']": 16
+  },
+  "search_wall_per_decision": 4.8882,
+  "stats": {},
+  "per_game": [
+    {
+      "seed": 600068,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 56,
+      "fallbacks": 1,
+      "world_failures": {
+        "encore_move_unknown: side 'p2' is encored but the locked move cannot be determined": 16
+      }
+    },
+    {
+      "seed": 600069,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 41,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600070,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 82,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600071,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600072,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600073,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 79,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600074,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 68,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600075,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 30,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600076,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 58,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600077,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 81,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600078,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 40,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600079,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 42,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600080,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 33,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600081,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600082,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 82,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600083,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 59,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600084,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 30,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600085,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 51,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600086,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 42,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600087,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 41,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600088,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 88,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600089,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 97,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600090,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 62,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600091,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 39,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600092,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 66,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600093,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 24,
+      "fallbacks": 1,
+      "world_failures": {
+        "self_moveset_mismatch: p2: request-known move 'swordsdance' is absent from the sampled moveset (Transform/Mimic-class desync)": 16
+      }
+    },
+    {
+      "seed": 600094,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 77,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600095,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 72,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600096,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 49,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600097,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 26,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600098,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 84,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600099,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 47,
+      "fallbacks": 1,
+      "world_failures": {
+        "volatile_unsupported: side 'p1': ['perish0']": 16
+      }
+    }
+  ]
+}

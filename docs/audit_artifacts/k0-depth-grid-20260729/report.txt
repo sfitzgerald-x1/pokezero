@@ -1,0 +1,46 @@
+cell          n   score        Wilson 95%       fb    s/dec  tables
+a-d1        100   0.490    [0.394, 0.587]   0.0124     0.31  k0/as_shipped/encoder_tables.json  DRIFT:tier2_investment,transition_token_budget
+c-d1        100   0.490    [0.394, 0.587]   0.0124     0.28  k0/corrected/encoder_tables.json
+c-d2        100   0.460    [0.366, 0.557]   0.0054     1.89  k0/corrected/encoder_tables.json
+c-d4        100   0.500    [0.404, 0.596]   0.0025     3.95  k0/corrected/encoder_tables.json
+c-d6        100   0.470    [0.375, 0.567]   0.0025     4.07  k0/corrected/encoder_tables.json
+ctl-d4      100   0.570    [0.472, 0.663]   0.0000     0.00  (control)
+k64c-d1     100   0.480    [0.385, 0.577]   0.0148     0.32  k64/corrected/encoder_tables.json
+k64c-d4     100   0.370    [0.282, 0.468]   0.0036     4.56  k64/corrected/encoder_tables.json
+k64c-d6     100   0.360    [0.273, 0.458]   0.0036     4.65  k64/corrected/encoder_tables.json
+k64ctl-d4   100   0.485    [0.389, 0.582]   0.0000     0.00  (control)
+
+=== per-seat split (p1 = fixed-build behaviour; p2 = carries the inversion) ===
+cell        p1 score         p1 Wilson   p2 score         p2 Wilson    p1-p2
+a-d1           0.520    [0.385, 0.652]      0.460    [0.330, 0.596]   +0.060
+c-d1           0.520    [0.385, 0.652]      0.460    [0.330, 0.596]   +0.060
+c-d2           0.540    [0.404, 0.670]      0.380    [0.259, 0.518]   +0.160
+c-d4           0.600    [0.462, 0.724]      0.400    [0.276, 0.538]   +0.200
+c-d6           0.560    [0.423, 0.688]      0.380    [0.259, 0.518]   +0.180
+ctl-d4         0.480    [0.348, 0.615]      0.660    [0.522, 0.776]   -0.180
+k64c-d1        0.520    [0.385, 0.652]      0.440    [0.312, 0.577]   +0.080
+k64c-d4        0.440    [0.312, 0.577]      0.300    [0.191, 0.438]   +0.140
+k64c-d6        0.440    [0.312, 0.577]      0.280    [0.175, 0.417]   +0.160
+k64ctl-d4      0.430    [0.303, 0.567]      0.540    [0.404, 0.670]   -0.110
+
+=== depth slope per arm (d1 -> deepest), POOLED ===
+  c            d1=0.490 -> d6=0.470  delta=-0.020  z=-0.29  FLAT (no significant decay)
+  k64c         d1=0.480 -> d6=0.360  delta=-0.120  z=-1.77  FLAT (no significant decay)
+
+=== depth slope per arm, p1 SEAT ONLY ===
+  c/p1         d1=0.520 -> d6=0.560  delta=+0.040  z=+0.42  FLAT (no significant decay)
+  k64c/p1      d1=0.520 -> d6=0.440  delta=-0.080  z=-0.83  FLAT (no significant decay)
+
+=== depth slope per arm, p2 SEAT ONLY ===
+  c/p2         d1=0.460 -> d6=0.380  delta=-0.080  z=-0.84  FLAT (no significant decay)
+  k64c/p2      d1=0.440 -> d6=0.280  delta=-0.160  z=-1.75  FLAT (no significant decay)
+
+=== cross-model contrast: c vs k64c, deep cells (d4+d6) ===
+  pooled   c=0.485 (n=200)  k64c=0.365 (n=200)  delta=+0.120  z=+2.45  DIFFERENT
+  p1 only  c=0.580 (n=100)  k64c=0.440 (n=100)  delta=+0.140  z=+2.00  DIFFERENT
+  p2 only  c=0.390 (n=100)  k64c=0.290 (n=100)  delta=+0.100  z=+1.50  not separable at 95%
+
+=== slope difference (baseline-free): c vs k64c ===
+  pooled   slope(c)=-0.005  slope(k64c)=-0.115  diff=+0.110  z=+1.28  suggestive, NOT significant
+  p1 only  slope(c)=+0.060  slope(k64c)=-0.080  diff=+0.140  z=+1.15  suggestive, NOT significant
+  p2 only  slope(c)=-0.070  slope(k64c)=-0.150  diff=+0.080  z=+0.67  suggestive, NOT significant

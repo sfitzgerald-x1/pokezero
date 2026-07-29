@@ -1,0 +1,132 @@
+{
+  "arm": "k64c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
+  "config": "d6-s1024-b64-w4",
+  "depth": 6,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600060,
+  "games": 10,
+  "search_wins": 3,
+  "draws": 0,
+  "score_vs_raw": 0.3,
+  "clean_games": 8,
+  "total_decisions": 431,
+  "fallback_decisions": 14,
+  "fallback_rate": 0.032483,
+  "fallback_reasons": {
+    "no_worlds_constructed": 14
+  },
+  "world_failure_reasons": {
+    "self_moveset_mismatch: p2: request-known move 'icebeam' is absent from the sampled moveset (Transform/Mimic-class desync)": 192,
+    "self_moveset_mismatch: p1: request-known move 'return' is absent from the sampled moveset (Transform/Mimic-class desync)": 32
+  },
+  "search_wall_per_decision": 4.1298,
+  "provenance": {
+    "arm": "k64c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k64/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/.mcts-eval-artifacts-5e2e3e8c7899bfeb/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 64
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 64
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600060,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 29,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600061,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 46,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600062,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 34,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600063,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 38,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600064,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 69,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600065,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 41,
+      "fallbacks": 12,
+      "world_failures": {
+        "self_moveset_mismatch: p2: request-known move 'icebeam' is absent from the sampled moveset (Transform/Mimic-class desync)": 192
+      }
+    },
+    {
+      "seed": 600066,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 35,
+      "fallbacks": 2,
+      "world_failures": {
+        "self_moveset_mismatch: p1: request-known move 'return' is absent from the sampled moveset (Transform/Mimic-class desync)": 32
+      }
+    },
+    {
+      "seed": 600067,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 56,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600068,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 42,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600069,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 41,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

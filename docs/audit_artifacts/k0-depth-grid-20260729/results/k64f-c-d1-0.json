@@ -1,0 +1,452 @@
+{
+  "arm": "k64c",
+  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
+  "config": "d1-s1024-b64-w4",
+  "depth": 1,
+  "sims": 1024,
+  "worlds": 4,
+  "seed_start": 600000,
+  "games": 50,
+  "search_wins": 24,
+  "draws": 0,
+  "score_vs_raw": 0.48,
+  "clean_games": 48,
+  "total_decisions": 2742,
+  "fallback_decisions": 3,
+  "fallback_rate": 0.001094,
+  "fallback_reasons": {
+    "no_worlds_constructed": 3
+  },
+  "world_failure_reasons": {
+    "self_request_state_unsupported: self active request flags ['trapped'] constrain legality beyond this construction (sampled world does not trap: foe ability 'sandveil')": 16,
+    "materialization_blocker: baton-pass:substitute": 32
+  },
+  "search_wall_per_decision": 0.3518,
+  "provenance": {
+    "arm": "k64c",
+    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k64/corrected/encoder_tables.json",
+    "model_path": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/.mcts-eval-artifacts-5e2e3e8c7899bfeb/model_ts.pt",
+    "tables_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_investment": true,
+      "tier2_residuals": true,
+      "transition_token_budget": 64
+    },
+    "checkpoint_masks": {
+      "exact_state": true,
+      "stats_block": true,
+      "tier2_residuals": true,
+      "tier2_investment": true,
+      "transition_token_budget": 64
+    },
+    "mask_drift": {}
+  },
+  "per_game": [
+    {
+      "seed": 600000,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 50,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600001,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 59,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600002,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 33,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600003,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 56,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600004,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 99,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600005,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 47,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600006,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600007,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 109,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600008,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 36,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600009,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 70,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600010,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 74,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600011,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 40,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600012,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 50,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600013,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 41,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600014,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 26,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600015,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 26,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600016,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 82,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600017,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 85,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600018,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 59,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600019,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 51,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600020,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 35,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600021,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 56,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600022,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 31,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600023,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 55,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600024,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 115,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600025,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 45,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600026,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 102,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600027,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600028,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 24,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600029,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 70,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600030,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 65,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600031,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 49,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600032,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 112,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600033,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600034,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 35,
+      "fallbacks": 1,
+      "world_failures": {
+        "self_request_state_unsupported: self active request flags ['trapped'] constrain legality beyond this construction (sampled world does not trap: foe ability 'sandveil')": 16
+      }
+    },
+    {
+      "seed": 600035,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 69,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600036,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 45,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600037,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 40,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600038,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 28,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600039,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 96,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600040,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 68,
+      "fallbacks": 2,
+      "world_failures": {
+        "materialization_blocker: baton-pass:substitute": 32
+      }
+    },
+    {
+      "seed": 600041,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 35,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600042,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 37,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600043,
+      "search_seat": "p2",
+      "winner": "p1",
+      "decisions": 34,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600044,
+      "search_seat": "p1",
+      "winner": "p1",
+      "decisions": 50,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600045,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 24,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600046,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 25,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600047,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 78,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600048,
+      "search_seat": "p1",
+      "winner": "p2",
+      "decisions": 100,
+      "fallbacks": 0,
+      "world_failures": {}
+    },
+    {
+      "seed": 600049,
+      "search_seat": "p2",
+      "winner": "p2",
+      "decisions": 33,
+      "fallbacks": 0,
+      "world_failures": {}
+    }
+  ]
+}

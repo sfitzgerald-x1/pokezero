@@ -107,6 +107,7 @@ def _numeric_slot(schema_version: str, legacy_index: int) -> int:
 def _layout_payload(
     schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
     spec: Any = None,
+    masks: Any = None,
 ) -> dict[str, Any]:
     # A region-trimmed checkpoint's spec differs from the schema default only in
     # transition_token_count (and therefore token_count). The transition region
@@ -116,7 +117,18 @@ def _layout_payload(
     # without it the tables describe 87 tokens while the model expects 39 and
     # the root/leaf contract check (correctly) refuses to run.
     spec = spec if spec is not None else observation_spec_for_schema(schema_version)
-    masks = ObservationFeatureMasks()
+    # The masks must come from the CHECKPOINT for the same reason the spec does.
+    # `default_feature_masks` is not decorative: the crate gates real encode work
+    # on it (`layout.tier2_investment`, `layout.transition_token_budget`), so a
+    # schema default here silently makes the leaf encoder describe a different
+    # observation than the Python root encode — the census-mismatch class the
+    # contract check exists to prevent. Defaulting cost two live errors:
+    # `tier2_investment` (default False, every trained checkpoint True) blanked
+    # the investment slots at every leaf, and `transition_token_budget` (default
+    # 128, clamped to the region) pinned history to the full region width, so a
+    # budget-0 Markov checkpoint was fed 64 synthesized history tokens it was
+    # trained to never attend to.
+    masks = masks if masks is not None else ObservationFeatureMasks()
     categorical_columns = {
         name: int(getattr(showdown, name))
         for name in dir(showdown)
@@ -250,11 +262,12 @@ def build_tables(
     *,
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
     spec: Any = None,
+    masks: Any = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": TABLES_SCHEMA_VERSION,
         "vocab": _vocab_payload(showdown_root),
-        "layout": _layout_payload(observation_schema_version, spec=spec),
+        "layout": _layout_payload(observation_schema_version, spec=spec, masks=masks),
         "dex": _dex_payload(showdown_root),
     }
 
@@ -285,22 +298,27 @@ def main(argv: list[str] | None = None) -> int:
     if schema_version not in {OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3}:
         parser.error(f"unsupported encoder-table schema: {args.observation_schema!r}")
     spec = None
+    masks = None
     if args.checkpoint is not None:
         from pokezero.neural_policy import (  # noqa: PLC0415 - optional torch dependency
+            feature_masks_from_model_config,
             load_transformer_model_config,
             observation_spec_from_model_config,
         )
 
-        spec = observation_spec_from_model_config(
-            load_transformer_model_config(args.checkpoint)
-        )
+        config = load_transformer_model_config(args.checkpoint)
+        spec = observation_spec_from_model_config(config)
+        masks = feature_masks_from_model_config(config)
         if spec.schema_version != schema_version:
             parser.error(
                 f"--checkpoint schema {spec.schema_version!r} != --observation-schema "
                 f"{schema_version!r}; refusing to emit tables the model cannot consume"
             )
     tables = build_tables(
-        str(args.showdown_root), observation_schema_version=schema_version, spec=spec
+        str(args.showdown_root),
+        observation_schema_version=schema_version,
+        spec=spec,
+        masks=masks,
     )
     encoded = json.dumps(tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
