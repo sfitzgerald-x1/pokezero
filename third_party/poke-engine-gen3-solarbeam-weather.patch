@@ -1,0 +1,38 @@
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -203,9 +203,34 @@
+             Weather::NONE => {}
+         },
+         Choices::SOLARBEAM => {
++            // pokezero gen3 fidelity fix: Solar Beam is weakened by RAIN, SAND
++            // and HAIL only -- never in clear weather.
++            //
++            // `weather_is_active(w)` is `self.weather.weather_type == w && not
++            // suppressed by Air Lock / Cloud Nine`, so passing the CURRENT weather
++            // back into it reduces to "weather is not suppressed" -- a legitimate
++            // idiom, and the three other sites that use it
++            // (MORNINGSUN/MOONLIGHT/SYNTHESIS, the Chlorophyll/Swift Swim speed
++            // boost, update_forecast) all pair it with a `match` on the specific
++            // weather so Weather::NONE falls through harmlessly.
++            //
++            // Here it was used as "some weather is up", which it is NOT: with no
++            // weather, `weather_type == weather_type` is still true, so the
++            // halving fired in CLEAR weather and every Solar Beam did half damage.
++            // Showdown halves only for the weakening weathers
++            // (`solarbeam.onBasePower`, data/moves.ts: raindance / primordialsea /
++            // sandstorm / hail / snowscape -- of which gen3 has rain, sand and
++            // hail), and gen3 inherits that handler unchanged.
++            //
++            // The SUN arm above is separate and already correct: Showdown skips
++            // the charge turn entirely in sun (`solarbeam.onTryMove`) rather than
++            // modifying power.
+             if state.weather_is_active(&Weather::SUN) {
+                 attacker_choice.flags.charge = false;
+-            } else if state.weather_is_active(&state.weather.weather_type) {
++            } else if state.weather_is_active(&Weather::RAIN)
++                || state.weather_is_active(&Weather::SAND)
++                || state.weather_is_active(&Weather::HAIL)
++            {
+                 attacker_choice.base_power /= 2.0;
+             }
+         }

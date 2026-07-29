@@ -787,3 +787,56 @@ turn pays exactly once and the next use pays again.
 **Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
 --only lockedmoveppdrain lockedmoveppcontrol`; engine side pinned by
 `rust/pokezero-search/tests/gen3_lockedmove_pp.rs` (7 tests).
+
+## Confirmed deviation 10: Solar Beam halved in clear weather
+
+The damage half of the two-turn release gap (ledger J.4). The charge-state fix
+made the release execute; this makes it deal the right number.
+
+Showdown weakens Solar Beam in specific weathers only — `data/moves.ts`
+`solarbeam.onBasePower`, inherited unchanged by gen3:
+
+    const weakWeathers = ['raindance', 'primordialsea', 'sandstorm', 'hail', 'snowscape'];
+    if (weakWeathers.includes(pokemon.effectiveWeather())) return this.chainModify(0.5);
+
+Of those gen3 has rain, sand and hail. Clear weather is not in the list, and sun
+is a separate mechanism: `solarbeam.onTryMove` skips the charge turn entirely
+without touching power.
+
+**Root cause: a self-comparison.** The engine asked
+`state.weather_is_active(&state.weather.weather_type)`. That helper is
+`self.weather.weather_type == argument && not suppressed by Air Lock / Cloud
+Nine`, so passing the CURRENT weather back into it collapses to "weather is not
+suppressed" — which is true in clear weather too, because `NONE == NONE`. Every
+Solar Beam did half damage, in every branch.
+
+The idiom is not wrong in general and is deliberately left alone at the three
+other sites that use it — Morning Sun / Moonlight / Synthesis, the Chlorophyll /
+Swift Swim speed boost, and `update_forecast` — each of which pairs it with a
+`match` on the specific weather so `Weather::NONE` falls through harmlessly.
+Only Solar Beam used it as "some weather is up".
+
+**The 4x crit spread was a misdiagnosis, and is now pinned against.** The audit
+measured Showdown −74 against engine −41 non-crit / −163 crit and inferred that
+the non-crit branch was halving base power while the crit branch used full. It
+was not: `calculate_damage` derives both branches from the same `choice`, so a
+base-power error cannot separate them — it moves both by the same factor. The 4x
+is **Light Screen**, which gen3 crits correctly ignore: the screen halves the
+non-crit branch only, and 2x crit on top is exactly 4x. One root cause, not two.
+−41 doubles to ~82, and Showdown's −74 is that at a 0.90 roll.
+
+**Impact.** Every Solar Beam release in clear weather dealt half damage — the
+common case, since sun is the only weather that changes the move's shape and
+rain/sand/hail are the only ones that should weaken it. Reachable: Solar Beam is
+on 4 gen3 randbats species.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-solarbeam-weather.patch`. The `else if` now tests
+`RAIN || SAND || HAIL` explicitly. The sun arm was already correct and is
+untouched.
+
+**Verification.** Real gen3 Showdown (Exeggutor into Blissey): clear −136, sand
+−71, sun −131 with no charge turn. Pinned by
+`rust/pokezero-search/tests/gen3_solarbeam_weather.rs` (6 tests, including the
+2x/4x crit ratio in both directions and Air Lock suppression) and the
+`solarbeamclear` / `solarbeamsand` / `solarbeamsun` differential scenarios.
