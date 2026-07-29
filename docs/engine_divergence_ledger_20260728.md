@@ -2199,3 +2199,93 @@ this program was trying to reach, just not yet at zero.
 
 `<scratch>` =
 `/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+
+---
+
+# Appendix K — the Substitute divergence: mechanism found, §J.3 premise retracted
+
+Branch `scott/substitute-diagnosis`. The implementation lane falsified §J.3's
+premise before building on it — the world constructor **does** express
+substitute — leaving my observation real but its mechanism unexplained. Diagnosed
+here.
+
+## K.1 §J.3's stated cause was WRONG
+
+Full payload dump at the exact boundary (`seed 1500002 step 75`):
+
+```
+BUILT p1: volatiles=()               substitute_health=0
+BUILT p2: volatiles=('substitute',)  substitute_health=66
+```
+
+The substitute **is** in the payload and **is** on the built world with health.
+§J.3 said "Substitute is not expressed in the constructed world". **That is
+retracted.** The observation (Showdown breaks the sub, the engine damages the
+mon) stands; the cause I gave for it does not.
+
+Process note: I asserted a cause from a single replay without dumping the
+payload that would have falsified it. The replay showed *what* happened; I
+narrated *why* without checking. The implementation lane caught it before
+building — that stop is what the method rule is for, and it applied to me here.
+
+## K.2 The real mechanism: fixed-damage moves bypass the Substitute
+
+Synthetic probe, defender behind a 66 HP sub:
+
+| attacker move | engine instruction | mon HP | sub HP | |
+| --- | --- | --- | --- | --- |
+| `seismictoss` | `Damage SideTwo: 88` | 264 -> **176** | 66 (untouched) | **sub bypassed** |
+| `superfang` | `Damage SideTwo: 132` | 264 -> **132** | 66 (untouched) | **sub bypassed** |
+| `tackle` | `DamageSubstitute SideTwo: 42` | 264 (safe) | 66 -> 24 | correct |
+
+Seismic Toss and Super Fang are handled by the move-id-keyed
+`choice_special_effect` path, which writes damage **directly to the Pokemon**
+instead of going through the substitute-aware damage routing. Ordinary damaging
+moves route correctly.
+
+**This is the same handler family, and the same shape, as the Protect leak the
+rapid-spin patch fixed** (`docs/engine_fidelity_findings.md`): `choice_special_
+effect` sits outside the normal damage path, so it missed the Protect guard then
+and misses Substitute routing now. Fixing one did not generalise to the other.
+
+| | |
+| --- | --- |
+| Verdict | **ENGINE — damage routing**, patch lane |
+| Not | materialization-side, and not the fresh-health pinning |
+| Repro | `seed 1500002 step 75`; synthetic probe above reproduces in isolation |
+| Reachability | **Seismic Toss is in 17 of 393 sets / 50 of 1,682 variants** — squarely on-distribution. Super Fang is absent from the pool, so it matters only for `gen3customgame`. |
+
+**Share of the residue: 15 of the 49 sub-adjacent rows (31 %), all Seismic
+Toss**, 14 of them in `roll_scaled_component`. The other 34 sub-adjacent rows do
+**not** involve a fixed-damage move and are still unexplained — they are not
+covered by this finding and must not be assumed to be.
+
+## K.3 Separate finding: Night Shade and Dragon Rage are inert
+
+Found while probing, and **not** substitute-related — they emit no instructions
+even with no substitute present:
+
+| move | engine damage, no sub, no immunity |
+| --- | --- |
+| `nightshade` | **0** |
+| `dragonrage` | **0** |
+
+Same shape as the confirmed Flail bug: present in the move table, no gen3
+behaviour. **Both are absent from the gen3 randbats pool** (0/393 sets), so this
+is latent — it matters for `gen3customgame` or a pool change, and is not an
+acceptance blocker. Filed rather than prioritised.
+
+## K.4 What this means for the treatment ladder
+
+The pre-approved ladder (fix materialization exactly / express zero-hit subs and
+fail closed on hit subs / support-based interval sampling) was scoped to a
+materialization or health-pinning cause. **Neither is the cause here**, so the
+ladder does not apply to these 15 rows — they need the engine-side damage-routing
+fix.
+
+The ladder's premise is still independently sound and worth keeping: the harness
+pins substitute health at a fresh `maxhp/4` via `approximate_substitute_health`,
+and gen3 emits `-activate` with no amount when a sub is hit, so **post-hit sub
+health genuinely is not public**. That remains a real approximation in the
+harness — it simply is not what produced this row, where the sub was untouched
+since creation and `maxhp/4` was therefore exact.
