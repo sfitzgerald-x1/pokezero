@@ -142,6 +142,37 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   damage must NOT climb — separating "the ladder works" from
                   "the attacker is taking chip-damage variance".
 
+  hypnosisrestclause / ...control : gen3's Sleep Clause Mod exempts a REST sleep.
+                  A Pokemon asleep from its own Rest sits on the BENCH and its
+                  side is still a legal Hypnosis target (``rulesets.ts`` skips any
+                  sleeper whose ``statusState.source`` is its own ally); the
+                  control puts the same benched Pokemon to sleep with HYPNOSIS
+                  instead, and the second Hypnosis is refused. This is the
+                  ground truth behind the Rest-sleep provenance fix: the engine
+                  spells the exemption as ``rest_turns == 0`` in
+                  ``has_alive_non_rested_sleeping_pkmn``, so a world that built a
+                  Rest-sleeper with a zeroed counter would re-arm a clause the sim
+                  exempts it from — invisibly, because the mon is benched.
+
+                  SHAPE, verified at the sim rather than assumed: a clause-blocked
+                  move emits NO ``|-fail|``. It emits ``|-message|Sleep Clause Mod
+                  activated.`` plus the matching ``|-hint|``, and then simply does
+                  nothing — ``onSetStatus`` returns false, the status never lands
+                  and no ``-status`` line is written. Both scenarios therefore
+                  assert on the ``-status`` line and the ``-message`` marker, and
+                  pin the ABSENCE of ``-fail`` so a future "the move fails" reading
+                  cannot creep back in.
+
+                  These two are the only scenarios that do not run under plain
+                  ``gen3customgame``: Custom Game's ruleset carries no Sleep Clause
+                  Mod at all (``HP Percentage Mod``, ``Cancel Mod`` and the size
+                  caps, nothing else), so the clause has to be appended with
+                  Showdown's ``@@@`` custom-rule syntax or the control arm measures
+                  a format that simply has no clause to fire. Hypnosis is 60%
+                  accurate, which would make a miss indistinguishable from a block,
+                  so both arms spend a turn on Mind Reader first and the measured
+                  Hypnosis cannot miss.
+
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such
 seed. ``confusionbatonpass`` is gated the same way, on two counts: the passer's
@@ -459,6 +490,26 @@ def _ditto():  # the only gen3 randbats Transform carrier with a one-move set
 def _machamp():  # copy target: distinct species, types, stats, ability and moves
     return FixturePokemon(species="Machamp", ability="Guts", item="None",
                           moves=("Bulk Up", "Cross Chop", "Splash"))
+
+
+def _clause_hypnotist():
+    # Every move here is Sketchable, so the set stays gen3-legal in spirit even
+    # though Custom Game would not check. Mind Reader is what makes the measured
+    # Hypnosis deterministic (60% accuracy would otherwise let a miss masquerade
+    # as a clause block); Seismic Toss is the fixed 100 damage that lets the
+    # Rest arm's Rest actually land, since Rest FAILS at full HP.
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Seismic Toss", "Mind Reader", "Hypnosis", "Splash"))
+
+
+def _clause_sleeper():  # the mon that goes to sleep and then sits on the bench
+    return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
+                          moves=("Rest", "Splash"))
+
+
+def _clause_second_target():  # the mon the measured Hypnosis is aimed at
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Splash",))
 
 
 def _machamp_sub():  # copy target that hides behind a Substitute first
@@ -1614,6 +1665,51 @@ def _spec(name):
             expect={"missed": misses, "poisoned": not misses},
             landmark=lambda L: _has(L, "|move|p1a: Muk|Toxic"),
             landmark_desc="Toxic was used by the Poison-type")
+    if name in ("hypnosisrestclause", "hypnosisrestclausecontrol"):
+        # Both arms end in the same measured turn -- a Mind Reader-guaranteed
+        # Hypnosis at Blissey while Snorlax sleeps on the bench. The ONLY
+        # difference is how Snorlax got there: its own Rest, or p1's Hypnosis.
+        rest_arm = name == "hypnosisrestclause"
+        if rest_arm:
+            # Seismic Toss first, because Rest fails at full HP.
+            turns = [("move seismictoss", "move splash"),   # chip the sleeper
+                     ("move splash", "move rest"),          # self-inflicted sleep
+                     ("move splash", "switch 2"),           # sleeper to the bench
+                     ("move mindreader", "move splash"),    # guarantee the next Hypnosis
+                     ("move hypnosis", "move splash")]      # measured
+            setup_step = 1
+            setup_landed = lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Rest")
+        else:
+            turns = [("move mindreader", "move splash"),    # guarantee the setup Hypnosis
+                     ("move hypnosis", "move splash"),      # opponent-inflicted sleep
+                     ("move splash", "switch 2"),           # sleeper to the bench
+                     ("move mindreader", "move splash"),    # guarantee the next Hypnosis
+                     ("move hypnosis", "move splash")]      # measured
+            setup_step = 1
+            setup_landed = lambda L: _has(L, "|-status|p2a: Snorlax|slp|[from] move: Hypnosis")
+        return dict(
+            p1=[_clause_hypnotist()],
+            p2=[_clause_sleeper(), _clause_second_target()],
+            # Custom Game has NO Sleep Clause Mod in its ruleset, so without this
+            # the control arm would measure a format with no clause to fire and
+            # "pass" for the wrong reason.
+            format_id="gen3customgame@@@Sleep Clause Mod",
+            turns=turns,
+            measured=4, setup_step=setup_step, setup_landed=setup_landed,
+            facts=lambda L: {
+                "second_slept": _has(L, "|-status|p2a: Blissey|slp|[from] move: Hypnosis"),
+                "clause_activated": _has(L, "|-message|Sleep Clause Mod activated."),
+                # Verified at the sim, not assumed: a clause-blocked move does not
+                # -fail, it silently does nothing. Pinned in BOTH arms so the shape
+                # cannot drift.
+                "move_failed": _has(L, "|-fail|p1a: Smeargle"),
+            },
+            expect={"second_slept": rest_arm,
+                    "clause_activated": not rest_arm,
+                    "move_failed": False},
+            landmark=lambda L: _has(L, "|move|p1a: Smeargle|Hypnosis|p2a: Blissey")
+                               and not _has(L, "[miss]"),
+            landmark_desc="the measured Hypnosis was used at Blissey and did not miss")
     raise ValueError(name)
 
 
@@ -1647,7 +1743,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "solarbeamclear", "solarbeamsand", "solarbeamsun",
              "seismictosssub", "seismictosssubbreak", "seismictosscontrol",
              "seismictossghost",
-             "toxicmiss", "toxichit")
+             "toxicmiss", "toxichit",
+             "hypnosisrestclause", "hypnosisrestclausecontrol")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
@@ -1655,11 +1752,16 @@ def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:
     notes: list[str] = []
     asserted = 0
     seeds = spec.get("seeds") or seeds
+    # Almost every scenario runs under plain gen3 Custom Game. A scenario that
+    # measures a RULE rather than a mechanic has to name the ruleset carrying it,
+    # because Custom Game deliberately carries almost none (Sleep Clause Mod among
+    # them) — Showdown's `@@@` custom-rule suffix is how that is appended.
+    format_kwargs = {"format_id": spec["format_id"]} if spec.get("format_id") else {}
     for seed in seeds:
         try:
             result = run_multi_turn_fixture(
                 p1_team=spec["p1"], p2_team=spec["p2"], turns=spec["turns"],
-                seed=seed, config=config,
+                seed=seed, config=config, **format_kwargs,
             )
         except LocalShowdownError as exc:
             # A scripted boundary that never arrives is a desynchronized

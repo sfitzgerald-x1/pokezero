@@ -28,6 +28,7 @@ from .observation import (
     ObservationFeatureMasks,
     ObservationSpec,
     PokeZeroObservationV0,
+    opponent_showdown_slot,
 )
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
@@ -36,6 +37,7 @@ from .showdown import (
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
+    _normalize_identifier,
     _ReplayParser,
     normalize_for_player,
     observation_from_player_state,
@@ -2026,6 +2028,7 @@ def _public_materialization_payload(
             belief_snapshot.side(player),
             blockers,
         )
+        _apply_rest_sleep_provenance(rows, replay, player)
         sides[player] = {
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
@@ -2199,6 +2202,57 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-unconfirmed:{species}")
             continue
         matching_rows[0]["currentItem"] = current_item
+
+
+def _apply_rest_sleep_provenance(
+    rows: list[dict[str, Any]],
+    replay: ShowdownReplayState,
+    player: PlayerId,
+) -> None:
+    """Attach the public Rest attempt count to each Rest-asleep mon's direct-world row.
+
+    ``ShowdownReplayState.rest_sleep_counts`` records, per sleeping mon, that the sleep
+    came from its OWN Rest and how many move attempts have already burned off it (k,
+    0..2 — see that field for why it counts ATTEMPTS and not elapsed turns). Until this
+    the only sleep provenance crossing into world construction was the pair of aggregate
+    booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``), which say
+    a side HAS a clause-engaging sleeper but never which mon — so a Rest-asleep mon
+    arrived at the constructor indistinguishable from an opponent-induced one, and gen3's
+    Sleep Clause Mod exempts exactly the first kind.
+
+    KEY RECONSTRUCTION — the same trap family as the Heal Bell benched-cure caution.
+    The tracker keys on the ident NAME (``_induced_sleep_victim_key``), because the lines
+    that CLEAR an entry include Heal Bell's benched ``|-curestatus|p2: Name|slp|[silent]``
+    form, whose position-less ident cannot be resolved to a species through
+    ``public_active``. A materialization row, by contrast, carries the SPECIES. The two
+    coincide here only because gen3 randbats runs under Nickname Clause and never
+    nicknames anything: reconstructing the key from the row's species is therefore exact
+    for this format and WRONG the moment nicknames are allowed. A miss is fail-soft in
+    the safe direction — the row simply carries no count, and world construction falls
+    back to its existing sleep handling — and keys are per-side and per-name, so a miss
+    can never collide with a DIFFERENT mon's entry. Do not extend this to a nicknamed
+    format without carrying the ident through the row.
+
+    Only a mon that is in the Rest map AND absent from the opposing side's induced-victim
+    set is annotated, so the emitted field means exactly "this sleep is its own Rest's"
+    and the consumer needs no second lookup to rule out an induced sleeper.
+    """
+
+    counts = replay.rest_sleep_counts
+    if not counts:
+        return
+    # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
+    # therefore recorded under its opponent.
+    induced = set(replay.induced_sleep_victims.get(opponent_showdown_slot(player), ()))
+    for row in rows:
+        species = row.get("species")
+        if not isinstance(species, str):
+            continue
+        key = f"{player}:{_normalize_identifier(species)}"
+        count = counts.get(key)
+        if count is None or key in induced:
+            continue
+        row["restSleepAttempts"] = int(count)
 
 
 def _materialization_identifier(value: str) -> str:

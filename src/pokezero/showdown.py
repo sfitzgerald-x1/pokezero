@@ -1012,6 +1012,23 @@ class ShowdownReplayState:
     # ``-curestatus … slp`` and faint; switch-out does NOT clear (sleep persists and is public
     # on revealed mons). Derived ONLY from public protocol lines — no engine-side hidden state.
     induced_sleep_victims: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Rest-sleep provenance, per mon: victim key -> k, the number of move attempts this mon
+    # has ALREADY burned off its Rest since falling asleep. Same ``<slot>:<normalized ident
+    # name>`` key as ``induced_sleep_victims`` (see ``_induced_sleep_victim_key`` for why the
+    # ident NAME and not the species). Membership answers "is this slp Rest-inflicted"; k
+    # answers "how far through it".
+    #
+    # WHY AN ATTEMPT COUNT AND NOT ELAPSED TURNS — do not "simplify" this back. gen3's sleep
+    # timer decrements ONLY inside ``slp.onBeforeMove`` (data/mods/gen3/conditions.ts:24-28),
+    # so a BENCHED sleeper's Rest does not tick at all. Elapsed wall-clock turns therefore
+    # over-count progress for exactly the population this exists to serve — a Rest-sleeper
+    # sitting on the bench — and would build it as closer to waking than it is. ``|cant|SLOT|slp``
+    # is emitted on precisely the attempts that DO tick, and on no others, so counting those
+    # lines tracks the real timer across any number of switches.
+    #
+    # k <= 2 by construction: Rest sets time 3, attempts take it 3->2->1, and the third attempt
+    # wakes the mon and emits ``-curestatus`` which clears the entry.
+    rest_sleep_counts: Mapping[str, int] = field(default_factory=dict)
     # Public consecutive-stall counter (spec v3, docs/observation_v3_spec.md change 3): per side,
     # the number of consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3 shares
     # one ``stall`` volatile; engine ground truth data/conditions.ts:439-462) by that side's
@@ -1206,6 +1223,9 @@ class _ReplayParser:
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
+        # Rest-sleep provenance: victim key -> attempts already burned off the Rest.
+        # See ShowdownReplayState.rest_sleep_counts (and why it is attempts, not turns).
+        self.rest_sleep_counts: dict[str, int] = {}
         # Public consecutive-stall counter (spec v3 change 3) + its transient in-flight flag.
         # See ShowdownReplayState.stall_counter / stall_move_pending.
         self.stall_counter: dict[str, int] = {"p1": 0, "p2": 0}
@@ -1267,6 +1287,9 @@ class _ReplayParser:
         }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
+        }
+        parser.rest_sleep_counts = {
+            key: int(count) for key, count in snapshot.rest_sleep_counts.items()
         }
         parser.stall_counter = {
             slot: int(snapshot.stall_counter.get(slot, 0)) for slot in ("p1", "p2")
@@ -1687,11 +1710,26 @@ class _ReplayParser:
         event_type = parts[1] if len(parts) > 1 else ""
         if event_type == "-status" and len(parts) >= 4 and parts[3].strip() == "slp":
             victim_slot = _slot_from_ident(parts[2])
-            if victim_slot in {"p1", "p2"} and "move: Rest" not in line:
-                inducing_slot = opponent_showdown_slot(victim_slot)
-                self.induced_sleep_victims[inducing_slot].add(
-                    self._induced_sleep_victim_key(victim_slot, parts[2])
-                )
+            if victim_slot in {"p1", "p2"}:
+                key = self._induced_sleep_victim_key(victim_slot, parts[2])
+                if "move: Rest" in line:
+                    # Rest-inflicted: start the attempt counter. Absence from the opposing
+                    # side's victim set already means "not induced", but the count is what
+                    # lets the world builder rebuild rest_turns instead of guessing.
+                    self.rest_sleep_counts[key] = 0
+                else:
+                    inducing_slot = opponent_showdown_slot(victim_slot)
+                    self.induced_sleep_victims[inducing_slot].add(key)
+            return
+        if event_type == "cant" and len(parts) >= 4 and parts[3].strip() == "slp":
+            # The ONLY public line emitted on an attempt that actually ticks the sleep timer
+            # (gen3 slp.onBeforeMove). Benched turns emit nothing, which is precisely why the
+            # counter tracks attempts rather than elapsed turns.
+            victim_slot = _slot_from_ident(parts[2])
+            if victim_slot in {"p1", "p2"}:
+                key = self._induced_sleep_victim_key(victim_slot, parts[2])
+                if key in self.rest_sleep_counts:
+                    self.rest_sleep_counts[key] = min(2, self.rest_sleep_counts[key] + 1)
             return
         if event_type == "-cureteam" and len(parts) >= 3:
             # Aromatherapy cures every living team member with a SINGLE ``|-cureteam|SOURCE``
@@ -1705,6 +1743,8 @@ class _ReplayParser:
                 for victims in self.induced_sleep_victims.values():
                     for key in [key for key in victims if key.startswith(prefix)]:
                         victims.discard(key)
+                for key in [k for k in self.rest_sleep_counts if k.startswith(prefix)]:
+                    self.rest_sleep_counts.pop(key, None)
             return
         clearing = (
             event_type == "-curestatus" and len(parts) >= 4 and parts[3].strip() == "slp"
@@ -1715,6 +1755,7 @@ class _ReplayParser:
                 key = self._induced_sleep_victim_key(victim_slot, parts[2])
                 for victims in self.induced_sleep_victims.values():
                     victims.discard(key)
+                self.rest_sleep_counts.pop(key, None)
 
     def _update_stall_counter(self, parts: Sequence[str]) -> None:
         """Public consecutive-stall counter (spec v3 change 3, docs/observation_v3_spec.md).
@@ -1815,6 +1856,7 @@ class _ReplayParser:
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
             },
+            rest_sleep_counts=dict(self.rest_sleep_counts),
             stall_counter=dict(self.stall_counter),
             stall_move_pending=dict(self.stall_move_pending),
         )

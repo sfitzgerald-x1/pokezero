@@ -47,6 +47,8 @@ MCTS_ENTRYPOINT_API = ("monte_carlo_tree_search",)
 
 # The one supported way to produce a wheel with the gen3 patch set applied.
 POKE_ENGINE_BUILD_COMMAND = "scripts/setup_poke_engine.sh /path/to/venv/bin/python"
+# Any mid-Rest value works; 2 is the middle of the reachable 1..3 range.
+_REST_TURNS_PROBE_VALUE = 2
 
 
 class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
@@ -83,6 +85,20 @@ class PokeEngineMctsEntrypointMissingError(PokeEngineUnavailableError):
     install that carries the compiled extension without that wrapper imports
     fine and exposes `mcts`, so nothing notices until search actually runs and
     dies on a bare AttributeError several layers down.
+    """
+
+
+class PokeEngineRestTurnsUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a world carries a Rest sleep the binding cannot express.
+
+    ``rest_turns`` is not merely the Rest wake timer, it is how the engine spells
+    gen3's Sleep Clause exemption: ``has_alive_non_rested_sleeping_pkmn`` counts a
+    sleeper only while ``rest_turns == 0``. A binding that takes the field and drops
+    it therefore does not decline the world -- it builds one where a Rest-asleep mon
+    re-arms a clause the real battle exempts it from, so search plans around a sleep
+    move Showdown would let through (or, on the other side, believes its own sleep
+    move is blocked). The damage is worst exactly where this fix aims: a benched
+    Rest-sleeper, whose mis-modelled state nothing else in the position reveals.
     """
 
 
@@ -281,6 +297,8 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
         require_move_trap_support(engine)
     if _spec_requires_pre_transform(spec):
         require_pre_transform_support(engine)
+    if _spec_requires_rest_turns(spec):
+        require_rest_turns_support(engine)
 
     return _build_poke_engine_state_unchecked(spec, engine)
 
@@ -421,6 +439,82 @@ def _charge_state_supported(engine: Any) -> bool:
         if "SOLARBEAM" not in serialized.upper():
             return False
         return str(state_type.from_string(serialized).to_string()) == serialized
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
+
+
+def _spec_requires_rest_turns(spec: BattleSpec) -> bool:
+    return any(
+        int(member.rest_turns) > 0
+        for side in (spec.side_one, spec.side_two)
+        for member in side.pokemon
+    )
+
+
+def require_rest_turns_support(engine: Any | None = None) -> None:
+    """Prove the installed binding preserves a Rest counter end to end.
+
+    Same house pattern as :func:`require_move_trap_support`, and needed for the same
+    reason even though ``rest_turns`` is an UPSTREAM field rather than a patched-in
+    one: what this fix depends on is not that the keyword is accepted but that the
+    value survives, and a binding whose serialization drops it accepts the state and
+    then quietly hands search a Rest-asleep mon with a zeroed counter — an ordinary
+    sleeper, clause re-armed. Probing the capability is the only way to tell those
+    apart, so probe the round trip rather than the install.
+
+    The probe compares a resting serialization against a non-resting one instead of
+    reading a fixed CSV column: the Pokemon record has gained fields before (the
+    gen3 Transform patch appended ``pre_transform``), and an index would silently
+    start measuring the wrong one. Difference proves the value is carried; the
+    ``from_string``/``to_string`` fixed point (per #878) proves it survives the read
+    as well as the write, since a field that made it out but not back in would still
+    corrupt a search root.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_rest_turns_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable; production modules are not.
+        supported = _rest_turns_supported(engine)
+    if not supported:
+        raise PokeEngineRestTurnsUnsupportedError(
+            "A Rest-asleep world requires a poke-engine that round-trips "
+            "Pokemon.rest_turns; the installed engine dropped it, which would build "
+            "the Rest-sleeper as an ordinary sleeper and re-arm the gen3 Sleep Clause "
+            "the Rest is exempt from. Rebuild with: "
+            f"{POKE_ENGINE_BUILD_COMMAND}"
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_rest_turns_supported(engine: Any) -> bool:
+    return _rest_turns_supported(engine)
+
+
+def _rest_turns_supported(engine: Any) -> bool:
+    """Return whether the binding preserves a Rest counter end to end."""
+
+    state_type = getattr(engine, "State", None)
+    side_type = getattr(engine, "Side", None)
+    pokemon_type = getattr(engine, "Pokemon", None)
+    if state_type is None or side_type is None or pokemon_type is None:
+        return False
+
+    def serialize(rest_turns: int) -> str:
+        state = state_type(
+            side_one=side_type(
+                pokemon=[pokemon_type(id="snorlax", status="sleep", rest_turns=rest_turns)]
+            ),
+            side_two=side_type(),
+        )
+        return str(state.to_string())
+
+    try:
+        resting = serialize(_REST_TURNS_PROBE_VALUE)
+        if resting == serialize(0):
+            return False
+        return str(state_type.from_string(resting).to_string()) == resting
     except Exception:  # noqa: BLE001 - capability checks must fail closed
         return False
 
