@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import re
 import random
 import sys
 import time
@@ -64,6 +65,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import poke_engine  # noqa: E402
+import pokezero_search  # noqa: E402
 
 from pokezero.dex import load_showdown_dex, normalize_id  # noqa: E402
 from pokezero.engine_fidelity import (  # noqa: E402
@@ -247,6 +249,182 @@ def engine_choice_for_action(
 
 
 # ---------------------------------------------------------------------------------------------
+# STRICT matcher: per-damage-source comparison instead of a net-HP band.
+#
+# The banded matcher compared NET active HP within +/-16 % of the turn's damage.
+# That is unsound in both directions, and Appendix A.3's D11 scenario proved it
+# empirically: a Leftovers tick riding on an attack manufactured a 12-39 %
+# apparent "bias" that vanished once the item was removed. A band can hide a real
+# error and invent a fake one.
+#
+# The strict matcher decomposes BOTH sides of the comparison into per-source
+# components and requires each to agree:
+#
+#   Showdown side: every |-damage|/|-heal| line carries its own attribution in a
+#     `[from]` tag ("[from] psn", "[from] Sandstorm", "[from] item: Leftovers",
+#     "[from] Leech Seed", "[from] Spikes", "[from] Recoil", ...). A bare
+#     |-damage| is direct move damage; a bare |-heal| is a move heal.
+#   Engine side: the SAME vocabulary, produced by the shipped instruction->event
+#     mapper (`pokezero_search.branch_events`, PR #727), which renders a branch's
+#     instruction list as protocol lines with attribution.
+#
+# Comparing rendered-vs-real protocol keeps the two sides in one vocabulary
+# instead of guessing at structural positions in the instruction list.
+#
+# EXACT vs ROLL-SCALED. Everything that is a deterministic fraction — status
+# residuals, weather chip, Leftovers, Leech Seed, hazards, move heals — must
+# match to the HP point.
+#
+# Roll-scaled components (direct move damage, recoil, drain, confusion self-hit)
+# are accepted when they are, IN ORDER:
+#   1. equal to the engine's value, OR
+#   2. a member of the enumerated legal roll set — gen3 computes
+#      `floor(base * random(85,100) / 100)` and `poke_engine.calculate_damage`
+#      returns the base for non-crit and crit, so the set is enumerable, OR
+#   3. within +/-9 % of the engine's representative roll.
+#
+# Rung 3 is a band, and saying otherwise would be an over-claim: the legal set is
+# computed from the PRE-state with an assumed move order, so it is unreliable
+# whenever the turn reorders or a same-turn stat change moves the base, and it
+# therefore never VETOES — it can only accept. The honest description of the
+# predicate is "equal, or in the enumerated legal set, or within +/-9 % of the
+# engine's representative roll". What is genuinely gone is the NET-HP band: every
+# tolerance here is scoped to a single roll-scaled component, and no deterministic
+# component gets any tolerance at all.
+# ---------------------------------------------------------------------------------------------
+
+# Components that scale with the damage roll; everything else must be exact.
+_ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion"})
+# Sources whose rendering the mapper is known not to reproduce line-for-line;
+# counted and excluded rather than silently mismatched.
+_IGNORED_SOURCES = frozenset({"lockedmove"})
+
+
+def damage_components(lines: Sequence[str]) -> dict[str, list[tuple[str, int]]]:
+    """Per-source HP deltas from a protocol slice, keyed by slot.
+
+    Returns ``{"p1": [(source, delta), ...], "p2": [...]}`` where ``delta`` is
+    signed (negative = damage) and ``source`` is the normalized ``[from]`` tag
+    ("" for a bare damage line = direct move damage, "heal" for a bare heal).
+    Deltas are computed against the running HP for that slot, so a slot's
+    components sum to its net change and each is independently comparable.
+    """
+
+    running: dict[str, int] = {}
+    out: dict[str, list[tuple[str, int]]] = {"p1": [], "p2": []}
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        tag = parts[1]
+        if tag in ("switch", "drag", "replace") and len(parts) > 4:
+            slot = parts[2].split(":", 1)[0].strip()[:2]
+            running[slot] = _hp_of(parts[4])
+            continue
+        if tag not in ("-damage", "-heal") or len(parts) < 4:
+            continue
+        slot = parts[2].split(":", 1)[0].strip()[:2]
+        if slot not in out:
+            continue
+        new_hp = _hp_of(parts[3])
+        source = ""
+        for extra in parts[4:]:
+            extra = extra.strip()
+            if extra.startswith("[from]"):
+                source = normalize_id(extra[len("[from]"):].strip())
+                break
+        if not source and tag == "-heal":
+            source = "heal"
+        previous = running.get(slot)
+        if previous is not None:
+            out[slot].append((source, new_hp - previous))
+        running[slot] = new_hp
+    return out
+
+
+def _hp_of(condition: str) -> int:
+    condition = condition.strip()
+    head = condition.split()[0] if condition.split() else condition
+    if head in ("0", "0.0") or "fnt" in condition:
+        return 0
+    current, _, _ = head.partition("/")
+    try:
+        return int(current)
+    except ValueError:
+        return 0
+
+
+def _split_components(
+    components: Sequence[tuple[str, int]]
+) -> tuple[Counter, list[int]]:
+    """Partition one slot's components into (exact multiset, roll-scaled deltas)."""
+
+    exact: Counter = Counter()
+    rolled: list[int] = []
+    for source, delta in components:
+        if source in _IGNORED_SOURCES:
+            continue
+        if source in _ROLL_SCALED_SOURCES:
+            rolled.append(delta)
+        else:
+            exact[(source, delta)] += 1
+    return exact, rolled
+
+
+def legal_roll_damages(base_rolls: Sequence[int]) -> set[int]:
+    """Every gen3-legal damage value for a move whose 100 % rolls are ``base_rolls``.
+
+    gen3 damage is ``floor(base * random(85, 100) / 100)``;
+    ``poke_engine.calculate_damage`` returns the base for (non-crit, crit), so
+    the achievable set is exactly enumerable — membership, not a band.
+    """
+
+    values: set[int] = set()
+    for base in base_rolls:
+        if base <= 0:
+            continue
+        for roll in range(85, 101):
+            values.add(base * roll // 100)
+    return values
+
+
+def roll_components_agree(
+    observed: Sequence[int], engine: Sequence[int], legal: set[int] | None
+) -> bool:
+    """Compare roll-scaled components: same count, each observed value legal.
+
+    With a ``legal`` set from ``calculate_damage`` this is exact membership. When
+    that is unavailable (the pre-state calculation does not survive a same-turn
+    stat change) it degrades to a proportional window around the engine's
+    representative roll — recorded by the caller as a separate, counted bucket.
+    """
+
+    if len(observed) != len(engine):
+        return False
+    for obs, eng in zip(sorted(observed), sorted(engine)):
+        if obs == eng:
+            continue
+        if (obs < 0) != (eng < 0):
+            return False
+        magnitude = abs(obs)
+        # ``legal`` is an ADDITIONAL accept path, never a veto. It is computed
+        # from the PRE-state with an assumed move order, so it is unreliable
+        # whenever the turn reorders or a same-turn stat change moves the base —
+        # letting it reject would fail boundaries where the engine and Showdown
+        # agree to the HP point (observed in the first revision of this matcher).
+        if legal is not None and magnitude in legal:
+            continue
+        # Window: the engine carries a ~92 % representative roll, so the 85-100 %
+        # spread is [0.924, 1.087] of it. One HP of slack for flooring. This is
+        # scoped to the ROLL-SCALED component alone, not to net HP.
+        low = abs(eng) * 0.92 - 1
+        high = abs(eng) * 1.09 + 1
+        if not (low <= magnitude <= high):
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------------------------
 # Hidden-counter mechanics: support-based validation instead of exact-state gating.
 #
 # WHY. Some gen3 counters are genuinely not public. The clearest is sleep:
@@ -287,19 +465,14 @@ MAX_SLEEP_TURNS = 4
 # gen3 Rest: asleep for two attempted turns; the engine panics outside 0..2
 # (generate_instructions.rs:1699), so the sweep stays inside the legal domain.
 MAX_REST_TURNS = 2
-# Fail-closed reasons that are purely "a hidden counter is unknown".
-HIDDEN_COUNTER_REASONS = frozenset({"status_unsupported", "volatile_unsupported"})
+# generate_instructions.rs:45 — the confusion ladder's top rung.
+MAX_CONFUSION_TURNS = 4
 # Guard rail: a pathological cross-product must never explode the boundary cost.
 MAX_HIDDEN_COUNTER_WORLDS = 64
 
 
 def _sleep_counter_variants(spec: Any) -> list[Any]:
-    """Every legal (sleep_turns, rest_turns) assignment for the asleep actives.
-
-    Returns one BattleSpec per assignment; the cross product across both sides is
-    capped by ``MAX_HIDDEN_COUNTER_WORLDS``. A side whose active is not asleep
-    contributes exactly one (unchanged) variant, so the common case is cheap.
-    """
+    """Every legal (sleep_turns, rest_turns) assignment for the asleep actives."""
 
     def side_variants(side: Any) -> list[Any]:
         active = side.pokemon[side.active_index]
@@ -322,10 +495,71 @@ def _sleep_counter_variants(spec: Any) -> list[Any]:
 
     one = side_variants(spec.side_one)
     two = side_variants(spec.side_two)
-    specs = [
+    return [
         dataclasses.replace(spec, side_one=a, side_two=b) for a in one for b in two
-    ]
-    return specs[:MAX_HIDDEN_COUNTER_WORLDS]
+    ][:MAX_HIDDEN_COUNTER_WORLDS]
+
+
+def _confusion_counter_variants(spec: Any) -> list[Any]:
+    """Every legal confusion-ladder rung for actives carrying CONFUSION.
+
+    Post-PR #875 the engine prices the snap-out as a hazard on
+    ``volatile_status_durations.confusion`` with
+    ``chance_confusion_ends(n) = 1/(1 + MAX_CONFUSION_TURNS - n)``
+    (generate_instructions.rs:106-114), reproducing Showdown's uniform 2-5 roll
+    given the elapsed count. The remaining count is private, so the rungs
+    0..MAX_CONFUSION_TURNS are swept exactly like sleep's.
+    """
+
+    def side_variants(side: Any) -> list[Any]:
+        volatiles = {str(v).lower() for v in (side.volatile_statuses or ())}
+        if "confusion" not in volatiles:
+            return [side]
+        variants = []
+        for rung in range(0, MAX_CONFUSION_TURNS + 1):
+            durations = dict(side.volatile_status_durations or {})
+            durations["confusion"] = rung
+            variants.append(dataclasses.replace(side, volatile_status_durations=durations))
+        return variants
+
+    one = side_variants(spec.side_one)
+    two = side_variants(spec.side_two)
+    return [
+        dataclasses.replace(spec, side_one=a, side_two=b) for a in one for b in two
+    ][:MAX_HIDDEN_COUNTER_WORLDS]
+
+
+# Which fail-closed reason is recoverable by which SINGLE widening. The retry
+# widens ONLY the mechanic that caused the failure — flipping the whole
+# approximate bundle would admit yawn / partial-trap / substitute-health
+# guesses whose effects (a sleep landing, a chip tick) are OBSERVABLE, which
+# would break the "observable mechanics keep exact gating" rule this mode rests
+# on.
+_UNSUPPORTED_VOLATILE_RE = re.compile(r"\[([^\]]*)\]")
+
+
+def hidden_counter_recovery(error: EngineWorldUnsupported) -> str | None:
+    """Which hidden counter (if any) this fail-closed reason is about.
+
+    Returns "sleep", "confusion", or None. ``volatile_unsupported`` recovers
+    ONLY when confusion is the sole unsupported volatile: yawn also rides the
+    same engine_world flag, and yawn's sleep landing is publicly observable, so
+    admitting it would relax an observable mechanic.
+    """
+
+    if error.reason == "status_unsupported":
+        return "sleep"
+    if error.reason != "volatile_unsupported":
+        return None
+    match = _UNSUPPORTED_VOLATILE_RE.search(error.detail or "")
+    if not match:
+        return None
+    names = {
+        part.strip().strip("'\"").lower()
+        for part in match.group(1).split(",")
+        if part.strip()
+    }
+    return "confusion" if names == {"confusion"} else None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -444,6 +678,109 @@ def _active_maxhp_by_slot(state: Any, slot_sides: Mapping[str, str]) -> dict[str
     }
 
 
+def evaluate_boundary_strict(
+    *,
+    states: Sequence[Any],
+    slot_sides: Mapping[str, str],
+    choices: Mapping[str, str],
+    party_display: Mapping[str, Sequence[str]],
+    turn: int,
+    observed: TurnFeatures,
+    step_lines: Sequence[str],
+    observed_boosts: Mapping[str, Mapping[str, int]],
+    active_changed: Mapping[str, bool],
+    counts: Counter,
+) -> tuple[str, list[str], int]:
+    """Per-damage-source comparison against the mapper-rendered engine branches."""
+
+    side_one_choice = choices["p1"] if slot_sides["p1"] == "side_one" else choices["p2"]
+    side_two_choice = choices["p2"] if slot_sides["p2"] == "side_two" else choices["p1"]
+    # The mapper renders side_one/side_two; map its p1/p2 labels back to slots.
+    engine_label_for_slot = {
+        slot: ("p1" if slot_sides[slot] == "side_one" else "p2") for slot in ("p1", "p2")
+    }
+    ctx = json.dumps({
+        "p1": list(party_display["p1" if slot_sides["p1"] == "side_one" else "p2"]),
+        "p2": list(party_display["p2" if slot_sides["p2"] == "side_two" else "p1"]),
+        "turn": int(turn),
+    })
+
+    observed_components = damage_components(step_lines)
+    obs_exact = {slot: _split_components(observed_components[slot])[0] for slot in ("p1", "p2")}
+    obs_rolled = {slot: _split_components(observed_components[slot])[1] for slot in ("p1", "p2")}
+
+    misses: list[str] = []
+    branch_total = 0
+    usable_branches = 0
+    for state in states:
+        try:
+            rendered = json.loads(
+                pokezero_search.branch_events(
+                    state.to_string(), side_one_choice, side_two_choice, ctx, True, True
+                )
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as error:  # noqa: BLE001
+            counts[f"strict:branch_events_error:{type(error).__name__}"] += 1
+            continue
+        branches = rendered.get("branches") or []
+        branch_total += len(branches)
+        # Legal damage set for this pre-state; unavailable when the engine
+        # refuses the pair (recorded, then the proportional window is used).
+        legal: set[int] | None = None
+        try:
+            s1_rolls, s2_rolls = poke_engine.calculate_damage(
+                state, side_one_choice, side_two_choice, True
+            )
+            legal = legal_roll_damages(list(s1_rolls) + list(s2_rolls))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # noqa: BLE001
+            counts["strict:no_damage_rolls"] += 1
+
+        for branch in branches:
+            if float(branch.get("percentage") or 0.0) <= 0.0:
+                continue
+            if branch.get("lossy"):
+                counts["strict:lossy_render"] += 1
+                continue
+            usable_branches += 1
+            engine_components = damage_components(branch.get("events") or [])
+            ok = True
+            reason = None
+            for slot in ("p1", "p2"):
+                label = engine_label_for_slot[slot]
+                eng_exact, eng_rolled = _split_components(engine_components[label])
+                if eng_exact != obs_exact[slot]:
+                    only_obs = obs_exact[slot] - eng_exact
+                    only_eng = eng_exact - obs_exact[slot]
+                    reason = (
+                        f"{slot} attributed components differ: "
+                        f"observed_only={sorted(only_obs.elements())} "
+                        f"engine_only={sorted(only_eng.elements())}"
+                    )
+                    ok = False
+                    break
+                if not roll_components_agree(obs_rolled[slot], eng_rolled, legal):
+                    reason = (
+                        f"{slot} roll-scaled components differ: "
+                        f"observed={sorted(obs_rolled[slot])} engine={sorted(eng_rolled)}"
+                    )
+                    ok = False
+                    break
+            if ok:
+                return "matched", [], branch_total
+            if reason and len(misses) < 12:
+                misses.append(f"pct={float(branch.get('percentage') or 0):.2f}: {reason}")
+    if usable_branches == 0:
+        # Every branch was a lossy render: the mapper itself is telling us it
+        # cannot reproduce this turn, so the boundary is unmeasurable, not
+        # divergent.
+        return "skip_lossy", ["every branch rendered lossy"], branch_total
+    return "diverged", misses, branch_total
+
+
 def evaluate_boundary(
     *,
     states: Sequence[Any],
@@ -532,6 +869,7 @@ def run_game(
     repros: list[dict[str, Any]],
     approximate_sleep: bool,
     hidden_counter_support: bool,
+    matcher: str,
 ) -> Counter:
     """Run one game. Divergence repros are appended to ``repros`` (capped by
     ``keep_repro``); the caller owns whether that list is per-game (checkpoint
@@ -605,15 +943,29 @@ def run_game(
             for slot in ("p1", "p2")
         }
         try:
-            verdict, misses, branch_count = evaluate_boundary(
-                states=prepared["states"],
-                slot_sides=prepared["slot_sides"],
-                choices=prepared["choices"],
-                pre_features=prepared["pre_features"],
-                observed=observed,
-                observed_boosts=observed_boost_deltas(step_lines),
-                active_changed=active_changed,
-            )
+            if matcher == "strict":
+                verdict, misses, branch_count = evaluate_boundary_strict(
+                    states=prepared["states"],
+                    slot_sides=prepared["slot_sides"],
+                    choices=prepared["choices"],
+                    party_display=prepared["party_display"],
+                    turn=prepared["turn"],
+                    observed=observed,
+                    step_lines=step_lines,
+                    observed_boosts=observed_boost_deltas(step_lines),
+                    active_changed=active_changed,
+                    counts=counts,
+                )
+            else:
+                verdict, misses, branch_count = evaluate_boundary(
+                    states=prepared["states"],
+                    slot_sides=prepared["slot_sides"],
+                    choices=prepared["choices"],
+                    pre_features=prepared["pre_features"],
+                    observed=observed,
+                    observed_boosts=observed_boost_deltas(step_lines),
+                    active_changed=active_changed,
+                )
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as error:  # pyo3 panics do not derive from Exception
@@ -638,6 +990,9 @@ def run_game(
                 )
             continue
 
+        if verdict == "skip_lossy":
+            counts["skip:strict_all_branches_lossy"] += 1
+            continue
         counts[f"transition:{verdict}"] += 1
         if verdict == "diverged":
             counts[f"divergence_class:{classify_divergence(step_lines, misses)}"] += 1
@@ -721,12 +1076,12 @@ def _prepare_boundary(
     except Exception:  # noqa: BLE001
         truant = []
 
-    def _build(*, approximate: bool, hidden_volatiles: bool) -> Any:
+    def _build(*, approximate_sleep_turns: bool, hidden_volatiles: bool) -> Any:
         return world_battle_spec(
             mstate,
             override,
             dex=dex,
-            approximate_sleep_turns=approximate,
+            approximate_sleep_turns=approximate_sleep_turns,
             approximate_substitute_health=True,
             approximate_hidden_duration_volatiles=hidden_volatiles,
             blocked_slots=blocked,
@@ -742,22 +1097,28 @@ def _prepare_boundary(
     specs: list[Any] = []
     gating = "exact"
     try:
-        world = _build(approximate=approximate_sleep, hidden_volatiles=False)
+        world = _build(approximate_sleep_turns=approximate_sleep, hidden_volatiles=False)
         specs = [world.spec]
     except EngineWorldUnsupported as error:
-        if not (hidden_counter_support and error.reason in HIDDEN_COUNTER_REASONS):
+        mechanic = hidden_counter_recovery(error) if hidden_counter_support else None
+        if mechanic is None:
             counts[f"skip:world_unsupported:{error.reason}"] += 1
             return None
-        # Hidden counter: sweep its legal domain and validate against the union
-        # of supports instead of refusing the boundary outright.
+        # Widen ONLY the mechanic that failed, then sweep ONLY its counter.
         try:
-            world = _build(approximate=True, hidden_volatiles=True)
+            if mechanic == "sleep":
+                world = _build(approximate_sleep_turns=True, hidden_volatiles=False)
+                specs = _sleep_counter_variants(world.spec)
+            else:
+                world = _build(
+                    approximate_sleep_turns=approximate_sleep, hidden_volatiles=True
+                )
+                specs = _confusion_counter_variants(world.spec)
         except EngineWorldUnsupported as inner:
             counts[f"skip:world_unsupported:{inner.reason}"] += 1
             return None
-        specs = _sleep_counter_variants(world.spec)
         gating = "support"
-        counts[f"hidden_counter_support:{error.reason}"] += 1
+        counts[f"hidden_counter_support:{mechanic}"] += 1
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as error:  # noqa: BLE001
@@ -800,7 +1161,16 @@ def _prepare_boundary(
 
     counts["boundaries_measured"] += 1
     counts[f"gating:{gating}"] += 1
+    turn = 0
+    try:
+        turn = int(_public_materialization_payload(mstate).get("turn") or 0)
+    except Exception:  # noqa: BLE001
+        turn = 0
     return {
+        "party_display": {
+            slot: [str(m.species) for m in teams[slot]] for slot in ("p1", "p2")
+        },
+        "turn": turn,
         "states": states,
         "slot_sides": world.slot_sides,
         "choices": choices,
@@ -853,23 +1223,31 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if not path.exists():
         return records
-    with path.open() as handle:
-        for line_number, line in enumerate(handle, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                # Only the last line may be a torn write; anything earlier is corruption.
-                print(
-                    f"warning: {path}: discarding unparseable line {line_number} "
-                    "(torn write from an interrupted run?)",
-                    file=sys.stderr,
-                )
-                continue
-            if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
-                records.append(dict(record))
+    raw = [line for line in path.read_text().splitlines()]
+    last_index = len(raw) - 1
+    for line_number, line in enumerate(raw):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            if line_number != last_index:
+                # Mid-file corruption would silently shrink the denominator of
+                # every rate computed from this shard, so it is fatal. Only the
+                # FINAL line may be a torn write from an interrupted run.
+                raise ValueError(
+                    f"{path}: unparseable line {line_number + 1} of {len(raw)} — only the "
+                    "final line may be a torn write; refusing to load a corrupt shard"
+                ) from None
+            print(
+                f"warning: {path}: discarding torn final line {line_number + 1} "
+                "(interrupted run)",
+                file=sys.stderr,
+            )
+            continue
+        if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
+            records.append(dict(record))
     return records
 
 
@@ -878,6 +1256,7 @@ def build_report(
     *,
     elapsed: float | None,
     approximate_sleep: bool | None,
+    matcher: str | None,
     keep_repro: int,
     sources: Sequence[str] = (),
 ) -> dict[str, Any]:
@@ -903,6 +1282,7 @@ def build_report(
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
+        "matcher": matcher,
         "gating_exact": totals["gating:exact"],
         "gating_support_based": totals["gating:support"],
         "elapsed_seconds": round(wall, 2) if wall else None,
@@ -946,6 +1326,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="approximate hidden sleep counters instead of failing the world closed "
              "(default: strict — a publicly-asleep mon with an unknown counter is a "
              "counted SKIP, never a guessed world)",
+    )
+    parser.add_argument(
+        "--matcher",
+        choices=("strict", "banded"),
+        default="strict",
+        help="strict (default): compare per-damage-source components. Deterministic "
+             "components (residuals, weather, items, hazards, move heals) must match "
+             "exactly; roll-scaled ones (move damage, recoil, drain, confusion) are "
+             "accepted if equal, or in the enumerated legal roll set, or within +/-9%% of "
+             "the engine's representative roll — component-scoped, never net-HP. "
+             "banded: the legacy +/-16%%-of-net-HP band, kept for continuity with the "
+             "pre-hardening numbers.",
     )
     parser.add_argument(
         "--no-hidden-counter-support",
@@ -1009,6 +1401,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             deduped,
             elapsed=None,
             approximate_sleep=None,
+            matcher=None,
             keep_repro=args.keep_repro,
             sources=[str(p) for p in args.merge_from],
         )
@@ -1066,6 +1459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repros=game_repros,
                 approximate_sleep=args.approximate_sleep,
                 hidden_counter_support=not args.no_hidden_counter_support,
+                matcher=args.matcher,
             )
             record = checkpoint_record(
                 seed=seed,
@@ -1079,7 +1473,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.progress_every and index % args.progress_every == 0:
                 elapsed = time.perf_counter() - started
                 running = build_report(
-                    records, elapsed=None, approximate_sleep=None, keep_repro=0
+                    records, elapsed=None, approximate_sleep=None, matcher=None, keep_repro=0
                 )
                 print(
                     f"[{index}/{len(todo)}] {elapsed:.0f}s "
@@ -1101,6 +1495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # resumed run's throughput would otherwise be nonsense.
         elapsed=elapsed if len(records) == len(todo) else None,
         approximate_sleep=bool(args.approximate_sleep),
+        matcher=args.matcher,
         keep_repro=args.keep_repro,
     )
     print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))

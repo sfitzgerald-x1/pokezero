@@ -343,6 +343,22 @@ def scenario_damage(showdown_root: str, seeds: int, seed_start: int) -> dict:
 
     config = LocalShowdownConfig(showdown_root=showdown_root)
     dex = load_showdown_dex(showdown_root)
+
+    # HARD GATE, not a convention. `engine_fidelity._mon` defaults to
+    # item="Leftovers", and an earlier revision of this scenario inherited that
+    # default and reported 12-39 % "damage bias" that was pure artifact: the
+    # engine branch's post-state HP is NET of the end-of-turn heal while
+    # Showdown's |-damage| line is GROSS. Assert rather than trust the fixtures.
+    for name, attacker, defender, _move, _defender_move in _DAMAGE_CASES:
+        for role, mon in (("attacker", attacker), ("defender", defender)):
+            if mon.item:
+                raise AssertionError(
+                    f"damage case {name!r}: {role} {mon.species} holds {mon.item!r}. "
+                    "Damage-bias fixtures MUST be itemless — a held item makes the "
+                    "engine's net HP incomparable to Showdown's gross damage line "
+                    "and manufactures a fake bias (see ledger Appendix A.3, D11)."
+                )
+
     rows = []
     for name, attacker, defender, move, defender_move in _DAMAGE_CASES:
         samples = []
@@ -380,6 +396,13 @@ def scenario_damage(showdown_root: str, seeds: int, seed_start: int) -> dict:
 
         mean = statistics.fmean(samples)
         bias = (mean - engine_damage) / engine_damage if engine_damage else None
+        # The comparison is a SAMPLE mean against a point value, so the tolerance
+        # must scale with the sample's own noise or the verdict flips with N (it
+        # did: 0.0099 at n=60 vs 0.017 at n=20 on identical fixtures). Three
+        # standard errors of the mean, floored at 1 % for tiny samples.
+        stdev = statistics.stdev(samples) if len(samples) > 1 else 0.0
+        sem = stdev / (len(samples) ** 0.5) if samples else 0.0
+        tolerance = max(0.01, 3 * sem / engine_damage) if engine_damage else 0.01
         rows.append({
             "case": name,
             "n": len(samples),
@@ -388,11 +411,13 @@ def scenario_damage(showdown_root: str, seeds: int, seed_start: int) -> dict:
             "showdown_max": max(samples),
             "engine_representative": engine_damage,
             "relative_bias": round(bias, 4) if bias is not None else None,
-            "within_roll_quantisation": abs(bias) <= 0.01 if bias is not None else None,
+            "tolerance_3sem": round(tolerance, 4),
+            "within_tolerance": abs(bias) <= tolerance if bias is not None else None,
         })
 
     scored = [r for r in rows if r.get("relative_bias") is not None]
     worst = max((abs(r["relative_bias"]) for r in scored), default=None)
+    all_within = all(r["within_tolerance"] for r in scored) if scored else None
     return {
         "scenario": "damage",
         "ledger_row": "D11",
@@ -404,8 +429,8 @@ def scenario_damage(showdown_root: str, seeds: int, seed_start: int) -> dict:
         "cases": rows,
         "max_abs_relative_bias": round(worst, 4) if worst is not None else None,
         "verdict": (
-            "cannot-reproduce" if worst is not None and worst <= 0.01
-            else "confirmed" if worst is not None else "inconclusive"
+            "cannot-reproduce" if all_within
+            else "confirmed" if all_within is False else "inconclusive"
         ),
     }
 
