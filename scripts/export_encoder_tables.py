@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -56,8 +57,24 @@ from pokezero.showdown import (  # noqa: E402
 TABLES_SCHEMA_VERSION = "pokezero.encoder-tables.v1"
 
 
-def _vocab_payload(showdown_root: str) -> dict[str, Any]:
+def _vocab_payload(showdown_root: str, trained_tokens: Any = None) -> dict[str, Any]:
+    """Emit the token->row map the LEAF encoder will use.
+
+    ``trained_tokens`` is the checkpoint's own ``category_vocab`` and is authoritative
+    whenever it is available. The build's enumeration is only correct for a model that
+    the build itself created: the model's embedding rows were learned against the
+    positions in force at training time, and the enumeration is a positional list, so a
+    token added later renumbers everything after it. Exporting build tokens for an older
+    checkpoint therefore hands the crate a map that resolves the same string to a row
+    the model learned as something else.
+
+    `TransformerPolicyConfig.__post_init__` requires ``category_vocab`` on every valid
+    config (neural_policy.py:399), so no vocab-less checkpoint contract exists; the
+    build enumeration below is reached only when exporting without a checkpoint at all.
+    """
     vocab = gen3_category_vocabulary(showdown_root, include_turn_merged=True)
+    if trained_tokens:
+        vocab = replace(vocab, tokens=tuple(str(t) for t in trained_tokens))
     index: dict[str, int] = {}
     for row, token in enumerate(vocab.tokens, start=1):
         index[normalize_category_value(token)] = row
@@ -263,10 +280,11 @@ def build_tables(
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2,
     spec: Any = None,
     masks: Any = None,
+    trained_tokens: Any = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": TABLES_SCHEMA_VERSION,
-        "vocab": _vocab_payload(showdown_root),
+        "vocab": _vocab_payload(showdown_root, trained_tokens),
         "layout": _layout_payload(observation_schema_version, spec=spec, masks=masks),
         "dex": _dex_payload(showdown_root),
     }
@@ -299,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unsupported encoder-table schema: {args.observation_schema!r}")
     spec = None
     masks = None
+    trained_tokens = None
     if args.checkpoint is not None:
         from pokezero.neural_policy import (  # noqa: PLC0415 - optional torch dependency
             feature_masks_from_model_config,
@@ -309,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_transformer_model_config(args.checkpoint)
         spec = observation_spec_from_model_config(config)
         masks = feature_masks_from_model_config(config)
+        trained_tokens = tuple(str(t) for t in (getattr(config, "category_vocab", ()) or ()))
         if spec.schema_version != schema_version:
             parser.error(
                 f"--checkpoint schema {spec.schema_version!r} != --observation-schema "
@@ -319,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         observation_schema_version=schema_version,
         spec=spec,
         masks=masks,
+        trained_tokens=trained_tokens,
     )
     encoded = json.dumps(tables, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -58,6 +58,7 @@ def _contract(**overrides) -> CheckpointContract:
         categorical_feature_count=51,
         numeric_feature_count=169,
         transition_token_count=64,
+        category_vocab=("alpha", "beta", "gamma"),
         architecture={"embedding_dim": 512, "transformer_layers": 3},
         feature_masks={
             "transition_token_budget": 64,
@@ -162,11 +163,15 @@ class EncoderTableValidationTest(unittest.TestCase):
                 "transition_token_budget": 64,
             },
         }
+        vocab = {"tokens": list(_contract().category_vocab)}
         if masks is not None:
             layout["default_feature_masks"] = {**layout["default_feature_masks"], **masks}
         layout.update(layout_overrides)
         path.write_text(
-            json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}), encoding="utf-8"
+            json.dumps(
+                {"schema_version": TABLES_SCHEMA_VERSION, "vocab": vocab, "layout": layout}
+            ),
+            encoding="utf-8",
         )
         return path
 
@@ -450,6 +455,7 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
         layout = exporter._layout_payload(
             OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed, masks=masks
         )
+        vocab = {"tokens": list(_contract().category_vocab)}
         contract = _contract(
             token_count=trimmed.token_count,
             transition_token_count=trimmed.transition_token_count,
@@ -465,7 +471,11 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "tables.json"
-            path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
+            path.write_text(
+                json.dumps(
+                    {"schema_version": TABLES_SCHEMA_VERSION, "vocab": vocab, "layout": layout}
+                )
+            )
             validate_encoder_tables(contract, path)  # must not raise
 
     def test_schema_default_masks_are_rejected_for_a_real_checkpoint(self) -> None:
@@ -490,17 +500,28 @@ class TrimmedEncoderTablesTest(unittest.TestCase):
                 validate_encoder_tables(contract, path)
 
 
-class EncoderTableVocabValidationTest(unittest.TestCase):
-    """The stale-artifact hole: tables are adopted whenever the file exists, and the
-    reuse key cannot see a vocabulary change. A cached file written before a token
-    was added renumbers every token after it at leaf encode."""
+class EncoderTableVocabPolarityTest(unittest.TestCase):
+    """The vocabulary must be checked against the CHECKPOINT, never against the build.
 
-    def _write(self, path: Path, tokens: list[str]) -> Path:
+    The enumeration is a positional list and the model's embedding rows were learned
+    against the positions in force at training time, so the checkpoint is the only
+    authority for what a categorical id means. A build-anchored check does not merely
+    miss things: it inverts, rejecting the artifact that matches the model and
+    accepting one that silently shifts rows.
+    """
+
+    # 2026-07-29, both 5M checkpoints: trained on 1216 tokens while the build had
+    # grown to 1217 by inserting `volatile:solarbeam` at index 1204, renumbering the
+    # 13 volatiles after it. Scaled down, same shape.
+    TRAINED = ("aaa", "volatile:stockpile", "volatile:substitute")
+    BUILD = ("aaa", "volatile:solarbeam", "volatile:stockpile", "volatile:substitute")
+
+    def _tables(self, path: Path, tokens) -> Path:
         path.write_text(
             json.dumps(
                 {
                     "schema_version": TABLES_SCHEMA_VERSION,
-                    "vocab": {"tokens": tokens, "size": len(tokens) + 1},
+                    "vocab": {"tokens": list(tokens)},
                     "layout": {
                         "schema_version": "pokezero.observation.v3",
                         "token_count": 87,
@@ -520,35 +541,146 @@ class EncoderTableVocabValidationTest(unittest.TestCase):
         )
         return path
 
-    def test_vocab_is_not_checked_without_a_showdown_root(self) -> None:
+    def _contract_trained(self):
+        return _contract(category_vocab=self.TRAINED)
+
+    def test_tables_matching_the_trained_vocab_are_accepted(self) -> None:
+        # The cached k64 tables. A build-anchored check REJECTED these -- they were
+        # correct, and regenerating them was what introduced the defect.
         with tempfile.TemporaryDirectory() as temp_dir:
-            tables = self._write(Path(temp_dir) / "t.json", ["a", "b"])
-            validate_encoder_tables(_contract(), tables)  # no raise
+            tables = self._tables(Path(temp_dir) / "t.json", self.TRAINED)
+            validate_encoder_tables(self._contract_trained(), tables)  # no raise
 
-    def test_stale_vocab_is_terminal(self) -> None:
-        import unittest.mock as mock
-
-        class _Vocab:
-            tokens = ["a", "b", "c"]
-
+    def test_fresh_build_export_against_an_older_checkpoint_is_terminal(self) -> None:
+        # The tables this agent regenerated for k0. A build-anchored check ACCEPTED
+        # these; they shift every volatile row the model learned after the insert.
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Tables predate "b": every token after it is renumbered.
-            tables = self._write(Path(temp_dir) / "t.json", ["a", "c"])
-            with mock.patch(
-                "pokezero.randbat_vocab.gen3_category_vocabulary", return_value=_Vocab()
-            ):
-                with self.assertRaisesRegex(ContractError, "vocab.tokens"):
-                    validate_encoder_tables(_contract(), tables, showdown_root="/opt/showdown")
+            tables = self._tables(Path(temp_dir) / "t.json", self.BUILD)
+            with self.assertRaisesRegex(ContractError, "vocab.tokens"):
+                validate_encoder_tables(self._contract_trained(), tables)
 
-    def test_current_vocab_accepted(self) -> None:
-        import unittest.mock as mock
-
-        class _Vocab:
-            tokens = ["a", "b", "c"]
-
+    def test_the_error_names_the_inserted_token_and_where_it_shifts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            tables = self._write(Path(temp_dir) / "t.json", ["a", "b", "c"])
-            with mock.patch(
-                "pokezero.randbat_vocab.gen3_category_vocabulary", return_value=_Vocab()
-            ):
-                validate_encoder_tables(_contract(), tables, showdown_root="/opt/showdown")
+            tables = self._tables(Path(temp_dir) / "t.json", self.BUILD)
+            with self.assertRaises(ContractError) as caught:
+                validate_encoder_tables(self._contract_trained(), tables)
+            message = str(caught.exception)
+            self.assertIn("index 1", message)  # first divergence
+            self.assertIn("volatile:solarbeam", message)  # not in the trained vocabulary
+
+    def test_vocab_is_in_the_reuse_key(self) -> None:
+        # So tables exported against another enumeration resolve to a different path
+        # and can never be adopted for this checkpoint, whatever wrote them.
+        self.assertNotEqual(
+            export_reuse_key(self._contract_trained()),
+            export_reuse_key(_contract(category_vocab=self.BUILD)),
+        )
+
+
+class TrimmedEncoderTablesTest(unittest.TestCase):
+    """Region-trimmed checkpoints must get tables matching THEIR width.
+
+    The exporter derived its layout from the schema default (87 tokens), so a
+    trimmed 39-token checkpoint produced tables the model could not consume and
+    the root/leaf contract check refused the run — trimmed models could not go
+    through the crate at all.
+    """
+
+    def _specs(self):
+        import dataclasses
+
+        _add_scripts_to_path()
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3, observation_spec_for_schema
+
+        full = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
+        return full, dataclasses.replace(full, transition_token_count=16)
+
+    def test_layout_follows_the_trimmed_spec(self) -> None:
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        full, trimmed = self._specs()
+        default_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        trimmed_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        self.assertEqual(default_layout["token_count"], full.token_count)
+        self.assertEqual(trimmed_layout["token_count"], trimmed.token_count)
+        self.assertLess(trimmed_layout["token_count"], default_layout["token_count"])
+
+    def test_offsets_before_the_transition_tail_are_unchanged(self) -> None:
+        # The transition region is the LAST block, so trimming it must not move
+        # any earlier token offset — that is what keeps the tables valid.
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        _, trimmed = self._specs()
+        default_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        trimmed_layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed)
+        self.assertEqual(default_layout["token_offsets"], trimmed_layout["token_offsets"])
+
+    def test_trimmed_tables_satisfy_the_contract_guard(self) -> None:
+        # End to end: tables built from a trimmed spec must pass the same
+        # root/leaf validation that rejected the schema-default ones.
+        import json
+        import tempfile
+
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        from pokezero.observation import ObservationFeatureMasks
+
+        _, trimmed = self._specs()
+        # The masks a real checkpoint carries, not the dataclass defaults — passing
+        # only the spec is exactly the hole that shipped wrong tables to every run.
+        masks = ObservationFeatureMasks(
+            transition_token_budget=trimmed.transition_token_count,
+            tier2_investment=True,
+        )
+        layout = exporter._layout_payload(
+            OBSERVATION_SCHEMA_VERSION_V3, spec=trimmed, masks=masks
+        )
+        vocab = {"tokens": list(_contract().category_vocab)}
+        contract = _contract(
+            token_count=trimmed.token_count,
+            transition_token_count=trimmed.transition_token_count,
+            numeric_feature_count=layout["numeric_feature_count"],
+            categorical_feature_count=layout["categorical_feature_count"],
+            feature_masks={
+                "transition_token_budget": trimmed.transition_token_count,
+                "exact_state": masks.exact_state,
+                "opponent_tendency_stats_block": masks.opponent_tendency_stats_block,
+                "tier2_residuals": masks.tier2_residuals,
+                "tier2_investment": masks.tier2_investment,
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tables.json"
+            path.write_text(
+                json.dumps(
+                    {"schema_version": TABLES_SCHEMA_VERSION, "vocab": vocab, "layout": layout}
+                )
+            )
+            validate_encoder_tables(contract, path)  # must not raise
+
+    def test_schema_default_masks_are_rejected_for_a_real_checkpoint(self) -> None:
+        # The shipped path, pinned as a failure: build tables WITHOUT the
+        # checkpoint's masks and the guard must now refuse them.
+        import json
+        import tempfile
+
+        import export_encoder_tables as exporter
+
+        from pokezero.showdown import OBSERVATION_SCHEMA_VERSION_V3
+
+        layout = exporter._layout_payload(OBSERVATION_SCHEMA_VERSION_V3)
+        contract = _contract(
+            numeric_feature_count=layout["numeric_feature_count"],
+            categorical_feature_count=layout["categorical_feature_count"],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tables.json"
+            path.write_text(json.dumps({"schema_version": TABLES_SCHEMA_VERSION, "layout": layout}))
+            with self.assertRaisesRegex(ContractError, "tier2_investment"):
+                validate_encoder_tables(contract, path)

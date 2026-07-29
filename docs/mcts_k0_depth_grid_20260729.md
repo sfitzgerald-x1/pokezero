@@ -1,7 +1,11 @@
 # The k0 depth grid: does a history-free checkpoint decay with depth?
 
 **Date:** 2026-07-29
-**Status:** k0 is flat across depth; k64 decays. The difference points the way the
+**Status:** superseded in part — see §6 finding 3. The k0 cells were run against a
+leaf vocabulary that did not match the checkpoint's trained enumeration and must be
+re-run, not reinterpreted. The finding below stands only as a direction.
+
+k0 is flat across depth; k64 decays. The difference points the way the
 off-distribution-history hypothesis predicts, but at n=100 per cell it is
 **suggestive and not significant** (slope difference +0.110, z = 1.28). Reported
 as a direction, not a cause.
@@ -161,20 +165,38 @@ but two are live for other consumers and all three are fixed here.
    the observation's SHAPE; tables of the right width can still describe filling
    a region the checkpoint masks. The mask block is now compared too.
 
-3. **Stale artifacts are adopted forever, and this one IS live.** Artifacts are
-   reused whenever the file exists, and the reuse key covers the checkpoint and
-   the exporter revision but not the code that enumerates vocabulary tokens. The
-   k64 tables cached on 07-28 carry a **1233**-token vocab; this build produces
-   **1234** (`volatile:solarbeam` was added). The vocab is a positional list, so
-   every token from index 1204 on is renumbered and the crate resolves a
-   different embedding row than the root encode for the same value. The latch
-   rewrites only the mask block; it does not touch the vocab.
+3. **The vocabulary is enumerated from the build, not the checkpoint — and this
+   finding was originally written with the polarity BACKWARDS.** Corrected here.
 
-   **§9's k64 grid ran on those stale tables.** §4.2 above re-ran it on fresh
-   ones: 0.360 → 0.360. Real defect, not the cause.
+   Both 5M checkpoints were **trained on a 1216-token** enumeration
+   (`categorical_vocab_size` 1233 = 1 pad + 1216 + 16 OOV). The build had since
+   grown to **1217** by inserting `volatile:solarbeam` at index 1204, renumbering
+   the 13 volatile tokens after it.
 
-`validate_encoder_tables` now rebuilds the vocabulary when given a showdown root,
-and `EXPORTER_REVISION` is bumped to v3 to invalidate the bad artifacts.
+   | | trained `category_vocab` | tables it ran with |
+   |---|---|---|
+   | k64 (§9, cached tables) | 1216 | **1216 — correct** |
+   | k0 (this campaign, regenerated) | 1216 | **1217 — defective** |
+
+   So the cached k64 tables this section originally called "stale" were **right**:
+   they matched the enumeration the model was trained with, and their reuse was
+   legitimate. The defective artifact is the one **this campaign generated fresh
+   from the build**. A regeneration was not the fix; it was the defect.
+
+   **Consequence for §4.1:** the k0 cells were run against a 1217-token leaf
+   enumeration while the model's embedding rows were learned against 1216, so
+   every volatile from index 1204 on resolved to a row the model learned as a
+   different token. The k64 cells in §4.2 carried the same shift, and still
+   reproduced d6 = 0.360 exactly against the clean §9 run — which bounds the
+   effect as small but does not license reinterpreting the k0 numbers. **They
+   need re-running, not re-reading.**
+
+`_vocab_payload` now emits the checkpoint's own `category_vocab`, and
+`validate_encoder_tables` compares against the checkpoint contract rather than the
+build. The vocabulary is part of the observation contract, so it is in the export
+reuse key: tables exported against a different enumeration resolve to a different
+path and cannot be adopted. `EXPORTER_REVISION` -> v4 makes the v3-era artifacts,
+including this campaign's contaminated k0 tables, unreachable.
 
 ---
 
