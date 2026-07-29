@@ -85,6 +85,14 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   makes it outright ``-fail`` (no bypasssub flag).
   meanlooktrapperleaves : the trap is a LINKED volatile, so the trapper switching
                   out runs ``removeLinkedVolatiles`` and frees the victim.
+  meanlooktrapperbatonpass / ...freed : but a BATON PASS by the trapper does not.
+                  ``copyVolatileFrom`` moves ``trapper`` to the receiver, DELETES
+                  the old trapper's link, and only then runs ``clearVolatile()``,
+                  which finds nothing left to release; the victim's link is
+                  re-pointed, so the trap changes OWNER and the RECEIVER's later
+                  departure is what frees the victim. This is the line 2 of the 3
+                  gen3 randbats Ariados sets are built around (Spider Web + Baton
+                  Pass).
   meanlookbatonpass : gen3/gen4 alone re-declare ``trapped`` with
                   ``noCopy: false``, so the trap rides a Baton Pass and the
                   RECEIVER is still stuck.
@@ -206,6 +214,16 @@ def _ariados():  # Spider Web user, straight out of the gen3 randbats pool
 def _trap_victim():  # can also answer with Protect / Substitute
     return FixturePokemon(species="Snorlax", ability="Immunity", item="None",
                           moves=("Splash", "Protect", "Substitute"))
+
+
+def _ariados_batonpass():  # the pool's own Spider Web + Baton Pass set
+    return FixturePokemon(species="Ariados", ability="Insomnia", item="None",
+                          moves=("Spider Web", "Baton Pass", "Splash"))
+
+
+def _smeargle_receiver():  # takes the pass, and the trap's ownership with it
+    return FixturePokemon(species="Smeargle", ability="Technician", item="None",
+                          moves=("Splash",))
 
 
 def _misdreavus_batonpass():  # Ghost trap victim that can pass the trap on
@@ -727,6 +745,30 @@ def _spec(name):
             request_facts=_trapped,
             expect={"trapper_left": True, "p2_trapped": False},
             landmark=lambda L: True, landmark_desc="")
+    if name in ("meanlooktrapperbatonpass", "meanlooktrapperbatonpassfreed"):
+        # The line the randbats set is built around: Ariados webs, then Baton
+        # Passes. The trap does NOT break — `copyVolatileFrom` moves `trapper` to
+        # the receiver (gen3 inherits gen4's `noCopy: false` for BOTH halves of
+        # the link), DELETES the old trapper's link, and only then runs
+        # `clearVolatile()`, which finds nothing left to release. The victim's
+        # link is re-pointed, so the trap changes OWNER — and the receiver's own
+        # departure is what finally frees the victim (measured step 3).
+        freed = name.endswith("freed")
+        return dict(
+            p1=[_ariados_batonpass(), _smeargle_receiver(), _blissey()],
+            p2=[_trap_victim(), _blissey()],
+            turns=[("move spiderweb", "move splash"),
+                   ("move batonpass", "move splash"),
+                   ("switch 2", None)]
+                  + ([("switch 3", "move splash")] if freed else []),
+            measured=3 if freed else 2, setup_step=None, setup_landed=None,
+            facts=lambda L: {
+                "receiver_in": _has(L, "|switch|p1a: Blissey" if freed
+                                    else "|switch|p1a: Smeargle"),
+            },
+            request_facts=_trapped,
+            expect={"receiver_in": True, "p2_trapped": not freed},
+            landmark=lambda L: True, landmark_desc="")
     if name == "meanlookbatonpass":
         # gen3/gen4 alone re-declare `trapped` with `noCopy: false`, so the trap
         # rides the pass and the RECEIVER is still stuck.
@@ -784,7 +826,8 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "transformrevert",
              "meanlook", "meanlookcontrol", "spiderweb", "meanlookghost",
              "meanlookprotect", "meanlooksub", "meanlooktrapperleaves",
-             "meanlookbatonpass",
+             "meanlookbatonpass", "meanlooktrapperbatonpass",
+             "meanlooktrapperbatonpassfreed",
              "perishladderfirsttick", "perishladder")
 
 

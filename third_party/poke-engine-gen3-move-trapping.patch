@@ -1,6 +1,6 @@
 diff --color -ruN a/src/choices.rs b/src/choices.rs
---- a/src/choices.rs	2026-07-28 16:41:16
-+++ b/src/choices.rs	2026-07-28 16:51:00
+--- a/src/choices.rs	2026-07-28 17:18:49
++++ b/src/choices.rs	2026-07-28 17:18:59
 @@ -1509,6 +1509,11 @@
              move_id: Choices::BLOCK,
              move_type: PokemonType::NORMAL,
@@ -31,9 +31,9 @@ diff --color -ruN a/src/choices.rs b/src/choices.rs
                  ..Default::default()
              },
 diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
---- a/src/gen3/choice_effects.rs	2026-07-28 16:41:16
-+++ b/src/gen3/choice_effects.rs	2026-07-28 16:50:47
-@@ -753,6 +753,51 @@
+--- a/src/gen3/choice_effects.rs	2026-07-28 17:18:49
++++ b/src/gen3/choice_effects.rs	2026-07-28 17:18:59
+@@ -789,6 +789,51 @@
                  instructions.instruction_list.push(apply_vs_instruction);
              }
          }
@@ -86,24 +86,42 @@ diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
              for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
                  let side = state.get_side(&side_ref);
 diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
---- a/src/gen3/generate_instructions.rs	2026-07-28 16:41:16
-+++ b/src/gen3/generate_instructions.rs	2026-07-28 16:50:34
-@@ -241,6 +241,32 @@
+--- a/src/gen3/generate_instructions.rs	2026-07-28 17:18:49
++++ b/src/gen3/generate_instructions.rs	2026-07-28 17:20:20
+@@ -241,6 +241,50 @@
          }
      }
  
 +    // pokezero gen3 fidelity fix: the Mean Look / Spider Web / Block trap is a
 +    // LINKED volatile in Showdown — `addVolatile('trapped', source, move,
 +    // 'trapper')` puts `trapper` on the user and `trapped` on the victim and
-+    // links them, so the user leaving the field runs `clearVolatile()` ->
-+    // `removeLinkedVolatiles()` and frees the victim. The trapper FAINTING frees
-+    // it too (verified against real gen3 Showdown: the victim's very next request
-+    // comes back untrapped), which this covers because the faint's forced
-+    // replacement runs through this same routine, at the first boundary where the
-+    // victim has a choice again.
-+    if opposite_side
-+        .volatile_statuses
-+        .contains(&PokemonVolatileStatus::TRAPPED)
++    // links them, so an ORDINARY departure by the trapper runs `clearVolatile()`
++    // -> `removeLinkedVolatiles()` and frees the victim. Fainting frees it too
++    // (verified against the real sim: the victim's very next request comes back
++    // untrapped), which this covers because the faint's forced replacement runs
++    // through this same routine, at the first boundary where the victim has a
++    // choice again.
++    //
++    // A BATON PASS does NOT free the victim, and the ordering in
++    // `copyVolatileFrom` is why: the receiver copies `trapper` (gen3 inherits
++    // gen4's `noCopy: false` for BOTH `trapped` and `trapper`), then the OLD
++    // trapper's `linkedPokemon`/`linkedStatus` are DELETED, and only then does
++    // `pokemon.clearVolatile()` run — finding no link left to release. The
++    // victim's own link is meanwhile re-pointed to the receiver, so the trap
++    // simply changes owner and is released by the RECEIVER's later departure.
++    // Verified against real gen3 Showdown on the line the randbats set is built
++    // around (2 of 3 Ariados sets carry Spider Web + Baton Pass): after the
++    // trapper's pass the victim's request is still `trapped: true`, and it only
++    // comes back untrapped once the receiver itself switches out.
++    //
++    // The PARTIALLYTRAPPED release below is deliberately NOT gated the same way:
++    // Wrap/Fire Spin is not a linked volatile at all. Its release is
++    // `partiallytrapped.onResidual` checking `!source.isActive`, which is true
++    // however the source left the field — Baton Pass included.
++    if !baton_passing
++        && opposite_side
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::TRAPPED)
 +    {
 +        incoming_instructions
 +            .instruction_list
@@ -122,9 +140,9 @@ diff --color -ruN a/src/gen3/generate_instructions.rs b/src/gen3/generate_instru
          .volatile_statuses
          .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
 diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
---- a/src/gen3/state.rs	2026-07-28 16:41:16
-+++ b/src/gen3/state.rs	2026-07-28 16:50:14
-@@ -179,6 +179,10 @@
+--- a/src/gen3/state.rs	2026-07-28 17:18:49
++++ b/src/gen3/state.rs	2026-07-28 17:19:39
+@@ -206,6 +206,10 @@
          THROATCHOP,
          TRUANT,
          TORMENT,
@@ -135,7 +153,7 @@ diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
          TYPECHANGE,
          UNBURDEN,
          UPROAR,
-@@ -293,6 +297,15 @@
+@@ -325,6 +329,15 @@
                  }
                  true
              }
@@ -151,7 +169,7 @@ diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
              PokemonVolatileStatus::ATTRACT => self.ability != Abilities::OBLIVIOUS,
              PokemonVolatileStatus::SUBSTITUTE => self.hp > self.maxhp / 4,
              PokemonVolatileStatus::FLINCH => {
-@@ -436,8 +449,21 @@
+@@ -468,8 +481,21 @@
          {
              return true;
          }
@@ -173,7 +191,7 @@ diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
              .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
          {
              return true;
-@@ -719,6 +745,20 @@
+@@ -751,6 +777,26 @@
                  | PokemonVolatileStatus::PERISH2
                  | PokemonVolatileStatus::PERISH3
                  | PokemonVolatileStatus::PERISH4 => baton_passing,
@@ -183,13 +201,19 @@ diff --color -ruN a/src/gen3/state.rs b/src/gen3/state.rs
 +                // gen3 inherits) explicitly re-declares `trapped` and `trapper`
 +                // with `noCopy: false` — gen5+ flips `trapped` back to
 +                // `noCopy: true`, so this is a genuinely gen3/gen4-only carry.
-+                // Showdown also re-points the trapper's link to the receiver, so
-+                // the receiver is still freed when the TRAPPER leaves; the engine
-+                // gets that for free by keying the release off the opposing
-+                // side's switch-out. Verified against real gen3 Showdown: a
-+                // trapped Misdreavus that Baton Passes into Blissey hands the
-+                // receiver a `trapped: true` request. A plain switch-out (or a
-+                // phazing drag) still drops it, per `Pokemon.clearVolatile()`.
++                // This arm is the VICTIM passing its own trap along. The mirror
++                // case — the TRAPPER passing — is handled in
++                // generate_instructions_from_switch: `copyVolatileFrom` moves the
++                // `trapper` volatile to the receiver and re-points the victim's
++                // link to it BEFORE `clearVolatile()` runs, so a pass changes the
++                // trap's owner instead of releasing it, and the victim is freed
++                // only by the RECEIVER's later departure. Verified against real
++                // gen3 Showdown from both ends: a trapped Misdreavus that Baton
++                // Passes into Blissey hands the receiver a `trapped: true`
++                // request, and an Ariados that webs and then passes leaves its
++                // victim trapped until the receiver itself switches out. A plain
++                // switch-out (or a phazing drag) still drops it either way, per
++                // `Pokemon.clearVolatile()`.
 +                PokemonVolatileStatus::TRAPPED => baton_passing,
                  // pokezero gen3 fidelity fix: Baton Pass carries CONFUSION, and
                  // carries it WITH its remaining duration. Same `copyVolatileFrom`

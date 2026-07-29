@@ -181,9 +181,23 @@ poke-engine-gen3-state-roundtrip.patch
 # drops the `trapped: 3` entry gen3 would otherwise inherit); Protect blocks it
 # (gen3 inherits the gen5 mod's protect flag on Mean Look and Block); a
 # Substitute blocks it (no bypasssub — the sim answers `-fail`); the volatile is
-# LINKED, so the trapper switching out OR fainting frees the victim; and gen3/4
-# alone re-declare `trapped` with `noCopy: false`, so a Baton Pass carries the
-# trap to the receiver.
+# LINKED, so an ordinary switch-out by the trapper, or its faint, frees the
+# victim; and gen3/4 alone re-declare BOTH `trapped` and `trapper` with
+# `noCopy: false`, which makes Baton Pass carry the trap in either direction.
+#
+# The Baton Pass asymmetry is the subtle part and is pinned from both ends. The
+# VICTIM passing carries its own trap to the receiver. The TRAPPER passing does
+# NOT release the victim: `copyVolatileFrom` copies `trapper` to the receiver,
+# DELETES the old trapper's linkedPokemon/linkedStatus, and only then runs
+# `clearVolatile()` — which finds no link left to release — while the victim's
+# link is re-pointed to the receiver. So the trap changes OWNER, and the
+# RECEIVER's later departure is what frees the victim. This is the line the pool
+# is built around: 2 of the 3 gen3 randbats Ariados sets carry Spider Web AND
+# Baton Pass. The release is therefore gated on the switching side not
+# baton-passing; the pre-existing PARTIALLYTRAPPED release next to it is
+# deliberately left unconditional, because Wrap/Fire Spin is not a linked
+# volatile at all — `partiallytrapped.onResidual` releases on `!source.isActive`,
+# which holds however the source left the field.
 #
 # Adds a TRAPPED variant to the gen3 volatile enum (distinct from
 # PARTIALLYTRAPPED, the Wrap/Fire Spin residual family) and applies it from

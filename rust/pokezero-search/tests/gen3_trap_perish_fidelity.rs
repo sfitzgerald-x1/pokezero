@@ -318,6 +318,133 @@ fn baton_pass_carries_the_trap() {
     );
 }
 
+/// The mirror case, and the one the randbats set is actually built around: the
+/// TRAPPER Baton Passes. This does NOT free the victim.
+///
+/// `copyVolatileFrom` copies `trapper` to the receiver (gen3 inherits gen4's
+/// `noCopy: false` for BOTH halves of the link), then DELETES the old trapper's
+/// `linkedPokemon`/`linkedStatus`, and only then runs `pokemon.clearVolatile()`
+/// — which therefore finds no link left to release. The victim's own link is
+/// re-pointed to the receiver, so the trap changes owner. Verified against real
+/// gen3 Showdown: after an Ariados webs and passes, the victim's request is
+/// still `trapped: true`, and it only comes back untrapped once the RECEIVER
+/// leaves. 2 of the 3 gen3 randbats Ariados sets carry Spider Web + Baton Pass,
+/// so this is the designed line, not a corner case.
+#[test]
+fn a_trapper_that_baton_passes_keeps_the_victim_trapped() {
+    let mut state = trap_state(Choices::MEANLOOK, Choices::SPLASH);
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::BATONPASS);
+
+    let trap = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+    state.apply_instructions(&trap);
+
+    let pass = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M1),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+    state.apply_instructions(&pass);
+    assert!(
+        state.side_one.baton_passing,
+        "Baton Pass must arm the pass before the switch resolves: {:?}",
+        pass
+    );
+
+    let switch = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+    assert!(
+        !removes_volatile(
+            &switch,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::TRAPPED
+        ),
+        "the trapper's Baton Pass must NOT release the victim: {:?}",
+        switch
+    );
+    assert_reverts_cleanly(&mut state, &switch);
+    state.apply_instructions(&switch);
+
+    let (_, side_two_options) = state.get_all_options();
+    assert!(
+        !has_switch_option(&side_two_options),
+        "the victim is still stuck on the receiver: {:?}",
+        side_two_options
+    );
+
+    // ...and the RECEIVER's own departure is what frees it, because the link was
+    // re-pointed rather than dropped.
+    let receiver_leaves = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P2),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+    ));
+    assert!(
+        removes_volatile(
+            &receiver_leaves,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::TRAPPED
+        ),
+        "the receiver leaving must free the victim: {:?}",
+        receiver_leaves
+    );
+    state.apply_instructions(&receiver_leaves);
+    let (_, freed_options) = state.get_all_options();
+    assert!(
+        has_switch_option(&freed_options),
+        "the freed victim gets its switches back: {:?}",
+        freed_options
+    );
+}
+
+/// The gate is on the TRAPPED link specifically. Wrap/Fire Spin is not a linked
+/// volatile — `partiallytrapped.onResidual` releases on `!source.isActive`,
+/// which is true however the source left — so a Baton Pass still frees a
+/// partial-trap victim, and that pre-existing release must stay unconditional.
+#[test]
+fn a_baton_pass_still_ends_a_partial_trap() {
+    let mut state = State::default();
+    state
+        .side_one
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::BATONPASS);
+    state
+        .side_two
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let pass = only_branch(generate(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::None,
+    ));
+    state.apply_instructions(&pass);
+
+    let switch = only_branch(generate(
+        &mut state,
+        &MoveChoice::Switch(PokemonIndex::P1),
+        &MoveChoice::None,
+    ));
+    assert!(
+        removes_volatile(
+            &switch,
+            SideReference::SideTwo,
+            PokemonVolatileStatus::PARTIALLYTRAPPED
+        ),
+        "a partial trap ends however the trapper left: {:?}",
+        switch
+    );
+}
+
 /// Control for the pin above: gen3's `noCopy: false` widens what a pass carries,
 /// it does not stop an ordinary switch-out from clearing the trap. The reachable
 /// route for a trapped Pokemon to leave without passing is being phazed out
