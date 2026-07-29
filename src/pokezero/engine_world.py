@@ -524,6 +524,13 @@ def battle_spec_from_payload(
     )
 
 
+# Showdown gives every copied slot `pp = Math.min(5, move.pp)` where `move` is the
+# DEX entry (sim/pokemon.ts transformInto), i.e. the move's BASE PP — not whatever
+# the donor has left. No gen3 move has a base PP below 5, so a copied slot is
+# always exactly 5, even off a donor that has drained the move to 1. This used to
+# read `min(5, donor_remaining_pp)`, which under-filled the copy and disagreed with
+# what the engine itself writes when Transform is CLICKED
+# (third_party/poke-engine-gen3-transform.patch); the two now use one rule.
 _TRANSFORM_MOVE_PP = 5
 
 
@@ -552,10 +559,25 @@ def _apply_transform(
     transformer's own boosts post-copy, so the payload's boost block is correct
     as-is and re-applying the donor's would double-count.
 
-    The one thing this cannot reproduce is reversion: the engine has no notion
-    of the copy ending, so a Transformed mon that switches out and back keeps
-    the borrowed form for the rest of the search. That is bounded and strictly
-    better than the uniform-legal fallback it replaces.
+    Reversion IS reproduced now. The engine gained a real TRANSFORMED volatile
+    and a `pre_transform` record of the transformer's own base form
+    (third_party/poke-engine-gen3-transform.patch), so a constructed Transform
+    can end the way a clicked one does. Expressing that takes three things
+    beyond the copy itself, and getting any of them wrong is worse than not
+    reverting at all:
+
+      * `pre_transform` — the pre-copy spec, which the engine reads back to
+        restore species, the five stats and the moveset.
+      * BASE IDENTITY — `base_ability` and `base_types` stay the TRANSFORMER's
+        own while `ability`/`types` become the donor's. This is what the engine
+        restores (`ability_on_switch_out`, and the TYPECHANGE switch-out arm),
+        and it is the half that used to be silently wrong: PokemonSpec plumbed
+        neither field, so the binding defaulted `base_ability` to the ability
+        this function had just copied FROM THE DONOR. A bridge-built transformed
+        Ditto therefore reverted into a Ditto with the donor's Immunity, and its
+        types into a flat Normal.
+      * The TRANSFORMED and TYPECHANGE volatiles, which are what make the engine
+        run those two restores at all.
     """
 
     updated = dict(sides)
@@ -583,6 +605,17 @@ def _apply_transform(
             active,
             id=donor.id,
             types=donor.types,
+            # The transformer's own identity, kept for the engine to restore.
+            # `active` is the PRE-copy spec, so its ability/types are the real
+            # base ones; an explicit base already on the spec wins (nothing sets
+            # one today, but silently overwriting it would be a trap).
+            base_ability=(
+                active.base_ability if active.base_ability is not None else active.ability
+            ),
+            base_types=(
+                active.base_types if active.base_types is not None else tuple(active.types)
+            ),
+            pre_transform=active,
             attack=donor.attack,
             defense=donor.defense,
             special_attack=donor.special_attack,
@@ -591,13 +624,22 @@ def _apply_transform(
             ability=donor.ability,
             weight_kg=donor.weight_kg,
             moves=tuple(
-                replace(move, pp=min(_TRANSFORM_MOVE_PP, move.pp), disabled=False)
+                replace(move, pp=_TRANSFORM_MOVE_PP, disabled=False)
                 for move in donor.moves
             ),
         )
         party = list(side.pokemon)
         party[side.active_index] = copied
-        updated[slot] = replace(side, pokemon=tuple(party))
+        # TRANSFORMED drives the species/stats/moveset restore off `pre_transform`;
+        # TYPECHANGE is the existing arm that restores `types -> base_types`. Both
+        # are dropped by the same switch-out that consumes them.
+        volatiles = list(side.volatile_statuses)
+        for volatile in ("transformed", "typechange"):
+            if volatile not in volatiles:
+                volatiles.append(volatile)
+        updated[slot] = replace(
+            side, pokemon=tuple(party), volatile_statuses=tuple(volatiles)
+        )
     return updated
 
 
@@ -1043,11 +1085,24 @@ def _build_side_spec(
                 "encore_move_unknown",
                 f"side {slot!r} is encored but the locked move cannot be determined",
             )
-        # The engine restricts the side to last_used_move while ENCORE is set
-        # (verified empirically); it does not decrement the duration, so the
-        # mon is modeled as locked for the search horizon. Conservative for an
-        # OPPONENT's encore; pessimistic for our own near expiry (real gen3
-        # encores run 3-8 turns) — acceptable over short MCTS horizons.
+        # The engine restricts the side to last_used_move while ENCORE is set.
+        #
+        # The duration IS now modelled, as of
+        # third_party/poke-engine-gen3-encore-duration.patch: gen3 Showdown rolls
+        # `this.random(3, 7)` (data/mods/gen3/moves.ts), so an Encore lasts 3-6
+        # locked turns — not the 3-8 this comment used to claim, which came from
+        # gen4's `this.random(4, 9)` and is the wrong side of the
+        # gen3-inherits-gen4 boundary. The engine burns one tick per end-of-turn
+        # and expires the volatile on a hazard ladder.
+        #
+        # The counter means "locked turns already elapsed", so seeding it at 1
+        # says this Encore has been running for one turn. That stays a deliberate
+        # floor: the true elapsed count is not observable from the request, and
+        # under-counting keeps the lock modelled for at least as long as it really
+        # lasts rather than freeing the mon early. Deriving the real value from
+        # observation history is follow-up work, and it only becomes measurable
+        # once the wheel carries the patch — same sequencing as the move-trap
+        # wiring.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
 

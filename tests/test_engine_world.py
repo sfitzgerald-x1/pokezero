@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 import os
 import sys
 import unittest
@@ -1295,10 +1296,66 @@ class TransformOverlayTests(unittest.TestCase):
         copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
         self.assertTrue(all(move.pp == 5 for move in copied.moves))
 
+    def test_a_drained_donor_move_still_copies_at_five_pp(self) -> None:
+        # Showdown copies `Math.min(5, move.pp)` off the DEX entry -- the move's
+        # BASE PP, not the donor's remaining. No gen3 move has a base PP below 5,
+        # so a copied slot is always exactly 5 even off a donor down to its last
+        # one. Reading the donor's REMAINING pp here under-filled the copy and
+        # disagreed with what the engine writes when Transform is clicked.
+        sides = self._sides()
+        drained = replace(
+            sides["p2"].pokemon[0],
+            moves=(MoveSpec(id="bodyslam", pp=1), MoveSpec(id="curse", pp=3)),
+        )
+        sides["p2"] = replace(sides["p2"], pokemon=(drained,))
+        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual([move.pp for move in copied.moves], [5, 5])
+
     def test_donor_side_is_left_untouched(self) -> None:
         sides = self._sides()
         donor_before = sides["p2"].pokemon[0]
         self.assertEqual(_apply_transform(sides, {"p1": "Snorlax"})["p2"].pokemon[0], donor_before)
+
+    def test_base_identity_stays_the_transformer_s_own(self) -> None:
+        # The half that used to be silently wrong. PokemonSpec plumbed neither
+        # base field, so the binding defaulted base_ability to the ability this
+        # function had just copied FROM THE DONOR -- a transformed Ditto reverted
+        # into a Ditto with Immunity, and its types into a flat Normal.
+        copied = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual(copied.ability, "immunity", "the CURRENT form is the donor's")
+        self.assertEqual(copied.base_ability, "limber", "the BASE form is Ditto's own")
+        self.assertEqual(copied.base_types, ("normal",))
+
+    def test_a_non_normal_transformer_keeps_its_own_base_types(self) -> None:
+        # Mew is the other gen3 randbats Transform carrier and it is PSYCHIC --
+        # the case the binding's flat ("normal", "typeless") default got wrong.
+        sides = self._sides()
+        mew = replace(sides["p1"].pokemon[0], id="mew", types=("psychic",), ability="synchronize")
+        sides["p1"] = replace(sides["p1"], pokemon=(mew,))
+        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual(copied.types, ("normal",), "current typing is the donor's")
+        self.assertEqual(copied.base_types, ("psychic",))
+        self.assertEqual(copied.base_ability, "synchronize")
+
+    def test_pre_transform_carries_the_pre_copy_spec(self) -> None:
+        sides = self._sides()
+        before = sides["p1"].pokemon[0]
+        copied = _apply_transform(sides, {"p1": "Snorlax"})["p1"].pokemon[0]
+        self.assertEqual(copied.pre_transform, before)
+        self.assertIsNone(before.pre_transform, "a base form has no base form")
+
+    def test_both_revert_volatiles_are_set(self) -> None:
+        # TRANSFORMED drives the species/stats/moveset restore off pre_transform;
+        # TYPECHANGE is the existing arm that restores types -> base_types.
+        side = _apply_transform(self._sides(), {"p1": "Snorlax"})["p1"]
+        self.assertEqual(set(side.volatile_statuses), {"transformed", "typechange"})
+
+    def test_existing_volatiles_are_preserved(self) -> None:
+        sides = self._sides()
+        sides["p1"] = replace(sides["p1"], volatile_statuses=("substitute",))
+        side = _apply_transform(sides, {"p1": "Snorlax"})["p1"]
+        self.assertEqual(side.volatile_statuses[0], "substitute")
+        self.assertEqual(set(side.volatile_statuses), {"substitute", "transformed", "typechange"})
 
     def test_absent_donor_fails_closed(self) -> None:
         # The copied mon is not in this world's opposing party, so its stats and
@@ -1307,6 +1364,128 @@ class TransformOverlayTests(unittest.TestCase):
         with self.assertRaises(EngineWorldUnsupported) as caught:
             _apply_transform(self._sides(), {"p1": "Rapidash"})
         self.assertEqual(caught.exception.reason, "transform_unexpressible")
+
+
+class BridgeBuiltTransformRevertsLiveTests(unittest.TestCase):
+    """The whole point, against the REAL engine: a constructed Transform ENDS.
+
+    Regression guard for the divergence this change fixes -- a bridge-built
+    transformed Ditto used to switch out and come back as a Ditto holding the
+    DONOR's ability (Immunity, not Limber) and a flat Normal typing, because
+    nothing carried its base identity across.
+    """
+
+    def setUp(self) -> None:
+        from pokezero.poke_engine_adapter import (
+            PokeEngineTransformRevertUnsupportedError,
+            require_pre_transform_support,
+        )
+        from pokezero.poke_engine_backend import probe_poke_engine
+
+        if not probe_poke_engine().ready:
+            self.skipTest("poke-engine is not installed/ready")
+        # A wheel predating the Transform patch rejects `pre_transform` outright,
+        # which would surface here as a TypeError ERROR rather than a skip.
+        try:
+            require_pre_transform_support()
+        except PokeEngineTransformRevertUnsupportedError as exc:
+            self.skipTest(str(exc))
+
+    def _switch_out_fields(self, transformer: PokemonSpec):
+        from pokezero.poke_engine_adapter import BattleSpec, build_poke_engine_state
+        import poke_engine
+
+        reserve = PokemonSpec(
+            id="swampert", level=100, types=("water", "ground"), hp=200, maxhp=200,
+            attack=100, defense=100, special_attack=100, special_defense=100, speed=100,
+            ability="torrent", moves=(MoveSpec(id="surf", pp=16),),
+        )
+        # A donor with a distinctive ability AND typing, so a wrong revert shows.
+        donor = PokemonSpec(
+            id="gengar", level=100, types=("ghost", "poison"), hp=300, maxhp=300,
+            attack=200, defense=180, special_attack=250, special_defense=175, speed=220,
+            # Splash keeps the ply deterministic; Shadow Ball's 20% secondary
+            # forks it three ways.
+            ability="levitate", moves=(MoveSpec(id="splash", pp=40),),
+        )
+        sides = _apply_transform(
+            {"p1": SideSpec(pokemon=(transformer, reserve)), "p2": SideSpec(pokemon=(donor,))},
+            {"p1": "Gengar"},
+        )
+        state = build_poke_engine_state(
+            BattleSpec(side_one=sides["p1"], side_two=sides["p2"])
+        )
+        branches = list(poke_engine.generate_instructions(state, "swampert", "splash"))
+        self.assertEqual(len(branches), 1, "expected one deterministic branch")
+        after = state.apply_instructions(branches[0])
+        self.assertEqual(
+            after.reverse_instructions(branches[0]).to_string(),
+            state.to_string(),
+            "the switch-out must invert exactly",
+        )
+        # Pokemon fields are comma-separated; slot 0 of side one is the mon that
+        # just left. See Pokemon::serialize in the vendored engine's state.rs.
+        return after.to_string().split("/")[0].split("=")[0].split(",")
+
+    def _ditto(self):
+        return PokemonSpec(
+            id="ditto", level=100, types=("normal",), hp=180, maxhp=180,
+            attack=132, defense=132, special_attack=132, special_defense=132, speed=132,
+            ability="limber", moves=(MoveSpec(id="transform", pp=8),),
+        )
+
+    def test_ditto_reverts_with_its_own_ability_and_typing(self) -> None:
+        fields = self._switch_out_fields(self._ditto())
+        self.assertEqual(fields[0], "DITTO", "species must revert")
+        self.assertEqual(fields[2:4], ["NORMAL", "TYPELESS"], "typing must revert")
+        self.assertEqual(fields[8], "LIMBER", "ability must revert to the TRANSFORMER's own")
+        self.assertNotEqual(fields[8], "LEVITATE", "the donor's ability must not survive")
+        self.assertEqual(fields[13:18], ["132"] * 5, "stats must revert")
+        self.assertEqual(fields[22], "TRANSFORM;false;8", "the base moveset must come back")
+
+    def test_a_psychic_transformer_reverts_to_psychic(self) -> None:
+        mew = PokemonSpec(
+            id="mew", level=72, types=("psychic",), hp=250, maxhp=250,
+            attack=160, defense=160, special_attack=160, special_defense=160, speed=160,
+            ability="synchronize",
+            moves=(MoveSpec(id="transform", pp=8), MoveSpec(id="softboiled", pp=16)),
+        )
+        fields = self._switch_out_fields(mew)
+        self.assertEqual(fields[0], "MEW")
+        self.assertEqual(fields[2:4], ["PSYCHIC", "TYPELESS"], "not the flat Normal default")
+        self.assertEqual(fields[8], "SYNCHRONIZE")
+
+    def test_a_state_from_an_older_caller_still_fails_soft(self) -> None:
+        # No snapshot and no volatiles: the base form was never observed, so the
+        # engine keeps the copied form rather than panicking or half-reverting.
+        from pokezero.poke_engine_adapter import BattleSpec, build_poke_engine_state
+        import poke_engine
+
+        stuck = replace(
+            self._ditto(), id="gengar", types=("ghost", "poison"), ability="levitate",
+            attack=200, moves=(MoveSpec(id="splash", pp=5),),
+        )
+        reserve = PokemonSpec(
+            id="swampert", level=100, types=("water", "ground"), hp=200, maxhp=200,
+            attack=100, defense=100, special_attack=100, special_defense=100, speed=100,
+            ability="torrent", moves=(MoveSpec(id="surf", pp=16),),
+        )
+        donor = PokemonSpec(
+            id="gengar", level=100, types=("ghost", "poison"), hp=300, maxhp=300,
+            attack=200, defense=180, special_attack=250, special_defense=175, speed=220,
+            ability="levitate", moves=(MoveSpec(id="splash", pp=40),),
+        )
+        state = build_poke_engine_state(BattleSpec(
+            side_one=SideSpec(pokemon=(stuck, reserve)),
+            side_two=SideSpec(pokemon=(donor,)),
+        ))
+        branch = list(poke_engine.generate_instructions(state, "swampert", "splash"))[0]
+        after = state.apply_instructions(branch)
+        fields = after.to_string().split("/")[0].split("=")[0].split(",")
+        self.assertEqual(fields[0], "GENGAR", "nothing to restore from, so nothing reverts")
+        self.assertEqual(
+            after.reverse_instructions(branch).to_string(), state.to_string()
+        )
 
 
 class TrapReproductionTests(unittest.TestCase):

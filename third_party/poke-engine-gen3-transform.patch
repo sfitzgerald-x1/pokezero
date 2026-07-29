@@ -57,7 +57,8 @@
 # APPROXIMATIONS, deliberate and scoped:
 #   1. WEIGHT IS NOT COPIED. Showdown copies `weighthg`. The engine's only gen3
 #      consumer of `weight_kg` is Low Kick's weight-based base power, and Low
-#      Kick appears in ZERO of the 220 gen3 randbats sets, so the divergence is
+#      Kick appears in ZERO of the 393 gen3 randbats sets (220 species), so the
+#      divergence is
 #      unreachable in the pool pokezero trains and evaluates on. Copying it was
 #      not free: a reversible f32 field would need either a lossy delta or a
 #      9-byte instruction payload, and the latter breaks the 6-byte Instruction
