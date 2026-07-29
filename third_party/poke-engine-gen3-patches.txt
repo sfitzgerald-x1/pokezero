@@ -740,5 +740,19 @@ poke-engine-gen3-toxic-accuracy.patch
 # effect and the sole delta is the flag: test_rest_does_not_activate_when_fainted,
 # test_branch_when_a_roll_can_kill, test_gen3_branch_when_a_roll_can_kill,
 # test_fast_explosion_makes_other_side_unable_to_move, test_same_speed_branch.
+
+# gen3: the end-of-turn residual block STOPS when a faint ends the battle. Showdown's
+# `Battle.fieldEvent` loop does `this.faintMessages(); if (this.ended) return;` after
+# every entry, so the faint-causing entry completes and every remaining handler is
+# skipped — the WINNER's own late-ordered residuals included, and even the `upkeep`
+# line. The engine ran the block to completion, which manufactured phantom heals and
+# ticks after `|win|` and cascaded into every HP-driven residual downstream (32 of
+# 298 residue rows, census-decidable by the `|win|` line). Mutually exclusive with
+# the residual deferral above by construction: a deferral needs a replacement to be
+# owed, which needs a living Pokemon to send. Pinned by
+# rust/pokezero-search/tests/gen3_battle_end_residuals.rs. Touches
+# gen3/generate_instructions.rs only.
+poke-engine-gen3-battle-end-residuals.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch

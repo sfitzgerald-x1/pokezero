@@ -1,0 +1,210 @@
+# pokezero gen3 fidelity fix: the end-of-turn residual block STOPS when a faint
+# ends the battle. The engine ran it to completion.
+#
+# GROUND TRUTH, read at source before touching anything. `Battle.fieldEvent`
+# (sim/battle.ts) is the residual dispatch loop:
+#
+#   while (handlers.length) {
+#       const handler = handlers[0]; handlers.shift();
+#       ...
+#       if (handler.callback) { this.singleEvent(handlerEventid, effect, ...); }
+#       this.faintMessages();
+#       if (this.ended) return;      // <-- between entries
+#   }
+#
+# The boundary is exact and it is BETWEEN entries, never mid-entry: the
+# faint-causing entry runs to completion, `faintMessages()` resolves the faint and
+# `checkWin` sets `ended`, and every REMAINING handler is skipped. The same early
+# return guards the duration-expiry branch a few lines above, and `case 'residual'`
+# suppresses even the `upkeep` line with `if (!this.ended)`.
+#
+# So the winner's own Leftovers fires or not purely by ORDER: order 5 resolves
+# before a poison faint at order 9 and must still happen; a burn tick sharing the
+# status-damage bracket but speed-sorted after it must not. Both directions are
+# pinned, because a fix that truncates too early is as wrong as one that truncates
+# too late.
+#
+# INTERACTION WITH THE DEFERRAL (poke-engine-gen3-residual-defer-on-faint.patch),
+# verified rather than assumed: the two are MUTUALLY EXCLUSIVE.
+# `end_of_turn_is_deferred` fires only when a side OWES A REPLACEMENT, and a side
+# can only owe one while it still has a living Pokemon to send. If the faint ended
+# the battle there is no replacement to owe, so the deferral cannot trigger; if a
+# replacement is owed the battle is not over, so this guard cannot trigger. Pinned
+# from both sides by deferral_and_battle_end_are_mutually_exclusive.
+#
+# The #888 double-wipe tie divergence is untouched and re-pinned here: gen3 Showdown
+# ties a simultaneous last-mon faint, the engine awards it to side two. Still
+# deliberately deferred, and now guarded against silent movement by this change.
+#
+# MECHANISM. A macro rather than a restructure, so the guard is a ONE-LINE insertion
+# at each entry boundary instead of an 800-line re-indent of a vendored function: it
+# performs the function's own apply/reverse bookkeeping before returning, exactly as
+# the tail does. Inserted at the top of each per-side residual section body (nine of
+# them) plus once on entry, which is every point at which control passes to the next
+# residual entry.
+#
+# Pinned by rust/pokezero-search/tests/gen3_battle_end_residuals.rs (three of its
+# five tests fail on the tree without this patch). Touches
+# gen3/generate_instructions.rs only; authored against the tree the list leaves.
+diff -u a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2711,6 +2711,40 @@
+     }
+ }
+ 
++/// pokezero fidelity fix: Showdown STOPS the end-of-turn residual block the moment a
++/// faint ends the battle, and the engine ran it to completion.
++///
++/// Ground truth is `Battle.fieldEvent` (sim/battle.ts), the residual dispatch loop:
++///
++/// ```js
++/// while (handlers.length) {
++///     const handler = handlers[0]; handlers.shift();
++///     ...
++///     if (handler.callback) { this.singleEvent(handlerEventid, effect, ...); }
++///     this.faintMessages();
++///     if (this.ended) return;      // <-- between entries
++/// }
++/// ```
++///
++/// So the boundary is exact and it is BETWEEN entries, not mid-entry: the
++/// faint-causing entry runs to completion, `faintMessages()` resolves the faint and
++/// `checkWin` sets `ended`, and every REMAINING handler is skipped — including the
++/// WINNER's own Leftovers, and including the `upkeep` line (`case 'residual'` guards
++/// it with `if (!this.ended)`). The same early return guards the duration-expiry
++/// branch a few lines above it.
++///
++/// Expressed as a macro rather than a restructure so the guard is a one-line
++/// insertion at each entry boundary: it performs this function's own
++/// apply/reverse bookkeeping before returning, exactly as the tail does.
++macro_rules! stop_residuals_if_battle_ended {
++    ($state:expr, $incoming_instructions:expr) => {
++        if $state.battle_is_over() != 0.0 {
++            $state.reverse_instructions(&$incoming_instructions.instruction_list);
++            return;
++        }
++    };
++}
++
+ fn add_end_of_turn_instructions(
+     state: &mut State,
+     mut incoming_instructions: &mut StateInstructions,
+@@ -2724,6 +2758,18 @@
+         return;
+     }
+ 
++    // A battle already decided by the move phase runs no residual block at all —
++    // Showdown's `case 'residual'` is never reached once `this.ended` is set.
++    //
++    // This is mutually exclusive with the deferral above, which is the whole reason
++    // the two do not interact: `end_of_turn_is_deferred` fires only when a side OWES
++    // A REPLACEMENT, and a side can only owe one when it still has a living Pokemon
++    // to send. If the faint ended the battle there is no replacement to owe, so the
++    // deferral cannot trigger; if a replacement IS owed the battle is not over, so
++    // this guard cannot trigger. Pinned by
++    // a_non_final_residual_faint_still_defers.
++    stop_residuals_if_battle_ended!(state, incoming_instructions);
++
+     let sides = [first_move_side, &first_move_side.get_other_side()];
+ 
+     // Weather decrement / dissipation
+@@ -2750,6 +2796,10 @@
+ 
+     // Side Condition decrement
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         if side.side_conditions.reflect > 0 {
+             incoming_instructions
+@@ -2779,6 +2829,10 @@
+ 
+     // Weather Damage
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         if state.weather_is_active(&Weather::HAIL) {
+             let active_pkmn = state.get_side(side_ref).get_active();
+             if active_pkmn.hp == 0 || active_pkmn.has_type(&PokemonType::ICE) {
+@@ -2828,6 +2882,10 @@
+ 
+     // future sight
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+         if attacking_side.future_sight.0 > 0 {
+             let decrement_future_sight_instruction =
+@@ -2860,6 +2918,10 @@
+ 
+     // wish
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         let side_wish = side.wish;
+         let active_pkmn = side.get_active();
+@@ -2893,6 +2955,10 @@
+     // residual orders. Upstream ran ALL items/abilities after status damage,
+     // netting Toxic/burn residuals against the Leftovers heal.
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         let active_pkmn = side.get_active();
+         if active_pkmn.hp == 0 {
+@@ -2913,6 +2979,10 @@
+ 
+     // leechseed sap
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let (leechseed_side, other_side) = state.get_both_sides(side_ref);
+         if leechseed_side
+             .volatile_statuses
+@@ -2962,6 +3032,10 @@
+ 
+     // status damage
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         let toxic_count = side.side_conditions.toxic_count as i16;
+         let active_pkmn = side.get_active();
+@@ -3060,6 +3134,10 @@
+     // Residual order 10 item/ability effects (threshold berries, Rain Dish,
+     // Speed Boost): resolve AFTER status damage, per Showdown gen3 orders.
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         let active_pkmn = side.get_active();
+         if active_pkmn.hp == 0 {
+@@ -3071,6 +3149,10 @@
+ 
+     // volatile statuses
+     for side_ref in sides {
++        // Showdown checks `this.ended` between residual entries; a side whose last
++        // living Pokemon just fainted ends the battle and everything still queued is
++        // skipped, this side's own healing included.
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
+         let side = state.get_side(side_ref);
+         if side.get_active().hp == 0 {
+             continue;
