@@ -747,13 +747,21 @@ threw away 27.5 % of boundaries to measure nothing.
 
 **The new bar.** For hidden-counter mechanics only, build one world per legal
 counter assignment and require the realized transition to lie in the **union of
-those worlds' branch supports with nonzero probability**. Applies to exactly two
-mechanics, both counter-hidden and bounded:
+those worlds' branch supports with nonzero probability**.
+
+> **Scope corrected (review of PR #887).** The first version of this section
+> overstated what shipped. As merged, only SLEEP's counter was actually swept,
+> the recoverable-reason set included the generic `volatile_unsupported`, and the
+> retry flipped the whole approximate bundle — which admitted yawn,
+> partial-trap and substitute-health approximations whose effects (a sleep
+> landing, a chip tick) are **observable**, contradicting the rule this mode
+> rests on. Appendix B fixes all three: confusion's counter is now swept for
+> real, and the retry widens **only** the mechanic that caused the failure.
 
 | Mechanic | Swept domain | Why hidden |
 | --- | --- | --- |
-| Sleep | `sleep_turns` 0..4, plus `rest_turns` 1..2 (Rest is a separate fixed-duration engine path) | duration rolled privately at `slp.onStart` |
-| Confusion | bounded duration since PR #875; snap-out count is private | same shape |
+| Sleep | `sleep_turns` 0..`MAX_SLEEP_TURNS` (4), plus `rest_turns` 1..2 (Rest is a separate fixed-duration engine path) | duration rolled privately at `slp.onStart` |
+| Confusion | `volatile_status_durations.confusion` 0..`MAX_CONFUSION_TURNS` (4) | snap-out count is private; the engine prices it as a hazard ladder since PR #875 |
 
 Everything else keeps **exact** gating — damage, status application, hazards,
 screens, weather, boosts and faints are all publicly observable and their
@@ -872,3 +880,160 @@ full-round boundaries instead of ~71 %.
 Seeds burned by this appendix (add to §5.2): 970000–970005, 971000–971002,
 980000–980024, 981000–981149, 990000–990059 (wish/damage), 991000–991059
 (encore), 1200000–1200299.
+
+---
+
+# Appendix B — strict per-source matcher and residue root-cause (13-patch main)
+
+Branch `scott/differential-strict-matcher`, measured against `a2a081a`
+(main + #887) with the engine re-vendored to **13** gen3 patches. **These
+numbers supersede Appendix A's**, which were taken on an 11-patch tree.
+Gate: 205 engine/env tests OK on the rebuilt wheel.
+
+## B.1 The ±16 % band is gone
+
+The banded matcher compared **net active HP** within ±16 % of the turn's damage.
+Appendix A.3 already proved that unsound in one direction — a Leftovers tick
+riding on an attack manufactured a 12–39 % fake "bias". The strict matcher
+replaces it with a **per-damage-source** comparison:
+
+* **Showdown side** — every `|-damage|`/`|-heal|` line carries its own
+  attribution (`[from] psn`, `[from] Sandstorm`, `[from] item: Leftovers`,
+  `[from] Leech Seed`, `[from] Spikes`, `[from] Recoil`, …). A bare `-damage`
+  is direct move damage; a bare `-heal` is a move heal.
+* **Engine side** — the same vocabulary, produced by the shipped
+  instruction→event mapper (`pokezero_search.branch_events`, PR #727), which
+  renders a branch's instruction list as protocol lines. Comparing
+  rendered-vs-real protocol keeps both sides in one vocabulary instead of
+  guessing at positions in the instruction list.
+
+**Exact vs roll-scaled.** Every deterministic component — status residuals,
+weather chip, Leftovers, Leech Seed, hazards, move heals — must match **to the
+HP point**. Only components that inherit the damage roll are tolerated, and not
+by a band: gen3 computes `floor(base * random(85,100) / 100)` and
+`poke_engine.calculate_damage` returns the base for non-crit and crit, so the
+legal set is **enumerable exactly** and membership is checked. Where that
+pre-state calculation cannot be trusted (a same-turn stat change moves the base)
+it falls back to a window scoped to the roll-scaled component alone — never to
+net HP. `--matcher banded` keeps the old behaviour for continuity.
+
+### Old vs new on the same 150-game seed set (981000–981149)
+
+| Metric | `--matcher banded` | `--matcher strict` |
+| --- | --- | --- |
+| full-round boundaries | 12,807 | 12,807 |
+| measured | 12,601 (98.39 %) | 12,601 (98.39 %) |
+| matched | 12,311 | 11,715 |
+| **diverged** | **290** | **886** |
+| **rate per measured boundary** | **2.30 %** | **7.03 %** |
+| diverged per game | 1.93 | 5.91 |
+
+**The band was hiding 596 divergences — 67 % of the real total.** Coverage is
+identical, so this is purely the bar tightening.
+
+## B.2 Residue root-cause (300 games, seeds 1310000–1310299)
+
+97.20 % of full-round boundaries measured, 1,889 divergences, 6.30/game,
+**7.61 % per measured boundary**. Classes below are from the 120 sampled repros
+(6.4 % of divergences, `--keep-repro` capped) — proportions are sample-based,
+counts are not the population.
+
+| Class | Share of sample | Verdict | Repro |
+| --- | --- | --- | --- |
+| `magnitude:psn` (toxic ladder off by 0–(stage−1) HP) | **66/120 (55 %)** | **REAL ENGINE DIVERGENCE → fix lane** (B.3) | seed 1310000 step 143 |
+| `magnitude:heal` (Showdown move-heal vs engine Leftovers-only) | 13/120 | **UNRESOLVED** — could not isolate within budget; two live hypotheses in B.4 | seed 1310001 steps 72, 95 |
+| `mixed:itemleftovers|movewish` (same amount, different label) | 8/120 | **HARNESS — mapper mis-attribution** (B.5) | seed 1310002 step 35 |
+| `missing_in_engine:itemleftovers` / `magnitude:itemleftovers` | 8/120 | residue of the faint-ply residual ordering (D2 edge cases) | seed 1310005 step 15 |
+| `magnitude:movewish` | 4/120 | same family as the mapper mis-attribution | seed 1310008 step 93 |
+| `missing_in_engine:spikes` | 4/120 | **NEEDS ENGINE CHECK** — Spikes tick absent entirely (distinct from D1's wrong fraction, which is fixed) | seed 1310018 steps 47, 48 |
+| `mixed:itemleftovers,psn|psn` | 3/120 | compound of the toxic bug + Leftovers ordering | seed 1310000 step 125 |
+| `mixed:heal|itemleftovers` | 3/120 | same family as `magnitude:heal` | seed 1310001 step 72 |
+| `missing_in_engine:psn` / `extra_in_engine:psn` | 4/120 | faint-ply residual-ordering residue | seed 1310005 step 1 |
+| `missing_in_engine:leechseed` | 2/120 | low incidence, needs check | seed 1310009 step 25 |
+| `roll_scaled` | 2/120 | genuine roll disagreement, low incidence | seed 1310003 step 26 |
+| `magnitude:brn` | 1/120 | same rounding family as the toxic bug | seed 1310000 step 193 |
+
+Separately counted, **not** divergences: `strict:lossy_render` 490 branches the
+mapper self-reports it cannot render (excluded), of which only **2 boundaries**
+had *every* branch lossy and became skips. That is the honest ceiling of the
+mapper-rendered approach.
+
+**No Encore-class divergence appears in the residue.** D9 is being fixed in the
+engine lane; `engine_world` still fails Encore closed at construction
+(`encore_move_unknown`, 1 skip in 300 games), so it never reaches the matcher.
+
+## B.3 CONFIRMED: toxic residual rounds the wrong way
+
+The single largest residue class, and a **new** finding the ±16 % band could
+never have surfaced — it is a 1–3 HP error.
+
+* **Showdown** (`data/conditions.ts` `tox.onResidual`, no gen3 override):
+  `this.damage(this.clampIntRange(pokemon.baseMaxhp / 16, 1) * this.effectState.stage)`.
+  `clampIntRange` floors its argument first, so this is
+  **floor(maxhp / 16) × stage** — *floor then multiply*.
+* **Engine**: measured **floor(maxhp × stage / 16)** — *multiply then floor*.
+
+Direct probe (`toxic_count = n`, engine tick vs both formulas):
+
+| maxhp | n | engine | multiply-then-floor | floor-then-multiply | differs |
+| --- | --- | --- | --- | --- | --- |
+| 470 | 2 | 88 | 88 | 87 | **yes** |
+| 470 | 3 | 117 | 117 | 116 | **yes** |
+| 503 | 2 | 94 | 94 | 93 | **yes** |
+| 317 | 1 | 39 | 39 | 38 | **yes** |
+| 317 | 3 | 79 | 79 | 76 | **yes (3 HP)** |
+| 451 | 1–3 | 56 / 84 / 112 | same | same | no (maxhp ≡ 0 mod 16) |
+
+The two agree only when `maxhp % 16 == 0`. Error grows with the ladder, up to
+`stage − 1` HP. Toxic is ubiquitous in gen3 randbats, so this is on-distribution
+on every stall turn. **Hand to the engine lane**; the same floor-then-multiply
+rule should be checked for burn (`magnitude:brn` above is likely the same bug).
+
+## B.4 UNRESOLVED: `magnitude:heal`
+
+Showdown shows a large bare `-heal` (251, 136 HP — Recover/Soft-Boiled/Rest
+shape) where the engine branch shows only a Leftovers tick. Two hypotheses, not
+separated within this pass:
+
+1. **mapper** — a move heal is rendered without the event the extractor expects,
+   so the component is invisible on the engine side;
+2. **engine/world** — the heal move genuinely did not execute in any enumerated
+   branch (e.g. a sleep-sweep candidate where the mon cannot act).
+
+Both are cheap to settle by dumping the full rendered event list for seed
+1310001 step 72 next to the Showdown slice. Flagged rather than guessed.
+
+## B.5 HARNESS: mapper mis-attributes a Leftovers heal as Wish
+
+`observed_only=[('itemleftovers', 18)] engine_only=[('movewish', 18)]` —
+**identical amount, different label**, and the amount is maxhp/16 (Leftovers),
+not maxhp/2 (Wish). The engine's state transition is right; the mapper's
+`[from]` tag is wrong. Fix belongs in `rust/pokezero-search/src/events.rs`, not
+the engine. Until then it inflates the strict divergence count by ~10 % of the
+sample.
+
+## B.6 Review fixes folded in
+
+| Item | Fix |
+| --- | --- |
+| **MEDIUM** — D8 scope claim wrong | Confusion's counter is now genuinely swept (`_confusion_counter_variants`, rungs 0..4). The retry widens **only** the failing mechanic: `status_unsupported` → sleep alone; `volatile_unsupported` → confusion **only when confusion is the sole unsupported volatile**, because yawn rides the same `engine_world` flag and yawn's sleep landing is observable. A.2's text is corrected in place. Measured cost: **zero** — `hidden_counter_support:sleep` fires 215×, confusion 0×, and coverage is unchanged at 98.39 %, confirming the review's note that the entire win was always sleep. |
+| **LOW** — `_mon()` defaults to Leftovers | The D11 runner now **asserts** every damage fixture is itemless and fails loudly with the net-vs-gross rationale, so the artifact cannot be silently reintroduced. (`_mon`'s default is left alone: the curated one-turn cases deliberately hold Leftovers to exercise residual ordering.) |
+| **LOW** — `load_checkpoint` skipped any bad line | Now enforces the documented rule: only the **final** line may be torn; a mid-file parse failure raises instead of silently shrinking the shard's denominator. |
+| **Staleness** | These 13-patch numbers are the cited state; Appendix A's 11-patch figures are superseded. |
+| *(found while re-running)* D11's verdict flipped with sample size | It compared a SAMPLE mean against a point value with a fixed 1 % threshold, so the same fixtures read `cannot-reproduce` at n=60 (bias 0.0099) and `confirmed` at n=20 (bias 0.017). The tolerance is now **3 standard errors of the mean**, floored at 1 % — stable across N, and the verdict stays `cannot-reproduce` at both. |
+
+## B.7 Bottom line for the acceptance run
+
+The bar is now strict per-source. On current main the residue is
+**7.61 % of measured boundaries**, and it is no longer unexplained: one
+confirmed engine bug (B.3) accounts for ~55 % of the sample, one mapper
+mis-attribution (B.5) ~10 %, faint-ply ordering residue ~10 %, and one
+unresolved class (B.4) ~13 %.
+
+**The 8×1250 acceptance run should not be launched yet.** Zero divergence is
+unreachable while B.3 is unfixed, and the measurement itself would be
+contaminated by B.5. Order: fix B.3 (engine lane) → fix B.5 (mapper) → settle
+B.4 → re-measure → then run acceptance from seed 2,000,000.
+
+Seeds burned by this appendix: 981000–981149 (A/B, re-used deliberately),
+1300000–1300009, 1310000–1310299.
