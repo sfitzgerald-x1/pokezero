@@ -2473,3 +2473,131 @@ engine work is scoped from class names.
 
 `<scratch>` =
 `/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+# Appendix M — payload-dump diagnosis of the 91-row Leftovers/psn block
+
+Diagnosis only, §K method: full payload + built world + instruction dump at each
+boundary, mechanism stated from evidence.
+
+## M.1 Headline: the block is NOT one mechanism
+
+The question posed was whether one mechanism spans most of the 91. **It does
+not**, and the split is visible before any replay:
+
+| Sub-class | n | gating | step mentions slp/Rest |
+| --- | --- | --- | --- |
+| `missing:itemleftovers` | 27 | 16 exact / 11 support | **13** |
+| `missing:psn` | 24 | 18 exact / 6 support | **17** |
+| `extra:itemleftovers` | 25 | 20 exact / 5 support | 4 |
+| `extra:psn` | 9 | 9 exact | **0** |
+| `extra:itemleftovers,psn` | 6 | 6 exact | **0** |
+
+The **missing** half is sleep-entangled (30 of 51 steps mention slp/Rest); the
+**extra** half is almost entirely not (4 of 40). Treating them as one block was
+wrong — as suspected in the tasking.
+
+## M.2 CONFIRMED mechanism (missing half): Rest-sleep provenance is lost
+
+`seed 1500004 step 30`, `earthquake` vs `hypnosis`:
+
+```
+Showdown: |-status|p1a: Claydol|slp|[from] move: Hypnosis
+          |cant|p1a: Claydol|slp          <- Earthquake never happens
+engine:   Damage SideTwo: 183             <- it happens; NO sleep branch at all
+```
+
+Payload dump — p1's bench:
+
+```
+{"active": false, "condition": "121/209 slp", "species": "Dusclops"}
+```
+
+and the game's own history, step 16:
+
+```
+|move|p1a: Dusclops|Rest|p1a: Dusclops
+|-status|p1a: Dusclops|slp|[from] move: Rest
+```
+
+**Dusclops is REST-asleep.** Gen 3 Sleep Clause exempts self-inflicted Rest
+sleep, so Showdown correctly allows Hypnosis on Claydol.
+
+The engine is **also correct** — isolation probe, benched teammate asleep:
+
+| bench state | engine result |
+| --- | --- |
+| no sleeper (control) | 2 branches, target sleeps ✓ |
+| `sleep_turns=1` (move-induced) | 1 branch, **target does not sleep** ✓ clause fires |
+| `rest_turns=2` (Rest-induced) | 2 branches, target sleeps ✓ clause exempts Rest |
+
+**The defect is in world construction.** The payload carries only `slp` with no
+provenance, so a Rest-asleep benched mon is encoded with `sleep_turns` instead of
+`rest_turns`. The engine's clause then fires when it should not, the sleep move
+silently fails, the target acts when Showdown says it cannot, and every HP-driven
+residual downstream disagrees — which is what surfaces as `missing:itemleftovers`
+and `missing:psn`.
+
+`[from] move: Rest` is a **public protocol line**, so this is publicly derivable
+and not an information gap.
+
+| | |
+| --- | --- |
+| Verdict | **WORLD CONSTRUCTION** — engine/world lane |
+| Not | the engine's sleep clause (verified correct in both directions) |
+| Repro | `seed 1500004 step 30`; also `seed 1500004 step 73` (the §L.4 survivor — same mechanism, and this **retires that open item**) |
+| Spec | carry Rest-vs-move sleep provenance into the materialization payload and set `rest_turns` rather than `sleep_turns` for Rest-asleep mons |
+| Coverage | bounded by the 30 of 51 sleep-entangled `missing` rows; **not** asserted for the rest |
+
+## M.3 CHARACTERIZED (extra half): faint-divergent residuals
+
+`seed 1500005 step 67`, `crunch` vs a switch:
+
+```
+Showdown: |-crit|p2a: Electabuzz
+          |-damage|p2a: Electabuzz|0 fnt   <- crit KOs; NO residuals for a fainted mon
+          |faint|p2a: Electabuzz
+engine:   Damage SideTwo: 74               <- non-crit; Electabuzz SURVIVES
+          Heal SideOne: 17, Damage SideTwo: 15, ToxicCount: 1   <- so it gets residuals
+```
+
+Showdown's roll critted and killed; the engine's did not. A fainted mon takes no
+end-of-turn residuals, so the survivor's Leftovers and toxic ticks appear in one
+sim and not the other — surfacing as `extra:itemleftovers`, `extra:psn` and
+`extra:itemleftovers,psn`.
+
+This is the **same phenomenon** already adjudicated as
+`limit:roll_divergent_lethality` — two sims taking different stochastic
+outcomes — but it lands in a *different class* because when a mon faints its
+residuals vanish **entirely** (a component present/absent) rather than appearing
+as a clipped `capped_lethal` value, which is the only shape the limit classifier
+recognises.
+
+| | |
+| --- | --- |
+| Verdict | **CHARACTERIZED, one row** — consistent with the existing limit class, not a new engine bug |
+| Status | **NOT adjudicated.** One replay. The `extra` half is 40 rows and I am not generalising from a single sample — that is the exact error this ledger has logged three times |
+| Next | replay a further sample of `extra:*`; if the pattern holds, the honest fix is to widen `limit:roll_divergent_lethality` to recognise vanished-residual shapes, which is a **classifier** change, not an engine one |
+
+## M.4 Mechanism table
+
+| Sub-class | n | Mechanism | Verdict | Repro |
+| --- | --- | --- | --- | --- |
+| `missing:itemleftovers` | 27 | Rest-sleep provenance lost -> spurious Sleep Clause block | **WORLD CONSTRUCTION** (confirmed) | seed 1500004 step 30 |
+| `missing:psn` | 24 | same | **WORLD CONSTRUCTION** (confirmed, same shape) | seed 1500004 step 30 |
+| `extra:itemleftovers` | 25 | faint-divergent residuals | characterized, likely `limit:` | seed 1500005 step 67 |
+| `extra:psn` | 9 | same | characterized, likely `limit:` | — |
+| `extra:itemleftovers,psn` | 6 | same | characterized, likely `limit:` | — |
+| §L.4 survivor (`seed 1500004 step 73`) | 1 | Rest-sleep provenance — **retires the open item** | **WORLD CONSTRUCTION** | seed 1500004 step 73 |
+
+My §L.4 speculation ("the world's target wasn't asleep at build time") was
+**wrong** — the target's own status was fine; it was a *benched teammate's* sleep
+provenance. Verified against the payload rather than inherited, as instructed.
+
+## M.5 What this changes
+
+* One engine-lane spec: **Rest-sleep provenance in the materialization payload.**
+* One likely **classifier** item, not an engine one: vanished-residual faints
+  belong with `limit:roll_divergent_lethality`. If that holds across a proper
+  sample, ~40 rows move from "unexplained residue" to "adjudicated limit", which
+  would materially change the acceptance arithmetic — so it deserves the sample
+  before anyone banks it.
+* No fixes in this pass, per the §K standard.
