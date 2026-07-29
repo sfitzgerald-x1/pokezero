@@ -160,6 +160,42 @@ class SleepTalkUnknownCallee(unittest.TestCase):
         self.assertFalse(roll_components_agree(
             [("", -78)], [("move_unknown_callee", -200)], None))
 
+    def test_named_residual_is_NOT_reclassified(self):
+        """The containment boundary, pinned.
+
+        The predicate keys on the mapper's generic `[from] residual` fallback,
+        NOT on "the called move's damage" — nothing in the rendered stream says
+        which line is the callee's. So a residual the mapper DID attribute must
+        keep its exact comparison even inside a Sleep-Talk-flagged branch. The
+        census shows this empirically; without this pin nothing enforces it.
+        """
+
+        lines = [
+            "|-damage|p1a: A|100/260|[from] psn",
+            "|-damage|p1a: A|60/260|[from] Sandstorm",
+            "|-damage|p1a: A|20/260|[from] residual",
+        ]
+        got = damage_components(lines, {"p1": 130}, unattributed_damage_as_roll=True)
+        exact, rolled = _split_components(got["p1"])
+        # Named residuals stay EXACT ...
+        self.assertEqual(
+            sorted(exact.elements()), [("psn", -30), ("sandstorm", -40)]
+        )
+        # ... only the unattributed one is reclassified.
+        self.assertEqual(rolled, [("move_unknown_callee", -40)])
+
+    def test_unattributed_HEAL_is_not_reclassified(self):
+        """Reclassification is scoped to -damage; heals keep their own rules."""
+
+        got = damage_components(
+            ["|-heal|p1a: A|150/260|[from] residual"],
+            {"p1": 130},
+            unattributed_damage_as_roll=True,
+        )
+        exact, rolled = _split_components(got["p1"])
+        self.assertEqual(sorted(exact.elements()), [("residual", 20)])
+        self.assertEqual(rolled, [])
+
     def test_missing_damage_entirely_FAILS(self):
         """Reclassification must not make an absent component match a present one."""
 

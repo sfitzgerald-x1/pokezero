@@ -84,6 +84,46 @@ def compute_fingerprint() -> dict[str, Any]:
     return {"fingerprint": digest.hexdigest(), "patches": entries, "count": len(entries)}
 
 
+# maturin stamps extension modules with the reproducible-build epoch
+# 315561600 (1980-01-01), and archive-extracting installers preserve it. Such a
+# file's own mtime carries NO provenance, so comparing it against source mtimes
+# reports a freshly built engine as STALE forever — which pushes operators
+# toward --skip-build-check and trains exactly the habit the gate exists to
+# prevent. Anything before 2000 is treated as "unknown", never as "old".
+_REPRODUCIBLE_EPOCH_CUTOFF = 946684800.0  # 2000-01-01
+
+
+def _dist_info_record(binary: Path) -> Path | None:
+    """The installing wheel's RECORD, whose mtime is real INSTALL time."""
+
+    site_packages = binary.parent.parent
+    stem = binary.parent.name
+    for dist_info in sorted(site_packages.glob(f"{stem}-*.dist-info")):
+        record = dist_info / "RECORD"
+        if record.exists():
+            return record
+    return None
+
+
+def _artifact_time(binary: Path) -> tuple[float | None, str]:
+    """Best available install time for an artifact, and where it came from.
+
+    Returns ``(None, "unknown")`` when no timestamp can be trusted — the caller
+    then relies on the content fingerprint, which is exact and does not depend
+    on timestamps at all.
+    """
+
+    own = binary.stat().st_mtime
+    if own >= _REPRODUCIBLE_EPOCH_CUTOFF:
+        return own, "mtime"
+    record = _dist_info_record(binary)
+    if record is not None:
+        recorded = record.stat().st_mtime
+        if recorded >= _REPRODUCIBLE_EPOCH_CUTOFF:
+            return recorded, "dist-info RECORD"
+    return None, "unknown"
+
+
 def _installed_binaries() -> list[Path]:
     """Installed extension modules for the two engine-bearing packages."""
 
@@ -140,12 +180,26 @@ def check(*, strict_mtime: bool = True) -> list[str]:
         binaries = _installed_binaries()
         if not binaries:
             problems.append("no installed poke_engine / pokezero_search extension found")
+        undatable = []
         for binary in binaries:
-            if binary.stat().st_mtime < newest_source:
+            stamped, origin = _artifact_time(binary)
+            if stamped is None:
+                # Not evidence of staleness — evidence of nothing. The content
+                # fingerprint above is the authority in this case.
+                undatable.append(binary.name)
+                continue
+            if stamped < newest_source:
                 problems.append(
                     f"STALE artifact: {binary.name} predates the engine sources "
-                    "(built before the current patch set / vendored tree)"
+                    f"(by {origin}; built before the current patch set / vendored tree)"
                 )
+        if undatable:
+            print(
+                "note: reproducible-build timestamps on "
+                f"{', '.join(sorted(undatable))} — freshness rests on the content "
+                "fingerprint, which is exact.",
+                file=sys.stderr,
+            )
     return problems
 
 
