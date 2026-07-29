@@ -2199,3 +2199,38 @@ this program was trying to reach, just not yet at zero.
 
 `<scratch>` =
 `/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
+
+## J.7 Acceptance trail: the run that was NOT started
+
+A negative decision is part of the acceptance trail. Without this entry a later
+reader finds an authorization, no acceptance artifact, and no explanation — and
+cannot tell whether the run was skipped, lost, or failed.
+
+| | |
+| --- | --- |
+| Decision | **The 8x1250 acceptance run was NOT started.** |
+| When | immediately after the §J.1 re-measurement, before any shard was launched |
+| Authorization | standing, and explicitly conditioned on a clean table |
+| Condition | zero divergent transitions outside the named, adjudicated `limit:` classes |
+| Observed | **264** outside those classes (311 total, 47 adjudicated) |
+| Therefore | the condition was not met, so the authorization did not apply |
+
+**Why not run it anyway.** A ~1.5 h run would have produced a real, correct,
+citable artifact showing a number that cannot pass. The failure mode this whole
+ledger exists to prevent is a plausible number acquiring the wrong label — and a
+"baseline acceptance run" is precisely that shape: an artifact whose filename
+says acceptance and whose content is not a pass. Confirmed on review: **the
+acceptance artifact must be a pass, full stop; no baseline run.**
+
+**Consequence worth checking.** The reserved block at seed **2,000,000+ remains
+entirely unconsumed.** No acceptance shard has ever run, so the next attempt
+still has a pristine block, exactly as §5.2 reserved it. Every seed burned to
+date remains below 2,000,000. If a future reader finds seeds at or above
+2,000,000 in any report, an acceptance attempt happened that this ledger does
+not record.
+
+**What would have changed the decision.** Nothing about the measurement — the
+apparatus was gated, `acceptance_eligible: true`, 97.80 % coverage, 0 harness
+errors, 0 unclassified. The blocker was entirely on the simulator-fidelity side
+(§J.3, §J.4). That distinction is why the hold is recorded as a *result*, not as
+a failure to execute.
