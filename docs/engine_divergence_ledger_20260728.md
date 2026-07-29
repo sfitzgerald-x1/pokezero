@@ -4528,3 +4528,228 @@ Remaining for cycle nine, all explicitly open:
    Encore gap (1), small classes.
 3. **The Kecleon question specifically**: whether the boundary builder's failure
    to apply `-start typechange` is mine or `engine_world`'s — unassessed.
+
+---
+
+# Appendix Z3 — Cycle nine: the 11-row cross-off, the 108 decomposed, and the Kecleon answer
+
+Commit `c496b1beb8d95dcc8e197b5eddef7b5b56f113ea` (main after #956), fingerprint
+`887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d` — byte-identical
+to the c8 build identity, 33 patches. Fresh worktree, fresh venv, wheel and crate
+rebuilt from vendor. Predictions registered in `reports/c9_predictions.json`
+BEFORE the regeneration ran; scored below.
+
+## Z3.1 The two NOT-RUN discriminators are now standing probes
+
+`scripts/engine_behavioral_probes.py` is committed: Pain Split clamp, Protect
+ladder k=0..4 (with the k>=4 hold at 1/8), the STAB-odd stepwise discriminator
+(278 vs old-float 279), and the burned-Struggle discriminator (crit 58 vs old
+56). Every fixture and expected constant is TRANSCRIBED from the #955 battery
+agent's artifacts (its probe_battery.py fixtures and the sim-anchored
+struggle_probe.log RELATION line, quoted verbatim in the module docstring) —
+nothing re-derived. References are content-addressed (symbols:
+`avg_damage_dealt`, `DamageRolls::Max`, `common_pkmn_damage_calc`; no line
+numbers — the "line 2495" citation went stale mid-review in #956 when the #955
+rewrite moved the region). Run against this cycle's fresh build: **9/9 PASS**
+(fingerprint printed from the venv stamp alongside). Z2.4's refusal is
+discharged: future cycles run one command after every rebuild.
+
+## Z3.2 Regeneration with row retention — P1 exact
+
+Same 300 seeds, strict matcher, `--keep-repro 5000`: diverged 151, outside
+limits 108, coverage 0.978, engine errors 0, `divergence_classes` **identical
+to `reports/c8_summary.json` key for key**. Row identities now exist
+(`reports/c9_summary.json`; c8 had committed only class counts, and the 19
+cleared rows were never reconstructed from class arithmetic — per the #956
+review note, they didn't need to be).
+
+## Z3.3 The 11-row `capped_lethal` cross-off (Appendix X as amended)
+
+**Step 1 — cross-off against Appendix Z: zero rows, as pre-registered (P2).**
+All 16 W.6 rows persist in the regeneration with unchanged classes (verified by
+seed/step, not by class arithmetic). Patches 31/33 were already in this build;
+a row they explained would not have survived it. All 11 proceeded to the walk.
+
+**Step 2 — the walk.** `scripts/capped_lethal_walk.py` (committed) implements
+X.2–X.4: target = post-state HP vector + faint set + multiset of non-residual,
+non-capped damage components; one roll index per move instance; mass = sum of
+reproducing (branch, assignment) probabilities; four exits, 1% floor. Capped
+residual ticks are reconstructed from the engine's own residual formulas,
+transcribed from the vendored source (`gen3/generate_instructions.rs` status/
+item/leech blocks and the Perish Song `damage_amount = active_pkmn.hp` arm) —
+never inferred from the branch value.
+
+**The walker itself was wrong three times before it was right**, and each
+defect was caught by hand-replaying a verdict against
+`scripts/replay_residue.py` before believing it: (1) faint-capped residuals
+were compared at their capped branch value, sending reachable rows to
+damage_calc; (2) a status tick that kills in-branch but not under the
+substituted roll was discarded even when nothing later in the residual order
+could fire (the un-faint is licensed by the state: no partial trap, no Perish,
+no pending Future Sight — checked, not assumed); (3) recoil/drain were held
+fixed instead of re-scaling with the substituted roll (engine:
+`trunc(dealt * fraction)`). The sample-of-4 was walked first (P3's four named
+rows), disagreed on mechanism, and all 11 were walked individually per X.4.2.
+
+| seed/step | exit | mass | note |
+|---|---|---|---|
+| s1500050 st33 | **limit** | 6.59% | tbolt m=63, two rolls hit -56; tick caps to kill |
+| s1500168 st97 | **limit** | 4.98% | Return roll 88% = -259 exact; Blissey survives at 3 as observed |
+| s1500219 st62 | **limit** | 5.86% | tbolt roll 100% = -28; tox tick + Perish kill reconstruct exactly |
+| s1500242 st56 | **limit** | 4.98% | HP Fire 87% = -71; capped tick -38 |
+| s1500255 st55 | **limit** | 5.86% | DE roll 100% = -146, recoil re-scales to -48, tick kills at 28 |
+| s1500012 st24 | limit_not_established | 0.343% | reachable ONLY as two independent exact rolls (X.3.1's anticipated gap) |
+| s1500105 st111 | limit_not_established | 0.343% | same two-roll conjunction shape |
+| s1500242 st60 | limit_not_established | 0.659% | corrected DOWN from 1.32% when calculate_damage pinned m=54 over the inversion's {53,54} |
+| s1500074 st57 | damage_calc (mechanism: U.3.1 signature) | 0 | Explosion + `\|cant\|par`: engine's 25% blocked branch emits NO residuals |
+| s1500188 st33 | damage_calc (mechanism: U.3.1 signature) | 0 | same, Swalot par + Explosion; blocked branch drops the whole EOT block |
+| s1500251 st56 | damage_calc (1-pt gap) | 0 | obs Surf -116 not in m=130's roll set ({115,117} adjacent); no mechanism-2 marker (Leftovers/Water Veil, no boosts); 1-point max family, mechanism OPEN |
+
+Predicted split 7/2/1/1 (limit/lne/dc/ce); actual **5/3/3/0**. Scored: wrong on
+every exact count, right that the majority walks to limit and that reachability
+dominates (8/11 reachable). The two damage_calc-with-mechanism rows are the
+**Explosion + incapacitating-status signature extended to `par`** — and
+s1500188's blocked branch drops residuals with NO Explosion resolving in it,
+which narrows U.3.1's open WHY: the suppression rides the blocked-Explosion
+branch itself, not the explosion resolving.
+
+**Residue effect: 108 -> 103.** Five rows move to `limit:roll_divergent_
+lethality`, each with the per-row demonstration attached
+(`reports/c9_capped_lethal_walk.json`: branch tables, roll ladders, masses,
+reproducing assignments). Three keep their labels at sub-floor mass; three are
+damage_calc with mechanism or quantified gap. The classifier is deliberately
+NOT taught any of this — these are ledger adjudications with evidence, exactly
+the shape W.1's guard demands.
+
+## Z3.4 The 108, fully decomposed (P4)
+
+Every outside-limits row classified, row-by-row, in
+`reports/c9_decomposition.json` (per-row family + evidence basis; replay-first
+for everything not already documented). By lane:
+
+| lane | rows |
+|---|---|
+| matcher/instrument families (documented) | 52 |
+| named engine gaps | 20 |
+| damage_calc lane (incl. documented follow-up) | 13 |
+| comparison-limit shapes (adjudicated candidates, labels kept) | 11 |
+| world-construction drift (instrument, boundary builder) | 7 |
+| adjudicated `limit` this cycle (Z3.3) | 5 |
+
+Against the pre-registered expected shape:
+
+- **Kecleon typechange world-drift: 4 — exact** (1500204/83, 1500191/20,
+  1500074/12, 1500074/32).
+- **Explosion + can't-move status: 2 — exact** (1500074/57, 1500188/33; the
+  signature's third status variant, `par`).
+- **mechanism-2: 6 in the interval [6,10]** — 4 marker-confirmed (Guts+psn+
+  boost 1500024/9; Choice Band 1500221/13, 1500126/13, 1500267/77) + 2
+  candidates (fresh Intimidate -1 atk 1500028/44; defender -1 spd 1500076/96).
+  Documented follow-up, not this lane's.
+- **heal-cap structural: predicted 2, actual 9.** The two Z.1 rows are present
+  and confirmed; the FAMILY (engine world evolves on the average roll, cap
+  state diverges, component shapes differ) is population-wide once you look:
+  7 more rows replay to the same mechanism. The 2 was a brief-seed count, not
+  a population count — scored against the prediction.
+- **Encore: predicted 1, actual 11.** Same scoring error, larger: same-turn
+  Encore redirection (sim redirects the chosen move to last-used; engine
+  executes the chosen move) explains 3 of Z.6's 5 "unreplayed extremes"
+  (1500121/67 ratio 7.12, 1500051/117, 1500180/35), the documented 1500051/124,
+  and 7 structural rows (mechanical marker: `-start Encore` + executed move !=
+  chosen move; spot-verified by replay on 1500232/54). The single biggest
+  named engine gap in the residue.
+- **The 5 "unreplayed extremes" are now all replayed**: 3 Encore-redirect,
+  1 mechanism-2 candidate (1500028/44), 1 NEW recoil-rounding candidate
+  (1500207/27: obs recoil 25 = sim `round(75/3)` vs engine `trunc(0.33*75)` =
+  24 — one point, every Double-Edge max roll).
+
+New named candidates out of the remainder triage (WHAT recorded per row,
+candidate-not-finding):
+
+1. **Fixed-damage path skips post-damage hooks** (3 rows + 1 Counter row):
+   Seismic Toss KOs without firing Rough Skin (1500103/76, 1500274/15) or
+   Flame Body (1500287/76), and Counter after Seismic Toss returns nothing
+   (1500192/91). Grep-supported: `apply_fixed_damage` and the fixed-damage
+   arms in `gen3/choice_effects.rs` never register `damage_dealt` and run no
+   contact-ability hook. Appendix K lineage (fixed damage bypassing
+   Substitute was the same path).
+2. **Water Absorb fires on Rain Dance** (1500124/58): engine emits
+   `Heal SideTwo: 72` (= maxhp/4) immediately after `ChangeWeather RAIN` with
+   a Water Absorb active on that side. One row, 100% branch, instruction-level
+   evidence.
+3. **Counter/Mirror Coat semantics** (1500155/22, 1500264/40 + the fixed-damage
+   row above): inverse direction too — Showdown's Mirror Coat retaliated with
+   nothing where the engine dealt 2x59, with the engine's own
+   `ChangeDamageDealtMoveCatagory Physical -> Special` in the branch. WHY open.
+4. **World-construction drift, two new members of the Kecleon ownership class**:
+   Trace-copied ability never materializes (1500248/77+78: world has
+   `ability=TRACE` + FLASHFIRE volatile; engine damages straight through the
+   traced Flash Fire immunity) and a stale toxic stage across a Rest cure
+   (1500243/79: engine ticks stage 5 where Showdown ticks a fresh stage 1).
+5. **Compound-class roll-divergent-lethality shapes** (7 rows, incl. 1500054/125
+   and 1500112/40 from W.6's attributed set): same faint-divergent shape the
+   walk adjudicated, wearing compound class names the #950 override cannot
+   touch. Recorded as candidates for a future cross-off under the same
+   standard; labels kept, residue NOT reduced for them.
+
+## Z3.5 The Kecleon question — answered, with the drop points cited
+
+**The gap is engine_world's (production world construction), not the
+differential's.** The differential has no boundary builder of its own: it calls
+the production constructor verbatim
+(`scripts/engine_transition_differential.py:1408-1450` — `world_battle_spec`
+with `_public_effect_signals`), and `world_battle_spec`'s signature
+(`src/pokezero/engine_world.py:762-790`) has **no channel for a live type
+override at all**, so the harness could not pass one even if it derived it.
+
+The event IS parsed, and dies between the parser and the world:
+
+- consumed: `src/pokezero/showdown.py:1679-1690`
+  (`_update_live_type_override` stores `type:<T>` per slot; `typechange` is
+  deliberately NOT in `TRACKED_VOLATILES` at :2595, so it never enters
+  `replay.volatiles`), and the OBSERVATION path applies it at :1994-1995 via
+  `_apply_live_type_override` (:1928). The encoder sees the retype; the world
+  does not.
+- dropped (payload): `src/pokezero/local_showdown.py:2080`
+  `_public_materialization_payload` — the per-side dict (~:2101-2119) carries
+  boosts/volatiles/toxicStage/stallCounter/sideConditions but no
+  `live_type_override` field.
+- dropped (constructor): `src/pokezero/engine_world.py:1316` builds every mon
+  with `types=info.types` (dex base types). The only live-retype arms are
+  `_apply_transform` (:619, donor types + TYPECHANGE volatile at :649) and
+  `_apply_forecast_types` (:731-757, Castform, re-derived from public weather
+  precisely because the payload carries no type event).
+
+The fix shape is a two-point production change (payload field + a consuming
+arm mirroring `_apply_transform`), and it reaches the LIVE search path —
+`engine_search` builds worlds through the same constructor (:648). That is not
+a small contained boundary-builder change, so per this cycle's brief it is
+**reported, not made**. The same lane owns the two new drift candidates above
+(traced ability, toxic stage): all three are protocol-public state the payload
+never carries.
+
+## Z3.6 ACCEPTANCE (eighth hold — and the gate question answered)
+
+The sweep was NOT started; seed block 2,000,000+ remains unconsumed after nine
+cycles. But the gate condition — *non-damage_calc, non-documented-follow-up
+residue fully attributed* — is now MET on the evidence above: all 108 rows
+carry a named family with per-row evidence; the damage_calc lane holds 13
+(6 mechanism-2 documented follow-up, 7 one-point/rounding candidates with the
+observed value placed against the exact legal roll set); everything else is an
+adjudicated limit, a documented instrument family, a named engine gap with
+row-level WHAT (and WHY where established), or world-construction drift with
+the owning lane identified. The honest register of what "attributed" means per
+family is in `reports/c9_decomposition.json` — three families carry WHAT-level
+candidates rather than proven WHYs (counter/mirror-coat semantics, confusion
+fan shape, battle-end attribution tie), disclosed as such. Launching the sweep
+is a separate decision with its own execution requirements (per-shard wheel
+rebuild, registry seeds, `--checkpoint` retention) and is not taken here.
+
+## Z3.7 Artifacts
+
+- `scripts/engine_behavioral_probes.py` — standing rebuild gate (Z3.1)
+- `scripts/capped_lethal_walk.py` — the X.2-X.4 walker
+- `reports/c9_predictions.json` — pre-registered, scored in Z3.2-Z3.4
+- `reports/c9_summary.json` — regeneration aggregates (repros stripped, size policy)
+- `reports/c9_capped_lethal_walk.json` — per-row walk evidence for the 11
+- `reports/c9_decomposition.json` — all 108 rows, family + basis
