@@ -182,7 +182,9 @@ Scenarios (all gen3 Custom Game, real Node sim via ``pokezero.showdown_fixture``
                   why the public counter k tops out at 2, and why the engine's
                   ``rest_turns`` (matched at 1 => wake, 2|3 => stay, i.e. also read
                   BEFORE its decrement) is the SAME number as Showdown's ``time``
-                  rather than one more. ``4 - k`` would agree only at k=0.
+                  rather than one more. ``4 - k`` disagrees on EVERY row, k=0
+                  included — nothing clamps it, and at k=0 it builds an
+                  unrepresentable ``rest_turns = 4`` that the engine panics on.
 
 ``leechseed`` and ``partialtrap`` depend on a 90%/85% accurate SETUP move, so they
 only assert on seeds where the setup actually landed and require at least one such

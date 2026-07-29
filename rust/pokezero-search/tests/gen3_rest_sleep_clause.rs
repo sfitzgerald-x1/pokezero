@@ -353,8 +353,19 @@ fn a_rest_costs_three_attempts_of_which_exactly_two_do_not_act() {
 
 /// The conversion table itself, asserted end to end against the engine rather than
 /// restated: for each public attempt count k, building at `3 - k` leaves exactly the
-/// attempts the real battle has left. `4 - k` fails every row but k = 0 -- which is
-/// precisely why a k = 0 spot-check cannot catch it, since `4 - 0` clamps back to 3.
+/// attempts the real battle has left.
+///
+/// `4 - k` gets EVERY row wrong, k = 0 included -- and nothing anywhere clamps it back
+/// into range (see `a_rest_counter_of_four_is_not_a_representable_state` below, and
+/// `engine_world._rest_turns_from_row`, whose range guard is on the INPUT k). What
+/// separates the rows is only how the wrongness surfaces: at k = 0 it produces
+/// `rest_turns = 4`, which this engine has no arm for and panics on, whereas k = 1 and
+/// k = 2 produce 3 and 2 -- legal values, silently one attempt late.
+///
+/// So a k = 0 check would have caught `4 - k` loudly. The real reason to pin every row
+/// is REACHABILITY, not detectability: a fresh, un-attempted Rest is far and away the
+/// commonest thing in the corpus, so a mapping error confined to k = 1 / k = 2 can sit
+/// in production data a long time without ever being exercised.
 #[test]
 fn each_public_attempt_count_builds_the_attempts_the_battle_has_left() {
     // k -> (rest_turns to build, non-acting attempts still ahead)
@@ -390,6 +401,36 @@ fn each_public_attempt_count_builds_the_attempts_the_battle_has_left() {
             k, rest_turns, remaining_cants
         );
     }
+}
+
+/// `rest_turns = 4` is not a state this engine can be in, and it does not quietly
+/// become 3 -- it panics. Pinned because the guard-rail comments above claim exactly
+/// that, and an unverified claim in a guard-rail is how the last wrong rationale got
+/// written down: the first version of these comments asserted that `4 - 0` "clamps back
+/// to 3", which is false in every layer (the adapter checks only non-negativity, and
+/// `_rest_turns_from_row` range-checks the INPUT k, never the output).
+///
+/// The practical consequence, and the reason it is worth a test rather than a sentence:
+/// a `4 - k` regression is LOUD at k = 0 and SILENT at k = 1 and k = 2.
+#[test]
+#[should_panic(expected = "Invalid rest_turns value: 4")]
+fn a_rest_counter_of_four_is_not_a_representable_state() {
+    let mut state = State::default();
+    let active = state.side_one.get_active();
+    active.status = PokemonStatus::SLEEP;
+    active.rest_turns = 4;
+    active.replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+
+    let _ = generate_instructions_from_move_pair(
+        &mut state,
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        &MoveChoice::Move(PokemonMoveIndex::M0),
+        false,
+    );
 }
 
 // ---------------------------------------------------------------------------

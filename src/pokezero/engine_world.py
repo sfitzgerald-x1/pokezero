@@ -1445,9 +1445,23 @@ def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
 
     ``scripts/gen3_switch_differential.py --only restattemptclock`` walks that ladder at
     the real sim; ``gen3_rest_sleep_clause.rs`` walks the engine's and asserts the table
-    above row by row. ``4 - k`` matches only the k=0 row — and only because 4 clamps to
-    3 — while leaving a k=1 or k=2 Rest a full attempt further from waking than it is.
-    That is why a k=0 spot-check cannot catch the error and the table is pinned per-row.
+    above row by row.
+
+    ``4 - k`` gets EVERY row wrong, k=0 included. NOTHING CLAMPS IT — not here (the range
+    check below is on the INPUT k, never on the returned counter) and not in the adapter
+    (which validates only non-negativity). What differs between the rows is how the
+    wrongness surfaces: k=0 would build ``rest_turns = 4``, a value the engine has no
+    match arm for and panics on (``Invalid rest_turns value: 4``, pinned by
+    ``a_rest_counter_of_four_is_not_a_representable_state``), while k=1 and k=2 build 3
+    and 2 — legal counters, silently one attempt late.
+
+    So a k=0 check WOULD have caught ``4 - k``, loudly. The reason every row is pinned is
+    REACHABILITY, not detectability: a fresh, un-attempted Rest dominates the corpus, so a
+    mapping error confined to k=1/k=2 can ride along in production data for a long time
+    without ever being exercised. (An earlier version of this comment claimed ``4``
+    "clamps back to 3" and that a k=0 check therefore could not catch it. Both halves were
+    false; the correction is recorded here because guard-rail comments are only worth what
+    their reasoning is worth.)
 
     Why this matters beyond the wake timer: gen3's Sleep Clause Mod exempts a Rest sleep
     (``rulesets.ts`` skips a sleeper whose ``statusState.source`` is its own ally), and
