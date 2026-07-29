@@ -47,3 +47,7 @@ uv pip install --python "$PYTHON" --no-cache --force-reinstall "$SRC" \
   --config-settings="build-args=--features poke-engine/gen3 --no-default-features"
 
 "$PYTHON" -c "import poke_engine; print('patched poke-engine (gen3) ready')"
+
+# Record which patch set this build came from, so the differential harness can
+# refuse to measure against a stale install (scripts/engine_build_fingerprint.py).
+"$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write || true

@@ -1263,3 +1263,124 @@ is a substantive candidate, not roll noise, and the class name says nothing
 about how many of the 86 are like it. Per the method rule above it needs
 per-row replay triage before the acceptance run, and one sample does not license
 a verdict on the class.
+
+---
+
+# Appendix D — `roll_scaled_component` triage, and the build-freshness gate
+
+Branch `scott/roll-component-triage`, off #896. 19-patch engine.
+Census seeds 1350000-1350059 (60 games, 5,310 measured boundaries).
+
+## D.1 Triage of all 86 rows
+
+`scripts/triage_roll_components.py` replays **every** row rather than sampling:
+it re-runs each recorded candidate state + joint action, compares the observed
+magnitudes against the engine's own legal roll set (`calculate_damage` gives the
+100 % base for non-crit and crit), and buckets what is left by the multipliers a
+gen3 damage calculation is built from.
+
+**First result, and the one that matters: 0 of 86 rows had a fully-matching
+branch.** Every divergence verdict was correct. What was wrong was the *label*.
+
+| Bucket | n | Verdict | Representative |
+| --- | --- | --- | --- |
+| branch matched rolls, failed a DETERMINISTIC component | 30 (34.9 %) | **HARNESS — mislabelled**, fixed below | seed 1350005 step 87 |
+| no branch matched rolls — real disagreement | 56 (65.1 %) | see D.3 | seed 1350001 step 49 |
+
+## D.2 Two harness fixes, both from the triage
+
+* **Miss ranking.** Roll-first rejection meant a branch that failed on its roll
+  reported a roll reason even when another branch cleared the rolls and failed
+  on a residual — and the first-listed miss drives classification. The miss is
+  now the one from the branch that got **furthest**. This alone reclassified 36
+  rows out of the class.
+* **Partial-trap naming.** Showdown tags the tick `[from] move: Wrap`; the
+  engine carries a generic `PARTIALLYTRAPPED` volatile and its mapper tags it
+  `partiallytrapped`. The move identity is not recoverable engine-side and does
+  not affect state (every gen3 Wrap-class move ticks maxhp/16), so both sides
+  normalize to one canonical source. This was **18 rows, 11 % of all
+  divergences, purely on naming.**
+
+Census effect: **160 -> 142 divergences (3.01 % -> 2.67 %** of measured), and
+`roll_scaled_component` 86 -> 50.
+
+## D.3 Engine-lane hand-off
+
+### CONFIRMED: gen3 Flail deals no damage
+
+Direct probe, attacker at every HP fraction, defender 300/300, no items or
+abilities in play:
+
+| attacker HP | engine Flail damage |
+| --- | --- |
+| 300/300 | **0** |
+| 150/300 | **0** |
+| 60/300 | **0** |
+| 20/300 | **0** |
+| 5/300 | **0** |
+
+gen3 Flail is an HP-proportional move (`basePowerCallback`, 20-200 BP as HP
+falls — gen3 inherits the gen4 mod). The engine deals **zero at every fraction**,
+so the move is inert.
+
+* expected per Showdown: seed 1350004 step 3, p2 takes −20 from Flail; step 14,
+  p2 takes −104
+* got per engine: no damage component at all
+* suspected mechanism: `basePowerCallback`-class move with no gen3
+  implementation (same shape as the Transform gap — present in the move table,
+  no behaviour)
+* repro rows: seeds 1350004 steps 3, 13, 14
+
+### NEEDS ITS OWN PROBE: Sleep Talk
+
+`sleeptalk` is the single most common move in the structural bucket (11 of 29).
+Sleep Talk calls a random move and the engine branches over the call, so a
+component-count difference is expected *sometimes*; whether these are
+enumeration gaps or real is not established, and I am not asserting it from
+co-occurrence. Repro: seed 1350019 step 82, seed 1350030 step 65.
+
+### Residual long tail
+
+21 rows are magnitude disagreements with no clean multiplier signature (ratios
+0.29-6.38, almost all singletons). No dominant mechanism; they need individual
+replay and are the lowest-value slice.
+
+Structural shapes: observed has a component the engine lacks in **21 of 29**
+(`obs1_eng0` 11, `obs2_eng1` 10) — i.e. the engine is *missing damage*, which is
+consistent with the Flail finding generalising to other unimplemented moves.
+
+## D.4 Build-freshness gate (review finding 2)
+
+The differential now **refuses to run** unless the installed engine was built
+from the checked-out patch set. Two independent checks, because they catch
+different halves:
+
+* **Fingerprint (content, exact).** sha256 over the shared patch list plus every
+  patch file it names — exactly the inputs both builders read.
+  `scripts/setup_poke_engine.sh` and `scripts/vendor_poke_engine_src.sh` stamp
+  it into the venv at build time; the harness compares stamp vs HEAD. Catches a
+  stale **wheel** against a current tree.
+* **Freshness (mtime).** Installed extension modules must be newer than every
+  patch file and every vendored `.rs`. Catches the **crate** half, which maturin
+  builds outside the stamping scripts, and catches a rebuild that silently
+  no-op'd on a cache.
+
+Failure is a hard stop with the exact rebuild sequence, because this class of
+bug does not error — it produces a plausible number (4.43 % vs 1.11 % on
+identical seeds). `--skip-build-check` exists only for `--merge-from`, where no
+engine call is made. Preferred over a behavioural probe because probes only
+cover mechanics someone thought to probe; the Encore probe remains as a
+belt-and-braces manual check.
+
+## D.5 State of the residue
+
+| | |
+| --- | --- |
+| measured | 5,310 / 5,438 = 97.65 % |
+| diverged | **142 = 2.67 %** of measured |
+| harness errors | 0 |
+| `unclassified` | 0 |
+| wrong verdicts found by triage | **0 of 86** |
+
+Remaining blockers before acceptance: PP-ordering, locked-move PP, and the Flail
+fix. Sleep Talk needs a probe before it can be called either way.
