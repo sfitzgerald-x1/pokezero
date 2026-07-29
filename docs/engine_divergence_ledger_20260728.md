@@ -1626,3 +1626,59 @@ which is also not acceptance-eligible — absence of proof is not proof.
 **The acceptance run must be read with `acceptance_eligible: true`.** That is now
 a machine-checkable property of the artifact rather than a claim about how it
 was produced.
+
+## F.5 Sleep Talk unknown-callee: support-based matching, not a limit class
+
+F.1 established the engine computes the called move's damage correctly and only
+the mapper's LABEL is missing. The information needed to validate therefore
+exists, so this is neither a `limit:` class nor an engine contract change — it is
+fixed in the matcher with the same support-based principle as hidden counters.
+
+**What changed.** A branch whose ONLY lossy marker is
+`sleeptalk_called_unidentified` is no longer discarded. It is kept for the union,
+and its unattributed `[from] residual` **damage** is reclassified as roll-scaled
+`move_unknown_callee`. The realized outcome is then validated against the union
+of the candidate branches' supports — each branch carries a concrete callee's
+damage and roll set — on the same strict per-component basis as everything else.
+Any other lossy marker still disqualifies a branch: this is scoped to the one
+insufficiency whose shape is understood.
+
+**Discard ordering (checked, as asked).** The discard happened *before* the union
+could be taken. In the 1350000-1350059 census **every** lossy branch was
+Sleep-Talk-only, so `strict:lossy_render` goes **671 -> 0** and 186 branches are
+now retained for union purposes. Nothing else was being thrown away.
+
+**Effect.**
+
+| | before | after |
+| --- | --- | --- |
+| diverged | 142 (2.67 %) | **131 (2.47 %)** |
+| lossy branches discarded | 671 | **0** |
+| Sleep-Talk-involving divergent rows | 19 | **8** |
+| `unclassified` | 0 | 0 |
+
+The 11 rows that resolved are the ones F.1 predicted. The **8 that remain fail
+for unrelated reasons** — a Leftovers tick the engine has and Showdown does not,
+a capped-lethal roll disagreement, a missing psn component — i.e. they are
+ordinary members of the other named classes that happened to contain a Sleep
+Talk, not a residue of this gap. That is the outcome that distinguishes a real
+fix from a blanket pass.
+
+**Pins** (`tests/test_transition_differential_matcher.py`, 17 tests):
+
+* `seed 1350014 step 55` — Showdown `-78` bare vs engine `-78` unattributed:
+  **PASSES**;
+* `seed 1350019 step 99` — Showdown `-103` vs engine `-97`, inside the roll
+  window: **PASSES**;
+* fabricated wrong damage (`-20` and `-200` against `-78`): **FAILS**;
+* a missing component against a present one: **FAILS** — reclassification must
+  not make absence match presence;
+* the reclassification is off by default and only applies to `-damage`, so a
+  genuine residual keeps its exact comparison.
+
+Both replayed rows also verified end-to-end through the harness: previously
+divergent, now clean.
+
+**Acceptance bar unchanged.** No new limit class, no engine change. These
+boundaries now pass or fail on the same strict per-component basis as every
+other boundary.
