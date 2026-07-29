@@ -98,6 +98,7 @@ from pokezero.randbat import Gen3RandbatSource, canonical_gen3_randbat_species_i
 _ENGINE_NO_MOVE = "none"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from engine_build_fingerprint import assert_fresh  # noqa: E402
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
 
 _ENGINE_BOOST_FIELDS = (
@@ -309,6 +310,19 @@ _ROLL_SCALED_SOURCES = frozenset({"", "recoil", "drain", "confusion", "capped_le
 # counted and excluded rather than silently mismatched.
 _IGNORED_SOURCES = frozenset({"lockedmove"})
 
+# Showdown tags a partial-trap tick with the MOVE that caused it
+# ("[from] move: Wrap"); the engine carries only a generic PARTIALLYTRAPPED
+# volatile and its mapper tags it "partiallytrapped". The move identity is not
+# recoverable engine-side and does not affect state — every gen3 Wrap-class move
+# ticks maxhp/16 — so both sides normalize to one canonical source. Without this
+# the pair read as a component MISMATCH on 11 % of divergences (18 rows of the
+# 1350000-1350059 census) purely on naming.
+_PARTIAL_TRAP_SOURCES = frozenset({
+    "partiallytrapped", "movewrap", "movebind", "movefirespin",
+    "moveclamp", "movewhirlpool", "movesandtomb",
+})
+_CANONICAL_PARTIAL_TRAP = "partialtrap"
+
 
 def damage_components(
     lines: Sequence[str], initial_hp: Mapping[str, int] | None = None
@@ -355,6 +369,8 @@ def damage_components(
             if extra.startswith("[from]"):
                 source = normalize_id(extra[len("[from]"):].strip())
                 break
+        if source in _PARTIAL_TRAP_SOURCES:
+            source = _CANONICAL_PARTIAL_TRAP
         if not source and tag == "-heal":
             source = "heal"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
@@ -871,7 +887,7 @@ def evaluate_boundary_strict(
     obs_exact = {slot: _split_components(observed_components[slot])[0] for slot in ("p1", "p2")}
     obs_rolled = {slot: _split_components(observed_components[slot])[1] for slot in ("p1", "p2")}
 
-    misses: list[str] = []
+    misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
     for state in states:
@@ -942,14 +958,24 @@ def evaluate_boundary_strict(
                     break
             if ok:
                 return "matched", [], branch_total
-            if reason and len(misses) < 12:
-                misses.append(f"pct={float(branch.get('percentage') or 0):.2f}: {reason}")
+            if reason:
+                # RANK the miss. Roll-first rejection means a branch that failed
+                # on its roll reports a roll reason even when ANOTHER branch
+                # passes the roll and fails on a deterministic component — and
+                # the first-listed miss drives classification, so 35 % of the
+                # `roll_scaled_component` class were really exact-component
+                # divergences wearing the wrong label (triage of seeds
+                # 1350000-1350059). Report the branch that got FURTHEST: one
+                # that cleared the rolls outranks one that did not.
+                rank = 0 if "roll-scaled" in reason else 1
+                misses.append((rank, f"pct={float(branch.get('percentage') or 0):.2f}: {reason}"))
     if usable_branches == 0:
         # Every branch was a lossy render: the mapper itself is telling us it
         # cannot reproduce this turn, so the boundary is unmeasurable, not
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
-    return "diverged", misses, branch_total
+    ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
+    return "diverged", ordered, branch_total
 
 
 def evaluate_boundary(
@@ -1511,6 +1537,13 @@ def main(argv: Sequence[str] | None = None) -> int:
              "counted SKIP, never a guessed world)",
     )
     parser.add_argument(
+        "--skip-build-check",
+        action="store_true",
+        help="skip the engine build-freshness assertion. Only for offline analysis "
+             "(--merge-from), where no engine call is made — a stale build does not "
+             "error, it produces a plausible number.",
+    )
+    parser.add_argument(
         "--matcher",
         choices=("strict", "banded"),
         default="strict",
@@ -1558,6 +1591,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="per-game cap on repros written to the checkpoint (keeps shard files small)",
     )
     args = parser.parse_args(argv)
+
+    # The engine must have been built from the CHECKED-OUT patch set. A stale
+    # wheel measured 4.43 % divergence where a HEAD build measured 1.11 % on
+    # identical seeds — it fails as a believable number, not as an error.
+    assert_fresh(skip=args.skip_build_check or bool(args.merge_from))
 
     # --- merge mode: pure aggregation, no simulator ---
     if args.merge_from:
