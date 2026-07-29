@@ -28,6 +28,7 @@ from pokezero.local_showdown import (  # noqa: E402
     env_config_with_checkpoint_masks,
 )
 from pokezero.neural_policy import (  # noqa: E402
+    category_vocab_from_model_config,
     feature_masks_from_model_config,
     load_transformer_policy,
     observation_spec_from_model_config,
@@ -113,6 +114,7 @@ def play(
         feature_masks_from_model_config(config),
         context="play_against_checkpoint",
         required_specs=spec,
+        required_vocabs=category_vocab_from_model_config(config, showdown_root),
     )
     env = LocalShowdownEnv(env_config)
     rng = random.Random(seed)

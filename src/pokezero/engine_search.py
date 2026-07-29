@@ -1820,6 +1820,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if model_mode:
         from .local_showdown import env_config_with_checkpoint_masks  # noqa: PLC0415
         from .neural_policy import (  # noqa: PLC0415
+            category_vocab_from_model_config,
             feature_masks_from_model_config,
             load_transformer_model_config,
             observation_spec_from_model_config,
@@ -1830,6 +1831,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             env_config,
             feature_masks_from_model_config(model_config),
             required_specs=observation_spec_from_model_config(model_config),
+            required_vocabs=category_vocab_from_model_config(
+                model_config, env_config.resolved_showdown_root()
+            ),
             context="engine MCTS model benchmark",
         )
     env = LocalShowdownEnv(env_config)

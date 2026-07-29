@@ -155,9 +155,11 @@ def build_agent(
     """Load the checkpoint and pair it with the observation spec/vocab/dex it expects."""
     from .dex import load_showdown_dex_cached
     from .neural_policy import load_transformer_policy
-    from .randbat_vocab import gen3_category_vocabulary
-
-    from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
+    from .neural_policy import (
+        category_vocab_from_model_config,
+        feature_masks_from_model_config,
+        observation_spec_from_model_config,
+    )
 
     # history_mask_k (eval-only history-truncation probe) is a deliberate decision-time
     # override; production callers leave it None. See docs/history_truncation_probe_plan.md.
@@ -170,14 +172,15 @@ def build_agent(
     spec = observation_spec_from_model_config(config)
     return OnlineBattleAgent(
         policy=policy,
-        # Vocabulary latches with the schema (review MED-2): v2.2 needs the
-        # turn-merged families.
-        vocab=gen3_category_vocabulary(
-            showdown_root,
-            include_turn_merged=(
-                spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
-            ),
-        ),
+        # Vocabulary latches from the CHECKPOINT, not the build. This used to call
+        # gen3_category_vocabulary(showdown_root, ...) under a comment saying the vocabulary
+        # "latches with the schema" — but that latched only include_turn_merged, i.e. WHICH
+        # token families exist, never the enumeration ORDER within them. The order is what
+        # indexes the embedding: a token the build has added since training renumbers every
+        # token after it, and the encode then resolves rows the model learned as other values.
+        # This is the widest-blast-radius site in the repo — every probe/eval script that
+        # reuses `agent.vocab` inherits whatever is decided here.
+        vocab=category_vocab_from_model_config(config, showdown_root),
         dex=load_showdown_dex_cached(showdown_root),
         feature_masks=feature_masks_from_model_config(config),
         set_source=(
@@ -210,11 +213,10 @@ def build_agent_remote(
     from .inference_service import fetch_remote_config, remote_inference_policy
     from .neural_policy import (
         TransformerPolicyConfig,
+        category_vocab_from_model_config,
         feature_masks_from_model_config,
         observation_spec_from_model_config,
     )
-
-    from .randbat_vocab import gen3_category_vocabulary
 
     # Adopt the SERVED checkpoint's config exactly as the collector path does (the
     # self-describing /config from resolve_encode_time_settings) — the policy object itself
@@ -231,12 +233,10 @@ def build_agent_remote(
     spec = observation_spec_from_model_config(config)
     return OnlineBattleAgent(
         policy=policy,
-        vocab=gen3_category_vocabulary(
-            showdown_root,
-            include_turn_merged=(
-                spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
-            ),
-        ),
+        # From the SERVED config, for the same reason as build_agent above: the remote
+        # model's embedding rows were learned against its own stamped enumeration, and this
+        # process's build is not evidence about a model it did not train.
+        vocab=category_vocab_from_model_config(config, showdown_root),
         dex=load_showdown_dex_cached(showdown_root),
         feature_masks=feature_masks_from_model_config(config),
         set_source=(

@@ -1274,6 +1274,7 @@ def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *
     from .local_showdown import env_config_with_checkpoint_masks
     from .neural_policy import (
         TransformerPolicyConfig,
+        category_vocab_from_model_config,
         feature_masks_from_model_config,
         load_transformer_model_config,
         observation_spec_from_model_config,
@@ -1294,6 +1295,10 @@ def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
         required_specs=[observation_spec_from_model_config(config) for config in configs],
+        required_vocabs=[
+            category_vocab_from_model_config(config, env_config.resolved_showdown_root())
+            for config in configs
+        ],
     )
 
 

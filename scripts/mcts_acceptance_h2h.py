@@ -136,6 +136,7 @@ def main(argv=None) -> int:
         env_config_with_checkpoint_masks,
     )
     from pokezero.neural_policy import (
+        category_vocab_from_model_config,
         feature_masks_from_model_config,
         load_transformer_model_config,
         observation_spec_from_model_config,
@@ -158,6 +159,7 @@ def main(argv=None) -> int:
         LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True),
         feature_masks_from_model_config(model_config),
         required_specs=observation_spec_from_model_config(model_config),
+        required_vocabs=category_vocab_from_model_config(model_config, args.showdown_root),
         context="mcts acceptance re-bench",
     )
     env = LocalShowdownEnv(env_config)

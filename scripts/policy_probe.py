@@ -128,6 +128,9 @@ def capture_base_state(
             agent.feature_masks,
             context="policy_probe capture driver",
             required_specs=agent.spec,
+            # agent.vocab is the checkpoint's own enumeration (build_agent latches it), so
+            # this closes the loop: the env encodes the same rows the driver's model reads.
+            required_vocabs=agent.vocab,
         )
 
     for game_seed in range(seed, seed + max_seeds):

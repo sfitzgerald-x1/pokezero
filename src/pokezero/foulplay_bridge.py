@@ -50,6 +50,7 @@ from .mcts_diagnostics import (
 from .neural_policy import (
     TransformerInferenceTimingAccumulator,
     TransformerSoftmaxPolicy,
+    category_vocab_from_model_config,
     feature_masks_from_model_config,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
@@ -1578,14 +1579,13 @@ async def run_controlled_foulplay_benchmark(
     # Schema + widths from the checkpoint's stamped provenance (dual-schema resolution): a v2
     # checkpoint is probed under the v2 encode, a v2.1 checkpoint under v2.1.
     observation_spec = observation_spec_from_model_config(result.model_config)
-    # The vocabulary axis latches with the schema (review MED-2): a v2.2 checkpoint
-    # needs the turn-merged label families or every merged label OOV-hashes silently.
-    vocab = gen3_category_vocabulary(
-        config.showdown_root,
-        include_turn_merged=(
-            observation_spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
-        ),
-    )
+    # The vocabulary axis latches from the CHECKPOINT. It previously latched only with the
+    # schema (review MED-2) — which token FAMILIES exist (turn-merged or not) — while the
+    # enumeration ORDER inside them still came from the build. Order is what indexes the
+    # embedding, so that half-latch left the silent failure open: a token added to the build
+    # since training renumbers every token after it, and merged labels resolve to rows the
+    # model learned as other values rather than OOV-hashing loudly.
+    vocab = category_vocab_from_model_config(result.model_config, config.showdown_root)
     dex = load_showdown_dex_cached(config.showdown_root)
     # Encode-time feature masks come FROM the checkpoint's stamped provenance (never the
     # defaults): a K=32 / stats-off / exact-state-off arm must be probed on observations

@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from ..checkpoint_factors import choice_label
 from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
 from ..neural_policy import (
+    category_vocab_from_model_config,
     evaluate_transformer_action_priors,
     feature_masks_from_model_config,
     load_transformer_checkpoint,
@@ -70,6 +71,9 @@ class ScenarioStudioService:
             feature_masks_from_model_config(result.model_config),
             context="scenario root evaluation",
             required_specs=observation_spec_from_model_config(result.model_config),
+            required_vocabs=category_vocab_from_model_config(
+                result.model_config, self.catalog.showdown_root
+            ),
         )
         with LocalShowdownEnv(env_config) as env:
             env.reset_with_start_override(seed=scenario.seed, start_override=scenario_start_override(scenario))

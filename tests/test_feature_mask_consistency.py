@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from pokezero.category_vocab import build_category_vocabulary
 from pokezero.local_showdown import LocalShowdownConfig, env_config_with_checkpoint_masks
 from pokezero.observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -21,6 +22,12 @@ from pokezero.observation import (
 
 K32_MASKS = ObservationFeatureMasks(transition_token_budget=32)
 STATS_OFF_MASKS = ObservationFeatureMasks(opponent_tendency_stats_block=False)
+# The latch is fail-closed on the vocabulary axis: any checkpoint provenance at all must
+# arrive with the enumeration it was trained on. These stand in for a checkpoint's
+# `category_vocab_from_model_config(...)` in the axis tests below.
+VOCAB = build_category_vocabulary(("species:pikachu", "move:thunderbolt"))
+# Same tokens, different ORDER — the shape that silently mis-indexes embeddings.
+SHIFTED_VOCAB = build_category_vocabulary(("aaa:inserted", "species:pikachu", "move:thunderbolt"))
 
 
 class EnvConfigMaskResolutionTest(unittest.TestCase):
@@ -30,29 +37,33 @@ class EnvConfigMaskResolutionTest(unittest.TestCase):
 
     def test_default_env_adopts_the_checkpoint_masks(self) -> None:
         config = LocalShowdownConfig()
-        resolved = env_config_with_checkpoint_masks(config, K32_MASKS, context="t")
+        resolved = env_config_with_checkpoint_masks(config, K32_MASKS, context="t", required_vocabs=VOCAB)
         self.assertEqual(resolved.feature_masks, K32_MASKS)
 
     def test_matching_masks_are_a_no_op(self) -> None:
-        config = LocalShowdownConfig(feature_masks=K32_MASKS)
-        resolved = env_config_with_checkpoint_masks(config, (K32_MASKS, K32_MASKS), context="t")
+        config = LocalShowdownConfig(feature_masks=K32_MASKS, category_vocab=VOCAB)
+        resolved = env_config_with_checkpoint_masks(
+            config, (K32_MASKS, K32_MASKS), context="t", required_vocabs=VOCAB
+        )
         self.assertIs(resolved, config)
 
     def test_conflicting_checkpoints_hard_fail(self) -> None:
         with self.assertRaisesRegex(ValueError, "conflicting observation feature masks"):
             env_config_with_checkpoint_masks(
-                LocalShowdownConfig(), (K32_MASKS, STATS_OFF_MASKS), context="t"
+                LocalShowdownConfig(), (K32_MASKS, STATS_OFF_MASKS), context="t", required_vocabs=VOCAB
             )
 
     def test_explicit_env_override_conflicting_with_checkpoint_hard_fails(self) -> None:
         config = LocalShowdownConfig(feature_masks=STATS_OFF_MASKS)
         with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
-            env_config_with_checkpoint_masks(config, K32_MASKS, context="t")
+            env_config_with_checkpoint_masks(
+                config, K32_MASKS, context="t", required_vocabs=VOCAB
+            )
 
     def test_full_default_checkpoint_keeps_default_env(self) -> None:
         config = LocalShowdownConfig()
         resolved = env_config_with_checkpoint_masks(
-            config, DEFAULT_OBSERVATION_FEATURE_MASKS, context="t"
+            config, DEFAULT_OBSERVATION_FEATURE_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertEqual(resolved.feature_masks, DEFAULT_OBSERVATION_FEATURE_MASKS)
 
@@ -132,6 +143,153 @@ def _save_v2_checkpoint(path: Path):
     return config
 
 
+class CategoryVocabDerivationTest(unittest.TestCase):
+    """`category_vocab_from_model_config` — the derivation this whole change hangs on."""
+
+    def test_tokens_come_from_the_checkpoint_not_the_build(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import (
+            TransformerPolicyConfig,
+            category_vocab_from_model_config,
+        )
+
+        trained = ("move:thunderbolt", "species:pikachu")
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=trained, category_oov_buckets=2
+        )
+        with patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={}):
+            vocab = category_vocab_from_model_config(config, "/nonexistent-showdown-root")
+        # The build is not consulted for tokens at all — note the root above does not exist.
+        self.assertEqual(vocab.tokens, trained)
+        self.assertEqual(vocab.oov_buckets, 2)
+
+    def test_a_build_that_inserted_a_token_does_not_shift_the_trained_rows(self) -> None:
+        """The exact 2026-07-29 failure, in miniature.
+
+        A token inserted ahead of an existing one renumbers it under the build's
+        enumeration. Deriving from the checkpoint must leave the trained row alone.
+        """
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import (
+            TransformerPolicyConfig,
+            category_vocab_from_model_config,
+        )
+
+        trained = ("move:thunderbolt", "species:pikachu")
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=trained, category_oov_buckets=2
+        )
+        # What a newer build would enumerate: one extra token sorting before the others.
+        newer_build = build_category_vocabulary(("aaa:added-later", *trained))
+        self.assertNotEqual(
+            newer_build.encode("species:pikachu"),
+            build_category_vocabulary(trained).encode("species:pikachu"),
+        )
+        with patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={}):
+            derived = category_vocab_from_model_config(config, "/nonexistent-showdown-root")
+        self.assertEqual(
+            derived.encode("species:pikachu"),
+            build_category_vocabulary(trained).encode("species:pikachu"),
+        )
+
+    def test_a_config_without_a_stamped_vocabulary_is_refused(self) -> None:
+        from pokezero.neural_policy import category_vocab_from_model_config
+
+        # Never silently fall back to the build — that IS the bug.
+        with self.assertRaisesRegex(ValueError, "no stamped category_vocab"):
+            category_vocab_from_model_config(SimpleNamespace(), "/nonexistent-showdown-root")
+
+
+class EnvConfigVocabResolutionTest(unittest.TestCase):
+    """The enumeration half of the latch, and the axis that fails SILENTLY.
+
+    Masks and spec disagreements change the observation's SHAPE, so they tend to surface as
+    a shape error in the forward pass. The vocabulary is a positional list of the same width
+    whichever build wrote it: a token inserted mid-list renumbers everything after it and the
+    encoder still produces a well-formed tensor — of rows the model learned as other tokens.
+    Nothing crashes, so only these assertions stand between that and a silent wrong score.
+    """
+
+    def test_provenance_without_a_vocabulary_fails_closed(self) -> None:
+        # The regression that motivated the change: masks/spec latched from the checkpoint
+        # while the vocabulary was left to be re-derived from the build. Its old contract was
+        # a comment on LocalShowdownConfig.category_vocab that nothing enforced.
+        with self.assertRaisesRegex(ValueError, "without required_vocabs"):
+            env_config_with_checkpoint_masks(LocalShowdownConfig(), K32_MASKS, context="t")
+
+    def test_spec_only_provenance_also_fails_closed(self) -> None:
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        # Spec alone is provenance too; the vocabulary is no less required for it.
+        with self.assertRaisesRegex(ValueError, "without required_vocabs"):
+            env_config_with_checkpoint_masks(
+                LocalShowdownConfig(), (), context="t",
+                required_specs=V2_REPLAY_OBSERVATION_SPEC,
+            )
+
+    def test_no_provenance_at_all_is_still_a_no_op(self) -> None:
+        # The control: fail-closed must not fire for envs with no model in play, which are
+        # entitled to enumerate from the build.
+        config = LocalShowdownConfig()
+        self.assertIs(env_config_with_checkpoint_masks(config, (), context="t"), config)
+
+    def test_default_env_adopts_the_checkpoint_vocabulary(self) -> None:
+        resolved = env_config_with_checkpoint_masks(
+            LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=VOCAB
+        )
+        self.assertEqual(resolved.category_vocab, VOCAB)
+
+    def test_agreeing_checkpoints_adopt_once(self) -> None:
+        resolved = env_config_with_checkpoint_masks(
+            LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=(VOCAB, VOCAB)
+        )
+        self.assertEqual(resolved.category_vocab, VOCAB)
+
+    def test_conflicting_vocabularies_hard_fail(self) -> None:
+        with self.assertRaisesRegex(ValueError, "different categorical vocabularies"):
+            env_config_with_checkpoint_masks(
+                LocalShowdownConfig(), K32_MASKS, context="t",
+                required_vocabs=(VOCAB, SHIFTED_VOCAB),
+            )
+
+    def test_explicit_env_vocabulary_conflicting_with_checkpoint_hard_fails(self) -> None:
+        config = LocalShowdownConfig(category_vocab=SHIFTED_VOCAB)
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_with_checkpoint_masks(
+                config, K32_MASKS, context="t", required_vocabs=VOCAB
+            )
+
+    def test_a_reordered_vocabulary_of_the_same_tokens_is_still_a_conflict(self) -> None:
+        # The whole point of the axis. SHIFTED_VOCAB is a superset here, but the failure this
+        # guards is ORDER: rows are positions, so equal-length differently-ordered lists must
+        # not compare equal either. Pin it directly rather than trusting dataclass equality.
+        reordered = build_category_vocabulary(("move:thunderbolt", "species:pikachu"))
+        same_tokens = build_category_vocabulary(("species:pikachu", "move:thunderbolt"))
+        # build_category_vocabulary sorts, so these ARE equal — the sorted invariant is what
+        # makes the enumeration reproducible. Construct the unsorted case explicitly to prove
+        # the comparison is positional and not set-based.
+        from pokezero.category_vocab import CategoryVocabulary
+
+        self.assertEqual(reordered, same_tokens)
+        a = CategoryVocabulary(tokens=("species:pikachu", "move:thunderbolt"))
+        b = CategoryVocabulary(tokens=("move:thunderbolt", "species:pikachu"))
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(a.encode("species:pikachu"), b.encode("species:pikachu"))
+        with self.assertRaisesRegex(ValueError, "different categorical vocabularies"):
+            env_config_with_checkpoint_masks(
+                LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=(a, b)
+            )
+
+    def test_matching_vocabulary_is_a_no_op(self) -> None:
+        config = LocalShowdownConfig(feature_masks=K32_MASKS, category_vocab=VOCAB)
+        resolved = env_config_with_checkpoint_masks(
+            config, K32_MASKS, context="t", required_vocabs=VOCAB
+        )
+        self.assertIs(resolved, config)
+
+
 class EnvConfigSpecResolutionTest(unittest.TestCase):
     """The dual-schema half of the latch: checkpoint-stamped observation specs resolve the
     env's encode schema + width with the same adopt/agree/conflict semantics as masks."""
@@ -140,7 +298,8 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
         from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
 
         resolved = env_config_with_checkpoint_masks(
-            LocalShowdownConfig(), (), context="t", required_specs=V2_REPLAY_OBSERVATION_SPEC
+            LocalShowdownConfig(), (), context="t", required_specs=V2_REPLAY_OBSERVATION_SPEC,
+            required_vocabs=VOCAB
         )
         self.assertEqual(resolved.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
         self.assertEqual(resolved.observation_spec.numeric_feature_count, 121)
@@ -150,12 +309,15 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
 
         # Pinned explicitly post-flip: the default env spec is v2.2 now, so a matching
         # v2.1 pair needs a v2.1 env to stay a no-op.
-        config = LocalShowdownConfig(observation_spec=V2_1_REPLAY_OBSERVATION_SPEC)
+        config = LocalShowdownConfig(
+            observation_spec=V2_1_REPLAY_OBSERVATION_SPEC, category_vocab=VOCAB
+        )
         resolved = env_config_with_checkpoint_masks(
             config,
             (),
             context="t",
             required_specs=(V2_1_REPLAY_OBSERVATION_SPEC, V2_1_REPLAY_OBSERVATION_SPEC),
+            required_vocabs=VOCAB,
         )
         self.assertIs(resolved, config)
 
@@ -168,6 +330,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
                 (),
                 context="t",
                 required_specs=(V2_REPLAY_OBSERVATION_SPEC, V2_1_REPLAY_OBSERVATION_SPEC),
+                required_vocabs=VOCAB,
             )
 
     def test_explicit_env_spec_conflicting_with_checkpoint_hard_fails(self) -> None:
@@ -176,7 +339,8 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
         config = LocalShowdownConfig(observation_spec=V2_REPLAY_OBSERVATION_SPEC)
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
             env_config_with_checkpoint_masks(
-                config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC
+                config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
+                required_vocabs=VOCAB,
             )
 
     def test_masks_and_specs_resolve_together(self) -> None:
@@ -187,6 +351,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
             K32_MASKS,
             context="t",
             required_specs=V2_REPLAY_OBSERVATION_SPEC,
+            required_vocabs=VOCAB,
         )
         self.assertEqual(resolved.feature_masks, K32_MASKS)
         self.assertEqual(resolved.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
@@ -431,7 +596,10 @@ class K32HarnessPathTest(unittest.TestCase):
             checkpoint_path = Path(temp_dir) / "k32.pt"
             _save_k32_checkpoint(checkpoint_path)
             with (
-                patch("pokezero.randbat_vocab.gen3_category_vocabulary", return_value=fake_vocab),
+                # build_agent now derives the vocabulary from the CHECKPOINT's stamped
+                # tokens; showdown_root supplies only the aliases, so that is what a fake
+                # root has to stand in for here.
+                patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={}),
                 patch("pokezero.dex.load_showdown_dex_cached", return_value=object()),
             ):
                 agent = build_agent(checkpoint_path, temp_dir, our_name="bot")
@@ -827,6 +995,10 @@ class K32ProbeScriptPathTest(unittest.TestCase):
             _save_k32_checkpoint(checkpoint_path)
             with (
                 patch.object(module, "LocalShowdownEnv", _FakeEnv),
+                # temp_dir is a stand-in showdown_root with no dex on disk. The vocabulary
+                # now resolves EAGERLY at latch time (it used to be built lazily on the
+                # first observe), so the alias lookup is reached here and needs stubbing.
+                patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={}),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 module.play(
@@ -860,6 +1032,9 @@ class SelfplayCliSpecMaskTest(unittest.TestCase):
             _save_k32_checkpoint(checkpoint_path)
             with (
                 patch("pokezero.selfplay_cli.run_selfplay_iterations", fake_run_selfplay_iterations),
+                # See play_against_checkpoint above: temp_dir has no dex, and the vocabulary
+                # axis now resolves eagerly through the latch.
+                patch("pokezero.randbat_vocab.gen3_category_string_aliases", return_value={}),
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(stderr),
             ):
@@ -937,12 +1112,13 @@ class Tier2ProvenanceLatchTest(unittest.TestCase):
 
     def test_env_adopts_tier2_off_and_conflicts_fail(self) -> None:
         resolved = env_config_with_checkpoint_masks(
-            LocalShowdownConfig(), TIER2_OFF_MASKS, context="t"
+            LocalShowdownConfig(), TIER2_OFF_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertEqual(resolved.feature_masks, TIER2_OFF_MASKS)
         with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
             env_config_with_checkpoint_masks(
-                LocalShowdownConfig(feature_masks=K32_MASKS), TIER2_OFF_MASKS, context="t"
+                LocalShowdownConfig(feature_masks=K32_MASKS), TIER2_OFF_MASKS, context="t",
+                required_vocabs=VOCAB,
             )
 
 

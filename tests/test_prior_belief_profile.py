@@ -99,7 +99,13 @@ def _record(*, turn_index: int = 1, variants: int = 1) -> PublicDecisionRecord:
 
 
 class PublicCorpusTest(unittest.TestCase):
-    def test_prior_belief_profile_constructs_schema_matched_category_vocabulary(self) -> None:
+    def test_prior_belief_profile_takes_the_category_vocabulary_from_the_checkpoint(self) -> None:
+        """Corrected 2026-07-29. This test previously asserted
+        ``gen3_category_vocabulary(showdown_root, include_turn_merged=True)`` — i.e. it
+        PINNED the build-anchored behaviour, keyed on the schema. That is the half-latch:
+        the schema decides which token FAMILIES exist, never the enumeration ORDER within
+        them, and order is what indexes the embedding. The vocabulary must come from the
+        checkpoint."""
         corpus = SimpleNamespace(
             decisions=tuple(range(MINIMUM_PROFILE_DECISIONS)),
             manifest={"checkpoint_sha256": "checkpoint", "belief_set_source_hash": "source"},
@@ -130,14 +136,17 @@ class PublicCorpusTest(unittest.TestCase):
             patch("pokezero.neural_cli.sha256_file", return_value="checkpoint"),
             patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), result)),
             patch("pokezero.neural_cli.observation_spec_from_model_config", return_value=observation_spec),
-            patch("pokezero.neural_cli.gen3_category_vocabulary", return_value=object()) as vocabulary,
+            patch(
+                "pokezero.neural_cli.category_vocab_from_model_config", return_value=object()
+            ) as vocabulary,
             patch("pokezero.neural_cli.feature_masks_from_model_config", return_value=object()),
             patch("pokezero.neural_cli.load_gen3_randbat_source_cached", return_value=set_source),
             patch("pokezero.neural_cli.profile_public_corpus", return_value=report) as profile_public_corpus,
         ):
             self.assertEqual(_prior_belief_profile(args), 0)
 
-        vocabulary.assert_called_once_with(Path("/showdown"), include_turn_merged=True)
+        # Derived from the loaded checkpoint's config, not enumerated from the build.
+        vocabulary.assert_called_once_with(model_config, Path("/showdown"))
         self.assertEqual(profile_public_corpus.call_args.kwargs["provenance"]["opponent_scenarios"], 1)
 
     def test_streamed_prefix_matches_eager_selection_and_commits_metadata_last(self) -> None:
