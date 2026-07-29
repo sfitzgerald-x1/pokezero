@@ -25,7 +25,7 @@ if _SRC.is_dir():
 from pokezero.local_showdown import (  # noqa: E402
     LocalShowdownConfig,
     LocalShowdownEnv,
-    env_config_with_checkpoint_masks,
+    env_config_from_checkpoint_provenance,
 )
 from pokezero.neural_policy import (  # noqa: E402
     category_vocab_from_model_config,
@@ -109,7 +109,7 @@ def play(
     bot_player = "p1" if human_player == "p2" else "p2"
     # The bot reads env.observe() tensors, so the env must encode with the checkpoint's
     # stamped feature masks + observation spec (the same latch the shared harnesses apply).
-    env_config = env_config_with_checkpoint_masks(
+    env_config = env_config_from_checkpoint_provenance(
         LocalShowdownConfig(showdown_root=showdown_root),
         feature_masks_from_model_config(config),
         context="play_against_checkpoint",

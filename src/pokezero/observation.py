@@ -18,7 +18,7 @@ OBSERVATION_SCHEMA_VERSION_V2 = "pokezero.observation.v2"
 # reserve carries forward. Unlike the v1->v2 break, v2 stays a fully supported encode mode for
 # as long as live v2 training runs produce checkpoints: the schema version + numeric width
 # resolve from each loaded checkpoint's model_config (feature_masks_from_model_config /
-# env_config_with_checkpoint_masks latch family), so v2 checkpoints keep scoring through every
+# env_config_from_checkpoint_provenance latch family), so v2 checkpoints keep scoring through every
 # harness while fresh trains stamp v2.1.
 OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
 # v2.2 (checkpoint-driven, third entry in the same dual-schema table): TURN-MERGED transition

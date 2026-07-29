@@ -335,7 +335,7 @@ _CATEGORICAL_FEATURE_COUNT = CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + V
 # Schema-keyed replay observation specs: BOTH schemas stay first-class encode modes during
 # the dual-schema window. Which one an env/harness uses resolves from the loaded checkpoint's
 # model_config (neural_policy.observation_spec_from_model_config through the
-# env_config_with_checkpoint_masks latch); DEFAULT_REPLAY_OBSERVATION_SPEC is only the
+# env_config_from_checkpoint_provenance latch); DEFAULT_REPLAY_OBSERVATION_SPEC is only the
 # checkpoint-free default (fresh trains, fresh encodes) and tracks the CURRENT schema.
 V2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_CATEGORICAL_FEATURE_COUNT,

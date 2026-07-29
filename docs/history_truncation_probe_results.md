@@ -46,7 +46,7 @@ narrower than the region (fills reach 96)". Resolved:
   `ObservationFeatureMasks.transition_token_budget`, which is stamped into the
   checkpoint's `model_config` (`neural_policy.py`). With `--initial-checkpoint`,
   `_require_mask_flags_agree_with_checkpoint` hard-fails on any disagreement, and
-  at eval `local_showdown.env_config_with_checkpoint_masks` refuses to encode
+  at eval `local_showdown.env_config_from_checkpoint_provenance` refuses to encode
   when the env masks differ from the loaded checkpoint's trained masks. So the
   flag cannot be repurposed to eval a budget-128-trained model at a smaller
   budget — which is exactly why the probe needs a separate eval-only harness

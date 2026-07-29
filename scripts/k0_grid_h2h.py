@@ -67,7 +67,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     from pokezero.local_showdown import (
-        LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks,
+        LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance,
     )
     from pokezero.neural_policy import (
         category_vocab_from_model_config,
@@ -84,7 +84,7 @@ def main(argv=None) -> int:
     from pokezero.mcts_eval.lattice import materialize_search_artifacts
 
     model_config = load_transformer_model_config(args.checkpoint)
-    env_config = env_config_with_checkpoint_masks(
+    env_config = env_config_from_checkpoint_provenance(
         LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True),
         feature_masks_from_model_config(model_config),
         required_specs=observation_spec_from_model_config(model_config),

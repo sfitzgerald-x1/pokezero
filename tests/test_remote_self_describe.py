@@ -97,7 +97,7 @@ class RemoteSelfDescribeTests(unittest.TestCase):
         import dataclasses
 
         from pokezero.category_vocab import build_category_vocabulary
-        from pokezero.local_showdown import env_config_with_checkpoint_masks
+        from pokezero.local_showdown import env_config_from_checkpoint_provenance
 
         # The latch is fail-closed on the vocabulary axis; this test exercises the SPEC
         # region-refinement rule, so it supplies a fixed enumeration to isolate that axis.
@@ -113,7 +113,7 @@ class RemoteSelfDescribeTests(unittest.TestCase):
             wider = dataclasses.replace(
                 required_spec, transition_token_count=required_spec.transition_token_count + 48
             )
-            refined = env_config_with_checkpoint_masks(
+            refined = env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(observation_spec=wider), (), context="refine",
                 required_specs=required_spec, required_vocabs=vocab,
             )
@@ -123,7 +123,7 @@ class RemoteSelfDescribeTests(unittest.TestCase):
                 required_spec, numeric_feature_count=required_spec.numeric_feature_count + 1
             )
             with self.assertRaisesRegex(ValueError, "conflicts"):
-                env_config_with_checkpoint_masks(
+                env_config_from_checkpoint_provenance(
                     LocalShowdownConfig(observation_spec=conflicted), (), context="refine",
                     required_specs=required_spec, required_vocabs=vocab,
                 )

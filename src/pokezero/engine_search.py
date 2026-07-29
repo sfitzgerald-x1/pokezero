@@ -1818,7 +1818,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         set_belief_source=True if model_mode else None,
     )
     if model_mode:
-        from .local_showdown import env_config_with_checkpoint_masks  # noqa: PLC0415
+        from .local_showdown import env_config_from_checkpoint_provenance  # noqa: PLC0415
         from .neural_policy import (  # noqa: PLC0415
             category_vocab_from_model_config,
             feature_masks_from_model_config,
@@ -1827,7 +1827,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         model_config = load_transformer_model_config(str(args.checkpoint))
-        env_config = env_config_with_checkpoint_masks(
+        env_config = env_config_from_checkpoint_provenance(
             env_config,
             feature_masks_from_model_config(model_config),
             required_specs=observation_spec_from_model_config(model_config),

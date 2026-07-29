@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pokezero.category_vocab import build_category_vocabulary
-from pokezero.local_showdown import LocalShowdownConfig, env_config_with_checkpoint_masks
+from pokezero.local_showdown import LocalShowdownConfig, env_config_from_checkpoint_provenance
 from pokezero.observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     TRANSITION_TOKEN_COUNT,
@@ -33,36 +33,36 @@ SHIFTED_VOCAB = build_category_vocabulary(("aaa:inserted", "species:pikachu", "m
 class EnvConfigMaskResolutionTest(unittest.TestCase):
     def test_no_transformer_checkpoints_leaves_config_unchanged(self) -> None:
         config = LocalShowdownConfig()
-        self.assertIs(env_config_with_checkpoint_masks(config, (), context="t"), config)
+        self.assertIs(env_config_from_checkpoint_provenance(config, (), context="t"), config)
 
     def test_default_env_adopts_the_checkpoint_masks(self) -> None:
         config = LocalShowdownConfig()
-        resolved = env_config_with_checkpoint_masks(config, K32_MASKS, context="t", required_vocabs=VOCAB)
+        resolved = env_config_from_checkpoint_provenance(config, K32_MASKS, context="t", required_vocabs=VOCAB)
         self.assertEqual(resolved.feature_masks, K32_MASKS)
 
     def test_matching_masks_are_a_no_op(self) -> None:
         config = LocalShowdownConfig(feature_masks=K32_MASKS, category_vocab=VOCAB)
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             config, (K32_MASKS, K32_MASKS), context="t", required_vocabs=VOCAB
         )
         self.assertIs(resolved, config)
 
     def test_conflicting_checkpoints_hard_fail(self) -> None:
         with self.assertRaisesRegex(ValueError, "conflicting observation feature masks"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(), (K32_MASKS, STATS_OFF_MASKS), context="t", required_vocabs=VOCAB
             )
 
     def test_explicit_env_override_conflicting_with_checkpoint_hard_fails(self) -> None:
         config = LocalShowdownConfig(feature_masks=STATS_OFF_MASKS)
         with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 config, K32_MASKS, context="t", required_vocabs=VOCAB
             )
 
     def test_full_default_checkpoint_keeps_default_env(self) -> None:
         config = LocalShowdownConfig()
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             config, DEFAULT_OBSERVATION_FEATURE_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertEqual(resolved.feature_masks, DEFAULT_OBSERVATION_FEATURE_MASKS)
@@ -217,14 +217,14 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
         # while the vocabulary was left to be re-derived from the build. Its old contract was
         # a comment on LocalShowdownConfig.category_vocab that nothing enforced.
         with self.assertRaisesRegex(ValueError, "without required_vocabs"):
-            env_config_with_checkpoint_masks(LocalShowdownConfig(), K32_MASKS, context="t")
+            env_config_from_checkpoint_provenance(LocalShowdownConfig(), K32_MASKS, context="t")
 
     def test_spec_only_provenance_also_fails_closed(self) -> None:
         from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
 
         # Spec alone is provenance too; the vocabulary is no less required for it.
         with self.assertRaisesRegex(ValueError, "without required_vocabs"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(), (), context="t",
                 required_specs=V2_REPLAY_OBSERVATION_SPEC,
             )
@@ -233,23 +233,23 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
         # The control: fail-closed must not fire for envs with no model in play, which are
         # entitled to enumerate from the build.
         config = LocalShowdownConfig()
-        self.assertIs(env_config_with_checkpoint_masks(config, (), context="t"), config)
+        self.assertIs(env_config_from_checkpoint_provenance(config, (), context="t"), config)
 
     def test_default_env_adopts_the_checkpoint_vocabulary(self) -> None:
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertEqual(resolved.category_vocab, VOCAB)
 
     def test_agreeing_checkpoints_adopt_once(self) -> None:
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=(VOCAB, VOCAB)
         )
         self.assertEqual(resolved.category_vocab, VOCAB)
 
     def test_conflicting_vocabularies_hard_fail(self) -> None:
         with self.assertRaisesRegex(ValueError, "different categorical vocabularies"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(), K32_MASKS, context="t",
                 required_vocabs=(VOCAB, SHIFTED_VOCAB),
             )
@@ -257,7 +257,7 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
     def test_explicit_env_vocabulary_conflicting_with_checkpoint_hard_fails(self) -> None:
         config = LocalShowdownConfig(category_vocab=SHIFTED_VOCAB)
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 config, K32_MASKS, context="t", required_vocabs=VOCAB
             )
 
@@ -278,13 +278,13 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
         self.assertNotEqual(a, b)
         self.assertNotEqual(a.encode("species:pikachu"), b.encode("species:pikachu"))
         with self.assertRaisesRegex(ValueError, "different categorical vocabularies"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(), K32_MASKS, context="t", required_vocabs=(a, b)
             )
 
     def test_matching_vocabulary_is_a_no_op(self) -> None:
         config = LocalShowdownConfig(feature_masks=K32_MASKS, category_vocab=VOCAB)
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             config, K32_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertIs(resolved, config)
@@ -297,7 +297,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
     def test_default_env_adopts_the_checkpoint_v2_spec(self) -> None:
         from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
 
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(), (), context="t", required_specs=V2_REPLAY_OBSERVATION_SPEC,
             required_vocabs=VOCAB
         )
@@ -312,7 +312,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
         config = LocalShowdownConfig(
             observation_spec=V2_1_REPLAY_OBSERVATION_SPEC, category_vocab=VOCAB
         )
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             config,
             (),
             context="t",
@@ -325,7 +325,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
         from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC, V2_REPLAY_OBSERVATION_SPEC
 
         with self.assertRaisesRegex(ValueError, "conflicting observation specs"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(),
                 (),
                 context="t",
@@ -338,7 +338,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
 
         config = LocalShowdownConfig(observation_spec=V2_REPLAY_OBSERVATION_SPEC)
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
                 required_vocabs=VOCAB,
             )
@@ -346,7 +346,7 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
     def test_masks_and_specs_resolve_together(self) -> None:
         from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
 
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(),
             K32_MASKS,
             context="t",
@@ -1111,12 +1111,12 @@ class Tier2ProvenanceLatchTest(unittest.TestCase):
             self.assertTrue(load_transformer_model_config(fresh_path).tier2_residuals)
 
     def test_env_adopts_tier2_off_and_conflicts_fail(self) -> None:
-        resolved = env_config_with_checkpoint_masks(
+        resolved = env_config_from_checkpoint_provenance(
             LocalShowdownConfig(), TIER2_OFF_MASKS, context="t", required_vocabs=VOCAB
         )
         self.assertEqual(resolved.feature_masks, TIER2_OFF_MASKS)
         with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
-            env_config_with_checkpoint_masks(
+            env_config_from_checkpoint_provenance(
                 LocalShowdownConfig(feature_masks=K32_MASKS), TIER2_OFF_MASKS, context="t",
                 required_vocabs=VOCAB,
             )

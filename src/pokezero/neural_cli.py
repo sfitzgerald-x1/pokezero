@@ -59,7 +59,7 @@ from .prior_belief_profile import (
 )
 from .public_decision_corpus import open_public_decision_corpus, sha256_file
 from .public_prefix_evaluator import PublicPrefixCandidateValueEvaluator
-from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
@@ -8364,7 +8364,7 @@ def _env_config_with_matchup_masks(env_config, matchups, *, context: str):
     (HIGH-1 latch + the dual-schema resolution: v2 checkpoints keep the v2 encode)."""
     policies = [policy for matchup in matchups for policy in (matchup.p1_policy, matchup.p2_policy)]
     configs = transformer_model_configs_from_policies(policies)
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
@@ -8434,7 +8434,7 @@ def _env_config_with_mixed_history_masks(env_config, matchups, *, context: str):
     masks = [feature_masks_from_model_config(config) for config in configs]
     max_budget = max(mask.transition_token_budget for mask in masks)
     unified = [_replace(mask, transition_token_budget=max_budget) for mask in masks]
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         unified,
         context=context,
@@ -8454,7 +8454,7 @@ def _env_config_with_spec_masks(env_config, specs, *, extra_model_configs=(), co
         for path in neural_checkpoint_paths_from_policy_specs(specs)
     ]
     configs.extend(extra_model_configs)
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,

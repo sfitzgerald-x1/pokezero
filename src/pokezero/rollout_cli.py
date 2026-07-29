@@ -168,7 +168,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Ablation-arm feature masks for the checkpoint-less iteration-0 case (the cluster
     # controller collects with current-policy=random-legal before any checkpoint exists).
     # When a neural: policy IS given, masks adopt from the checkpoint and explicit flags
-    # must agree or hard-fail (env_config_with_checkpoint_masks conflict semantics). The
+    # must agree or hard-fail (env_config_from_checkpoint_provenance conflict semantics). The
     # resolved masks are recorded in the cache metadata either way, so the subsequent
     # train cross-checks them against the model config.
     collect_selfplay_cache.add_argument(

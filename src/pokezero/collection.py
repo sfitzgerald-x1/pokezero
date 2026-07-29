@@ -1260,7 +1260,7 @@ def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *
     observe through the env contributes its stamped masks AND its stamped observation
     schema/width (the dual-schema resolution: a v2 checkpoint keeps the v2 encode, a v2.1
     checkpoint the v2.1 encode); conflicts (between checkpoints, or with an explicit env
-    override) hard-fail in ``env_config_with_checkpoint_masks``. Remote specs adopt the
+    override) hard-fail in ``env_config_from_checkpoint_provenance``. Remote specs adopt the
     SERVED checkpoint's model config from the inference server's /config (self-describing:
     a region-trimmed 39-token server drives a 39-token encode; without this, collectors
     encoded the default layout and every forward 400'd). Servers predating the
@@ -1271,7 +1271,7 @@ def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *
     remote_urls = remote_base_urls_from_policy_specs(specs)
     if not paths and not remote_urls:
         return env_config
-    from .local_showdown import env_config_with_checkpoint_masks
+    from .local_showdown import env_config_from_checkpoint_provenance
     from .neural_policy import (
         TransformerPolicyConfig,
         category_vocab_from_model_config,
@@ -1290,7 +1290,7 @@ def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *
                 configs.append(TransformerPolicyConfig.from_dict(payload))
     if not configs:
         return env_config
-    return env_config_with_checkpoint_masks(
+    return env_config_from_checkpoint_provenance(
         env_config,
         [feature_masks_from_model_config(config) for config in configs],
         context=context,
@@ -1317,7 +1317,7 @@ def neural_checkpoint_paths_from_policy_specs(specs: Iterable[str | None]) -> tu
     """Checkpoint paths of every ``neural:`` policy spec (string parsing only, torch-free).
 
     Used by CLI harnesses to derive env encode-time feature masks from the checkpoints that
-    will observe through the env (see ``local_showdown.env_config_with_checkpoint_masks``).
+    will observe through the env (see ``local_showdown.env_config_from_checkpoint_provenance``).
     """
     paths: list[Path] = []
     for spec in specs:

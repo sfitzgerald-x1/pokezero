@@ -59,7 +59,7 @@ stamp today's enumeration. The bug is entirely on the consumption side.
 | `online_client.py:build_agent_remote` | served ckpt | **build** | ckpt |
 | `foulplay_bridge.py` controlled benchmark | ckpt | **build** | ckpt |
 | `neural_cli.py` public-corpus profile | ckpt | **build** | ckpt |
-| `local_showdown.env_config_with_checkpoint_masks` | ckpt | **absent** | `required_vocabs`, **fail-closed** |
+| `local_showdown.env_config_from_checkpoint_provenance` | ckpt | **absent** | `required_vocabs`, **fail-closed** |
 | `neural_cli` `_env_config_with_{matchup,mixed_history,spec}_masks` | ckpt | build fall-through | ckpt |
 | `collection.env_config_with_policy_spec_masks` | ckpt | build fall-through | ckpt |
 | `engine_search.py` MCTS model benchmark | ckpt | build fall-through | ckpt |
@@ -154,7 +154,7 @@ each alias resolves through the vocabulary's own index and is dropped if its bas
 so aliases cannot shift a trained row. (The previous build path composed aliases the same
 way, so only the token source changed.)
 
-`env_config_with_checkpoint_masks` gains `required_vocabs` with the same adopt / agree /
+`env_config_from_checkpoint_provenance` gains `required_vocabs` with the same adopt / agree /
 conflict semantics as the other two axes, plus one addition: **supplying any checkpoint
 provenance without a vocabulary raises.** Mirrors #948's required-not-defaulted move. Every
 valid `TransformerPolicyConfig` carries `category_vocab` (enforced in `__post_init__`), so
@@ -170,7 +170,7 @@ stand-in `showdown_root` reaches the alias lookup during config construction.
 
 ### Naming
 
-`env_config_with_checkpoint_masks` now latches three axes and its name says one. Kept
+`env_config_from_checkpoint_provenance` now latches three axes and its name says one. Kept
 deliberately — renaming churns ten call sites and buries the enforcement change — but the
 authority is the signature and the fail-closed check, not the name. **Flagged for the
 reviewer**: say the word and it becomes `env_config_from_checkpoint_provenance`.

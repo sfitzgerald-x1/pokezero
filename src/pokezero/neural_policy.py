@@ -321,7 +321,7 @@ class TransformerPolicyConfig:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         # Dual-schema window: v2 AND v2.1 checkpoints are both loadable — which encode an env
         # uses resolves FROM this stamped version (observation_spec_from_model_config through
-        # the env_config_with_checkpoint_masks latch). Loading a v2 checkpoint is NOT a
+        # the env_config_from_checkpoint_provenance latch). Loading a v2 checkpoint is NOT a
         # refusal case; v1/unversioned artifacts still die here with the pinned-tag message.
         if self.observation_schema_version not in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
             if (
@@ -2468,7 +2468,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
 
     THE single derivation point from stamped provenance to env behavior. Every harness that
     builds an env for a loaded checkpoint must route through this (via
-    ``local_showdown.env_config_with_checkpoint_masks``) — provenance nothing reads back is
+    ``local_showdown.env_config_from_checkpoint_provenance``) — provenance nothing reads back is
     how the #492 train/eval observation mismatch happened.
     """
     return ObservationFeatureMasks(

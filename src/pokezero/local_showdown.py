@@ -56,7 +56,7 @@ class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
 
 
-def env_config_with_checkpoint_masks(
+def env_config_from_checkpoint_provenance(
     env_config: LocalShowdownConfig,
     required_masks: "ObservationFeatureMasks | Sequence[ObservationFeatureMasks]",
     *,
@@ -66,10 +66,11 @@ def env_config_with_checkpoint_masks(
 ) -> "LocalShowdownConfig":
     """Derive the env's encode-time masks, observation spec AND category vocabulary from provenance.
 
-    .. note:: The name is historical. This latches **three** axes, not just masks; it is kept
-       only because renaming it would churn every call site and obscure the enforcement change.
-       The authority on what it covers is the signature, and — since 2026-07-29 — the
-       fail-closed check below, not this name.
+    Renamed from ``env_config_with_checkpoint_masks`` on 2026-07-29. The old name asserted one
+    axis while the function latched three, and a label that stops the next reader from looking
+    is the failure mode this whole change is about — the vocabulary axis went unlatched for
+    months behind a comment that said MUST. A name is a claim about coverage; this one now
+    matches what it does.
 
     The train/eval consistency latch for the mask axis (same failure shape as the #492
     belief-source mismatch): a checkpoint stamped with ablation masks (K=32 budget, stats-off,
@@ -242,7 +243,7 @@ class LocalShowdownConfig:
     #
     # This used to say callers "MUST" pass the model's vocabulary, and nothing enforced it;
     # the production consumption sites did not. Enforcement now lives in
-    # `env_config_with_checkpoint_masks`, which requires `required_vocabs` whenever any
+    # `env_config_from_checkpoint_provenance`, which requires `required_vocabs` whenever any
     # checkpoint provenance is supplied. Route env construction for a loaded checkpoint
     # through that helper rather than setting this field by hand.
     category_vocab: "CategoryVocabulary | None" = None
@@ -1654,7 +1655,7 @@ class LocalShowdownEnv:
         """Whether this env populates Tier-2 residuals into transition tokens.
 
         Requires both the encode-time mask (checkpoint-latched via
-        ``env_config_with_checkpoint_masks``) AND the candidate-set source — without
+        ``env_config_from_checkpoint_provenance``) AND the candidate-set source — without
         candidate variants every strike is unassessable, so the tracker is skipped
         outright and encodes stay byte-identical to a pre-#505 pipeline.
         """
