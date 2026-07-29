@@ -115,10 +115,11 @@ must not be claimed until the cells finish. §4.2's *downward* slope is already
 absent on every complete cell.
 
 **One partial cell to watch:** k64 `d4-s4096` has DiD **−0.286 [−0.514, −0.057]**
-at n=70 — the only interval in the whole grid excluding zero, in the direction of
-p2 being *better* than p1. It is the least-complete cell in the campaign, and it
-is one marginal exclusion among sixteen cells. It is recorded so it is not
-discovered later, not asserted.
+at n=70 — the only **DiD** interval in the grid excluding zero, in the direction
+of p2 being *better* than p1. (The two k0 sims-slope intervals in the table above
+also exclude zero; they belong to a different family. See §6.) It is the
+least-complete cell in the campaign. It is recorded so it is not discovered
+later, not asserted.
 
 ## 5. What this settles
 
@@ -132,3 +133,75 @@ discovered later, not asserted.
 - **Search's gain over its own prior is real but small and does not scale with
   depth.** The best complete cells sit at 0.506–0.557 pooled against a 0.500
   control on the same seeds.
+
+---
+
+## 6. Pre-registered multiple-comparisons rule
+
+**Committed 2026-07-29, while `s2048`/`s4096` were still draining and the outcome
+was unknown.** At the time of writing: k0 `s2048` 352/400 games, k0 `s4096`
+380/400, k64 `s2048` 240/400, k64 `s4096` 150/400 — so criterion (B) below is
+decided by data that did not yet exist when the rule was fixed.
+
+The reason for writing this before the data: the grid currently holds two
+candidate "findings" pointing in opposite emotional directions. The two k0 sims
+slopes point somewhere **welcome** (more search helps). The one k64 DiD cell
+points somewhere **unwelcome** (a seat residual, which §14 argued was noise).
+Post-hoc discretion would be tempted to bank the first and explain away the
+second. This rule binds both identically.
+
+### 6.1 Test families, enumerated
+
+| family | tests | why that count | expected exclusions at α = 0.05 |
+|---|---|---|---|
+| per-cell DiD | **14** | 7 search cells × 2 checkpoints. The 2 controls are excluded: their DiD is identically 0 by construction, not an estimate | 0.70 |
+| paired slopes | **12** | (3 depth + 3 sims) deltas vs the cell's own baseline, × 2 checkpoints | 0.60 |
+| cross-checkpoint | **4** | k64 − k0 at d1/d2/d4/d6 | 0.20 |
+| **total** | **30** | | **≈ 1.5** |
+
+A note on the arithmetic: the campaign has 16 *cells*, but only **14** carry a
+testable DiD, so the DiD family is 14 × 0.05 = **0.70** expected, not 0.80.
+
+**Observed so far: three zero-excluding intervals against ≈1.5 expected by
+chance** — and the two k0 sims slopes are not independent of each other (both are
+measured against the same `s512` baseline over nested data), so the effective
+count of independent exclusions is closer to two. **Exactly the order chance
+predicts.** No candidate is presently distinguishable from noise.
+
+### 6.2 The criterion, committed
+
+`p` is obtained from the same percentile bootstrap already used throughout, as
+the two-sided `p = 2 × min(P[resample ≤ 0], P[resample ≥ 0])`, on the same
+resample seed (20260729) and 20 000 resamples. No other test may be substituted
+after the fact.
+
+A candidate is **ACCEPTED as an effect** only if at least one of:
+
+- **(A) Holm.** Its `p` survives Holm–Bonferroni within its own family, at the
+  family sizes fixed in §6.1 — not at a size recomputed after seeing which cells
+  finished.
+- **(B) Replication.** The same `(depth, sims)` cell on the **other** checkpoint
+  shows the **same sign** with its own unadjusted 95% interval also excluding
+  zero, both cells complete at 400 games.
+
+Anything else is reported as **chance-compatible** and must not be called an
+effect, a trend, a hint, or a signal — in either direction.
+
+### 6.3 Applied in advance to the two live candidates
+
+- **k0 `d4-s2048` and `d4-s4096` sims slopes** (+0.062, +0.073; welcome
+  direction). Route (B) requires k64's `s2048`/`s4096` slopes to come in positive
+  with intervals excluding zero. As of §4 they are +0.018 and +0.025 with
+  intervals spanning zero at n=112 and n=70. **If they complete without
+  excluding zero, the k0 sims slope is chance-compatible and the sims axis is
+  reported as flat** — matching §14 — regardless of how clean the k0 numbers look
+  on their own.
+- **k64 `d4-s4096` DiD** (−0.286; unwelcome direction). Route (B) requires k0's
+  `d4-s4096` DiD to be negative and exclude zero; as of §4 it is **+0.079**,
+  wrong sign. Route (A) requires surviving Holm across 14 — a single marginal
+  interval at the campaign's least-complete cell will not. **On present evidence
+  it is chance-compatible**, and the completed cell must be re-tested against
+  this same rule rather than dropped.
+
+Whichever way the remaining shards fall, the §4 refresh adjudicates against this
+block as written, and any departure from it must be argued explicitly and dated.
