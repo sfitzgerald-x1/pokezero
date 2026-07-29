@@ -97,6 +97,15 @@ class PokemonSpec:
     rest_turns: int = 0
     sleep_turns: int = 0
     weight_kg: float | None = None
+    # BASE IDENTITY: what the engine restores when a temporary change to the
+    # current identity ends (`ability_on_switch_out` for the ability, the
+    # TYPECHANGE switch-out arm for the types). ``None`` means "whatever the
+    # current value is", which is what every untransformed Pokemon wants — only
+    # a spec describing an already-Transformed active needs them to differ from
+    # ``ability``/``types``, because there the CURRENT identity is the donor's
+    # and the base identity is still the transformer's own.
+    base_ability: str | None = None
+    base_types: Sequence[str] | None = None
     # The Pokemon's OWN base form, set only when this spec describes an already
     # Transformed active (the belief-world constructor bakes the copied species/
     # stats/moves straight into the spec). The engine restores it when the
@@ -597,6 +606,16 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
         "id": member.id,
         "level": member.level,
         "types": _normalize_types(member.types, path),
+        # Always passed: the binding's own default is a flat
+        # ("normal", "typeless"), which is wrong for every non-Normal Pokemon.
+        # Nothing in the gen3 build READ base_types until Transform's switch-out
+        # revert, which is why the default went unnoticed; sending the real types
+        # makes the field mean what its name says without changing any search
+        # decision. See BaseIdentityTest.
+        "base_types": _normalize_types(
+            member.types if member.base_types is None else member.base_types,
+            f"{path}.base_types",
+        ),
         "hp": member.hp,
         "maxhp": member.maxhp,
         "attack": member.attack,
@@ -609,6 +628,11 @@ def _build_pokemon(engine: Any, member: PokemonSpec, path: str) -> Any:
     }
     if member.ability is not None:
         kwargs["ability"] = member.ability
+    if member.base_ability is not None:
+        # Left unset the binding copies `ability`, which is exactly the "same as
+        # current" default — so an untransformed Pokemon is byte-identical either
+        # way and only a constructed Transform passes this.
+        kwargs["base_ability"] = member.base_ability
     if member.item is not None:
         kwargs["item"] = member.item
     if member.nature is not None:

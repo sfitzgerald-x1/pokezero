@@ -448,6 +448,78 @@ def _transform_specs(*, with_snapshot: bool):
     )
 
 
+class BaseIdentityTest(unittest.TestCase):
+    """``base_ability`` / ``base_types`` are the identity a revert restores.
+
+    ``None`` means "same as the current value", which is what every
+    untransformed Pokemon wants. Only a spec describing an already-Transformed
+    active needs them to differ, because there the CURRENT identity is the
+    donor's while the base identity is still the transformer's own.
+    """
+
+    # Everything an untransformed spec sent the binding before base identity
+    # existed. Pinned as a set so a future field cannot be added silently.
+    _CONSTRUCTION_KWARGS = {
+        "id", "level", "types", "hp", "maxhp", "attack", "defense",
+        "special_attack", "special_defense", "speed", "status", "moves",
+    }
+
+    def _mon(self, **kw):
+        fields = dict(
+            id="gengar", level=100, types=("ghost", "poison"), hp=250, maxhp=250,
+            attack=200, defense=180, special_attack=250, special_defense=175, speed=220,
+            ability="levitate", moves=(MoveSpec(id="shadowball", pp=24),),
+        )
+        fields.update(kw)
+        return PokemonSpec(**fields)
+
+    def _built(self, mon):
+        state = build_poke_engine_state(
+            BattleSpec(side_one=SideSpec(pokemon=(mon,)), side_two=SideSpec(pokemon=(mon,))),
+            module=fake_construction_module(),
+        )
+        return state.kwargs["side_one"].pokemon[0]
+
+    def test_existing_specs_gain_base_types_and_nothing_else(self) -> None:
+        # The byte-identity claim, made precise: no construction kwarg moved
+        # except the one this change adds, and base_ability is still left for the
+        # binding to default to `ability`.
+        built = self._built(self._mon(ability=None))
+        sent = {key for key in vars(built) if key != "kind"}
+        self.assertEqual(sent, self._CONSTRUCTION_KWARGS | {"base_types"})
+        self.assertNotIn("base_ability", sent)
+
+    def test_base_types_defaults_to_the_real_types(self) -> None:
+        # The binding's own default is a flat ("normal", "typeless") — wrong for
+        # every non-Normal Pokemon. Nothing in the gen3 build READ base_types
+        # until Transform's switch-out revert, which is why it went unnoticed.
+        built = self._built(self._mon())
+        self.assertEqual(built.types, ("ghost", "poison"))
+        self.assertEqual(built.base_types, ("ghost", "poison"))
+
+    def test_single_type_base_is_padded_like_types(self) -> None:
+        built = self._built(self._mon(id="ditto", types=("normal",)))
+        self.assertEqual(built.base_types, ("normal", "typeless"))
+
+    def test_explicit_base_identity_is_passed_through(self) -> None:
+        built = self._built(self._mon(base_ability="limber", base_types=("normal",)))
+        self.assertEqual(built.ability, "levitate")
+        self.assertEqual(built.types, ("ghost", "poison"))
+        self.assertEqual(built.base_ability, "limber")
+        self.assertEqual(built.base_types, ("normal", "typeless"))
+
+    def test_untransformed_specs_are_their_own_base_in_the_real_engine(self) -> None:
+        # The invariant the default exists to hold, asserted on the serialized
+        # bytes rather than on the kwargs.
+        if not probe_poke_engine().ready:
+            self.skipTest("poke-engine is not installed/ready")
+        serialized = build_poke_engine_state(minimal_gen3_fixture()).to_string()
+        for side in serialized.split("/")[:2]:
+            fields = side.split("=")[0].split(",")
+            self.assertEqual(fields[2:4], fields[4:6], "types must be their own base")
+            self.assertEqual(fields[8], fields[9], "ability must be its own base")
+
+
 class PreTransformSerializationTest(unittest.TestCase):
     """``pre_transform`` is the base form a constructed Transform reverts to.
 
