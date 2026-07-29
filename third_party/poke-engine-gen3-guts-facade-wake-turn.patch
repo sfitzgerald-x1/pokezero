@@ -1,0 +1,60 @@
+--- a/src/gen3/abilities.rs	2026-07-29 07:09:56
++++ b/src/gen3/abilities.rs	2026-07-29 07:10:12
+@@ -584,11 +584,34 @@
+             }
+         }
+         Abilities::GUTS => {
+-            if attacking_pkmn.status != PokemonStatus::NONE {
++            // pokezero gen3 fidelity fix: Guts must key off the status the
++            // attack actually EXECUTES under, not the pre-turn status. This
++            // choice modification runs (via before_move) BEFORE the sleep /
++            // freeze branching in generate_instructions_from_move, but a
++            // sleeping or frozen attacker's move only ever executes on the
++            // branch that CURED the status first: Showdown's slp.onBeforeMove
++            // calls cureStatus() before the move runs
++            // (data/mods/gen3/conditions.ts), and Guts is onModifyAtk
++            // (data/abilities.ts), evaluated at damage time against the cured
++            // status — while the engine's own wake branch likewise sets status
++            // NONE before the damage instruction is applied. Boosting on
++            // SLEEP/FREEZE here therefore gave the wake-turn attack a phantom
++            // 1.5x. The exception is a Sleep Talk-called move, which executes
++            // while still asleep and DOES get the boost (onModifyAtk sees
++            // status 'slp' at damage time).
++            let status_at_execution = match attacking_pkmn.status {
++                PokemonStatus::SLEEP | PokemonStatus::FREEZE
++                    if !attacker_choice.sleep_talk_move =>
++                {
++                    PokemonStatus::NONE
++                }
++                other => other,
++            };
++            if status_at_execution != PokemonStatus::NONE {
+                 attacker_choice.base_power *= 1.5;
+ 
+                 // not the right place to put this, but good enough
+-                if attacking_pkmn.status == PokemonStatus::BURN
++                if status_at_execution == PokemonStatus::BURN
+                     && attacker_choice.category == MoveCategory::Physical
+                 {
+                     attacker_choice.base_power *= 2.0;
+--- a/src/gen3/choice_effects.rs	2026-07-29 07:09:56
++++ b/src/gen3/choice_effects.rs	2026-07-29 07:10:21
+@@ -269,7 +269,17 @@
+             }
+         }
+         Choices::FACADE => {
+-            if attacking_side.get_active_immutable().status != PokemonStatus::NONE {
++            // pokezero gen3 fidelity fix (same rule as Guts in abilities.rs):
++            // Facade's doubling keys off the status at EXECUTION time. A
++            // sleeping/frozen attacker only attacks through the branch that
++            // cured the status first, so SLEEP/FREEZE must not double — unless
++            // the move was called by Sleep Talk, which executes while asleep.
++            let doubles = match attacking_side.get_active_immutable().status {
++                PokemonStatus::NONE => false,
++                PokemonStatus::SLEEP | PokemonStatus::FREEZE => attacker_choice.sleep_talk_move,
++                _ => true,
++            };
++            if doubles {
+                 attacker_choice.base_power *= 2.0;
+             }
+         }

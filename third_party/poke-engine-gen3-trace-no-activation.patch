@@ -1,0 +1,41 @@
+--- a/src/gen3/abilities.rs	2026-07-29 07:10:12
++++ b/src/gen3/abilities.rs	2026-07-29 07:11:05
+@@ -345,8 +345,17 @@
+     let active_pkmn = attacking_side.get_active();
+     let defending_pkmn = defending_side.get_active_immutable();
+ 
+-    // trace copying an ability needs to happen before the ability check to activate on switch-in
+-    // e.g. tracing intimidate will activate intimidate
++    // pokezero gen3 fidelity fix: gen3 Trace copies the foe's ability WITHOUT
++    // firing its switch-in activation. sim/pokemon.ts `setAbility()` gates the
++    // copied ability's 'Start' event on `this.battle.gen > 3`, and gen3's own
++    // trace override (data/mods/gen3/abilities.ts) calls plain `setAbility` —
++    // so in gen3 a traced Intimidate never drops the foe's Attack and a traced
++    // Drizzle/Drought/Sand Stream never sets weather. Upstream deliberately ran
++    // the activation match below on the copied ability ("tracing intimidate
++    // will activate intimidate"), which is gen4+ behaviour. The traced
++    // ability's PASSIVE effects — the status/volatile cures modelling
++    // onUpdate/onImmunity below, and the Forecast recompute — still apply.
++    let mut ability_gained_by_trace = false;
+     if active_pkmn.ability == Abilities::TRACE && active_pkmn.ability != defending_pkmn.ability {
+         instructions
+             .instruction_list
+@@ -355,6 +364,7 @@
+                 ability_change: defending_pkmn.ability as i16 - active_pkmn.ability as i16,
+             }));
+         active_pkmn.ability = defending_pkmn.ability;
++        ability_gained_by_trace = true;
+     }
+ 
+     // Abilities that prevent a persistent condition also remove it immediately
+@@ -424,6 +434,10 @@
+     }
+ 
+     match active_ability {
++        // gen3: an ability gained through Trace does not run its switch-in
++        // activation (see the trace comment above; sim/pokemon.ts gates the
++        // 'Start' event on gen > 3).
++        _ if ability_gained_by_trace => {}
+         Abilities::DROUGHT => {
+             if state.weather.weather_type != Weather::SUN
+                 || state.weather.turns_remaining != WEATHER_ABILITY_TURNS

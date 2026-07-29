@@ -101,11 +101,19 @@ class StruggleTypelessEngineTests(unittest.TestCase):
         self.assertGreater(high_atk, high_spa)
 
     def test_struggle_is_physical_burn_halves(self) -> None:
-        # PHYSICAL moves are halved by burn (gen3 damage_calc burn_modifier). A
-        # Special Struggle would be unaffected -> this pins the category too.
+        # PHYSICAL moves are halved by burn. A Special Struggle would be
+        # unaffected -> this pins the category too. gen3 halves BEFORE the +2
+        # and the crit x2 (data/mods/gen3/scripts.ts modifyDamage: burn at the
+        # top, +2 and crit later) — the stepwise pipeline of
+        # poke-engine-gen3-damage-stepwise-truncation.patch. These helpers
+        # return the CRIT roll, so healthy = 2*(base + 2) and burned =
+        # 2*(floor(base/2) + 2). The previous expectation (healthy // 2)
+        # pinned the engine's old trailing float halving, which was one point
+        # low against the sim's order.
         healthy = _struggle_rolls(NORMAL, WATER, status="none")
         burned = _struggle_rolls(NORMAL, WATER, status="burn")
-        self.assertEqual(burned, healthy // 2)
+        base = healthy // 2 - 2
+        self.assertEqual(burned, (base // 2 + 2) * 2)
 
 
 if __name__ == "__main__":
