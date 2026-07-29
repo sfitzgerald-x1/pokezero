@@ -1,0 +1,94 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2048,6 +2048,34 @@
+             }
+         }
+     }
++}
++
++/// pokezero gen3 fidelity fix: is this turn a CONTINUATION of a lock, i.e. one
++/// on which Showdown's `getLockedMove()` returns a move and the PP deduction is
++/// skipped entirely?
++///
++/// Two sources, because the engine represents them differently.
++/// `charge_continuation` is passed in for the second half of a two-turn move:
++/// the charge volatile is cleared earlier in `generate_instructions_from_move`,
++/// before the deduction runs, so the fact has to be carried in a local rather
++/// than re-read here. The LOCKEDMOVE volatile is still live at deduction time
++/// for Outrage-class locks, so it can be read directly.
++///
++/// Deliberately NOT included: MUSTRECHARGE. Showdown's `mustrecharge` is a
++/// `LockMove` provider too, but the engine already models a recharge turn as
++/// `MoveChoice::None`, and `Choices::NONE` returns from
++/// `generate_instructions_from_move` long before any deduction — so a recharge
++/// turn is already free and adding it here would be dead weight.
++fn in_locked_turn(
++    state: &State,
++    side_ref: &SideReference,
++    charge_continuation: bool,
++) -> bool {
++    charge_continuation
++        || state
++            .get_side_immutable(side_ref)
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::LOCKEDMOVE)
+ }
+ 
+ pub fn generate_instructions_from_move(
+@@ -2164,6 +2192,15 @@
+         final_instructions.push(incoming_instructions);
+         return;
+     }
++
++    // pokezero gen3 fidelity fix (locked-move PP): remember that THIS turn is the
++    // second half of a two-turn move before the charge volatile is cleared below.
++    // Showdown skips the PP deduction on any turn where `getLockedMove()` returns
++    // a move, and the `twoturnmove` condition is one of its `onLockMove`
++    // providers — which is why the execute turn is tagged `[from] lockedmove` in
++    // the protocol. The volatile is gone by the time the deduction runs, so the
++    // fact has to be carried in a local.
++    let mut locked_continuation = false;
+ 
+     // If the move is a charge move, remove the volatile status if damage was done
+     if choice.flags.charge {
+@@ -2171,6 +2208,7 @@
+         let volatile_status = charge_choice_to_volatile(&choice.move_id);
+         if side.volatile_statuses.contains(&volatile_status) {
+             choice.flags.charge = false;
++            locked_continuation = true;
+             let instruction = Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
+                 side_ref: attacking_side,
+                 volatile_status: volatile_status,
+@@ -2289,7 +2327,31 @@
+     // deducts. Pressure needs no separate placement — Showdown charges its extra
+     // point inside `useMove` (line 482), downstream of this same gate, so the
+     // engine's combined 1-or-2 decrement moves as one unit.
+-    if !choice.sleep_talk_move {
++    // pokezero gen3 fidelity fix: a LOCKED continuation turn costs no PP at all.
++    // Showdown wraps the deduction that the block below reproduces in one more
++    // guard (sim/battle-actions.ts:280-283):
++    //
++    //     const lockedMove = pokemon.getLockedMove();
++    //     if (!lockedMove) {
++    //         if (!pokemon.deductPP(baseMove, null, target) && move.id !== 'struggle') { ... }
++    //     } else { sourceEffect = this.dex.conditions.get('lockedmove'); }
++    //
++    // `getLockedMove` fires the `LockMove` priority event, whose providers in
++    // gen3's chain are the `lockedmove` condition (Outrage / Thrash / Petal
++    // Dance), `twoturnmove` (Solar Beam, Sky Attack, Dig, Fly, Razor Wind, Skull
++    // Bash), `mustrecharge`, and `rollout`/`bide`. So the whole lock costs ONE PP,
++    // charged on the turn that started it, and every continuation is free — which
++    // is why Showdown tags the second half of a two-turn move `[from] lockedmove`.
++    //
++    // The engine charged again on the continuation, so a two-turn move cost two
++    // PP instead of one. `locked_continuation` covers the charge-move execute
++    // turn (the volatile is already cleared by then, so it is carried in a local
++    // set at the clear site); the LOCKEDMOVE volatile covers Outrage-class
++    // continuations, where it is still present at this point and is only cleared
++    // at end of turn. Both are absent on the turn that STARTS the lock — the
++    // charge volatile is applied by the move's own effects, after this — so the
++    // first turn still pays exactly once and the next use pays again.
++    if !choice.sleep_talk_move && !in_locked_turn(state, &attacking_side, locked_continuation) {
+         // most of the time pp decrement doesn't matter and just adds another
+         // instruction so we only decrement pp if the move is at 10 or less pp
+         // since that is when it starts to matter
