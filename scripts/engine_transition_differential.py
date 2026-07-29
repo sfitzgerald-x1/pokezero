@@ -1408,10 +1408,18 @@ CHECKPOINT_SCHEMA = "engine-transition-differential/1"
 
 
 def checkpoint_record(
-    *, seed: int, counts: Mapping[str, int], repros: Sequence[Mapping[str, Any]], seconds: float
+    *,
+    seed: int,
+    counts: Mapping[str, int],
+    repros: Sequence[Mapping[str, Any]],
+    seconds: float,
+    build_check: str,
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
+        # Carried per RECORD, not just per report, so a merge of many shards can
+        # tell that ANY of them ran ungated.
+        "build_check": build_check,
         "seed": int(seed),
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
@@ -1475,7 +1483,9 @@ def build_report(
     repros: list[dict[str, Any]] = []
     seeds: list[int] = []
     total_seconds = 0.0
+    build_checks: set[str] = set()
     for record in records:
+        build_checks.add(str(record.get("build_check", "unknown")))
         totals.update({str(k): int(v) for k, v in (record.get("counters") or {}).items()})
         seeds.append(int(record.get("seed", -1)))
         total_seconds += float(record.get("seconds") or 0.0)
@@ -1487,7 +1497,16 @@ def build_report(
     measured = totals["boundaries_measured"]
     diverged = totals["transition:diverged"] + totals["engine_error"]
     wall = elapsed if elapsed is not None else total_seconds
+    # A report from an ungated run must never read as a gated one — same
+    # label-the-output rule as --allow-partial. "unknown" covers pre-field
+    # checkpoints, which are equally not-proven-gated.
+    gated = build_checks <= {"gated"} and build_checks
     report: dict[str, Any] = {
+        "build_check": (
+            "gated" if gated
+            else "NOT-GATED: " + ",".join(sorted(build_checks or {"unknown"}))
+        ),
+        "acceptance_eligible": bool(gated),
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
@@ -1595,7 +1614,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The engine must have been built from the CHECKED-OUT patch set. A stale
     # wheel measured 4.43 % divergence where a HEAD build measured 1.11 % on
     # identical seeds — it fails as a believable number, not as an error.
+    skipped_check = bool(args.skip_build_check) and not args.merge_from
     assert_fresh(skip=args.skip_build_check or bool(args.merge_from))
+    build_check = "skipped" if skipped_check else "gated"
 
     # --- merge mode: pure aggregation, no simulator ---
     if args.merge_from:
@@ -1626,6 +1647,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep_repro=args.keep_repro,
             sources=[str(p) for p in args.merge_from],
         )
+        if not report.get("acceptance_eligible"):
+            print(
+                f"WARNING: merged report is {report['build_check']} — at least one shard "
+                "ran without the engine build-freshness gate, so this report is NOT "
+                "acceptance-eligible.",
+                file=sys.stderr,
+            )
         print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
         if args.json:
             Path(args.json).write_text(json.dumps(report, indent=2))
@@ -1687,6 +1715,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 counts=counts,
                 repros=game_repros,
                 seconds=time.perf_counter() - game_started,
+                build_check=build_check,
             )
             records.append(record)
             if handle is not None:

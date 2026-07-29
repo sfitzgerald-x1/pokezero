@@ -1519,3 +1519,110 @@ and the triage guard passes. Expect ~1.1-1.5 h wall clock at 8-way concurrency.
 `limit:*` classes must be **0**, with `measured_fraction_of_full_rounds` and
 `unclassified` (which must be 0) reported alongside — a run that skips a third
 of its boundaries, or cannot name a class, has not earned the number.
+
+---
+
+# Appendix F — re-measurement prep: four review items, and a corrected family assignment
+
+Branch `scott/remeasurement-prep`, off merged main (19 patches).
+
+## F.1 CORRECTION: the Sleep Talk residue rows are HARNESS, not engine
+
+Appendix E re-triaged 19 Sleep Talk-involving residue rows into the
+"engine is missing damage" family, alongside the confirmed variable-BP bug.
+**Independently replaying two of them shows that was wrong.**
+
+`seed 1350014 step 55` — Showdown's Sleep Talk called **Seismic Toss** for −78:
+
+```
+observed   p1: rolled = move −78
+engine     p1: exact  = residual −78     LOSSY=['sleeptalk_called_unidentified']
+```
+
+`seed 1350019 step 99` — Showdown's Sleep Talk called **Psychic** for −103:
+
+```
+observed   p2: rolled = move −103
+engine     p2: exact  = residual −97     LOSSY=['sleeptalk_called_unidentified']
+```
+
+**The engine computed the damage correctly in both cases** (−78 exactly; −97 vs
+−103 is inside the roll window). What fails is the rendering: the mapper cannot
+identify which move Sleep Talk called, so it marks the branch
+`sleeptalk_called_unidentified` and attributes the called move's damage to a
+generic `residual`. That lands it in the matcher's **exact** bucket instead of
+the **roll-scaled** bucket, which can never match a bare `-damage` line — and
+the matcher discards lossy branches anyway (671 lossy renders in the census).
+
+This is a **known, documented mapper limitation**, not a new one:
+`rust/pokezero-search/src/events.rs:1230` calls it out as "unrecoverable from
+the delta (documented insufficiency)". So the honest verdict is:
+
+| | |
+| --- | --- |
+| Verdict | **HARNESS / mapper** — called-move identity is not recoverable from the instruction delta |
+| Not | engine missing damage (the previous, incorrect assignment) |
+| Effect on residue | these rows cannot be matched while the branch renders lossy |
+| Next step | either teach the mapper to recover the called move (an instruction-level contract change, needs the engine lane) or have the matcher treat a lossy Sleep Talk branch as a support-based case rather than discarding it |
+
+**Process note.** This is the fourth mislabel replay has caught in six PRs, and
+the second where *my own* summary of a class was wrong until a row was actually
+re-run. The re-triage was load-bearing exactly as the review said. The standing
+rule stands and is now cheap to obey: `scripts/replay_residue.py`.
+
+## F.2 What "variant" means (the 1,682 / 70 figures)
+
+Appendix E's reachability numbers are in **expanded variants**; a re-checker
+using the standard set denominator gets different totals and the *same zero*.
+All three units, computed from
+`Gen3RandbatSource.to_payload()["universes"]`:
+
+| Unit | Total | Carrying Sleep Talk | Paired with a gen3-excluded move |
+| --- | --- | --- | --- |
+| species | 220 | 40 | **0** |
+| source **sets** (`source_set_id`) | **393** | **44** | **0** |
+| expanded **variants** (`variants[]`) | **1,682** | **70** | **0** |
+
+A *set* is one generator entry for a species (Showdown's own unit); a *variant*
+is one concrete 4-move realisation the belief layer expands that set into, so
+variants > sets. Appendix E quoted the variant row; the reviewer's independent
+44/393 is the set row. **Same conclusion at every denominator: unreachable.**
+
+## F.3 Builder note: the stamp step runs last
+
+Both builders now say so inline: the fingerprint write is the **last** step,
+after the engine is built and installed, so if it is the only thing that failed
+the engine itself is fine and the stamp can be re-run standalone:
+
+```bash
+python scripts/engine_build_fingerprint.py --write
+```
+
+Without this, removing the `|| true` turns a stamp-write failure into what looks
+like a broken engine build.
+
+## F.4 Reports record whether the build gate ran
+
+Same label-the-output rule as `--allow-partial`. Every report now carries:
+
+```json
+"build_check": "gated",            "acceptance_eligible": true
+"build_check": "NOT-GATED: skipped", "acceptance_eligible": false
+```
+
+The flag is stored **per checkpoint record**, not just per report, so a merge
+across shards can tell that *any* of them ran ungated — one skipped shard
+contaminates the merged report and prints a warning:
+
+```
+"build_check": "NOT-GATED: gated,skipped"
+"acceptance_eligible": false
+WARNING: merged report is NOT-GATED: ... NOT acceptance-eligible.
+```
+
+Verified in all three configurations. Pre-field checkpoints read `unknown`,
+which is also not acceptance-eligible — absence of proof is not proof.
+
+**The acceptance run must be read with `acceptance_eligible: true`.** That is now
+a machine-checkable property of the artifact rather than a claim about how it
+was produced.

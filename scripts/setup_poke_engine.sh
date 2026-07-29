@@ -53,4 +53,7 @@ uv pip install --python "$PYTHON" --no-cache --force-reinstall "$SRC" \
 # NOT tolerated to fail: a missing or stale stamp is exactly the state the gate
 # exists to catch, and swallowing the error would leave a freshly built engine
 # carrying someone else's fingerprint.
+# This step runs LAST, after the engine is already built and installed. If it is
+# the only thing that failed, the ENGINE IS FINE — re-run the stamp on its own:
+#     python scripts/engine_build_fingerprint.py --write
 "$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write
