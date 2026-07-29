@@ -58,8 +58,7 @@ use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
 use poke_engine::instruction::{Instruction, StateInstructions};
 use poke_engine::state::{
-    PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus,
-    SideReference, State,
+    PokemonBoostableStat, PokemonGender, PokemonIndex, PokemonSideCondition, PokemonStatus, PokemonType, SideReference, State,
 };
 
 use crate::parse_state;
@@ -692,11 +691,13 @@ pub fn render_branch_events(
             // and mark the branch lossy so callers can count it.
             out.lossy.push("segmentation_failed".to_string());
             let mut sim = Sim::new(state, ctx.hp_percent);
+            let mut plan = ResidualPlan::default();
             for (index, ins) in instructions.iter().enumerate() {
                 render_residual_instruction(
                     &mut sim,
                     ins,
                     instructions.get(index + 1),
+                    &mut plan,
                     ctx,
                     &mut out,
                     true,
@@ -747,11 +748,13 @@ pub fn render_branch_events(
     let residual_segment = &instructions[seg.p2_end..];
     if eot_triggered {
         out.lines.push("|".to_string());
+        let mut plan = ResidualPlan::build(sim.state, residual_segment);
         for (index, ins) in residual_segment.iter().enumerate() {
             render_residual_instruction(
                 &mut sim,
                 ins,
                 residual_segment.get(index + 1),
+                &mut plan,
                 ctx,
                 &mut out,
                 false,
@@ -1233,8 +1236,17 @@ fn render_move_phase(
                     // empty delta (an ambiguous no-op call still means the
                     // real stream had a called-move line we cannot emit).
                     out.lossy.push("sleeptalk_called_unidentified".to_string());
+                    let mut plan = ResidualPlan::default();
                     for (index, ins) in tail.iter().enumerate() {
-                        render_residual_instruction(sim, ins, tail.get(index + 1), ctx, out, true);
+                        render_residual_instruction(
+                            sim,
+                            ins,
+                            tail.get(index + 1),
+                            &mut plan,
+                            ctx,
+                            out,
+                            true,
+                        );
                     }
                 }
             }
@@ -2088,6 +2100,7 @@ fn render_residual_instruction(
     sim: &mut Sim<'_>,
     ins: &Instruction,
     next_ins: Option<&Instruction>,
+    plan: &mut ResidualPlan,
     ctx: &EventContext,
     out: &mut RenderedEvents,
     lossy_mode: bool,
@@ -2095,7 +2108,11 @@ fn render_residual_instruction(
     match ins {
         Instruction::Damage(damage) => {
             let side = damage.side_ref;
-            let cause = residual_damage_cause(sim.state, side, damage.damage_amount);
+            // Positional first; the state guess is only a fallback for sides
+            // whose plan did not reconcile (see ResidualPlan).
+            let cause = plan
+                .take(side, false)
+                .unwrap_or_else(|| residual_damage_cause(sim.state, side, damage.damage_amount));
             sim.apply(ins);
             let ident = ctx.active_ident(sim.state, side);
             let condition = sim.hp_condition(side);
@@ -2115,9 +2132,20 @@ fn render_residual_instruction(
                 ));
                 emit_faint_if_dead(sim, side, ctx, out);
             } else {
-                let cause = residual_heal_cause(sim.state, side, next_ins);
+                let cause = plan
+                    .take(side, true)
+                    .unwrap_or_else(|| residual_heal_cause(sim.state, side, next_ins));
                 out.lines
-                    .push(format!("|-heal|{ident}|{condition}|[from] {cause}"));
+                    .push(if cause.is_empty() {
+                        // Showdown renders the Leech Seed sap on the SEEDER as a
+                        // bare silent heal — the `[from] Leech Seed` tag goes on
+                        // the victim's damage line, not the drainer's heal
+                        // (verified against a live trace:
+                        // `|-heal|p1a: Bellossom|259/293|[silent]`).
+                        format!("|-heal|{ident}|{condition}|[silent]")
+                    } else {
+                        format!("|-heal|{ident}|{condition}|[from] {cause}")
+                    });
             }
         }
         Instruction::ChangeWeather(change) => {
@@ -2169,6 +2197,168 @@ fn render_residual_instruction(
             }
             sim.apply(ins);
         }
+    }
+}
+
+/// Positional attribution of end-of-turn residuals.
+///
+/// `residual_damage_cause` / `residual_heal_cause` guessed a source by testing
+/// the side's STATE in a fixed priority order and returning the first match for
+/// EVERY residual instruction on that side. A mon with two simultaneous sources
+/// therefore had all of its ticks labelled with the highest-priority one: a
+/// poisoned mon in sand had its sand tick rendered `[from] psn`, a trapped mon
+/// in sand had its trap tick rendered `[from] Sandstorm`, and a Leftovers holder
+/// whose opponent was seeded had its heal rendered `[from] Leech Seed`. The HP
+/// arithmetic was always right; only the labels were wrong (ledger H.1).
+///
+/// The fix is POSITIONAL, never amount-based. Amounts cannot disambiguate: the
+/// sand chip and the partial-trap tick are BOTH `maxhp/16`, which is a permanent
+/// counterexample, not an edge case (pinned by `sand_and_trap_collide_on_amount`).
+///
+/// The engine emits residuals in a fixed phase order, per side, from
+/// `gen3/generate_instructions.rs::add_end_of_turn_instructions`:
+///
+///   weather chip -> future sight -> wish -> order-5 items (Leftovers)
+///   -> Leech Seed sap -> status damage -> order-10 items -> volatiles (partial trap)
+///
+/// Each phase emits at most one HP instruction per side, so the k-th damage on a
+/// side is the k-th firing damage phase for that side. The plan below predicts
+/// which phases fire using PRESENCE predicates only — never damage formulas —
+/// and is used ONLY when its predicted counts match the counts actually emitted.
+/// On any mismatch the side falls back to the generic `residual` tag, which is
+/// loud (it diverges) rather than confidently wrong.
+#[derive(Default)]
+pub(crate) struct ResidualPlan {
+    damage: [Vec<String>; 2],
+    heal: [Vec<String>; 2],
+    usable: [bool; 2],
+    damage_seen: [usize; 2],
+    heal_seen: [usize; 2],
+}
+
+fn side_index(side: SideReference) -> usize {
+    match side {
+        SideReference::SideOne => 0,
+        SideReference::SideTwo => 1,
+    }
+}
+
+fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
+    let s = match side {
+        SideReference::SideOne => &state.side_one,
+        SideReference::SideTwo => &state.side_two,
+    };
+    let active = s.get_active_immutable();
+    if active.hp <= 0 {
+        return None;
+    }
+    if state.weather_is_active(&Weather::HAIL) {
+        if active.has_type(&PokemonType::ICE) {
+            return None;
+        }
+        return Some("Hail");
+    }
+    if state.weather_is_active(&Weather::SAND) {
+        if active.has_type(&PokemonType::ROCK)
+            || active.has_type(&PokemonType::GROUND)
+            || active.has_type(&PokemonType::STEEL)
+        {
+            return None;
+        }
+        return Some("Sandstorm");
+    }
+    None
+}
+
+impl ResidualPlan {
+    /// Build from the PRE-residual state, in the engine's own emission order.
+    pub(crate) fn build(state: &State, segment: &[Instruction]) -> ResidualPlan {
+        let mut plan = ResidualPlan::default();
+        for side in [SideReference::SideOne, SideReference::SideTwo] {
+            let i = side_index(side);
+            let (s, opponent) = match side {
+                SideReference::SideOne => (&state.side_one, &state.side_two),
+                SideReference::SideTwo => (&state.side_two, &state.side_one),
+            };
+            let active = s.get_active_immutable();
+
+            // --- damage phases, in order ---
+            if let Some(label) = weather_chips(state, side) {
+                plan.damage[i].push(label.to_string());
+            }
+            if s.future_sight.0 == 1 {
+                plan.damage[i].push("move: Future Sight".to_string());
+            }
+            if s.volatile_statuses.contains(&PokemonVolatileStatus::LEECHSEED)
+                && opponent.get_active_immutable().hp > 0
+            {
+                plan.damage[i].push("Leech Seed".to_string());
+            }
+            match active.status {
+                PokemonStatus::BURN => plan.damage[i].push("brn".to_string()),
+                PokemonStatus::POISON | PokemonStatus::TOXIC => {
+                    plan.damage[i].push("psn".to_string())
+                }
+                _ => {}
+            }
+            if s.volatile_statuses
+                .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+            {
+                plan.damage[i].push("partiallytrapped".to_string());
+            }
+
+            // --- heal phases, in order ---
+            if s.wish.0 == 1 {
+                plan.heal[i].push("move: Wish".to_string());
+            }
+            if active.item == Items::LEFTOVERS {
+                plan.heal[i].push("item: Leftovers".to_string());
+            }
+            if opponent
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::LEECHSEED)
+            {
+                // Silent: Showdown tags the victim's DAMAGE with Leech Seed and
+                // emits the seeder's heal bare.
+                plan.heal[i].push(String::new());
+            }
+        }
+
+        // Only trust the plan for a side when it predicts EXACTLY the number of
+        // HP instructions that segment actually emits for that side. Predicting
+        // a phase that did not fire (or missing one that did) would shift every
+        // later label on that side, so a count mismatch disables the plan there.
+        let mut emitted_damage = [0usize; 2];
+        let mut emitted_heal = [0usize; 2];
+        for ins in segment {
+            match ins {
+                Instruction::Damage(d) => emitted_damage[side_index(d.side_ref)] += 1,
+                Instruction::Heal(h) if h.heal_amount > 0 => {
+                    emitted_heal[side_index(h.side_ref)] += 1
+                }
+                _ => {}
+            }
+        }
+        for i in 0..2 {
+            plan.usable[i] = plan.damage[i].len() == emitted_damage[i]
+                && plan.heal[i].len() == emitted_heal[i];
+        }
+        plan
+    }
+
+    fn take(&mut self, side: SideReference, is_heal: bool) -> Option<String> {
+        let i = side_index(side);
+        if !self.usable[i] {
+            return None;
+        }
+        let (list, seen) = if is_heal {
+            (&self.heal[i], &mut self.heal_seen[i])
+        } else {
+            (&self.damage[i], &mut self.damage_seen[i])
+        };
+        let label = list.get(*seen).cloned();
+        *seen += 1;
+        label
     }
 }
 
@@ -2465,6 +2655,171 @@ mod tests {
         assert_eq!(state.serialize(), serialized);
     }
 
+    // --- positional residual attribution (ledger H.1) ---------------------
+
+    /// Render a whole residual segment through the plan, returning the `[from]`
+    /// tags in emission order for the requested side.
+    fn residual_tags(state: &mut State, segment: &[Instruction], side: &str) -> Vec<String> {
+        let mut rendered = RenderedEvents::default();
+        let mut sim = Sim::new(state, [false, false]);
+        let mut plan = ResidualPlan::build(sim.state, segment);
+        for (index, ins) in segment.iter().enumerate() {
+            render_residual_instruction(
+                &mut sim,
+                ins,
+                segment.get(index + 1),
+                &mut plan,
+                &ctx(),
+                &mut rendered,
+                false,
+            );
+        }
+        sim.finish();
+        rendered
+            .lines
+            .iter()
+            .filter(|l| l.contains(side))
+            .filter_map(|l| l.split("[from]").nth(1).map(|t| t.trim().to_string()))
+            .collect()
+    }
+
+    fn damage_one(amount: i16) -> Instruction {
+        Instruction::Damage(poke_engine::instruction::DamageInstruction {
+            side_ref: SideReference::SideOne,
+            damage_amount: amount,
+        })
+    }
+
+    fn heal_one(amount: i16) -> Instruction {
+        Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideOne,
+            heal_amount: amount,
+        })
+    }
+
+    /// A poisoned mon in a sandstorm takes BOTH ticks. The old attributor tested
+    /// status before weather and labelled both `psn`.
+    #[test]
+    fn poisoned_in_sand_attributes_each_tick_separately() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 320;
+            active.status = PokemonStatus::POISON;
+            active.item = Items::NONE;
+        }
+        let segment = vec![damage_one(20), damage_one(40)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["Sandstorm".to_string(), "psn".to_string()],
+        );
+    }
+
+    /// THE COUNTEREXAMPLE TO AMOUNT MATCHING, pinned on purpose.
+    ///
+    /// The sandstorm chip and the partial-trap tick are BOTH `maxhp/16`, so on a
+    /// mon carrying both they are numerically IDENTICAL and no amount-based
+    /// attributor can ever separate them. Only the engine's emission order can.
+    #[test]
+    fn sand_and_trap_collide_on_amount_and_only_order_separates_them() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 320;
+            active.item = Items::NONE;
+        }
+        // Both ticks are 320/16 = 20. Identical numbers, different sources.
+        let segment = vec![damage_one(20), damage_one(20)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["Sandstorm".to_string(), "partiallytrapped".to_string()],
+            "amounts are equal; attribution must come from emission order alone"
+        );
+    }
+
+    /// A Leftovers holder whose OPPONENT is seeded: the old attributor checked
+    /// the opponent's LEECHSEED before Leftovers and tagged the holder's own
+    /// tick `Leech Seed`.
+    #[test]
+    fn leftovers_holder_facing_a_seeded_opponent_keeps_its_own_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        // Leftovers (order 5) then the Leech Seed sap heal (order 8).
+        let segment = vec![heal_one(20), heal_one(40)];
+        // The sap heal on the SEEDER is silent in Showdown, so it carries no
+        // `[from]` tag at all — only the Leftovers tick does.
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+        );
+    }
+
+    /// Three simultaneous sources on one side, in the engine's order:
+    /// weather chip -> order-5 Leftovers -> status damage.
+    #[test]
+    fn triple_source_side_attributes_all_three_in_order() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.weather.weather_type = Weather::SAND;
+        state.weather.turns_remaining = 5;
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 200;
+            active.item = Items::LEFTOVERS;
+            active.status = PokemonStatus::POISON;
+        }
+        let segment = vec![damage_one(20), heal_one(20), damage_one(40)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec![
+                "Sandstorm".to_string(),
+                "item: Leftovers".to_string(),
+                "psn".to_string()
+            ],
+        );
+    }
+
+    /// The plan is only trusted when it predicts EXACTLY what the segment
+    /// emits. An unexpected extra tick must fall back to the generic tag —
+    /// loud (it diverges) rather than confidently wrong.
+    #[test]
+    fn count_mismatch_falls_back_to_the_generic_tag() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 320;
+            active.hp = 320;
+            active.item = Items::NONE;
+            active.status = PokemonStatus::POISON;
+        }
+        // The plan predicts ONE damage (psn); the segment emits two.
+        let segment = vec![damage_one(40), damage_one(20)];
+        let tags = residual_tags(&mut state, &segment, "p1a");
+        assert!(
+            tags.iter().all(|t| t == "psn"),
+            "a desynced plan must not invent labels; got {tags:?}"
+        );
+    }
+
     /// A side merely CARRYING a pending wish must not have its ordinary
     /// Leftovers tick attributed to Wish. Regression for the mapper mis-tag that
     /// inflated the strict differential's divergence count (ledger Appendix B.5):
@@ -2485,7 +2840,8 @@ mod tests {
         // Pending but NOT resolving: the next instruction is not DecrementWish.
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
-        render_residual_instruction(&mut sim, &heal, None, &ctx(), &mut rendered, false);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(&mut sim, &heal, None, &mut plan, &ctx(), &mut rendered, false);
         sim.finish();
         assert!(
             rendered.lines[0].contains("[from] item: Leftovers"),
@@ -2501,10 +2857,12 @@ mod tests {
         );
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
+        let mut plan = ResidualPlan::default();
         render_residual_instruction(
             &mut sim,
             &heal,
             Some(&decrement),
+            &mut plan,
             &ctx(),
             &mut rendered,
             false,
@@ -2524,7 +2882,10 @@ mod tests {
         );
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
-        render_residual_instruction(&mut sim, &heal, Some(&other), &ctx(), &mut rendered, false);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(
+            &mut sim, &heal, Some(&other), &mut plan, &ctx(), &mut rendered, false,
+        );
         sim.finish();
         assert!(
             rendered.lines[0].contains("[from] item: Leftovers"),
@@ -2544,7 +2905,10 @@ mod tests {
         });
         let mut rendered = RenderedEvents::default();
         let mut sim = Sim::new(&mut state, [false, false]);
-        render_residual_instruction(&mut sim, &instruction, None, &ctx(), &mut rendered, false);
+        let mut plan = ResidualPlan::default();
+        render_residual_instruction(
+            &mut sim, &instruction, None, &mut plan, &ctx(), &mut rendered, false,
+        );
         assert_eq!(
             rendered.lines,
             [

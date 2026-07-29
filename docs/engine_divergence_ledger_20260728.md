@@ -1938,3 +1938,89 @@ families are confirmed and lane-assigned; roughly 59 rows across H.2 and the
 ratio tail still need replay-verified verdicts. That work, plus the mapper fix
 and the charge-state fix, is what stands between here and a meaningful
 acceptance run.
+
+---
+
+# Appendix I — positional residual attribution
+
+Branch `scott/positional-residual-attribution`, 22-patch base, gated,
+`acceptance_eligible: true`.
+
+## I.1 The fix
+
+`residual_damage_cause` / `residual_heal_cause` guessed a source by testing the
+side's STATE in a fixed priority order and returning the first match for **every**
+residual on that side (H.1). Replaced with `ResidualPlan`: a per-side ordered
+list of expected residual events, built from the pre-residual state in the
+engine's own emission order and consumed as instructions arrive.
+
+Order taken from `gen3/generate_instructions.rs::add_end_of_turn_instructions`,
+which iterates `[first_move_side, other]` within each phase:
+
+```
+weather chip -> future sight -> wish -> order-5 items (Leftovers)
+  -> Leech Seed sap -> status damage -> order-10 items -> volatiles (partial trap)
+```
+
+**Never amount-based, and that is not a stylistic preference.** The sandstorm
+chip and the partial-trap tick are *both* `maxhp/16`: on a mon carrying both they
+are numerically identical, so no amount-based attributor can separate them ever.
+`sand_and_trap_collide_on_amount_and_only_order_separates_them` pins that exact
+collision permanently.
+
+The plan predicts phases with **presence predicates only** — never damage
+formulas — because re-deriving the engine's arithmetic is the fragile thing.
+And it is used for a side **only when its predicted counts exactly match the HP
+instructions that side actually emits**. On any mismatch that side falls back to
+the generic `residual` tag, which is *loud* (it diverges) rather than confidently
+wrong; `count_mismatch_falls_back_to_the_generic_tag` pins that.
+
+## I.2 A second, separate mapper bug found on the way
+
+With attribution fixed, `component_mismatch:heal,itemleftovers|leechseed`
+collapsed to `heal|leechseed` — still 9 rows. A live trace settles it:
+
+```
+|-damage|p2a: Golduck|79/262|[from] Leech Seed|[of] p1a: Bellossom
+|-heal|p1a: Bellossom|259/293|[silent]          <- the seeder's drain
+```
+
+Showdown tags the **victim's damage** with Leech Seed and emits the **seeder's
+heal bare**. The mapper was tagging the drain `[from] Leech Seed`. Fixed: an
+empty cause now renders `|-heal|...|[silent]`, matching the real protocol.
+
+## I.3 Effect
+
+| build | diverged / 5,310 | rate |
+| --- | --- | --- |
+| 21 patches, old attributor | 128 | 2.41 % |
+| 22 patches, positional attribution | 103 | 1.94 % |
+| 22 patches, + silent sap heal | **84** | **1.58 %** |
+
+**44 rows cleared, 34 % of the residue.** Five classes are gone entirely
+(`sandstorm|psn`, `partialtrap|sandstorm`, `leechseed|psn`, `sandstorm|brn`,
+`heal|leechseed`). 97.65 % measured, 0 harness errors, `unclassified` 0.
+
+Pins: 5 new unit tests (poisoned-in-sand, trapped-in-sand, the amount collision,
+Leftovers-vs-seeded, the triple-source side, plus the desync fallback);
+17 crate suites green, including the 22nd patch's own locked-move PP tests.
+
+## I.4 Remaining residue (84 rows)
+
+| Class | n | Status |
+| --- | --- | --- |
+| `roll_scaled_component` | 37 | structural bucket — charge-state gap (G.2), engine lane |
+| `component_missing_in_engine:itemleftovers` | 11 | **unadjudicated** |
+| `limit:roll_divergent_lethality` | 10 | adjudicated limit |
+| `component_extra_in_engine:itemleftovers` | 8 | **unadjudicated** |
+| `component_magnitude:itemleftovers` | 5 | **unadjudicated** |
+| `component_missing_in_engine:psn` | 5 | **unadjudicated** |
+| `limit:world_sample_drag_target` | 2 | adjudicated limit |
+| 5 singleton classes | 6 | **unadjudicated** |
+
+The Leftovers-shaped families now dominate the unadjudicated set. They were
+*not* cleared by this fix, which means they are not attribution errors — a
+component is genuinely present in one sim and not the other. Per the sequencing
+note these get their verdicts after the charge-state fix merges, since that gap
+has the same "engine is missing a component" signature and would otherwise force
+a re-triage.
