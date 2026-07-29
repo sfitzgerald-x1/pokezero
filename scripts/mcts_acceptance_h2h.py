@@ -185,9 +185,23 @@ def assert_vocab_alignment(model_config, env_config, tables_path) -> str:
         )
     root_tokens = tuple(str(t) for t in root_vocab.tokens)
     if root_tokens != checkpoint_tokens:
+        # Report the first divergence, exactly as the leaf branch below does.
+        # Equal lengths with a different enumeration ("1216 vs 1216") is the
+        # hardest case to diagnose from a pod log and the one most likely to be
+        # waved past; the index names the token that moved.
+        first = next(
+            (i for i, (a, b) in enumerate(zip(root_tokens, checkpoint_tokens)) if a != b),
+            None,
+        )
+        detail = (
+            f", first divergence at {first} "
+            f"(root {root_tokens[first]!r} vs checkpoint {checkpoint_tokens[first]!r})"
+            if first is not None
+            else " (one is a prefix of the other)"
+        )
         raise SystemExit(
             f"root vocabulary != checkpoint: {len(root_tokens)} vs "
-            f"{len(checkpoint_tokens)} tokens"
+            f"{len(checkpoint_tokens)} tokens{detail}"
         )
     if tables_path is not None:
         leaf_tokens = tuple(
