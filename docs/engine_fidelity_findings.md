@@ -816,14 +816,45 @@ Swift Swim speed boost, and `update_forecast` — each of which pairs it with a
 `match` on the specific weather so `Weather::NONE` falls through harmlessly.
 Only Solar Beam used it as "some weather is up".
 
-**The 4x crit spread was a misdiagnosis, and is now pinned against.** The audit
-measured Showdown −74 against engine −41 non-crit / −163 crit and inferred that
-the non-crit branch was halving base power while the crit branch used full. It
-was not: `calculate_damage` derives both branches from the same `choice`, so a
-base-power error cannot separate them — it moves both by the same factor. The 4x
-is **Light Screen**, which gen3 crits correctly ignore: the screen halves the
-non-crit branch only, and 2x crit on top is exactly 4x. One root cause, not two.
-−41 doubles to ~82, and Showdown's −74 is that at a 0.90 roll.
+**The 4x crit spread was a misdiagnosis — twice, and the second correction is
+the one that matters.** The audit measured Showdown −74 against engine −41
+non-crit / −163 crit and inferred that the non-crit branch was halving base
+power while the crit branch used full. That cannot happen: `calculate_damage`
+derives both branches from the same `choice`, so a base-power error moves both by
+the same factor.
+
+The first replacement explanation offered here was **Light Screen**, which gen3
+crits do ignore. It is a real mechanism that yields exactly 4x — but it is not
+this row's, because **Light Screen and Reflect are 0/220 species in the gen3
+randbats pool**, and the J.4 row came out of the randbats re-measurement. A
+synthetic probe demonstrated a mechanism; it did not identify the row's.
+
+Dumping the row settled it. Seed 1350004 step 66, side one (Mew, the defender)
+in `charge60.json`:
+
+    active_index          = 3            (MEW)
+    side_conditions       = 0;0;0;...;0  (all nineteen zero — no screen)
+    special_attack_boost  = 3
+    special_defense_boost = 2            <- the mechanism
+    weather               = NONE
+
+Solar Beam is Special, so the defender's **+2 SpD** halves the non-crit branch
+while the crit ignores it — 2x2 = 4x — from a rule that is implemented
+**correctly**. Calm Mind is on 31 gen3 randbats species, so this is the ordinary
+case, not an exotic one. The arithmetic closes the same way either route: −41
+doubles to ~82 under the base-power fix, and Showdown's −74 is that at a 0.90
+roll.
+
+All four sign cases of the gen3 crit rule are now pinned in
+`rust/pokezero-search/tests/gen3_crit_boost_rules.rs`, verified against
+`sim/battle-actions.ts:1687-1704`:
+
+| stage | on a crit | engine |
+|---|---|---|
+| attacker's boost > 0 | KEPT | correct |
+| attacker's boost < 0 | IGNORED | correct |
+| defender's boost > 0 | IGNORED | correct |
+| defender's boost < 0 | KEPT | correct |
 
 **Impact.** Every Solar Beam release in clear weather dealt half damage — the
 common case, since sun is the only weather that changes the move's shape and

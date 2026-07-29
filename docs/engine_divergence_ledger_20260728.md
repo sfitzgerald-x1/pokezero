@@ -2160,9 +2160,32 @@ branches are internally inconsistent:
 | engine, 6.25 % (crit) branch | **−163** |
 
 Gen 3 crits are 2x. 163/41 = **3.98**, so the two engine branches disagree with
-*each other* by a factor of two — consistent with the non-crit release being
-halved while the crit is not. Showdown's −74 sits within roll of the unhalved
-~81.
+*each other* by a factor of two. The inference drawn here — that the non-crit
+release was halving base power while the crit was not — **was wrong**, and is
+corrected below; `calculate_damage` derives both branches from the same `choice`,
+so a base-power error moves both together and cannot separate them.
+
+**The row's actual 4x mechanism (dumped from `charge60.json`, seed 1350004
+step 66).** Side one, the defender:
+
+    active_index          = 3            (MEW)
+    side_conditions       = 0;0;0;...;0  (all nineteen zero — no screen)
+    special_attack_boost  = 3
+    special_defense_boost = 2            <- the mechanism
+    weather               = NONE
+
+Solar Beam is Special, so the defender's **+2 SpD** halves the non-crit branch
+while the crit ignores it (gen3 crits ignore the defender's positive stages) —
+2x2 = 4x, from a rule the engine implements **correctly**. Calm Mind is on 31
+gen3 randbats species. An earlier draft attributed the 4x to Light Screen, which
+also yields 4x but is **unreachable here**: Light Screen and Reflect are 0/220
+species in the gen3 randbats pool, and this row came from the randbats
+re-measurement. All four sign cases are now pinned in
+`rust/pokezero-search/tests/gen3_crit_boost_rules.rs`.
+
+The single real defect was the base power itself — Solar Beam halved in clear
+weather (deviation 10) — and Showdown's −74 sits within roll of the unhalved
+~82.
 
 Class-shape evidence on the fixed build (same 60-game seed set): the structural
 bucket fell 29 -> 15 while the magnitude bucket rose to 22 — rows converted from
