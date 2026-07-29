@@ -1,0 +1,111 @@
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -357,10 +357,16 @@
+ 
+     let expected_instructions = vec![StateInstructions {
+         percentage: 100.0,
+-        instruction_list: vec![Instruction::Damage(DamageInstruction {
+-            side_ref: SideReference::SideOne,
+-            damage_amount: 1,
+-        })],
++        instruction_list: vec![
++            Instruction::Damage(DamageInstruction {
++                side_ref: SideReference::SideOne,
++                damage_amount: 1,
++            }),
++            // pokezero residual-defer-on-faint: the 1 HP Rest user is KOd, and a
++            // faint now flags the side as owing a replacement so the end-of-turn
++            // block can defer past it. Rest still correctly does not activate.
++            Instruction::ToggleSideOneForceSwitch,
++        ],
+     }];
+     assert_eq!(expected_instructions, vec_of_instructions);
+ }
+@@ -400,10 +406,16 @@
+         },
+         StateInstructions {
+             percentage: 29.6875,
+-            instruction_list: vec![Instruction::Damage(DamageInstruction {
+-                side_ref: SideReference::SideTwo,
+-                damage_amount: 50,
+-            })],
++            instruction_list: vec![
++                Instruction::Damage(DamageInstruction {
++                    side_ref: SideReference::SideTwo,
++                    damage_amount: 50,
++                }),
++                // pokezero residual-defer-on-faint: only the KILLING roll flags a
++                // replacement — 50 damage takes the 50 HP target to exactly 0,
++                // while the 46 branch above leaves it alive and unflagged.
++                Instruction::ToggleSideTwoForceSwitch,
++            ],
+         },
+     ];
+     assert_eq!(expected_instructions, vec_of_instructions);
+@@ -435,6 +447,10 @@
+                 side_ref: SideReference::SideOne,
+                 damage_amount: 292,
+             }),
++            // pokezero residual-defer-on-faint: the EXPLODER (side two) self-KOs
++            // and is flagged; side one takes 292 of its 500 HP and survives, so
++            // it is not — the flag tracks the faint, not the move.
++            Instruction::ToggleSideTwoForceSwitch,
+         ],
+     }];
+     assert_eq!(expected_instructions, vec_of_instructions);
+@@ -520,17 +536,26 @@
+     let expected_instructions = vec![
+         StateInstructions {
+             percentage: 50.0,
+-            instruction_list: vec![Instruction::Damage(DamageInstruction {
+-                side_ref: SideReference::SideTwo,
+-                damage_amount: 1,
+-            })],
++            instruction_list: vec![
++                Instruction::Damage(DamageInstruction {
++                    side_ref: SideReference::SideTwo,
++                    damage_amount: 1,
++                }),
++                // pokezero residual-defer-on-faint: whichever side wins the speed
++                // tie KOs the other at 1 HP, so each branch flags exactly the side
++                // that fainted in THAT branch and the loser never gets to act.
++                Instruction::ToggleSideTwoForceSwitch,
++            ],
+         },
+         StateInstructions {
+             percentage: 50.0,
+-            instruction_list: vec![Instruction::Damage(DamageInstruction {
+-                side_ref: SideReference::SideOne,
+-                damage_amount: 1,
+-            })],
++            instruction_list: vec![
++                Instruction::Damage(DamageInstruction {
++                    side_ref: SideReference::SideOne,
++                    damage_amount: 1,
++                }),
++                Instruction::ToggleSideOneForceSwitch,
++            ],
+         },
+     ];
+     assert_eq!(expected_instructions, vec_of_instructions);
+@@ -572,10 +597,16 @@
+         },
+         StateInstructions {
+             percentage: 29.6875,
+-            instruction_list: vec![Instruction::Damage(DamageInstruction {
+-                side_ref: SideReference::SideTwo,
+-                damage_amount: 50,
+-            })],
++            instruction_list: vec![
++                Instruction::Damage(DamageInstruction {
++                    side_ref: SideReference::SideTwo,
++                    damage_amount: 50,
++                }),
++                // pokezero residual-defer-on-faint: as above, only the killing
++                // roll flags a replacement; the crit-inclusive 29.6875% branch is
++                // exactly the mass that takes the 50 HP target to 0.
++                Instruction::ToggleSideTwoForceSwitch,
++            ],
+         },
+     ];
+     assert_eq!(expected_instructions, vec_of_instructions);
