@@ -222,35 +222,41 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         after its decrement against the engine's before its own is what makes ``4 - k``
         look right.
 
-        Asserted as an explicit table because ``4 - k`` agrees with the truth on
-        exactly one row -- k=0, where 4 would clamp back to 3 -- so any spot-check that
-        only builds a fresh Rest passes under both. The k=1 and k=2 rows are the ones
-        that separate them, and under ``4 - k`` each would sit a full attempt further
-        from waking than the real battle.
+        Asserted as an explicit table because ``4 - k`` gets EVERY row wrong, k=0
+        included, and NOTHING CLAMPS IT back into range -- not the range check in
+        ``_rest_turns_from_row`` (which guards the INPUT k) and not the adapter (which
+        validates only non-negativity). The rows differ only in how the wrongness would
+        surface: k=0 builds an unrepresentable 4 that the engine panics on, k=1 and k=2
+        build legal-but-late counters.
+
+        So a k=0 check would have caught ``4 - k`` loudly. Every row is pinned for
+        REACHABILITY instead: a fresh, un-attempted Rest dominates the corpus, so an
+        error confined to k=1/k=2 is the one that could ride along unexercised.
         """
 
         three_minus_k = {0: 3, 1: 2, 2: 1}
-        four_minus_k_clamped = {0: 3, 1: 3, 2: 2}
+        four_minus_k = {k: 4 - k for k in three_minus_k}
 
         for attempts, expected in three_minus_k.items():
             with self.subTest(k=attempts):
                 self.assertEqual(self._sleeper(rest_attempts=attempts).rest_turns, expected)
 
-        # And the rows that actually discriminate really do discriminate: if this ever
-        # stops being true, the table above has been rewritten to the wrong convention.
-        discriminating = [k for k in three_minus_k if three_minus_k[k] != four_minus_k_clamped[k]]
-        self.assertEqual(discriminating, [1, 2])
-        for attempts in discriminating:
+        # No row agrees with 4 - k, k=0 included -- the claim the rationale above rests
+        # on. If this ever stops holding, the mapping has been rewritten.
+        for attempts, wrong in four_minus_k.items():
             with self.subTest(k=attempts):
-                self.assertNotEqual(
-                    self._sleeper(rest_attempts=attempts).rest_turns,
-                    four_minus_k_clamped[attempts],
-                )
+                self.assertNotEqual(self._sleeper(rest_attempts=attempts).rest_turns, wrong)
 
-    def test_a_fresh_rest_builds_the_full_counter_with_no_clamping_needed(self) -> None:
-        # The k=0 edge, pinned so it is clear nothing is being clamped into range:
-        # 3 - 0 is 3, which is exactly what Rest sets, and the reachable output range
-        # is 1..3 with no value ever landing outside it.
+        # And k=0's 4 is not merely wrong, it is outside the range the engine can
+        # represent at all (gen3 matches 0/1/2/3 and panics on anything else), which is
+        # why that row would have failed loudly rather than silently.
+        self.assertEqual(four_minus_k[0], 4)
+        self.assertNotIn(four_minus_k[0], {0, 1, 2, 3})
+
+    def test_a_fresh_rest_builds_the_full_counter_and_nothing_is_clamped(self) -> None:
+        # The k=0 edge. 3 - 0 is 3, exactly what Rest sets -- arrived at directly, not
+        # by clamping: the conversion range-checks its INPUT and returns None outside
+        # 0..2, so no output is ever squeezed into range.
         self.assertEqual(self._sleeper(rest_attempts=0).rest_turns, 3)
         built = {self._sleeper(rest_attempts=k).rest_turns for k in (0, 1, 2)}
         self.assertEqual(built, {1, 2, 3})
@@ -399,6 +405,41 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             "|move|p2a: Skarmory|Snore|p1a: Snorlax",
         ])
         self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_an_awake_sleep_talk_user_has_nothing_to_retire(self) -> None:
+        """Case A: Sleep Talk with no Rest entry in play must be inert.
+
+        Retirement is written as an unconditional ``pop`` on the actor's key, so today
+        this holds by entry LIFETIME rather than by any awake/asleep test: no Rest, no
+        entry, nothing to remove. That derivation is exactly what makes it worth pinning
+        -- a later change that let ``rest_sleep_counts`` outlive the sleep it describes
+        would turn every awake Sleep Talk into a spurious retire, and nothing would fail.
+        """
+        replay = parse_showdown_replay(_LEADS + [
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|upkeep",
+            "|turn|2",
+        ], battle_id="awake-talk")
+        self.assertEqual(dict(replay.rest_sleep_counts), {})
+
+    def test_a_sleep_talk_after_waking_does_not_retire_a_later_rest(self) -> None:
+        """Case E: Rest -> wake -> awake Sleep Talk, then a SECOND Rest.
+
+        The wake already retired the first entry; the awake Sleep Talk that follows must
+        not reach forward and disturb the fresh Rest that comes after it. Pins that
+        retirement is scoped to the sleep it belongs to and not to the Pokemon.
+        """
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|-curestatus|p2a: Skarmory|slp",          # first Rest ends
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",  # awake now: inert
+            "|upkeep",
+            "|turn|2",
+            "|move|p2a: Skarmory|Rest|p2a: Skarmory",  # a brand-new Rest
+            "|-status|p2a: Skarmory|slp|[from] move: Rest",
+            "|cant|p2a: Skarmory|slp",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
     def test_an_ordinary_sleeping_turn_keeps_the_clock(self) -> None:
         # The control: only sleepUsable moves accrue skippedTime, so an ordinary Rest
