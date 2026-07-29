@@ -46,8 +46,16 @@ The four probes and what each discriminates:
   4. BURNED-STRUGGLE ORDER DISCRIMINATOR (patch 33): burn halves BEFORE the
      +2 and the crit x2 (stepwise), not after everything (old). Battery
      fixture (atk=180 vs def=140, L100, crit): healthy crit max ** 112 **,
-     burned crit max ** 58 ** stepwise vs ** 56 ** old. Sim-anchored by the
-     quoted RELATION line above.
+     burned crit max ** 58 ** stepwise vs ** 56 ** old. Evidence labels,
+     kept separate: the quoted RELATION line sim-anchors the NON-CRIT
+     relation only (all 16 rolls observed both arms; old value 97
+     unreachable). The CRIT expectations here are derived from the stepwise
+     model applied to this fixture, NOT from sim measurement — the sim's
+     crit sample was too small to discriminate (its CRIT RELATION line:
+     healthy_crit_max=384 burned_crit_max=192 pin_expect=194; 8 crits, 6
+     distinct values, under-sampled max, no verdict). The crit probe is a
+     valid REGRESSION pin (a revert to trailing halving flips 58 -> 56),
+     not a sim-confirmed discriminator.
 
 Symbols involved (content-addressed deliberately — cite symbols, never line
 numbers; a "line 2495" citation went stale mid-review when #955's rewrite moved
@@ -210,8 +218,13 @@ def probe_stepwise_stab() -> None:
 # attacker atk=180 vs defender def=140, Struggle, crit. B = 54.
 # Healthy crit max 2*(B+2) = 112. Burned crit max: stepwise halves BEFORE
 # the +2 and the crit x2 -> 2*(floor(B/2)+2) = 58; old trailing halving
-# -> floor((2*(B+2))/2) = 56. Sim-anchored: see the quoted RELATION line in
-# the module docstring (verdict=STEPWISE; old value unreachable in sim).
+# -> floor((2*(B+2))/2) = 56.
+# Evidence label: the sim anchor (quoted RELATION line, module docstring)
+# covers the NON-CRIT relation only. These crit expectations are derived
+# from the stepwise model applied to this fixture; the sim's crit sample
+# was too small to discriminate (8 crits / 6 distinct values, max 192 vs
+# stepwise pin 194 — under-sampled, no verdict). Valid regression pin for
+# a revert to trailing halving; not a sim-confirmed discriminator.
 # ---------------------------------------------------------------------------
 def probe_burned_struggle() -> None:
     def struggle_crit_max(status: str) -> int:
