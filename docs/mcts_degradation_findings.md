@@ -335,6 +335,10 @@ Rust, model-free, expectations from fixture symmetry — not from engine output:
   exact win probability is 0.5 by construction). Backed-up root value at
   depths 1–6: **0.5000, 0.5000, 0.4981, 0.5004, 0.5004, 0.5004**, with the tree
   really growing (601 decision nodes by d4). No even/odd separation.
+  Note the symmetric-position 0.5 pin is a sanity/regression check only —
+  0.5 is a fixed point of the reflection `v -> 1 - v`, so it cannot
+  discriminate the §10.3 inversion; the discriminating pins are the
+  seat-mirrored sums and the asymmetric p2 rows (review finding, 2026-07-29).
 - `seat_mirror_maps_root_value_to_its_complement_at_every_depth` — root value +
   mirrored root value = **1.00006 / 1.00058 / 1.00049 / 1.00049** at d1–d4.
 - `terminal_orientation_is_absolute_across_the_seat_mirror` — a guaranteed
