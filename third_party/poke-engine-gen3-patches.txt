@@ -304,7 +304,20 @@ poke-engine-gen3-encore-duration.patch
 #
 # so none of the four fails Encore in gen3 and none belongs in the list. Reading
 # base — or gen8, which re-adds the flag to sleeptalk and mirrormove — would
-# over-fail all four. Verified vs real gen3 Showdown
+# over-fail all four.
+#
+# The hardcoded six are therefore DELIBERATE, and regenerating this list
+# programmatically needs care: a Dex-derived set for gen3 resolves TWELVE moves,
+# because six more leak in from the inherited base table with no gen3-legal
+# existence at all — blazingtorque, combattorque, dynamaxcannon, magicaltorque,
+# noxioustorque and wickedtorque, all gen8/gen9. Anyone re-deriving this must
+# intersect against the gen3 move pool as well as walking the flag overrides.
+#
+# Coupled with poke-engine-gen3-lastmove-semantics.patch below: this patch
+# decides Encore's fate FROM `last_used_move`, so a wrong last_used_move makes a
+# right failure set produce the wrong answer. The two are one story — the
+# application gate and the value it reads — and should be reviewed and changed
+# together. Verified vs real gen3 Showdown
 # (scripts/gen3_switch_differential.py); pinned by
 # rust/pokezero-search/tests/gen3_encore_failencore_fidelity.rs. Touches the
 # Encore arm of move_has_no_effect in gen3/generate_instructions.rs only;
@@ -345,6 +358,42 @@ poke-engine-gen3-encore-failencore.patch
 # end-of-turn block in gen3/generate_instructions.rs only; authored against the
 # encore-patched tree, applied before the fixture refresh.
 poke-engine-gen3-residual-rounding.patch
+# gen3 `last_used_move` is recorded only for a move that ACTUALLY EXECUTED.
+# Showdown sets `lastMove` in `Pokemon.moveUsed()`, called from
+# `BattleActions.runMove` (sim/battle-actions.ts:291) at exactly one point —
+# after the `BeforeMove` gate has passed and after PP has been deducted:
+#
+#     const willTryMove = this.battle.runEvent('BeforeMove', ...);
+#     if (!willTryMove) { runEvent('MoveAborted', ...); ...; return; }
+#     if (move.beforeMoveCallback) { ... return; }
+#     if (!pokemon.deductPP(...) && move.id !== 'struggle') { 'cant nopp'; return; }
+#     pokemon.moveUsed(move, targetLoc);            // <- lastMove set here
+#
+# Every immobilizer sits behind that gate by returning false from its
+# onBeforeMove — full paralysis (gen4 par), sleep (gen3 slp), freeze (gen4 frz),
+# flinch, a confusion self-hit (gen4 confusion), infatuation — so none of them
+# records a last move. The engine recorded it BEFORE
+# generate_instructions_from_existing_status_conditions, so a fully-paralyzed or
+# self-hitting turn still counted as "used". That is not cosmetic: Encore's
+# onStart reads lastMove, so the engine could Encore a move the target never got
+# to make, and (since the failencore patch above) decide Encore's fate from it.
+#
+# The fix moves the record point below that call and below the still-asleep early
+# return, so only the branch on which the move really executes reaches it. It
+# stays ABOVE move_has_no_effect and the accuracy roll on purpose: moveUsed
+# precedes useMove, so a move that misses, fails outright, or is blocked by
+# Protect still counts as used.
+#
+# Sleep Talk needed explicit handling rather than riding the move: it is
+# `sleepUsable`, so gen3's slp.onBeforeMove returns undefined and Sleep Talk
+# itself reaches moveUsed, while the move it CALLS goes through useMove, which
+# never touches lastMove. So the caller records and the called move must not —
+# a naive relocation would have inverted exactly that. Pinned by
+# rust/pokezero-search/tests/gen3_lastmove_semantics.rs (a row per truth-table
+# entry, including the confusion/paralysis composition from the confusion patch).
+# Touches generate_instructions_from_move in gen3/generate_instructions.rs only;
+# authored against the failencore-patched tree.
+poke-engine-gen3-lastmove-semantics.patch
 
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
