@@ -1,0 +1,135 @@
+# pokezero fidelity fix: `get_all_options` must never return an EMPTY option
+# vector — MCTS indexes straight into it.
+#
+# `Node::maximize_ucb_for_side` (src/mcts.rs) initialises `let mut choice = 0`
+# and returns it unchanged when the option slice is empty; `Node::expand` then
+# evaluates `self.s2_options.as_ref().unwrap()[s2_move_index]` on a zero-length
+# vector and panics with "index out of bounds: the len is 0 but the index is 0"
+# (src/mcts.rs:125), which aborts the entire search — a hard crash, not a
+# degraded decision. Nothing downstream of `get_all_options` checks, so the
+# invariant has to hold at the source.
+#
+# THE CONDITION, verified rather than assumed. Every exit from `get_all_options`
+# guards `len() == 0` except the two `force_switch` branches, which instead call
+# `add_move_from_choice` — a no-op when the saved move is absent from the CURRENT
+# active's four slots — and then `return` early, skipping the guard. So:
+#
+#   one side owes a forced replacement, AND the other side carries a
+#   `switch_out_move_second_saved_move` its current active does not know
+#     => that other side gets `[]`.
+#
+# Reachable because `engine_world` samples a pending Baton Pass commitment into
+# that field and search then explores lines where the committed side's active
+# changes. `root_get_all_options` already guards its own exits, which is exactly
+# why this only ever fired on INTERIOR tree nodes and never at the root — and why
+# it presented as a deep-search crash with a clean-looking root state.
+#
+# NOT the condition, despite the symptom looking like it: "a side owing a
+# replacement with no living reserve". `Side::add_switches` already pushes
+# `MoveChoice::None` when it finds no living reserve, so a wiped side never
+# produces an empty vector, and `Node::expand` already short-circuits on
+# `battle_is_over()`. Pinned both ways in the test file.
+#
+# THE FIX. An unsatisfiable commitment means the side has NO ACTION at this
+# boundary, not NO OPTION — `MoveChoice::None`, which is what the `Choices::NONE`
+# arm directly above and `root_get_all_options`'s own guard already produce, and
+# what Showdown does: the seat that does not owe a replacement is simply not
+# asked to choose while the other seat replaces. Fixed at the source rather than
+# by teaching `maximize_ucb_for_side` to tolerate an empty slice, which would
+# have hidden the malformed state instead of not producing it.
+#
+# KNOWN DIVERGENCE, deliberately NOT addressed here and pinned as-is: a
+# simultaneous last-mon double faint. gen3 Showdown TIES it
+# (`Battle.checkWin`: `this.win(faintData && this.gen > 4 ? faintData.target.side : null)`
+# — the `gen > 4` guard makes gen3 pass `null`), whereas `battle_is_over` tests
+# side one first and returns -1.0, awarding it to side two. Encoding a tie is a
+# sentinel refactor of a {0.0, 1.0, -1.0} contract that has no free value (0.0
+# already means "not over"), in the SHARED src/state.rs, across three consumers —
+# one of which (src/search.rs) uses the value as a sign multiplier — with a
+# generation-dependent answer. That is a separate change from this crash fix.
+#
+# Also adds a debug_assert tripwire in `maximize_ucb_for_side` itself. That is NOT
+# the fix — it cannot be, since it is compiled out of the release wheel the search
+# actually runs — it is so that a future regression fails in a debug build with a
+# message naming the cause, instead of as a bare index panic several frames away.
+#
+# Pinned by rust/pokezero-search/tests/gen3_terminal_options.rs (three of its six
+# tests fail on the tree without this patch) and end to end by
+# tests/test_engine_search_no_panic.py, which runs the original 15-game repro.
+# Touches the two force_switch branches of gen3/state.rs plus the tripwire in
+# mcts.rs; authored against the move-trapping-patched tree (applied before the
+# upstream-fixture-refresh patch, which must stay last).
+diff -u a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -614,6 +614,26 @@
+             return (side_one_options, side_two_options);
+         }
+ 
++        // pokezero fidelity fix: these two branches were the ONLY exits from this
++        // function that could hand back an EMPTY option vector, and MCTS indexes
++        // straight into it. `add_move_from_choice` pushes nothing when the saved
++        // move is absent from the CURRENT active's four slots, and the early
++        // return then skipped the `len() == 0` guard every other exit has — so a
++        // side owing a forced replacement while the OTHER side carried a
++        // saved-move commitment its active does not know produced `[]`.
++        //
++        // `Node::maximize_ucb_for_side` (src/mcts.rs) initialises `choice = 0` and
++        // returns it unchanged for an empty slice, so `Node::expand` then did
++        // `s2_options[0]` on a zero-length vector and panicked with
++        // "index out of bounds: the len is 0 but the index is 0", killing the
++        // whole search. `root_get_all_options` already guards its own exits, which
++        // is why this only ever fired on INTERIOR tree nodes and never at the root.
++        //
++        // The commitment is unsatisfiable, so the correct model is "this side has
++        // no action at this boundary" — MoveChoice::None, which is exactly what
++        // the NONE arm above and `root_get_all_options`'s guard already produce,
++        // and what Showdown does: the seat that does not owe a replacement is not
++        // asked to choose while the other seat replaces.
+         if self.side_one.force_switch {
+             self.side_one.add_switches(&mut side_one_options);
+             if self.side_two.switch_out_move_second_saved_move == Choices::NONE {
+@@ -623,6 +643,9 @@
+                     &mut side_two_options,
+                     self.side_two.switch_out_move_second_saved_move,
+                 );
++                if side_two_options.is_empty() {
++                    side_two_options.push(MoveChoice::None);
++                }
+             }
+             return (side_one_options, side_two_options);
+         }
+@@ -636,6 +659,9 @@
+                     &mut side_one_options,
+                     self.side_one.switch_out_move_second_saved_move,
+                 );
++                if side_one_options.is_empty() {
++                    side_one_options.push(MoveChoice::None);
++                }
+             }
+             return (side_one_options, side_two_options);
+         }
+diff -u a/src/mcts.rs b/src/mcts.rs
+--- a/src/mcts.rs
++++ b/src/mcts.rs
+@@ -67,6 +67,20 @@
+     }
+ 
+     pub fn maximize_ucb_for_side(&self, side_map: &[MoveNode]) -> usize {
++        // pokezero tripwire: this returns `choice` unchanged when `side_map` is
++        // empty, and every caller indexes straight into it — so an empty option
++        // vector surfaces as an index-out-of-bounds panic several frames away in
++        // `expand`. `get_all_options` is responsible for never producing one (see
++        // poke-engine-gen3-terminal-options.patch); this asserts the contract at
++        // the point that depends on it, so a future regression fails in a debug
++        // build with a message that names the cause instead of a bare index panic
++        // in release. Deliberately a debug_assert: it is a development tripwire,
++        // not a runtime branch in the search hot loop.
++        debug_assert!(
++            !side_map.is_empty(),
++            "get_all_options handed MCTS an empty option vector; \
++             maximize_ucb_for_side would return index 0 into it"
++        );
+         let mut choice = 0;
+         let mut best_ucb1 = f32::MIN;
+         for (index, node) in side_map.iter().enumerate() {
