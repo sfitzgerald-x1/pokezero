@@ -596,3 +596,93 @@ If p2 does not recover, §10 and §11 both retract.
 Every strength number in §4, §7 and §9 was produced by an engine that played one
 of its two seats backwards. They should be treated as void, not as a baseline to
 improve on.
+
+---
+
+## 12. The handcrafted-leaf control: the tree itself was never the problem
+
+**Date:** 2026-07-29, run concurrently with §10/§11 and reported independently.
+Full write-up and artifacts: `docs/mcts_handcrafted_leaf_depth_findings.md`,
+`docs/audit_artifacts/hc-depth-grid-20260729/`.
+
+§11 shows the deficit is the p2 seat and that on p1 more search is better. That
+is measured on the model path, so it says the *learned* value works when it is
+oriented correctly. It leaves one thing open: whether the tree would convert
+depth into strength for a value function that is not the network at all.
+
+This section closes that. `EngineMctsConfig.leaf_eval="hp_fraction_crate"` runs
+the crate's `puct_search_multi` — the same `MultiPlyConfig` reaching the same
+`traverse`/`expand_edge`/`finalize`, the same chance-node backup, the same depth
+and `c_puct` semantics — with the engine's handcrafted HP-fraction evaluation at
+the leaves and uniform priors. Only the leaf changes. Same mirrored-seat harness,
+seeds 600000+, `w4`, n = 400 per cell (the arm is cheap enough that the 100-seed
+window's ±0.10 was avoidable; both windows are in the write-up).
+
+| depth, s1024 | score | Wilson 95% | | d6, budget | score | Wilson 95% |
+|---|---|---|---|---|---|---|
+| control (raw v raw) | 0.496 | [0.448, 0.545] | | `s256` | 0.255 | [0.215, 0.300] |
+| `d1` | 0.196 | [0.160, 0.238] | | `s1024` | 0.328 | [0.283, 0.375] |
+| `d2` | 0.289 | [0.247, 0.335] | | `s4096` | 0.360 | [0.314, 0.408] |
+| `d4` | 0.328 | [0.283, 0.375] | | | | |
+| `d6` | 0.328 | [0.283, 0.375] | | | | |
+| `d8` | 0.328 | [0.283, 0.375] | | | | |
+
+Both axes rise (paired on the same seeds: d1→d4 p < 0.0001, s256→s4096
+p = 0.0006). Levels are not comparable to §4 — different opponent pairing, and a
+locally available v2.2 checkpoint as the raw opponent — so the slope is the
+readout, and it points the other way on both axes.
+
+**What this adds to §11:**
+
+- **The tree is exonerated independently of the model being right.** Decoupled
+  selection, the chance-node exact-expectation backup and the depth mechanics
+  turn plies and simulations into strength with an arbitrary bounded value
+  function. This retires "backup at chance nodes" from §9's *What has NOT been
+  tested* without leaning on the fixed value path.
+- **It closes the "maybe depth just helps weak values" reading.** One could have
+  argued the handcrafted arm improves only because it starts weak. §11.3's p1
+  ladder rules that out from the other side: with a strong, correctly oriented
+  learned value, more search is also better. The two arms agree.
+- **This arm's own seat orientation was verified, not assumed** — the leaf is
+  `0.5 + 0.5*(hp_frac(s1) − hp_frac(s2))`, computed off the state with no
+  seat-dependent conversion, and
+  `tests/test_multiply_chance_search.py::test_seat_swap_reflects_about_one_half`
+  pins root values and per-arm Q to reflect about 0.5 at d1/d2/d4/d6. No
+  `leaf_eval="model"` cell was run here, so nothing in this section inherits the
+  §10.3 inversion. Every cell is reported per seat in the write-up; the
+  handcrafted arm shows nothing like §11's seat collapse (its one +0.11 gap at
+  d4/d6-s1024 does not replicate at s4096, where it reverses sign).
+
+### 12.1 §4.3 closed: the budget binds, not the cap
+
+The crate has always counted `max_depth_reached`; nothing had read it. Node
+depth, root = 0, and the cap bounds child *creation* (`depth + 1 >= max_depth`),
+so a binding cap `d` tops out at `d − 1`.
+
+| cell (s1024) | cap | max reached | mean reached | histogram (node depth → world-searches) |
+|---|---|---|---|---|
+| hc-`d1` | 1 | 0 | 0.000 | `{0: 66716}` |
+| hc-`d2` | 2 | 1 | 0.999 | `{0: 102, 1: 71026}` |
+| hc-`d4` | 4 | 3 | 2.508 | `{0: 97, 1: 364, 2: 32923, 3: 35640}` |
+| hc-`d6` | 6 | 5 | 2.666 | `{0: 98, 1: 374, 2: 32965, 3: 26403, 4: 7468, 5: 1724}` |
+| hc-`d8` | 8 | 7 | 2.672 | `{0: 98, 1: 374, 2: 32965, 3: 26403, 4: 7468, 5: 1381, 6: 264, 7: 79}` |
+
+The cap binds at every setting — but only just: mean depth moves 2.508 → 2.666 →
+2.672 across caps 4/6/8, and 0.11% of world-searches reach depth 7. The d6 and d8
+histograms are the same tree one row longer (d6's 1724 traversals stopped at
+depth 5 are d8's 1381 + 264 + 79), and hc-`d6` and hc-`d8` give the identical
+winner on **400/400** seeds — §4.3 and §11.2's 100/100 reproduced with a cause.
+
+Raising the budget at a fixed cap of 6 moves the distribution exactly as that
+account predicts:
+
+| budget | mean node depth | share at the cap (depth 5) |
+|---|---|---|
+| `s256` | 1.936 | 0.2% |
+| `s1024` | 2.666 | 2.5% |
+| `s4096` | 3.471 | 15.5% |
+
+So §4.3's "either the tree does not reach depth 6, or the cap is not binding" was
+a false dichotomy: the cap binds, and the subtree beyond node depth ~3 is too
+visit-starved to change a root argmax. **Any future depth cell should report the
+depth reached, not the depth configured.**

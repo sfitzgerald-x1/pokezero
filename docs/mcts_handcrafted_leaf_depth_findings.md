@@ -11,19 +11,23 @@ exact-expectation resolution, the depth mechanics themselves — as the cause.
 What remains is on the value side.
 
 **Date:** 2026-07-29
-**Build:** branch `scott/mcts-hceval-ablation`, based on `main` @ `651699d`
-(PR #931, the falsifying re-bench). The `pokezero-search` crate and the
-gen3-patched `poke-engine` were rebuilt from that worktree into a dedicated venv
-before any measurement, and every cell JSON records the resolved module paths it
-actually imported plus the 27-patch engine build fingerprint
-`32a9b325db5f2655…`.
+**Build:** every number here was measured on a build of `main` @ `651699d`
+(PR #931, the falsifying re-bench) plus this branch's additions. The
+`pokezero-search` crate and the gen3-patched `poke-engine` were rebuilt from that
+worktree into a dedicated venv before any measurement, and every cell JSON
+records the module paths it actually imported plus the 27-patch engine build
+fingerprint `32a9b325db5f2655…`. The branch was subsequently rebased onto `main`
+@ `2103d65` (PRs #936–#939) for review; nothing in that range touches the
+handcrafted search path — the model-value reflection is in
+`multiply_batched_encoded_core`, and the telemetry fix is in `_search_model` —
+so no cell was re-measured.
 **Raw-policy opponent:** `checkpoints/pz-v2-2-1m.pt`
 (`foundation-midscale-iter-0312`, observation schema v2.2, 1M games), argmax.
 
 > Read the **slope**, not the level. Handcrafted-search-vs-raw-NN-policy is a
 > different opponent pairing from NN-search-vs-raw-NN-policy, so the absolute
 > scores here are not comparable to the numbers in the degradation doc. Only the
-> shape across depth is.
+> shape across depth and simulation budget is.
 
 ---
 
@@ -77,8 +81,10 @@ reported once, in §2.2.)
 
 ### 2.2 Slope table — full run, seeds 600000–600399
 
-The grid is cheap enough (30–200× cheaper per decision than the model arm) that
-the 100-seed window's ±0.10 half-width was not worth living with.
+The grid is cheap enough — tens of milliseconds per decision against the model
+arm's seconds — that the 100-seed window's ±0.10 half-width was not worth living
+with. (An exact ratio is not quotable: the model arm's published s/decision was
+double-counted until PR #939, so those seconds are ~2× inflated.)
 
 | cell | n | score | Wilson 95% | s/decision | fallback |
 |---|---|---|---|---|---|
@@ -299,35 +305,55 @@ depth-degrading. A structural defect of the kind that could produce
 0.53 → 0.36 while also making 8× the simulations *worse* would have to corrupt
 this arm too, and it does not: this arm has the opposite sign on both axes.
 
-That halves the hypothesis space. What survives, in the order I would test it:
+### 5.1 Convergence with the parity lane
 
-1. **The learned leaf value's orientation — already found by another lane.**
-   While this ran, the parity lane (PR #937) identified a **seat-constant
-   inversion**: on p2 roots, model leaf values entered the tree unreflected. That
-   is a value-side defect, discovered independently, and it is exactly the class
-   this experiment localizes to. `docs/mcts_degradation_findings.md` §9 listed the
-   mirrored-state orientation check as "the cheapest untested candidate"; it was
-   the right instinct and it has now paid out. The open question is no longer
-   *whether* the value path had an orientation bug but *how much of the depth
-   decay it accounts for* — the honest answer needs the grid re-run on the fixed
-   value path, because the published grid is a mix of one correct seat and one
-   inverted seat.
-2. **The learned leaf value under depth, beyond orientation.** Even with the
-   inversion fixed, deeper leaves sit further off the distribution the value head
-   trained on. If the re-run flattens the decay, this is moot; if a residual slope
-   survives, this is where it lives.
+This ran concurrently with, and independently of, the value-orientation audit now
+in `docs/mcts_degradation_findings.md` §10–§11. The two arrive at the same place
+from opposite directions:
+
+- **§10** found the defect: a **seat-constant inversion** — on p2 roots, model
+  leaf values entered the tree unreflected, so every model leaf disagreed with
+  every terminal branch in the same tree. A value-side defect.
+- **§11** split the recorded grid by seat and found p2 carries essentially all of
+  the deficit, while **on the p1 seat more search is better** (d4 0.400 → 0.540
+  across s512→s8192; d6 0.460 → 0.590 across s1024→s4096).
+- **This section** shows the same tree also converts depth and simulations into
+  strength with a value function that is not the network at all.
+
+Two consequences worth stating plainly.
+
+First, the caveat I would otherwise have had to leave open — *maybe extra plies
+help a weak value function and hurt a strong one, so the sign difference tracks
+value quality rather than the tree* — is closed from the other side by §11.3. A
+strong, correctly oriented learned value also improves with search. The
+handcrafted arm is not a special case; the inverted seat was.
+
+Second, this arm's exoneration of the tree does not depend on the model being
+right about anything, which §11's p1 ladder inevitably does. If the acceptance
+re-bench on the fixed build (§11.8) fails to lift p2, §11's mechanism claim
+retracts — and this section still stands, because it never touched the model
+path.
+
+### 5.2 What is still open
+
+1. **How much of the decay the inversion accounts for.** §11.8's re-bench
+   answers it. Every strength number in §4/§7/§9 was produced by an engine
+   playing one seat backwards and should not be used as a baseline.
+2. **The learned leaf value under depth, beyond orientation.** If a residual
+   slope survives the re-bench on the correctly oriented seat, off-distribution
+   leaves at depth are where it would live. §11.7 already flags a possible 2–5
+   point p1 residual hiding inside n = 50.
 3. **The model-prior/PUCT coupling.** This experiment does *not* exonerate it.
    The handcrafted arm runs with **uniform** priors, because `model_priors` has no
    meaning without a model. So what has been cleared is the tree *given uniform
    priors*. If the acting side's learned priors concentrate visits onto arms whose
    deep values are mispriced, the tree would be fine and the pairing would still
-   decay. An ablation exists and is cheap: model leaves with `model_priors=False`.
-
-An honest alternative reading, which I cannot exclude and which does not change
-the verdict: it is possible that extra plies help a *weak* value function and hurt
-a *strong* one, so the sign difference could track value quality rather than
-"learned vs handcrafted". Note that this is still a statement about the value
-side, not the tree. Either way, the tree is not where the fix is.
+   decay. The ablation is cheap: model leaves with `model_priors=False`.
+4. **Depth still saturates near 4** even at s4096 on this arm. That is a property
+   of the handcrafted value running out of signal, and it is exactly what a
+   learned value is supposed to fix — so it is also the thing to look for in the
+   re-bench: does the fixed model arm keep gaining past d4 where handcrafted
+   stops?
 
 ---
 
@@ -349,7 +375,7 @@ Deviations, all forced and all on the record:
 | **Sequential driver** (`LeafPrice::Ready`), so `search_batch` is inert. The model arm uses batch-16 virtual-loss batching. | Handcrafted leaves are priced inline; there is nothing to batch. | The crate's own gate proves `b=1 ≡ sequential`. If anything the hc arm is the cleaner of the two. |
 | **Uniform priors.** | No model, no priors. | Documented above as an explicit hole in the exoneration, not papered over. |
 | **Raw opponent is `pz-v2-2-1m` (v2.2, 1M), not `v3hist-k64-enthalf-5m` @ 4.25M.** | The 5M checkpoint lives on the cluster; this ran locally. | Changes the level, not the shape. The opponent is fixed across every cell, so the within-experiment slope is unaffected. Cross-study comparison is slope-only by construction. |
-| **n = 400** rather than 100. | The arm is 30–200× cheaper per decision, so the doc's ±0.10 half-width was avoidable. | Both windows are reported; the 100-seed window is the comparable one. |
+| **n = 400** rather than 100. | Handcrafted leaves cost tens of milliseconds per decision where model leaves cost seconds, so the doc's ±0.10 half-width was avoidable. | Both windows are reported; the 100-seed window is the comparable one. |
 | **d8 added.** | §4.3's open question is about d6 vs d8 specifically. | Bonus cell. |
 
 Games that end with no winner (the 250-round decision cap) score 0.5. They are
