@@ -1209,6 +1209,19 @@ class EngineMctsPolicy:
             # invocations; worlds_searched is updated only for final records.
             self.stats.total_iterations += int(report["iterations"])
             self.stats.model_evals += int(report["model_evals"])
+            # Reached depth, same accumulation the hp_fraction path already does.
+            # Without this the model path -- the one every strength campaign runs
+            # -- reports nothing about whether the depth CAP was ever binding, so
+            # a flat depth ladder cannot be distinguished from a ladder whose
+            # rungs all built the same undersized tree. Per WORLD, like the
+            # hp_fraction path: depth_reached_samples counts worlds, not decisions.
+            reached = report.get("max_depth_reached")
+            if reached is not None:
+                reached = int(reached)
+                self.stats.depth_reached_samples += 1
+                self.stats.depth_reached_sum += reached
+                self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+                self.stats.depth_reached_histogram[reached] += 1
             # Crate-measured phase walls are per-INVOCATION compute, exactly like
             # iterations/model_evals above: a conservatively replayed world spent
             # that encode/model/tree time twice and must report it.
