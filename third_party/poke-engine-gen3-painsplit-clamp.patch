@@ -1,0 +1,83 @@
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-29 03:35:08
++++ b/src/gen3/choice_effects.rs	2026-07-29 03:38:25
+@@ -897,28 +897,72 @@
+             );
+         }
+         Choices::PAINSPLIT => {
++            // pokezero gen3 fidelity fix: the shared average is assigned through
++            // Showdown's `Pokemon#sethp`, which CLAMPS to each mon's OWN maxhp.
++            // Upstream assigned the raw average to both actives, so the mon with
++            // the smaller maxhp came out ABOVE its maximum — hp > maxhp, a
++            // corrupt state that every later damage/heal/faint check then reads.
++            //
++            // `painsplit.onHit` (data/moves.ts; no gen mod in the chain overrides
++            // Pain Split, so gen3 inherits the base):
++            //
++            // ```text
++            // const averagehp = Math.floor((targetHP + pokemon.hp) / 2) || 1;
++            // target.sethp(target.hp - (targetHP - averagehp));
++            // pokemon.sethp(averagehp);
++            // ```
++            //
++            // and `sethp` (sim/pokemon.ts:1656) is where the clamping lives:
++            //
++            // ```text
++            // if (!this.hp) return 0;          // fainted: no-op
++            // d = trunc(d); if (d < 1) d = 1;  // floor at 1, not 0
++            // ...
++            // if (this.hp > this.maxhp) this.hp = this.maxhp;   // clamp
++            // ```
++            //
++            // So the average itself floors ONCE (integer division here), is
++            // floored at 1, and is then clamped per mon. Verified against the
++            // real sim: a 271-max Weezing splitting with a full 341-max Groudon
++            // averages 306 — Groudon lands on 306/341 unclamped, Weezing on
++            // 271/271 clamped.
++            //
++            // SCOPE NOTE: the #915 choice_special_effect audit verdicted this arm
++            // "correct as-is", and that verdict stands — it was about SUBSTITUTE
++            // routing (Pain Split correctly skips behind a sub, matching
++            // Showdown's `getDamage`-returns-nothing failure). The audit covered
++            // the guard set, not the assignment arithmetic below it, which is
++            // where this bug lives.
+             if !defending_side
+                 .volatile_statuses
+                 .contains(&PokemonVolatileStatus::SUBSTITUTE)
+             {
+-                let target_hp = (attacking_side.get_active_immutable().hp
+-                    + defending_side.get_active_immutable().hp)
+-                    / 2;
++                let attacker_hp = attacking_side.get_active_immutable().hp;
++                let defender_hp = defending_side.get_active_immutable().hp;
++                // Sum in i32 so a pair of large max-HP mons cannot wrap the i16.
++                let average = cmp::max((attacker_hp as i32 + defender_hp as i32) / 2, 1) as i16;
++                let attacker_new =
++                    cmp::min(average, attacking_side.get_active_immutable().maxhp);
++                let defender_new =
++                    cmp::min(average, defending_side.get_active_immutable().maxhp);
++
++                // A negative damage_amount is the engine's existing spelling for
++                // a heal on this instruction, and reverses correctly.
+                 instructions
+                     .instruction_list
+                     .push(Instruction::Damage(DamageInstruction {
+                         side_ref: *attacking_side_ref,
+-                        damage_amount: attacking_side.get_active_immutable().hp - target_hp,
++                        damage_amount: attacker_hp - attacker_new,
+                     }));
+                 instructions
+                     .instruction_list
+                     .push(Instruction::Damage(DamageInstruction {
+                         side_ref: attacking_side_ref.get_other_side(),
+-                        damage_amount: defending_side.get_active_immutable().hp - target_hp,
++                        damage_amount: defender_hp - defender_new,
+                     }));
+ 
+-                attacking_side.get_active().hp = target_hp;
+-                defending_side.get_active().hp = target_hp;
++                attacking_side.get_active().hp = attacker_new;
++                defending_side.get_active().hp = defender_new;
+             }
+         }
+         Choices::SUBSTITUTE => {
