@@ -1,6 +1,8 @@
 # The n=400 dual-purpose grid: both depth ladders are flat
 
-**Status:** depth ladder COMPLETE and reported below. Sims ladder PARTIAL at
+**Status:** depth ladder COMPLETE and reported below, but **scope-limited — read
+§7 before citing §1**: every depth cell here ran at `s1024`, where the simulation
+budget starves the depth cap, so "flat" means "flat where the cap is not reached". Sims ladder PARTIAL at
 `s2048`/`s4096` — preliminary numbers are marked as such and must not be cited
 until the cells finish.
 
@@ -125,7 +127,10 @@ later, not asserted.
 
 - **§4.1's monotone depth decay is not a property of search.** Re-run properly on
   the fixed build, at n=400 per cell, on two checkpoints, with per-checkpoint
-  controls and within-seed pairing: both depth ladders are flat.
+  controls and within-seed pairing: both depth ladders are flat. **Amended by §7:**
+  these ladders ran at `s1024`, where the budget starves the depth cap, so the
+  correct scope is "flat at a budget where the cap is not reached". Wave 3 tests
+  the ladder at `s4096`.
 - **Off-distribution synthesized history is not a decay mechanism.** k64 does not
   slope down where k0 doesn't; the two are indistinguishable at every depth.
 - **The seat residual does not reappear.** Ten more cells, every DiD interval
@@ -205,3 +210,106 @@ effect, a trend, a hint, or a signal — in either direction.
 
 Whichever way the remaining shards fall, the §4 refresh adjudicates against this
 block as written, and any departure from it must be argued explicitly and dated.
+
+---
+
+## 7. Wave 3 pre-registration: the depth ladder where the cap actually binds
+
+**Committed 2026-07-29, before wave 3 was built or launched, and while wave 2's
+`s2048`/`s4096` cells were still draining.**
+
+### 7.1 The confound this addresses, stated against my own result
+
+§1 reported both depth ladders flat and I called that a refutation of
+off-distribution history. That conclusion is **weakened by a confound I did not
+control**: every depth cell in §1 ran at `s1024`, where the simulation budget
+starves the depth cap. On the recorded evidence (#943) mean reached depth is ~2.5
+and only ~2.5% of searches ever touch d6. So `d4` and `d6` at `s1024` largely
+build *the same undersized tree*, and a flat ladder is what you would measure
+whether depth helps or not. §14's comparison does not rescue this either — it
+moved depth and simulations together (`d4-s1024` → `d6-s4096`), so it cannot
+separate the two axes.
+
+**§1's flatness therefore does not license "depth does not help".** It licenses
+"depth does not help *at a budget where the cap is not reached*", which is a much
+smaller claim. §5's bullet is amended accordingly by this section.
+
+### 7.2 Hypothesis
+
+> **Depth expresses only when the simulation budget makes the cap reachable.** At
+> `s4096` (~15% of searches reach the cap on #943's numbers) the depth ladder
+> should show a **positive** slope that the `s1024` ladder lacked.
+
+Falsifiable both ways. If the `s4096` depth ladder is **also flat**, then depth
+genuinely does not convert into strength in this search over d1–d6, the confound
+is not load-bearing, and §1's conclusion stands on firmer ground than it does
+today. If it slopes **up**, §1's flat ladder was a budget artefact and must be
+re-labelled as such.
+
+### 7.3 Design
+
+`d1` / `d2` / `d6` @ `s4096`, both checkpoints — 6 new cells. **`d4-s4096`
+already exists in wave 2 and is reused as the fourth rung**, so the ladder is
+d1/d2/d4/d6 without paying for d4 twice. 400 within-seed mirrored pairs per cell
+on the **same** 8100000–8100199 band; the per-checkpoint controls from wave 1 are
+reused (raw-vs-raw is depth- and sims-independent by construction — the same
+argument as §14's control reuse, and the pooled-0.500 identity re-verifies it).
+
+**Build era.** Wave 3 is built from the wave-1/2 commit **plus one
+observability-only change** (reached-depth capture on the model path, #964).
+Verified: the engine build fingerprint is **byte-identical** —
+`814b2bd28d398381…`, 30 patches — so all 22 cells across the three waves remain
+**one engine era**. Play-inertness is additionally verified by replaying an
+existing wave-2 shard's seeds on the wave-3 image and diffing per-game outcomes
+against the recorded file.
+
+**Cost.** ~2400 games at ~7–10 min/game measured at `s4096` ⇒ **≈333 GPU-hours**,
+larger than waves 1 and 2 combined. Stated up front because it is the most
+expensive thing this campaign has asked for.
+
+### 7.4 Reached depth will be MEASURED, not assumed
+
+#943's histograms come from a different build. Every wave-3 shard emits
+`policy_stats.depth_reached_histogram` (per world), so **"the cap binds at
+`s4096`" is a reported quantity of these runs**. This is required, not optional:
+
+- If the `s4096` histograms show the cap is still rarely reached, wave 3 inherits
+  the same confound and its flatness is uninterpretable — the honest report is
+  then "budget still starves the cap", not a verdict on depth.
+- Wave 1/2 shards predate the instrumentation and carry no histogram. Their
+  reached-depth is therefore **unmeasured**, and §1 may not be defended by
+  appeal to #943's numbers from another build.
+
+### 7.5 Families and Holm sizes, updated
+
+Wave 3 adds 6 cells: **+6 DiD tests** (14 → **20**) and **+6 paired depth-slope
+tests** at s4096, 3 per checkpoint (12 → **18**). Cross-checkpoint comparisons
+gain 4 at s4096 (4 → **8**).
+
+| family | tests | expected exclusions at α = 0.05 |
+|---|---|---|
+| per-cell DiD | **20** | 1.00 |
+| paired slopes | **18** | 0.90 |
+| cross-checkpoint | **8** | 0.40 |
+| **total** | **46** | **≈ 2.3** |
+
+The §6.2 criterion applies unchanged and at these updated sizes: Holm within the
+pre-declared family, **or** replication on the other checkpoint at the same
+`(depth, sims)`. Holm is computed at 20 / 18 / 8 — **not** at the smaller
+pre-wave-3 sizes, and not at a size recomputed from whichever cells finish.
+
+### 7.6 k0-vs-k64 expectation
+
+The §1 result — indistinguishable at every depth — was measured where the cap
+does not bind, so it does not settle the history question either. At `s4096`,
+where deep rollouts actually synthesize the history k64 was trained to expect
+and k0 was not:
+
+- **If synthesized history is a real mechanism**, k64's s4096 depth slope should
+  be *less positive* than k0's, and `k64 − k0` should become *more negative* with
+  depth.
+- **If it is not**, the two slopes stay indistinguishable, as in §1, and the
+  refutation in §1 is then supported by a test that could have detected the
+  effect.
+
+Either outcome is acceptance-criterion-bound by §6.2 exactly as everything else.
