@@ -14,6 +14,17 @@ canary-verified before launch)
 > conclusion below was tested by the prediction it generated, and failed. It is
 > retained unedited so the reasoning that produced a wrong answer stays legible.
 
+> **Telemetry caveat — every model-mode `s/decision` and `search_wall` figure in
+> this document is ~2x inflated.** `EngineMctsPolicy._search_model` accumulated
+> `search_wall_seconds` twice per decision (and counted each world twice), fixed
+> 2026-07-29. The tables below are left as recorded rather than rewritten: the
+> inflation is uniform across model-mode cells, so every wall-time COMPARISON in
+> here still holds, and only the absolute seconds are wrong. **Scores, Wilson
+> intervals and every strength conclusion are unaffected** — the double count
+> never touched the aggregated visit shares. Cite absolute wall numbers only from
+> post-fix builds; the raw-vs-raw control rows were never model-mode and are
+> exact.
+
 ---
 
 ## 1. Verdict

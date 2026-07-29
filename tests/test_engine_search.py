@@ -931,6 +931,77 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(len(native.calls[0]), 12)
 
+    # --- telemetry counting (model path) ------------------------------------------
+    #
+    # The model path used to count every world TWICE — once above the aggregation loop
+    # and once per record inside it — and to add the search interval to
+    # ``search_wall_seconds`` twice, both times measured from the same
+    # ``search_started``. So model-mode ``worlds_searched`` and the derived
+    # ``search_wall_per_searched_decision`` were ~2x inflated. Scores were never
+    # affected: none of it feeds ``aggregated``. The hp_fraction paths always counted
+    # once and are the reference shape.
+
+    def _reports(self, count: int) -> list[dict]:
+        return [self._report(70, 30, stopped=False) for _ in range(count)]
+
+    def test_each_world_is_counted_exactly_once(self) -> None:
+        worlds = [self._world(f"world-{index}") for index in range(3)]
+        policy = self._policy(early_stop=False)
+
+        decision = self._run(policy, self._Native(self._reports(len(worlds))), worlds)
+
+        # Three worlds in, three counted -- not six, which is what the double
+        # increment produced and what the metadata handed to every consumer.
+        self.assertEqual(policy.stats.worlds_searched, len(worlds))
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["worlds_searched"], len(worlds)
+        )
+
+    def test_world_count_is_linear_in_the_number_of_worlds(self) -> None:
+        # Guards the shape as well as one value: a per-record increment would keep the
+        # ratio at 2 for every N, so checking a single N could be read as an off-by-one.
+        for count in (1, 2, 4):
+            with self.subTest(worlds=count):
+                policy = self._policy(early_stop=False)
+                worlds = [self._world(f"world-{index}") for index in range(count)]
+                self._run(policy, self._Native(self._reports(count)), worlds)
+                self.assertEqual(policy.stats.worlds_searched, count)
+
+    def test_search_wall_is_accumulated_once_per_decision(self) -> None:
+        # A stepped clock: the first reading is ``search_started``, every later reading
+        # is a fixed interval after it. One accumulation therefore records exactly
+        # STEP; the old double accumulation recorded 2 * STEP. Robust to how many
+        # times perf_counter is called, only to how many times the wall is added to.
+        step = 7.5
+        readings = iter([100.0])
+
+        def clock() -> float:
+            return next(readings, 100.0 + step)
+
+        policy = self._policy(early_stop=False)
+        worlds = [self._world(f"world-{index}") for index in range(3)]
+        with patch("pokezero.engine_search.time.perf_counter", clock):
+            self._run(policy, self._Native(self._reports(len(worlds))), worlds)
+
+        self.assertAlmostEqual(policy.stats.search_wall_seconds, step)
+
+    def test_reported_seconds_per_decision_is_not_inflated(self) -> None:
+        # The number the depth study actually reads
+        # (``search_wall_per_searched_decision``), end to end through the stats payload.
+        step = 4.0
+        readings = iter([0.0])
+
+        def clock() -> float:
+            return next(readings, step)
+
+        policy = self._policy(early_stop=False)
+        with patch("pokezero.engine_search.time.perf_counter", clock):
+            self._run(policy, self._Native(self._reports(2)), [self._world("a"), self._world("b")])
+
+        payload = policy.stats.to_dict()
+        self.assertEqual(payload["worlds_searched"], 2)
+        self.assertAlmostEqual(payload["search_wall_per_searched_decision"], step)
+
 
 class _FakeEvent:
     def __init__(self, raw_line):

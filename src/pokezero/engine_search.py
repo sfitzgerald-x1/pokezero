@@ -1181,9 +1181,12 @@ class EngineMctsPolicy:
             total = max(sum(entry["visits"] for entry in entries), 1)
             for entry in entries:
                 aggregated[entry["move"]] += entry["visits"] / total
-            self.stats.worlds_searched += 1
-            worlds_searched_here += 1
-        self.stats.search_wall_seconds += time.perf_counter() - search_started
+        # Both counters are accumulated ONCE, above the loop. This block used to also
+        # bump ``stats.worlds_searched`` and ``worlds_searched_here`` per record and
+        # re-add the wall interval after the loop, so model-mode telemetry reported
+        # every world twice and roughly twice the search time (the same interval, both
+        # times measured from ``search_started``). The hp_fraction paths never had it.
+        # Scores were never affected — nothing here feeds ``aggregated``.
 
         if not worlds_searched_here:
             return self._fallback(context, rng, "crate_search_failed")
