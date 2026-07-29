@@ -1053,6 +1053,38 @@ Seeds burned by this appendix: 981000–981149 (A/B, re-used deliberately),
 
 ---
 
+# Method rule — for an upstream field, acceptance proves nothing
+
+**A constructor accepting a field is not evidence the engine honours it. Only
+ROUND-TRIP SURVIVAL is: set the field, serialize, re-parse, and confirm it is
+still there and still doing something.**
+
+Third recurrence of this shape, hence a standing rule:
+
+| Field | What "accepted" hid |
+| --- | --- |
+| `wish` amount | stored and then ignored — the engine heals the resolving active's half regardless |
+| `TRANSFORM` volatile | accepted by `Side(...)` and stored, with **zero** behavioural references in gen3 |
+| Rest-provenance / attempt counts | accepted, but the semantics differed from the field's name |
+
+The trap: `pe.Side(volatile_statuses={"TRANSFORM"})` raises nothing and the value
+reads back, so the field looks supported. It is inert. An upstream binding will
+happily accept anything its type signature allows, and a value that is stored but
+never read is indistinguishable from a value that works — until a differential
+disagrees and the cause is hunted somewhere else entirely.
+
+The check that actually discriminates:
+
+1. set the field on a state;
+2. `state.to_string()` -> `State.from_string(...)` and confirm it survives;
+3. drive a transition that the field must change, and confirm the instruction
+   stream differs from the field-absent case.
+
+Step 3 is the one that matters. Steps 1-2 pass for inert fields too.
+
+Companion to the Dex-resolution rule below: both are cases where the obvious
+check returns a clean answer to a question nobody asked.
+
 # Method rule — resolve gen3 data through the Dex, never read base data
 
 **Read move and condition data through `Dex.mod('gen3')`. Never read
@@ -2807,3 +2839,130 @@ reclassification goes unchallenged.
 If the engine lane judges the fix not worth it, the widening should go to
 adversarial review on rows the reviewer picks — the §N protocol — rather than
 being adopted here.
+
+---
+
+# Appendix P — cycle three (26 patches): NOT MET, third hold
+
+Fresh clean vendor, both wheels rebuilt and stamped (`4f4a174102fadc14`,
+26 patches + 8 crate sources); 24 crate suites green; gate current.
+
+## P.1 ACCEPTANCE VERDICT: NOT MET — run not started
+
+300 games, seeds 1500000-1500299, strict.
+
+| | cycle 2 (24p) | **cycle 3 (26p)** |
+| --- | --- | --- |
+| measured | 23,334 / 23,860 = 97.80 % | **23,335 — 97.80 %** |
+| **diverged** | 298 | **306 — 1.31 %** |
+| harness errors | 0 | **0** |
+| `unclassified` | 0 | **0** |
+| adjudicated `limit:` | 47 | **47** |
+| **OUTSIDE limit classes** | 251 | **259** |
+
+Seed block 2,000,000+ remains unconsumed.
+
+## P.2 The count went UP — and that is mostly the measurement getting stronger
+
+Row-identity diff, not just class counts:
+
+| | n |
+| --- | --- |
+| fixed since cycle 2 | **11** |
+| newly divergent | **19** |
+| net | **+8** |
+
+**All 19 new rows are `gating=exact`.** The Rest-provenance fix made a large
+population of sleep boundaries exactly constructible that previously fell back to
+the hidden-counter sweep:
+
+| counter | cycle 2 | cycle 3 |
+| --- | --- | --- |
+| `gating:exact` | 17,161 | **21,258** (+4,097) |
+| `gating:support` | 6,173 | **2,077** (−4,096) |
+
+The support sweep validates against the **union** of a counter's legal values, so
+it matches whenever *any* value would. Moving ~4,100 boundaries to exact gating
+replaces that union with one committed state — a strictly stronger bar. Some of
+what it now catches was always divergent and simply unmeasurable.
+
+**That does not make the 19 rows acceptable**, and the ledger does not get to
+claim the increase is purely virtuous. P.3 shows a real defect underneath.
+
+## P.3 CONFIRMED: the `restSleepAttempts` -> `rest_turns` conversion is off by one
+
+`seed 1500013 step 72`, payload:
+
+```
+p1 Dunsparce  "90/319 slp"   restSleepAttempts: 1   ->  world rest_turns=2
+p2 Dunsparce  "175/319 slp"  restSleepAttempts: 2   ->  world rest_turns=1
+```
+
+Showdown: **both** mons are `|cant|...|slp`. Neither moves.
+Engine: p2 wakes and attacks (`move=-85` on p1).
+
+Engine `rest_turns` semantics, probed directly:
+
+| `rest_turns` | attacker moves this turn |
+| --- | --- |
+| 1 | **yes** — wakes |
+| 2 | no |
+| 3 | no |
+
+So `rest_turns=1` means "wakes now". A mon that has made **2** sleep attempts
+must still be asleep in gen3 (Rest costs two full turns; the user acts on the
+third), and Showdown confirms it directly here. The conversion produced
+`rest_turns = 3 - attempts`; it needs `4 - attempts`:
+
+| attempts | current -> engine behaviour | required |
+| --- | --- | --- |
+| 1 | 2 -> stays asleep ✓ | 3 |
+| 2 | **1 -> WAKES ✗** | **2** |
+| 3 | 0 | 1 -> wakes ✓ |
+
+| | |
+| --- | --- |
+| Verdict | **WORLD CONSTRUCTION** — off-by-one in the attempt-count conversion |
+| Repro | `seed 1500013 step 72` (payload above; engine probe above) |
+| Why it matters now | the same fix moved 4,097 boundaries onto exact gating, so this error went from absorbed-by-the-union to load-bearing |
+
+## P.4 The battle-end residual fix did not move the residue
+
+Terminal-boundary rows (`|win|` in the step) — a census property, decidable per
+row:
+
+| | cycle 2 | cycle 3 |
+| --- | --- | --- |
+| terminal divergent rows | **32** | **32** |
+
+**Unchanged.** §O predicted these would clear. They did not. Either the fix does
+not cover the case §O.2 documented (the winner's own Leftovers firing after the
+final faint), or it is not reaching this path. Handed back to that lane with the
+§O.2 repro (`seed 1500064 step 126`) intact.
+
+## P.5 What worked
+
+| Fix | Predicted | Actual |
+| --- | --- | --- |
+| Toxic Poison-gate | 8-set share | **`component_extra_in_engine:psn` 9 -> 0**, class extinct ✓ |
+| Rest-provenance | ~51 rows | directionally right — +4,097 exact-gated — but P.3 off-by-one |
+| battle-end residuals | 32 rows | **0 rows** ✗ (P.4) |
+| #879 sub/confusion/perish | some | no measurable movement in those families |
+
+## P.6 Residue
+
+| Class | n | Note |
+| --- | --- | --- |
+| `roll_scaled_component` | 150 | +17, and 17 of the 19 new rows land here (P.3) |
+| `limit:roll_divergent_lethality` | 42 | adjudicated |
+| `component_extra_in_engine:itemleftovers` | 29 | 24 terminal (P.4) |
+| `component_missing_in_engine:itemleftovers` | 28 | Rest-provenance family |
+| `component_missing_in_engine:psn` | 24 | unchanged across three builds |
+| `limit:world_sample_drag_target` | 5 | adjudicated |
+| 14 smaller classes | 28 | |
+
+## P.7 Artifacts
+
+Under `<scratch>/reports/`: `c3.json`, `c3.jsonl` (resumable), `c3.log`;
+`cyc300.json` (cycle 2) for the diff. `<scratch>` =
+`/private/tmp/claude-501/-Users-scott-workspace-agents-pokezero-agent/47b7c392-a7b8-43cf-b071-8a500f9bc9bf/scratchpad`
