@@ -15,6 +15,7 @@ Ground truth for the behaviour all of this exists to reproduce is
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import unittest
@@ -32,6 +33,30 @@ from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
 from pokezero.local_showdown import _apply_rest_sleep_provenance  # noqa: E402
 from pokezero.showdown import parse_showdown_replay  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
+
+
+@contextlib.contextmanager
+def _stubbed_capability_probe():
+    """Swap the module-level Rest capability probe for the duration.
+
+    The real probe asks the installed native wheel whether it round-trips
+    ``rest_turns``. These tests are about the WIRING either side of it -- the
+    payload row in, the ``rest_turns`` out -- so they stub it, exactly as
+    ``tests/test_engine_world.py`` does for move-trapping. Without the stub a
+    machine with no wheel would ERROR here instead of skipping, and the failure
+    would name the wrong thing. ``RestTurnsCapabilityTests`` below runs the real
+    probe against the real wheel and skips loudly when there is none.
+    """
+
+    import pokezero.engine_world as engine_world
+
+    calls: list[int] = []
+    original = engine_world.require_rest_turns_support
+    engine_world.require_rest_turns_support = lambda *a, **k: calls.append(1)
+    try:
+        yield calls
+    finally:
+        engine_world.require_rest_turns_support = original
 
 
 # --- fixtures ---------------------------------------------------------------------
@@ -157,10 +182,26 @@ class RestTurnsReconstructionTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.dex = _dex()
+        probe = _stubbed_capability_probe()
+        self.probe_calls = probe.__enter__()
+        self.addCleanup(probe.__exit__, None, None, None)
 
     def _sleeper(self, **kwargs):
         world = battle_spec_from_payload(_payload(self.dex, **kwargs), _override(), dex=self.dex)
         return world.spec.side_two.pokemon[0]
+
+    def test_building_a_rest_sleeper_gates_on_the_capability(self) -> None:
+        # The constructor-side half of the gate. An unannotated sleeper must NOT
+        # reach for the native probe -- otherwise every ordinary sleep would start
+        # requiring a wheel it has no need of.
+        self._sleeper(rest_attempts=0)
+        self.assertEqual(len(self.probe_calls), 1)
+
+        self.probe_calls.clear()
+        battle_spec_from_payload(
+            _payload(self.dex), _override(), dex=self.dex, approximate_sleep_turns=True
+        )
+        self.assertEqual(self.probe_calls, [])
 
     def test_each_attempt_count_maps_onto_the_engines_own_counter(self) -> None:
         # The engine sets rest_turns 3 on Rest and decrements once per move ATTEMPT,
