@@ -4925,3 +4925,181 @@ rather than by comparing counts, and diagnosed by reverting the change (via a sa
 a stash) to replay the row at the base build. A count-level comparison would have shown
 "12 cleared, expected 11" and invited a hand-wave about noise; the identity diff named the
 row, and the replay named the cause.
+
+## Z4.7 Three corrections from the #958 verification
+
+### (i) Full-frame clearance was 16, not 12
+
+Z4.6 counted only the **outside-limits** frame (108 -> 96). The full frame cleared **16**:
+the 12 named there plus four more that sat in the **limit bucket**, and so were invisible to
+a population defined as outside-limits:
+
+| row | where it sat |
+| --- | --- |
+| 1500000/11 | limit bucket |
+| 1500138/88 | limit bucket |
+| 1500294/71 | limit bucket |
+| 1500297/14 | limit bucket |
+
+Verified: none of the four is among the c9 decomposition's 108, and all four are absent from
+the post-fix run. The Encore mechanism therefore accounted for **16** rows across the whole
+frame, against a documented family of 11.
+
+Standing lesson, and it is the same shape as the 12th row: **a population definition is a
+lens, not a census.** "Outside-limits" was the right frame for adjudicating the 108, and the
+wrong frame for measuring a fix's reach. Report clearance against the full frame and the
+sub-population separately, because a fix does not know which bucket a row was filed in.
+
+### (ii) Erratum 2 was FALSE — and it was my transcription, not the artifact
+
+Z4.5 recorded that 1500242/60's committed branch table "lists 7 of 15 branches while claiming
+`branches_truncated: 0`". **The artifact says no such thing.** Read directly out of
+`reports/c9_capped_lethal_walk.json`, row index 8, candidate 0:
+
+```
+branches:            <list len 7>
+branches_truncated:  8            <- 7 + 8 = 15, correct and self-consistent
+```
+
+The `0` came from the **#957 merge note**, and I carried it into the ledger without opening
+the file it described. There was no artifact defect. Erratum 2 is withdrawn; the only real
+erratum from that verification is erratum 1 (the walk artifact serialized by a slightly
+earlier walker iteration).
+
+**The transcription-chain lesson, which is worth more than the erratum was.** I have a
+standing rule about replaying before narrating and a standing rule about verifying provenance
+at source, and I applied neither here, because the claim arrived in a *review note* rather
+than in a tool result — and review prose reads like conclusion, not evidence. It is neither:
+**a merge note is upstream data.** It is written by someone reading the same artifacts, at
+speed, and it can be wrong in exactly the ways an artifact cannot (an artifact at least
+disagrees with itself loudly). The rule generalizes past this ledger:
+
+> Verify against the artifact, not the note. Prose that summarizes evidence is not evidence,
+> whoever wrote it — including a reviewer, including me.
+
+This is the fourth entry in this ledger where a **partial truth positioned where a reader
+looks for the whole one** cost something: the class label (U.2), the unenforced comment and
+the half-true "latches with the schema" note (encoder vocab), the function name, and now a
+merge note. The failure mode is identical every time and the defence is always the same one:
+open the thing being described.
+
+### (iii) The Fake Out pin is an ENGINE-BEHAVIOR pin
+
+Z4.2 lists Fake Out under the consumer survey, which is right, but the pin itself was
+described alongside the parser pins as though it were of a kind with them. It is not, and the
+distinction matters for what a future failure would mean:
+
+* **6 parser pins** — the seeding **discriminators**. They fix what the world is allowed to
+  claim it knows: executed-vs-immobilized, caller-vs-callee, switch-vs-unknown. A failure
+  there means the world is describing history wrongly.
+* **1 engine-behavior pin** (Fake Out) — fixes what the ENGINE does once correctly seeded.
+  Nothing about the parser changes if it breaks; it would mean the engine's Fake Out handling
+  moved underneath a now-populated field.
+
+Same file, different failure meaning. Worth keeping legible because the seeding pins are
+stable-by-construction while the behavior pin tracks an engine the vendored patch stack keeps
+editing.
+
+---
+
+# Appendix Z5 — Patch 34: self-destruct is gated on the move actually executing
+
+Branch `scott/engine-gen3-explosion-blocked-residuals`. **Vendored patch 34**
+(`poke-engine-gen3-explosion-selfdestruct-gate.patch`), fixture-refresh still last at 35.
+Fingerprint `5b29e611468d3baa930984d5b8557280835e72f1ce38d8dc3c6b183e15c344dc`; the
+unpatched comparison build is `9ecfacadc938c0da`.
+
+## Z5.1 The documented WHY was the symptom again
+
+The brief carried this as *"when the engine's branch has the move BLOCKED (frz/slp/par cant),
+it drops the WHOLE end-of-turn residual block"*. **It does not, and it never did.** One
+control settles it — an ordinary blocked move, same paralyzed mon, same Leftovers:
+
+```
+TACKLE,    p2 paralyzed, 25% blocked branch:  ['Heal SideTwo: 19']      <- residuals fine
+EXPLOSION, p2 paralyzed, 25% blocked branch:  ['Damage SideTwo: 89']    <- user is DEAD
+```
+
+The engine applied Explosion's self-faint in `choice_before_move`, which runs at
+`generate_instructions.rs:2245` — **before** the immobilizers are rolled at `:2258`. So the
+blocked branch killed its own user, and residuals then correctly did not run, because the mon
+was dead. The missing Leftovers tick was real; its cause was one step upstream of where the
+family name pointed.
+
+Showdown, verified at source: `selfdestruct` lives in `useMoveInner`
+(`sim/battle-actions.ts:501`, guarded `gen !== 4`), and `runMove` calls `useMove` only after
+the `BeforeMove` gate returns true. **An immobilized Pokemon never explodes.**
+
+The fix relocates the faint to immediately after the status-condition gate — the blocked
+branches were already pushed to `final_instructions` by that call and never reach it. Position
+within the surviving branch is unchanged: still before damage (gen3 faints the user first),
+still firing through Protect (Showdown's faint precedes `tryMoveHit`), DAMP guard preserved,
+and Sleep Talk's callee still reaches it because the gate is skipped for it.
+
+**This is the third consecutive assignment whose documented WHY named a downstream symptom**
+(encore-redirect -> missing world seed; boundary-truncation -> Encore misfiling; residual-drop
+-> pre-gate self-KO). The common shape: a residual/HP-component signature is the most VISIBLE
+part of a divergence and the least diagnostic, because every upstream cause that changes who
+is alive at end-of-turn produces the same missing tick. **Read the branch that is wrong, not
+the component that is missing.**
+
+## Z5.2 Pins: 2 fail unpatched, 4 pass both ways
+
+| pin | unpatched | patched |
+| --- | --- | --- |
+| `the_blocked_branch_no_longer_kills_its_own_user` | **FAIL** | pass |
+| `the_blocked_branch_keeps_its_end_of_turn_residuals` | **FAIL** | pass |
+| `an_ordinary_blocked_move_keeps_its_residuals` | pass | pass |
+| `the_firing_branch_still_faints_the_user_and_still_skips_residuals` | pass | pass |
+| `damp_still_prevents_the_faint` | pass | pass |
+| `a_healthy_user_still_explodes` | pass | pass |
+
+The third row is the load-bearing control and the reason it is written at all: it encodes the
+refutation, so a future reader who takes the family name at face value and re-adds residuals
+to blocked branches will find the premise already disproved in the test file rather than
+rediscovering it from a census.
+
+## Z5.3 Differential: predicted 2, cleared 4 — the family was under-counted again
+
+300 games, seeds 1500000-1500299, strict matcher. Prediction recorded before the run
+(`reports/c10_explosion_prediction.md`). Post-#958 baseline: 96 outside-limits.
+
+| | predicted | actual |
+| --- | --- | --- |
+| named rows (1500074/57, 1500188/33) | clear | **both clear** |
+| other families | zero change | **two more cleared** |
+| outside-limits | 96 -> 94 | 96 -> **92** |
+| newly divergent | 0 | **0** |
+
+The two extra rows were checked on the **unpatched** build rather than assumed, per the
+prediction's own instruction. Both are the same signature:
+
+| row | c9 family | what it actually is |
+| --- | --- | --- |
+| 1500188/57 | `matcher_accounting_best_branch` | `p2: explosion` + `\|cant\|p2a: Swalot\|par` |
+| 1500286/38 | `matcher_overreport_legal_roll` | `p2: explosion` + `\|cant\|p2a: Regirock\|par` |
+
+So the family is **4**, not 2, and the two strays were filed by downstream symptom — a
+branch-accounting mismatch — rather than by cause, exactly as 1500285/14 was filed as
+boundary truncation in the Encore family.
+
+**Both of the last two fixes have under-counted their own family in the same direction, for
+the same reason.** A mechanism that changes *which branch is right* shows up in whatever
+class the matcher lands in once the right branch is missing — residual truncation, branch
+accounting, legal-roll overreport. Those class names describe the matcher's experience, not
+the engine's error. **Predicting from family labels therefore systematically under-predicts;
+predict from the mechanism's signature instead** (here: any boundary pairing a self-destruct
+move with an incapacitating status), and identity-diff the full frame to catch the rest.
+
+The first count-level comparison here was *also* misleading in a second way worth recording:
+the default report retains only 25 repros of 130+ divergences, so an identity diff computed
+from `repros` silently compared two truncated samples and reported "0 cleared, 0 new". The
+re-run with `--repros-per-game 40` is what produced the table above. **A diff over a truncated
+set is not a diff.**
+
+## Z5.4 Artifacts
+
+- `reports/c10_explosion_prediction.md` — prediction, pre-registered
+- patch: `third_party/poke-engine-gen3-explosion-selfdestruct-gate.patch` (34 of 35;
+  fixture-refresh last)
+- pins: `rust/pokezero-search/tests/gen3_selfdestruct_gate.rs`

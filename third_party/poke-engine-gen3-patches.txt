@@ -945,5 +945,31 @@ poke-engine-gen3-trace-no-activation.patch
 # trace-no-activation tree above.
 poke-engine-gen3-damage-stepwise-truncation.patch
 
+# gen3 self-destruct faints the user only if the move actually EXECUTES. Showdown
+# reaches it in `useMoveInner` (sim/battle-actions.ts:501):
+#
+#     if (this.battle.gen !== 4 && move.selfdestruct === 'always') {
+#         this.battle.faint(pokemon, pokemon, move);
+#     }
+#
+# and `runMove` calls `useMove` only after the `BeforeMove` gate returns true, so a
+# fully-paralyzed / asleep / frozen Pokemon never explodes. The engine applied the
+# faint in `choice_before_move`, which runs BEFORE
+# generate_instructions_from_existing_status_conditions rolls those immobilizers, so
+# the BLOCKED branch killed its own user. The visible symptom was a missing Leftovers
+# tick on that branch -- residuals correctly do not run for a dead mon -- which is why
+# the family was first read as "blocked branches drop the residual block". They do
+# not: an ordinary blocked move keeps its residuals (pinned as a control).
+#
+# The relocation keeps the faint BEFORE damage (gen3 fains the user first) and keeps
+# it firing through Protect, both matching Showdown, where it precedes `tryMoveHit`.
+# The DAMP guard is preserved. Sleep Talk's callee still reaches it, correctly: the
+# called move runs through `useMove` like any other.
+#
+# Touches gen3/choice_effects.rs (removal) and gen3/generate_instructions.rs
+# (relocation); authored against the lastmove-semantics tree, applied before the
+# fixture refresh. Pinned by rust/pokezero-search/tests/gen3_selfdestruct_gate.rs.
+poke-engine-gen3-explosion-selfdestruct-gate.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
