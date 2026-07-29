@@ -184,3 +184,43 @@ class AcceptanceReportTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class ModelPathDepthInstrumentationTest(unittest.TestCase):
+    """The model path must accumulate reached depth, like the hp_fraction path.
+
+    Without this a depth ladder cannot be interpreted: "depth does not help" and
+    "the simulation budget never let the tree reach the cap" produce the same flat
+    ladder, and only the reached-depth histogram separates them.
+    """
+
+    def test_model_path_accumulates_reached_depth(self) -> None:
+        import re
+
+        source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
+        # The two accumulation sites must both exist: the hp_fraction path and
+        # the model path. Locate them by their neighbouring model-only counter.
+        self.assertIn("self.stats.model_evals += int(report[\"model_evals\"])", source)
+        model_block = source.split("self.stats.model_evals += int(report[\"model_evals\"])")[1][:900]
+        for field in (
+            "depth_reached_samples",
+            "depth_reached_sum",
+            "depth_reached_max",
+            "depth_reached_histogram",
+        ):
+            self.assertIn(
+                field,
+                model_block,
+                f"model path does not accumulate {field}; a depth ladder run on "
+                "leaf_eval='model' would carry no reached-depth evidence",
+            )
+        self.assertEqual(
+            len(re.findall(r"depth_reached_histogram\[reached\] \+= 1", source)),
+            2,
+            "expected exactly two accumulation sites: hp_fraction and model",
+        )
+
+    def test_runner_emits_the_policy_stats_payload(self) -> None:
+        source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text()
+        self.assertIn("policy_stats", source)
+        self.assertIn("to_payload()", source)
