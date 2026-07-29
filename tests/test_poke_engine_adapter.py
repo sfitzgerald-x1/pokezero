@@ -8,6 +8,7 @@ import unittest
 
 from pokezero.poke_engine_adapter import (
     BattleSpec,
+    PokeEngineMctsEntrypointMissingError,
     PokeEngineTransformRevertUnsupportedError,
     MoveSpec,
     PokeEngineAttractUnsupportedError,
@@ -16,6 +17,7 @@ from pokezero.poke_engine_adapter import (
     _serialize_pre_transform,
     build_poke_engine_state,
     minimal_gen3_fixture,
+    require_mcts_entrypoint,
     require_pre_transform_support,
     run_adapter_reversible_smoke,
 )
@@ -463,6 +465,32 @@ def _transform_specs(*, with_snapshot: bool):
         ),
         side_two=SideSpec(pokemon=(donor,)),
     )
+
+
+class MctsEntrypointProbeTest(unittest.TestCase):
+    """`monte_carlo_tree_search` is the entrypoint `engine_search` calls.
+
+    It is a pure-Python wrapper in poke-engine-py's `python/poke_engine/__init__.py`
+    around the native `mcts` pyfunction, so an install carrying only the compiled
+    extension imports cleanly, exposes `mcts`, and fails only mid-search with a
+    bare AttributeError. The probe turns that into a message naming the build.
+    """
+
+    def test_accepts_a_binding_that_exposes_the_entrypoint(self) -> None:
+        require_mcts_entrypoint(SimpleNamespace(monte_carlo_tree_search=lambda *a, **k: None))
+
+    def test_rejects_an_extension_only_install(self) -> None:
+        # The exact half-installed shape: native `mcts` present, wrapper absent.
+        with self.assertRaises(PokeEngineMctsEntrypointMissingError) as caught:
+            require_mcts_entrypoint(SimpleNamespace(mcts=lambda *a, **k: None))
+        message = str(caught.exception)
+        self.assertIn("monte_carlo_tree_search", message)
+        self.assertIn("setup_poke_engine.sh", message, "must name the build command")
+
+    def test_the_real_binding_has_it(self) -> None:
+        if not probe_poke_engine().ready:
+            self.skipTest("poke-engine is not installed/ready")
+        require_mcts_entrypoint()
 
 
 class BaseIdentityTest(unittest.TestCase):

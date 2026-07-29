@@ -38,6 +38,16 @@ TYPE_SLOTS = 2
 # Module attributes the adapter needs to construct a state.
 ADAPTER_CONSTRUCTION_API = ("State", "Side", "Pokemon", "Move")
 
+# The search entrypoint `pokezero.engine_search` drives. `monte_carlo_tree_search`
+# is a pure-PYTHON wrapper in poke-engine-py's `python/poke_engine/__init__.py`
+# that adapts the native `mcts` pyfunction, so an install carrying the compiled
+# extension WITHOUT that wrapper imports cleanly, exposes `mcts`, and then fails
+# only at call time with a bare AttributeError.
+MCTS_ENTRYPOINT_API = ("monte_carlo_tree_search",)
+
+# The one supported way to produce a wheel with the gen3 patch set applied.
+POKE_ENGINE_BUILD_COMMAND = "scripts/setup_poke_engine.sh /path/to/venv/bin/python"
+
 
 class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
     """Raised when a state needs move-trapping but the native patch is absent.
@@ -60,6 +70,19 @@ class PokeEngineTransformRevertUnsupportedError(PokeEngineUnavailableError):
     outright, so this is a loud failure rather than a silent drop — but the check
     exists so the failure names the cause and the fix instead of surfacing as a
     bare TypeError from deep inside construction.
+    """
+
+
+class PokeEngineMctsEntrypointMissingError(PokeEngineUnavailableError):
+    """Raised when the installed binding has no `monte_carlo_tree_search`.
+
+    Unlike the other capability errors here, this is not about a missing gen3
+    patch — it is about which HALF of the binding got installed.
+    `monte_carlo_tree_search` is a pure-Python wrapper around the native `mcts`
+    pyfunction, shipped in poke-engine-py's `python/poke_engine/__init__.py`. An
+    install that carries the compiled extension without that wrapper imports
+    fine and exposes `mcts`, so nothing notices until search actually runs and
+    dies on a bare AttributeError several layers down.
     """
 
 
@@ -338,6 +361,30 @@ def _move_trap_supported(engine: Any) -> bool:
         return str(state_type.from_string(serialized).to_string()) == serialized
     except Exception:  # noqa: BLE001 - capability checks must fail closed
         return False
+
+
+def require_mcts_entrypoint(engine: Any | None = None) -> None:
+    """Prove the installed binding exposes the search entrypoint engine_search calls.
+
+    Same house pattern as :func:`require_move_trap_support`, but a plain symbol
+    check rather than a round trip: there is nothing behavioural to probe, the
+    name is either present or it is not. Exposed so callers and tests can turn a
+    half-installed binding into a skip that names the build command, instead of
+    an AttributeError from inside the search loop.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    missing = tuple(name for name in MCTS_ENTRYPOINT_API if not hasattr(engine, name))
+    if missing:
+        raise PokeEngineMctsEntrypointMissingError(
+            "The installed poke-engine is missing "
+            + ", ".join(missing)
+            + ". That name is a pure-Python wrapper in poke-engine-py's "
+            "python/poke_engine/__init__.py, so this is an install carrying the "
+            "compiled extension without its Python half — it imports fine and "
+            "exposes the native `mcts`, then fails only when search runs. "
+            f"Rebuild with: {POKE_ENGINE_BUILD_COMMAND}"
+        )
 
 
 def _spec_requires_pre_transform(spec: BattleSpec) -> bool:

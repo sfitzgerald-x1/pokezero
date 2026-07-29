@@ -16,14 +16,29 @@ whole run. Before
 ``third_party/poke-engine-gen3-terminal-options.patch`` this fired within ~5 games
 from essentially any seed block.
 
-Run in a venv whose wheel was built from the current patch list (never the shared
-one), mirroring tests/test_engine_move_trap_wiring.py:
+REBUILDING. This drives the real search, so it needs a wheel that carries BOTH
+halves of the binding: the compiled extension and poke-engine-py's Python
+wrapper (`python/poke_engine/__init__.py`), which is where
+`monte_carlo_tree_search` — the entrypoint `pokezero.engine_search` calls —
+actually lives. An install with only the extension imports cleanly and exposes
+the native `mcts`, then dies mid-search on a bare AttributeError. Build in a venv
+of your own (never the shared one), mirroring
+tests/test_engine_move_trap_wiring.py:
 
+    uv venv /path/to/venv --python 3.13
+    uv pip install --python /path/to/venv/bin/python -e .
     scripts/setup_poke_engine.sh /path/to/venv/bin/python
     /path/to/venv/bin/python -m unittest tests.test_engine_search_no_panic
 
-It is skipped when the wheel or a built Showdown checkout is absent, and it is
-slow (a real 15-game bench), so it is not part of the default fast suite.
+`setup_poke_engine.sh` is the only supported build: it fetches the pinned sdist,
+applies third_party/poke-engine-gen3-patches.txt with --fuzz=0, and installs from
+the sdist ROOT, whose pyproject sets `python-source = "python"` so the wrapper is
+included. Verified to produce the entrypoint from a clean venv.
+
+Skipped — never failed — when the wheel, the search entrypoint, or a built
+Showdown checkout is missing, so a half-installed binding reports the build
+command instead of a red test. Slow (a real 15-game bench), so it is not part of
+the default fast suite.
 """
 
 from __future__ import annotations
@@ -51,10 +66,22 @@ class EngineSearchDoesNotPanicTest(unittest.TestCase):
     """15 games from seed 7000 must all complete, with zero engine panics."""
 
     def setUp(self) -> None:
+        from pokezero.poke_engine_adapter import (
+            PokeEngineMctsEntrypointMissingError,
+            require_mcts_entrypoint,
+        )
         from pokezero.poke_engine_backend import probe_poke_engine
 
         if not probe_poke_engine().ready:
             self.skipTest("poke-engine is not installed/ready")
+        # Probed in-process, BEFORE spawning the bench: the subprocess would only
+        # surface a half-installed binding as a non-zero exit and a stack trace in
+        # captured output, i.e. a red test for an environment problem. `sys.executable`
+        # runs the bench, so this interpreter's binding is the one that matters.
+        try:
+            require_mcts_entrypoint()
+        except PokeEngineMctsEntrypointMissingError as exc:
+            self.skipTest(str(exc))
         if _showdown_root() is None:
             self.skipTest("no built Showdown checkout (set POKEZERO_SHOWDOWN_ROOT)")
 
