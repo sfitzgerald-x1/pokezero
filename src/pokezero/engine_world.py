@@ -42,6 +42,7 @@ from .poke_engine_adapter import (
     PokemonSpec,
     SideSpec,
     build_poke_engine_state,
+    require_charge_state_support,
     require_move_trap_support,
 )
 from .showdown_fixture import FixturePokemon, _STAT_ORDER
@@ -92,6 +93,13 @@ _SUPPORTED_VOLATILES = frozenset({
     "leechseed", "flashfire", "attract", "destinybond",
     "perish1", "perish2", "perish3", "perish4",
 })
+
+# Mid-charge state of a two-turn move, keyed by the MOVE id, matching the parser
+# (showdown._CHARGE_MOVE_VOLATILES) and the engine's own charge volatile. Behind a
+# capability guard rather than in the set above: an engine that does not know the
+# volatile ACCEPTS the token and drops it (`from_str` defaults to NONE), which builds
+# the charging Pokemon FREE instead of declining the world.
+_CHARGE_VOLATILES = frozenset({"solarbeam"})
 
 # Showdown boost keys -> adapter SideSpec boost keys.
 _BOOST_KEYS = {
@@ -682,7 +690,14 @@ def _require_world_reproduces_trap(
     # a world carrying it does refuse to switch. It reaches this set only through
     # the allowlist below, which fails closed on a wheel that predates
     # third_party/poke-engine-gen3-move-trapping.patch.
-    if self_volatiles & {"trapped", "partiallytrapped", "lockedmove", "mustrecharge"}:
+    # A mid-charge two-turn move is the same shape of hard lock: the engine's
+    # `active_is_charging_move` restricts get_all_options to that one move, so the
+    # side has no switch to analyse and the extra trap reasoning below is moot.
+    # Consistent with `lockedmove` beside it -- both are commitments the engine
+    # already enforces.
+    if self_volatiles & (
+        {"trapped", "partiallytrapped", "lockedmove", "mustrecharge"} | _CHARGE_VOLATILES
+    ):
         return
 
     active = self_side.pokemon[self_side.active_index] if self_side.pokemon else None
@@ -992,6 +1007,13 @@ def _build_side_spec(
         # switch options back and confidently plan an escape Showdown refuses.
         require_move_trap_support()
         supported = supported | {"trapped"}
+    if volatiles_set := (set(volatiles) & _CHARGE_VOLATILES):
+        # Mid-charge (Solar Beam): the commitment the public protocol announced with
+        # `-prepare`. Without it the world is built with the charging mon free and the
+        # engine starts a FRESH charge instead of releasing -- silently wrong rather
+        # than declined, which is why this is expressed rather than approximated.
+        require_charge_state_support()
+        supported = supported | volatiles_set
     if "encore" in volatiles:
         supported = supported | {"encore"}
     if must_recharge:
