@@ -97,6 +97,7 @@ def main() -> int:
                 "engine": eng_v,
                 "ratio": round(obs_v / max(eng_v, 1), 3),
                 "label": label,
+                "reachable": bool(legal[index]) if index < len(legal) else None,
                 "factors": _factors(ctx, "p2" if slot == "p1" else "p1", slot),
             }
             (real if not (legal[index] if index < len(legal) else False) else reachable).append(item)
@@ -123,7 +124,16 @@ def main() -> int:
             print(f"         seed {g['seed']} step {g['step']} {g['slot']}: obs {g['observed']} vs eng {g['engine']}")
 
     print()
-    print("REAL findings clustered by ratio (a shared ratio implies a shared missing factor):")
+    print("WINDOW-SEMANTICS WARNING — read before treating any ratio band as a lead.")
+    print("  `_classify_ratio`'s low edge (0.92) treats the ENGINE value as the MEAN")
+    print("  roll. If the engine reports TOP-of-range the true band is [0.85, 1.00]-")
+    print("  shaped, and every finding just under 0.92 is this filter's own artifact")
+    print("  packed against its floor. A spike at 0.90-0.92 is NOT a cluster.")
+    print("  Constants are deliberately NOT chosen here, pending the damage lane's")
+    print("  source-cited answer on engine damage-value semantics (max vs mean).")
+    print("  Prefer `reachable` (legal-roll-set membership) — it needs no constant.")
+    print()
+    print("REAL findings clustered by ratio (DESCRIPTIVE ONLY, see warning above):")
     by_ratio = collections.Counter(f["ratio"] for f in real)
     for ratio, n in by_ratio.most_common(12):
         moves = sorted({f["move"] for f in real if f["ratio"] == ratio})
