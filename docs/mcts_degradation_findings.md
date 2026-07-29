@@ -282,3 +282,142 @@ as a cause.
 
 **No third mechanism is asserted here.** The honest state is: reproducible
 effect, two eliminated causes, no confirmed explanation.
+
+---
+
+## 10. Ply-parity value orientation: REFUTED. A seat-constant inversion: CONFIRMED.
+
+**Date:** 2026-07-29. Crate rebuilt at the audited HEAD before any measurement;
+probes ran against that build (module resolved out of a scratch prefix, model
+feature verified live).
+
+§9 named the cheapest untested candidate: a value-orientation error applied
+**per level** rather than globally, which would leave `d1` clean and corrupt
+increasingly with depth. It was tested. It does not exist.
+
+### 10.1 The value path carries no per-level sign or seat change
+
+Audited end to end (`rust/pokezero-search/`):
+
+| site | finding |
+|---|---|
+| `tree.rs` backup (`finalize`) | the chance-node expectation is added to **both** seats' stats unchanged. `s2_stats[j].total_value += expectation - 1.0` is the REPLACEMENT of the `+1.0` virtual loss written in `traverse` — net per visit is `+expectation` on both sides. No negation, no `1 - v`, no per-ply seat swap. |
+| `lib.rs` `MoveStats::puct` | the ONLY seat flip in the crate: `1.0 - self.mean()` for side two, applied identically at every level. This is the correct simultaneous-move form; it is not negamax. |
+| `tree.rs` terminal pricing | `battle_is_over` (+1 = side ONE won, `state.rs:1485`) → `{0.0, 1.0}`. Side-one-absolute, depth-independent. |
+| `fold.rs` | `perspective_slot` is set once at construction and is never written by `advance_in_place` / `process_line`; branch folds are clones of their parent's, so the seat perspective is inherited unchanged down every rollout. |
+| `leaf.rs` | the leaf observation's seat is `LeafContext::self_is_p1`, a constant of the search. Nothing about the encode alternates with depth. |
+
+**Also refuted while in `select()`:** side two's Q is NOT on a `[-1, 0]` scale.
+Both seats' arms hold the same `[0, 1]` side-one quantity, so `c_puct` weighs
+the exploration term against the same scale on both sides. Pinned by
+`tree.rs::side_two_stats_accumulate_the_same_expectation_as_side_one`.
+
+### 10.2 Pins (so this hypothesis stays dead)
+
+Rust, model-free, expectations from fixture symmetry — not from engine output:
+
+- `leaf_value_reflects_about_half_under_seat_mirror` — a leaf value and its
+  seat-mirror sum to 1 on every fixture; a mirror-symmetric position reads
+  exactly 0.5.
+- `depth_parity_invariance_on_a_mirrored_position` — new fixture
+  `symmetric.state` (side two is a verbatim copy of side one, so side one's
+  exact win probability is 0.5 by construction). Backed-up root value at
+  depths 1–6: **0.5000, 0.5000, 0.4981, 0.5004, 0.5004, 0.5004**, with the tree
+  really growing (601 decision nodes by d4). No even/odd separation.
+- `seat_mirror_maps_root_value_to_its_complement_at_every_depth` — root value +
+  mirrored root value = **1.00006 / 1.00058 / 1.00049 / 1.00049** at d1–d4.
+- `terminal_orientation_is_absolute_across_the_seat_mirror` — a guaranteed
+  side-TWO KO prices at exactly 0.0, the complement of the side-one KO already
+  pinned at 1.0.
+
+Python (`tests/test_search_value_orientation.py`) drives the REAL encoded search
+with a TorchScript stub whose orientation is fixed by construction
+(`v = tanh(20 * (mean SELF-block HP fraction − mean OPPONENT-block HP
+fraction))`, read out of the observation's own token blocks — the same
+convention as the trained head, whose target is `+1` iff the observing seat won,
+`dataset._terminal_value_for_player`).
+
+### 10.3 What the audit did find: the seat boundary, not the ply boundary
+
+The two conventions that meet at the leaf are not the same convention:
+
+- the leaf observation is encoded from the **searching seat's** perspective
+  (SELF / OPPONENT token blocks) and the value head is **self-relative**;
+- the tree is **side-one-absolute** (terminal branches, `s1_stats`, one flip in
+  `puct`);
+- `engine_world.py:534` pins `slot_sides = {"p1": "side_one", "p2": "side_two"}`,
+  so the searching seat is side TWO exactly when PokeZero plays p2 — and
+  `mcts_eval/scoring.py` plays **both seats of every team seed**.
+
+`multiply_batched_encoded_core` fed `values01` through unreflected. On a p2
+root, every model leaf therefore disagreed with every terminal branch in the
+same tree, and side two selected on `1 - v` of an already-inverted value.
+
+Measured on drivable golden-corpus roots (`SIMS=96`, priors off, so the report
+is about values alone). Ground truth for "which side leads" is read off the
+constructed world spec:
+
+| row | seat | side 1 leads | model v01 at root | root_value d1 | d2 | d3 | d4 |
+|---|---|---|---|---|---|---|---|
+| 2 | p1 | yes | 0.9752 | 0.6849 | 0.8225 | 0.8225 | 0.8225 |
+| 3 | **p2** | yes | 0.2271 | **0.2234** | **0.2240** | **0.2240** | **0.2240** |
+
+Row 3's tree reports side one *losing* while side one leads — and note the
+shape: the error is **flat across depth**, present already at d1. That is the
+refutation of the parity hypothesis and the confirmation of the seat one, in the
+same four numbers.
+
+The same rows after the fix: row 3 → 0.5820 / 0.6991 / 0.6995 / 0.6995, now on
+the same side of 0.5 as row 3's p1-seated counterpart.
+
+Both blocks are reproduced by `tests/test_search_value_orientation.py`, which
+was run against an unfixed build as a negative control: it fails on the p2 row
+at **every** depth (1, 2, 3, 4) and passes on the p1 rows.
+
+**It changed the move.** Same roots, 256 sims, priors off, acting seat's argmax:
+
+| row | seat | depth | as shipped | with the reflection |
+|---|---|---|---|---|
+| 1 | p2 | 2 | `switch smeargle` (45%) | `fireblast` (36%) |
+| 1 | p2 | 4 | `switch smeargle` (44%) | `fireblast` (32%) |
+| 3 | p2 | 2 | `switch smeargle` (36%) | `seismictoss` (29%) |
+| 3 | p2 | 4 | `switch smeargle` (37%) | `seismictoss` (27%) |
+
+(The "as shipped" column is produced on the FIXED build by feeding a
+sign-negated stub, which on a side-two seat is algebraically the pre-fix path —
+`1 - (1 - v01) = v01`. Validated: it reproduces the unfixed build's row-3 root
+values to the last recorded digit, 0.223431 / 0.224028 / 0.224028 / 0.224028.)
+
+### 10.4 Fix
+
+One site, one reflection, at the seat boundary and never per ply
+(`model.rs`, `multiply_batched_encoded_core`):
+
+```rust
+if self_side_one { output.values01 } else { output.values01.iter().map(|v| 1.0 - v).collect() }
+```
+
+Priors are untouched: they are policy over the SELF seat's own actions and were
+already applied to the self side.
+
+### 10.5 What this does NOT establish
+
+Following §9's lesson — name the falsifier before writing the cause up:
+
+- **This is not yet shown to be the depth-decay mechanism.** It is a confirmed
+  defect with the right seat structure; the depth structure is a *prediction*,
+  not a measurement: the priors carry the p2 seat at d1 (they were always
+  correctly oriented), and inverted values gain leverage over them as depth and
+  sims grow — which is also the shape of §4.2's sims ablation. Untested.
+- **The cheap falsifier, to run before this is called the cause:** split the
+  ALREADY-RECORDED grid by seat. `mcts_eval/scoring.py` keeps `seat` on every
+  result. If the `d6` deficit is symmetric between the p1 and p2 seats, this
+  defect is not the cause and this section must be retracted the way §5 was. If
+  the p2 seat carries essentially all of it, re-bench on the fixed build with
+  the §8 acceptance criterion.
+- The `d1`-parity argument in §5 remains sound for global flips; it never
+  covered a flip that only fires on one seat, because every reported cell
+  averages the two seats.
+- §4.3 (depth > 6 inert) reproduces here in miniature: `max_depth_reached`
+  saturates at 4 for `max_depth` 5 and 6 on the symmetric fixture. Visit
+  dilution, unrelated to orientation.
