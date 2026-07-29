@@ -680,3 +680,55 @@ left for its own change.
 **Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py`;
 engine side pinned by `rust/pokezero-search/tests/gen3_lastmove_semantics.rs`
 (12 tests, one per truth-table row).
+
+## Confirmed deviation 8: PP charged for moves that never executed
+
+The sibling of deviation 7, and the last piece of the `runMove` prologue. The
+engine deducted PP before the status branch, so an immobilized turn cost a PP;
+Showdown charges only after the `BeforeMove` gate.
+
+The deduction site sits in the same block as the `lastMove` record —
+`BattleActions.runMove`, `sim/battle-actions.ts:282`, deduction first and
+`moveUsed` second at 291:
+
+    const willTryMove = this.battle.runEvent('BeforeMove', pokemon, target, move);
+    if (!willTryMove) { ...; return; }              // no PP charged
+    ...
+    if (!pokemon.deductPP(baseMove, null, target) && move.id !== 'struggle') {
+        this.battle.add('cant', pokemon, 'nopp', move); ...; return;
+    }
+    pokemon.moveUsed(move, targetLoc);
+
+so the truth table is the same one as deviation 7: every immobilizer that returns
+false from its `onBeforeMove` is free, and a move that misses, fails outright or
+is blocked by Protect still pays, because the deduction precedes `useMove`.
+
+**Pressure needs no separate treatment.** Showdown charges its extra point inside
+`useMove` (`sim/battle-actions.ts:482`, via the `DeductPP` event), downstream of
+the same gate, so an immobilized turn owes neither point and the engine's
+combined 1-or-2 decrement moves as a single unit. gen3 has Pressure
+(`data/mods/gen3/abilities.ts` inherits it and overrides only `onStart`).
+
+**Impact.** Beyond the obvious PP drift, the phantom drain is load-bearing now
+that Encore reads PP: `encore.onResidual` ends Encore the moment the locked move
+hits 0, and `encore.onStart` refuses a target already at 0. Draining PP the sim
+never spent frees a seat Showdown keeps locked.
+
+**Disposition: PATCHED (2026-07-28).**
+`third_party/poke-engine-gen3-pp-ordering.patch`, placed immediately ABOVE the
+`last_used_move` record from deviation 7 (Showdown deducts first, records
+second), below the still-asleep early return, and above `move_has_no_effect` and
+the accuracy roll. `!choice.sleep_talk_move` reproduces Showdown's
+`if (!externalMove)`: Sleep Talk pays for itself and the move it calls never
+deducts.
+
+**Still divergent (verified, left for its own change).** Showdown skips the
+deduction entirely on a LOCKED continuation turn — `const lockedMove =
+pokemon.getLockedMove(); if (!lockedMove) { ...deductPP... }` — so an Outrage /
+Petal Dance / Thrash costs one PP for the whole lock. The engine charges every
+turn. Confirmed empirically against the patched engine (a mid-lock turn still
+emits `DecrementPP`). Distinct observable, needs its own pins and differential.
+
+**Verification.** Real gen3 Showdown via `scripts/gen3_switch_differential.py
+--only ppimmobilizedfree ppimmobilizedcontrol`; engine side pinned by
+`rust/pokezero-search/tests/gen3_pp_ordering.rs` (14 tests).

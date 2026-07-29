@@ -498,6 +498,61 @@ poke-engine-gen3-variable-bp.patch
 
 
 
+# gen3 PP is charged only for a move that ACTUALLY EXECUTED. Showdown deducts in
+# BattleActions.runMove (sim/battle-actions.ts:282), inside the same
+# `if (!externalMove)` block that ends in moveUsed (line 291), and only once the
+# BeforeMove gate has passed:
+#
+#     const willTryMove = this.battle.runEvent('BeforeMove', ...);
+#     if (!willTryMove) { ...; return; }              // no PP charged
+#     ...
+#     if (!pokemon.deductPP(baseMove, null, target) && move.id !== 'struggle') {
+#         this.battle.add('cant', pokemon, 'nopp', move); ...; return;
+#     }
+#     pokemon.moveUsed(move, targetLoc);
+#
+# So an immobilized turn is FREE -- full paralysis, staying asleep, staying
+# frozen, flinching, a confusion self-hit and infatuation all return false from
+# their onBeforeMove and never reach the deduction. The engine charged before
+# generate_instructions_from_existing_status_conditions, so a paralyzed Pokemon
+# burned PP for turns it never acted on.
+#
+# That phantom drain is load-bearing now that Encore reads PP: encore.onResidual
+# ends Encore the moment the locked move hits 0, and encore.onStart refuses a
+# target already at 0, so draining PP the sim never spent frees a seat Showdown
+# keeps locked. This is the third and last piece of the runMove prologue, after
+# lastmove-semantics: the gate order, the record, and the charge now all agree.
+#
+# Placed immediately ABOVE the last_used_move record that patch installed, since
+# Showdown deducts first and records second, and below the still-asleep early
+# return so only the branch that really executes reaches it. It stays ABOVE
+# move_has_no_effect and the accuracy roll, because the deduction precedes
+# useMove -- a move that misses, fails outright or is blocked by Protect still
+# pays. `!choice.sleep_talk_move` is Showdown's `if (!externalMove)`: Sleep Talk
+# pays for itself and the move it calls never deducts.
+#
+# Pressure needs no separate placement, and collapsing the two deductions into
+# one 1-or-2 decrement is EXACT rather than merely convenient. Being post-gate is
+# not sufficient on its own; what makes it exact is that there is NO WINDOW
+# between the two sites. Nothing between battle-actions.ts:282 (the base point)
+# and :482 (Pressure's extra, via the DeductPP event inside useMove) can abort
+# the move -- every abort path in runMove has already returned above :282, and
+# useMove's own failure points (TryMove, accuracy, immunity, Protect) all sit
+# BELOW :482 -- so the two either both happen or neither does. And neither point
+# refunds: a miss or a failed move never gives PP back, which is why both sites
+# can be hoisted to a single decrement without changing any observable. If a
+# future gen introduced an abort between them, or a refund-on-miss rule, the
+# collapse would stop being sound and the two would have to be split again.
+#
+# NOT fixed here, verified and left for its own change: Showdown skips the
+# deduction entirely on a LOCKED continuation turn (`if (!lockedMove)`), while the
+# engine charges every turn of an Outrage / Petal Dance / Thrash. Distinct
+# observable, needs its own pins. Pinned by
+# rust/pokezero-search/tests/gen3_pp_ordering.rs; touches
+# generate_instructions_from_move in gen3/generate_instructions.rs only; authored
+# against the phaze-protect-patched tree.
+poke-engine-gen3-pp-ordering.patch
+
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
 # list, because its expectations are the behaviour every patch above it leaves
