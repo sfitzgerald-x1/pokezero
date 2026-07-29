@@ -3765,3 +3765,88 @@ in this repo that make a specific row re-examinable after main advances.
 **Caveat that travels with them:** the reports pin the engine fingerprint but a
 fingerprint alone is not a build identity once main moves — the repo SHA is
 recorded above for exactly that reason.
+
+---
+
+# Appendix V — Two instrument fixes (classifier adjudication, source pairing)
+
+Both are instrument changes, not engine changes. Neither alters the residue
+count; V.1 was explicitly constrained so that it cannot.
+
+## V.1 The #946 adjudication, made mechanical
+
+`branch_misses` is in branch order, so `misses[0]` may be a MINORITY branch.
+s1500014 st69 has three: the 6.25% branch reports a missing `itemleftovers`, and
+the 75.00% + 18.75% branches report `observed=[('', -214)] engine=[('', -116)]`
+— a damage disagreement of nearly 2x. The classifier read the 6.25% branch and
+filed the row under Leftovers. It held that label for four cycles.
+
+The rule now: when the first miss names only an adjudicable residual
+(`itemleftovers`, `psn`, `brn`, `sandstorm`, `tox`) and the branch carrying the
+largest probability mass complains only about a roll-scaled component, classify
+from the majority. Deliberately narrow — reordering every row by probability
+would re-classify rows nobody has adjudicated.
+
+**Effect, stated in advance and then measured** (replayed over the c7 rows):
+
+| | before | after |
+|---|---|---|
+| rows relabelled | — | **14** |
+| `roll_scaled_component` | 72 | 86 |
+| `component_missing_in_engine:itemleftovers` | 22 | 11 |
+| `component_missing_in_engine:psn` | 6 | 4 |
+| `component_missing_in_engine:brn` | 2 | 1 |
+| **total diverged** | 170 | **170** |
+| **outside limits** | 127 | **127** |
+| limit classes | 43 | 43 |
+
+14 of the 28 known-mislabels relabel; the other 14 do not meet the predicate and
+keep their labels honestly rather than being swept along.
+
+### The guard that matters more than the rule
+
+The first implementation moved **15 additional rows into
+`limit:roll_divergent_lethality`** and dropped outside-limits from 127 to 112.
+That is an instrument change silently handing the acceptance gate a 15-row
+credit. #946 adjudicated those rows as `damage_calc`, not as a comparison limit.
+
+The override therefore refuses to fire when the majority miss carries
+`capped_lethal`. **A relabel must never reduce the residue.** If those rows
+belong in a limit class, that is a separate decision on its own evidence.
+
+## V.2 Source pairing replaces sorted-magnitude pairing
+
+The triage paired observed against engine components by sorting both sides by
+bare magnitude and zipping. In any slot with more than one component that pairs
+unlike things — a 2-point residual against a 136-point move hit, reported as a
+ratio of 0.015 describing nothing. 15 findings were excluded from the cycle-seven
+brief for this reason: dark data feeding nothing.
+
+Pairing is now keyed on source, with magnitude used only as a tiebreak within a
+source. Components with no counterpart are dropped rather than paired: an
+unmatched count is a structural difference, already reported as
+`structural_component_count`, and must not be manufactured into a ratio.
+
+### Answer to the question asked: they join existing clusters
+
+**9 previously-dark findings became usable. None forms a new cluster.**
+
+| ratio band | old (single-component only) | new (all, source-paired) | of which previously dark |
+|---|---|---|---|
+| < 0.50 | 7 | 5 | 0 |
+| 0.50–0.70 | 10 | 12 | 2 |
+| 0.70–0.85 | 1 | 0 | 0 |
+| 0.85–1.00 | 11 | 14 | 2 |
+| > 1.00 | 10 | 14 | 5 |
+
+Real findings go 52 -> 45, because unmatched components are no longer
+manufactured into ratios. The nonsense extremes are gone: no 0.015, no 25.0.
+
+The 0.85–1.00 band — the damage lane's recommended entry point — gains 2 and
+still holds the tight 0.90–0.92 sub-cluster. **The brief is an additive update:
+the 39-row structure the lane is working from is unchanged in character, and no
+conclusion it has drawn is invalidated.**
+
+A secondary benefit: source pairing surfaces residual-source findings that
+magnitude pairing hid entirely (`drain`, `movewish_to_full`,
+`itemleftovers_to_full` now appear beside the move finding on the same row).
