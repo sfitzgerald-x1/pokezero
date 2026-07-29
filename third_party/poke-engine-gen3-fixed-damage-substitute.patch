@@ -1,0 +1,208 @@
+diff --color -ruN a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs	2026-07-28 22:32:48
++++ b/src/gen3/choice_effects.rs	2026-07-28 22:42:09
+@@ -537,6 +537,76 @@
+     }
+ }
+ 
++/// Route a fixed-damage hit through a Substitute exactly as the normal damage
++/// path does (gen3/generate_instructions.rs).
++///
++/// pokezero gen3 fidelity fix: every damaging arm of `choice_special_effect`
++/// wrote its damage STRAIGHT to the Pokemon, so Seismic Toss, Super Fang,
++/// Endeavor, Counter and Mirror Coat all punched through a Substitute. None of
++/// those moves carries `bypasssub` in the gen3 data, so all five must be
++/// absorbed by the sub.
++///
++/// Showdown's rule is `substitute.onTryPrimaryHit` (data/moves.ts; gen3 adds no
++/// override): the move's own damage is computed against the POKEMON — Super Fang
++/// still halves the mon's HP, Endeavor still reads the mon's HP — and is then
++/// capped at the substitute's remaining HP:
++///
++/// ```text
++/// if (damage > target.volatiles['substitute'].hp) damage = sub.hp;
++/// sub.hp -= damage;
++/// if (sub.hp <= 0) target.removeVolatile('substitute');
++/// ```
++///
++/// so there is NO overflow onto the Pokemon when the hit exceeds the sub — the
++/// substitute simply breaks and the mon behind takes nothing. Verified against
++/// the real sim: Seismic Toss (100) into a 65 HP Substitute answers
++/// `-end <target> Substitute` with no `-damage` line on the Pokemon at all.
++fn apply_fixed_damage(
++    defending_side: &mut Side,
++    target_side_ref: SideReference,
++    damage_amount: i16,
++    instructions: &mut StateInstructions,
++) {
++    if damage_amount <= 0 {
++        return;
++    }
++    if defending_side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::SUBSTITUTE)
++    {
++        let absorbed = cmp::min(damage_amount, defending_side.substitute_health);
++        instructions
++            .instruction_list
++            .push(Instruction::DamageSubstitute(DamageInstruction {
++                side_ref: target_side_ref,
++                damage_amount: absorbed,
++            }));
++        defending_side.substitute_health -= absorbed;
++        if defending_side.substitute_health == 0 {
++            instructions
++                .instruction_list
++                .push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
++                        side_ref: target_side_ref,
++                        volatile_status: PokemonVolatileStatus::SUBSTITUTE,
++                    },
++                ));
++            defending_side
++                .volatile_statuses
++                .remove(&PokemonVolatileStatus::SUBSTITUTE);
++        }
++        return;
++    }
++    let dealt = cmp::min(damage_amount, defending_side.get_active_immutable().hp);
++    instructions
++        .instruction_list
++        .push(Instruction::Damage(DamageInstruction {
++            side_ref: target_side_ref,
++            damage_amount: dealt,
++        }));
++    defending_side.get_active().hp -= dealt;
++}
++
+ pub fn choice_special_effect(
+     state: &mut State,
+     choice: &mut Choice,
+@@ -588,19 +658,13 @@
+                     .get_active_immutable()
+                     .has_type(&PokemonType::GHOST)
+             {
+-                let damage_amount = cmp::min(
+-                    defending_side.damage_dealt.damage * 2,
+-                    defending_side.get_active_immutable().hp,
++                let damage_amount = defending_side.damage_dealt.damage * 2;
++                apply_fixed_damage(
++                    defending_side,
++                    attacking_side_ref.get_other_side(),
++                    damage_amount,
++                    instructions,
+                 );
+-                if damage_amount > 0 {
+-                    instructions
+-                        .instruction_list
+-                        .push(Instruction::Damage(DamageInstruction {
+-                            side_ref: attacking_side_ref.get_other_side(),
+-                            damage_amount: damage_amount,
+-                        }));
+-                    defending_side.get_active().hp -= damage_amount;
+-                }
+             }
+         }
+         Choices::MIRRORCOAT => {
+@@ -609,19 +673,13 @@
+                     .get_active_immutable()
+                     .has_type(&PokemonType::DARK)
+             {
+-                let damage_amount = cmp::min(
+-                    defending_side.damage_dealt.damage * 2,
+-                    defending_side.get_active_immutable().hp,
++                let damage_amount = defending_side.damage_dealt.damage * 2;
++                apply_fixed_damage(
++                    defending_side,
++                    attacking_side_ref.get_other_side(),
++                    damage_amount,
++                    instructions,
+                 );
+-                if damage_amount > 0 {
+-                    instructions
+-                        .instruction_list
+-                        .push(Instruction::Damage(DamageInstruction {
+-                            side_ref: attacking_side_ref.get_other_side(),
+-                            damage_amount: damage_amount,
+-                        }));
+-                    defending_side.get_active().hp -= damage_amount;
+-                }
+             }
+         }
+         Choices::WISH => {
+@@ -722,31 +780,37 @@
+             {
+                 return;
+             }
+-            let target_hp = target_pkmn.hp / 2;
+-            instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: attacking_side_ref.get_other_side(),
+-                    damage_amount: target_pkmn.hp - target_hp,
+-                }));
+-            target_pkmn.hp = target_hp;
++            let damage_amount = target_pkmn.hp - target_pkmn.hp / 2;
++            apply_fixed_damage(
++                defending_side,
++                attacking_side_ref.get_other_side(),
++                damage_amount,
++                instructions,
++            );
+         }
+         Choices::SEISMICTOSS => {
+             let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+             let attacker_level = attacking_side.get_active_immutable().level;
+-            let defender_active = defending_side.get_active();
+-            if type_effectiveness_modifier(&PokemonType::NORMAL, &defender_active) == 0.0 {
++            // Seismic Toss is FIGHTING-typed, but the zero-effectiveness set of
++            // Normal and of Fighting is the same single type in gen3 — Ghost —
++            // so this NORMAL probe returns the identical verdict. Verified
++            // against the real sim: Seismic Toss into Gengar answers `-immune`.
++            // (Kept as NORMAL to match the sibling fixed-damage arms rather than
++            // implying a Fighting type chart lookup that would behave the same.)
++            if type_effectiveness_modifier(
++                &PokemonType::NORMAL,
++                defending_side.get_active_immutable(),
++            ) == 0.0
++            {
+                 return;
+             }
+ 
+-            let damage_amount = cmp::min(attacker_level as i16, defender_active.hp);
+-            instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: attacking_side_ref.get_other_side(),
+-                    damage_amount: damage_amount,
+-                }));
+-            defender_active.hp -= damage_amount;
++            apply_fixed_damage(
++                defending_side,
++                attacking_side_ref.get_other_side(),
++                attacker_level as i16,
++                instructions,
++            );
+         }
+         Choices::ENDEAVOR => {
+             let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+@@ -760,13 +824,12 @@
+             }
+ 
+             let damage_amount = defender.hp - attacker.hp;
+-            instructions
+-                .instruction_list
+-                .push(Instruction::Damage(DamageInstruction {
+-                    side_ref: attacking_side_ref.get_other_side(),
+-                    damage_amount: damage_amount,
+-                }));
+-            defender.hp -= damage_amount;
++            apply_fixed_damage(
++                defending_side,
++                attacking_side_ref.get_other_side(),
++                damage_amount,
++                instructions,
++            );
+         }
+         Choices::PAINSPLIT => {
+             if !defending_side

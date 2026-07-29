@@ -310,6 +310,29 @@ def _snorlax_hazard_victim():  # 461 max HP, grounded: exact-HP hazard target
                           moves=("Splash",))
 
 
+def _tosser():  # Blissey carries Seismic Toss on 17 of the pool's 393 sets
+    return FixturePokemon(species="Blissey", ability="Natural Cure", item="None",
+                          moves=("Seismic Toss", "Body Slam", "Splash"))
+
+
+def _sub_user(species: str = "Snorlax"):
+    """Substitute users sized on either side of a 100 HP Seismic Toss.
+
+    Snorlax's 461 max HP gives a 115 HP substitute, which survives the hit;
+    Dodrio's 261 gives 65, which breaks. Neither is Ghost, so the immunity arm
+    stays out of the way.
+    """
+
+    ability = "Run Away" if species == "Dodrio" else "Immunity"
+    return FixturePokemon(species=species, ability=ability, item="None",
+                          moves=("Substitute", "Splash"))
+
+
+def _ghost_wall():
+    return FixturePokemon(species="Gengar", ability="Levitate", item="None",
+                          moves=("Splash",))
+
+
 def _flailer(move: str = "Flail"):
     """261 max HP Dodrio — the pool's own Flail user. One 48th is 5.4 HP, so a
     sandstorm's 16 HP/turn walks the ladder from 20 BP to 200 BP in ~16 turns."""
@@ -1459,6 +1482,50 @@ def _spec(name):
             expect={"release_damage_in_band": True, "charged_first": True},
             landmark=lambda L: _has(L, "[from] lockedmove") or name == "solarbeamsun",
             landmark_desc="Solar Beam released")
+    # --- fixed damage vs Substitute (choice_special_effect audit) -----------
+    if name in ("seismictosssub", "seismictosssubbreak"):
+        # substitute.onTryPrimaryHit caps the hit at the sub's HP and never
+        # overflows onto the Pokemon. Snorlax's 115 HP sub survives a 100 HP
+        # Seismic Toss (`-activate ... Substitute [damage]`); Dodrio's 65 HP sub
+        # breaks (`-end ... Substitute`). In BOTH cases the Pokemon behind takes
+        # nothing — which is the bug: the engine wrote the hit straight to it.
+        breaks = name.endswith("break")
+        target = "Dodrio" if breaks else "Snorlax"
+        return dict(
+            p1=[_tosser()], p2=[_sub_user(target)],
+            turns=[("move splash", "move substitute"), ("move seismictoss", "move splash")],
+            measured=1, setup_step=0,
+            setup_landed=lambda L: _has(L, "|-start|p2a") and _has(L, "Substitute"),
+            facts=lambda L: {
+                "sub_absorbed": _has(L, "|-activate|p2a") or _has(L, "|-end|p2a"),
+                "sub_broke": _has(L, f"|-end|p2a: {target}|Substitute"),
+                "pokemon_hit": any(l.startswith(f"|-damage|p2a: {target}") for l in L),
+            },
+            expect={"sub_absorbed": True, "sub_broke": breaks, "pokemon_hit": False},
+            landmark=lambda L: _has(L, "|move|p1a: Blissey|Seismic Toss"),
+            landmark_desc="Seismic Toss was used into the Substitute")
+    if name == "seismictosscontrol":
+        # No Substitute: the same hit must land on the Pokemon for exactly the
+        # attacker's level (461 - 100 = 361).
+        return dict(
+            p1=[_tosser()], p2=[_sub_user("Snorlax")],
+            turns=[("move seismictoss", "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"landed": _has(L, "|-damage|p2a: Snorlax|361/461")},
+            expect={"landed": True},
+            landmark=lambda L: _has(L, "|move|p1a: Blissey|Seismic Toss"),
+            landmark_desc="Seismic Toss was used")
+    if name == "seismictossghost":
+        # Fighting-typed fixed damage is zero-effect vs Ghost.
+        return dict(
+            p1=[_tosser()], p2=[_ghost_wall()],
+            turns=[("move seismictoss", "move splash")],
+            measured=0, setup_step=None, setup_landed=None,
+            facts=lambda L: {"immune": _has(L, "|-immune|p2a: Gengar"),
+                             "damaged": any(l.startswith("|-damage|p2a: Gengar") for l in L)},
+            expect={"immune": True, "damaged": False},
+            landmark=lambda L: _has(L, "|move|p1a: Blissey|Seismic Toss"),
+            landmark_desc="Seismic Toss was used into the Ghost")
     raise ValueError(name)
 
 
@@ -1488,7 +1555,9 @@ SCENARIOS = ("spinprotect", "spinconnect", "batonpass", "batonpasscontrol",
              "flailladder", "reversalladder", "flailladdercontrol",
              "ppimmobilizedfree", "ppimmobilizedcontrol",
              "lockedmoveppdrain", "lockedmoveppcontrol",
-             "solarbeamclear", "solarbeamsand", "solarbeamsun")
+             "solarbeamclear", "solarbeamsand", "solarbeamsun",
+             "seismictosssub", "seismictosssubbreak", "seismictosscontrol",
+             "seismictossghost")
 
 
 def run_scenario(name, seeds, config) -> tuple[bool, list[str]]:

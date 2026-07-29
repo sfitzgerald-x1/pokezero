@@ -595,6 +595,7 @@ poke-engine-gen3-pp-ordering.patch
 # guard wraps -- the two are one story and the guard has no meaning without it.
 poke-engine-gen3-lockedmove-pp.patch
 
+
 # gen3 Solar Beam is weakened by RAIN, SAND and HAIL only -- never in clear
 # weather. Showdown's `solarbeam.onBasePower` (data/moves.ts, inherited unchanged
 # by gen3) halves the base power for
@@ -631,6 +632,48 @@ poke-engine-gen3-lockedmove-pp.patch
 # modify_choice in gen3/choice_effects.rs only; authored against the
 # lockedmove-pp-patched tree.
 poke-engine-gen3-solarbeam-weather.patch
+
+# gen3 fixed-damage moves must route through a Substitute.
+#
+# Audit of every damaging arm of choice_special_effect against the guard set the
+# normal damage path applies. None of these moves carries `bypasssub` in the gen3
+# data, so all five must be absorbed by a Substitute; all five wrote damage
+# STRAIGHT to the Pokemon instead:
+#   SEISMICTOSS (17/393 sets, on-distribution — the confirmed bug)
+#   SUPERFANG, ENDEAVOR, COUNTER, MIRRORCOAT (0/393 each, same handler)
+#
+# Showdown's rule is substitute.onTryPrimaryHit (data/moves.ts; gen3 adds no
+# override): the move's own damage is computed against the POKEMON — Super Fang
+# still halves the mon's HP, Endeavor still reads the mon's HP — then capped at
+# the substitute's remaining HP, with NO overflow onto the Pokemon when it
+# exceeds. Verified against the real sim: Seismic Toss (100) into a 65 HP
+# Substitute answers `-end <target> Substitute` and emits no `-damage` on the
+# Pokemon at all; into a 115 HP Substitute it answers
+# `-activate <target> Substitute [damage]` and the mon is untouched.
+#
+# The other guards were audited and found ALREADY CORRECT, and are pinned rather
+# than changed:
+#   Protect  — one `if blocked_by_protect { return; }` at the top of the
+#              dispatcher covers every arm (poke-engine-gen3-rapidspin-fidelity).
+#   immunity — Seismic Toss is Fighting-typed but the zero-effectiveness set of
+#              Normal and of Fighting is the same single gen3 type (Ghost), so
+#              the shared NORMAL probe returns the identical verdict; Super Fang
+#              and Endeavor are Normal-typed and correct as written; Counter's
+#              Ghost test and Mirror Coat's Dark test match their real types.
+#   PAINSPLIT — already skips entirely when a Substitute is up, which is what
+#              Showdown does (no bypasssub, and getDamage returns nothing, so the
+#              move fails).
+#
+# Left unimplemented, documented per the reachability convention: NIGHTSHADE and
+# DRAGONRAGE emit no instructions at all (the Flail gap shape), both 0 of 393
+# sets. PSYWAVE likewise 0 of 393.
+#
+# Verified vs real gen3 Showdown (scripts/gen3_switch_differential.py:
+# seismictosssub / seismictosssubbreak / seismictossghost / seismictosscontrol);
+# pinned by rust/pokezero-search/tests/gen3_fixed_damage_fidelity.rs. Touches
+# gen3/choice_effects.rs only; authored against the head of the list, applied
+# before the fixture refresh.
+poke-engine-gen3-fixed-damage-substitute.patch
 
 # Refreshes UPSTREAM fixtures in tests/test_gen3.rs that encode pre-patch
 # behaviour. Touches tests only — no engine code — and must stay LAST in this
