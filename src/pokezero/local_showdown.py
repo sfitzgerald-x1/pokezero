@@ -2113,6 +2113,14 @@ def _public_materialization_payload(
             # 0.5 ** count, so the count passes through with NO boundary offset
             # (unlike toxicStage above, whose feature runs one residual ahead).
             "stallCounter": int(replay.stall_counter.get(player, 0)),
+            # Public last EXECUTED move (or the "switch" sentinel), transcribed from the
+            # same truth table the engine already obeys. The engine needs this for far
+            # more than the encore lock it was previously derived for: Encore's own
+            # onStart READS it, so a world that omits it makes Encore fail outright
+            # (Showdown: `if (!move) return false`) and every downstream Encore effect --
+            # duration, the move-slot lock, and the same-turn redirect the engine already
+            # implements -- silently never happens.
+            "lastUsedMove": replay.last_used_move.get(player) or "",
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }

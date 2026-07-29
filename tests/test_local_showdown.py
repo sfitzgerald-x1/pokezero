@@ -1907,7 +1907,23 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             self.assertIn("harden", json.dumps(source._latest_requests["p2"]).casefold())
             self.assertIn("protect", json.dumps(source._latest_requests["p2"]).casefold())
             serialized_payload = json.dumps(payload, sort_keys=True).casefold()
-            self.assertNotIn("harden", serialized_payload)
+            # Narrowed 2026-07-29. This used to assert "harden" appears NOWHERE in the
+            # payload, as a proxy for "nothing was copied from p2's private request". The
+            # proxy stopped tracking the intent once the payload began carrying the publicly
+            # observed last move: p2 VISIBLY used Harden on turn 1 — the protocol carries
+            # `|move|p2a: Ditto|Harden|p2a: Ditto` — so its appearance as `lastUsedMove` is
+            # public fact, not leakage. (The turn-2 Harden, which Baton Pass interrupted
+            # before it resolved, is the one that must not leak, and does not: it never
+            # reached a `|move|` line.)
+            #
+            # The real invariant is asserted directly below instead of by proxy: p2's entry
+            # carries no moveset, and no deferred opponent action was copied.
+            # Scoped to p2: our OWN side legitimately carries a full moveset (Protect
+            # included), so the check has to look at the opponent's subtree, not the whole
+            # payload. p2's Protect was never used publicly and must not appear anywhere.
+            p2_serialized = json.dumps(payload["sides"]["p2"], sort_keys=True).casefold()
+            self.assertEqual(payload["sides"]["p2"].get("lastUsedMove"), "harden")
+            self.assertNotIn("protect", p2_serialized)
             self.assertNotIn("moves", payload["sides"]["p2"]["pokemon"][0])
             self.assertEqual(payload["deferredOpponentActions"], {})
 

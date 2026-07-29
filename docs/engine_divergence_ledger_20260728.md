@@ -4753,3 +4753,175 @@ rebuild, registry seeds, `--checkpoint` retention) and is not taken here.
 - `reports/c9_summary.json` — regeneration aggregates (repros stripped, size policy)
 - `reports/c9_capped_lethal_walk.json` — per-row walk evidence for the 11
 - `reports/c9_decomposition.json` — all 108 rows, family + basis
+
+---
+
+# Appendix Z4 — Cycle ten: the Encore family was never an engine gap
+
+Branch `scott/engine-gen3-encore-redirect`. Engine **unchanged**: 33 patches, fingerprint
+`887a722dd2d6cd9b16c7e9736e07f0f5e7f591b17e38a8b9a7a593f31bc6659d`, identical to the c9
+decomposition's. **No vendored patch.** The fix is parser + `engine_world` — public-repo
+Python, normal review.
+
+## Z4.1 RELABEL: `encore_redirect_gap` (11) -> `boundary_builder_last_used_move_absent`
+
+The c9 brief recorded the WHAT from a single row: *the engine models Encore duration and
+failencore but not the same-turn redirect.* The first half is right. **The second half is
+wrong, and the engine has implemented the redirect all along** — `generate_instructions.rs`,
+immediately after `apply_instructions`, mirroring Showdown's
+`encore.condition.onOverrideAction`. It was found while looking for somewhere to *insert* it.
+
+**Replay evidence — 4 rows, all drawn from the 6 that c9 classified by mechanical marker
+rather than replay** (the inference-based subset, chosen deliberately as the place the
+classification could break):
+
+| row | chose | Showdown executed | engine executed |
+| --- | --- | --- | --- |
+| 1500099/49 | Drill Peck | **Protect** (encored; then failed) | Drill Peck, 146 |
+| 1500123/38 | Will-O-Wisp | **Fire Blast**, 134 | Will-O-Wisp (burn) |
+| 1500136/27 | HP Flying | **Toxic** (missed) | HP Flying, 127 |
+| 1500161/44 | Rest | **Earthquake**, 35 | Rest (failed at full HP) |
+
+4/4 are same-turn redirection, so the FAMILY was correctly identified. Encore resolved first
+in all four. But every one shows `SetLastUsedMove <target>: None -> …` and **no
+`ApplyVolatileStatus ENCORE` anywhere** — the Encore never applied at all.
+
+**Engine probe pair, same state twice, nothing else changed:**
+
+```
+last_used_move = Move(0) [seismictoss]      last_used_move = None
+  ApplyVolatileStatus SideTwo: ENCORE         SetLastUsedMove SideOne: None -> Move(M0)
+  Damage SideOne: 100   <- REDIRECTED         SetLastUsedMove SideTwo: None -> Move(M1)
+  ChangeVolatileStatusDuration ENCORE: 1      <- no Encore; the chosen move ran
+```
+
+The redirect fires the moment it is given a last move. With `None` it cannot: Encore's own
+`onStart` guard — Showdown's `if (!move) return false`, implemented faithfully as
+`LastUsedMove::None => true` in `move_has_no_effect` — fails the Encore outright, so
+duration, the move-slot lock and the redirect all never happen.
+
+**Root cause.** `engine_world.py` set `last_used_move` **only inside `if "encore" in
+volatiles`** — i.e. only for a mon *already* encored. A mon being encored *this turn* reached
+the engine as `None`. The engine was correct at every step; the world never told it.
+
+The gap is therefore strictly **larger** than the label said (the whole Encore, not just the
+redirect) and **smaller** in blast radius (a missing seed, not an engine-behaviour patch).
+
+## Z4.2 Consumer survey before seeding
+
+Seeding a field unconditionally can unlock behaviours beyond the one being fixed, so every
+engine read of `last_used_move` was enumerated first:
+
+| consumer | what it does | reachable in gen3 randbats? |
+| --- | --- | --- |
+| Encore — option filter (`state.rs`) | restricts selectable moves to the locked one | **yes** |
+| Encore — `onStart` failure guard | fails Encore on None/Switch/failencore/0-PP | **yes** |
+| Encore — same-turn redirect | the `onOverrideAction` mirror | **yes** |
+| Encore — PP-exhaustion end | ends Encore when the locked move hits 0 PP | **yes** |
+| **Fake Out** (`choice_effects.rs`) | **strips ALL effects once the user has moved** | **no — not in the pool** |
+
+Spite, Grudge and Mirror Move do **not** read `last_used_move` in gen3 (GRUDGE exists only as
+a volatile enum entry; MIRRORMOVE appears only in the failencore list).
+
+Fake Out is the one genuine non-Encore behaviour change: because `last_used_move` was
+previously almost always `None`, the engine let Fake Out flinch **unconditionally**. It is
+pool-unreachable in randbats but reachable in `gen3customgame`, which the fixture harness
+uses, so it is pinned rather than left to be discovered.
+
+## Z4.3 Parser semantics, transcribed from the patch that already bound the engine
+
+`poke-engine-gen3-lastmove-semantics.patch` moved the ENGINE's record point to match
+`Pokemon.moveUsed()`. The parser is written against that same truth table, because a world
+that disagrees with the engine about what "last move" means is worse than one that omits it —
+it would lock Encore onto the *wrong* move rather than onto nothing:
+
+* a move that **misses, fails, or is blocked by Protect still counts as used** — `moveUsed`
+  precedes `useMove`, and Showdown emits the `|move|` line either way;
+* every immobilizer (par/slp/frz/flinch/confusion-self-hit/attract) returns false from
+  `onBeforeMove`, so **no `|move|` line is emitted at all** — Showdown emits `|cant|`, and the
+  parser records nothing. The match is by construction, not by enumeration;
+* **Sleep Talk's CALLER records; its CALLEE must not.** The callee runs through `useMove`,
+  which never touches `lastMove`. Publicly the callee's line carries `[from]`, which is the
+  discriminator. The engine-side patch called the inversion out explicitly as the naive
+  mistake; the parser pins the same row;
+* switch-out clears to a **`switch` sentinel, not to unknown**. `Pokemon.clearVolatile()`
+  nulls `lastMove`, and Encore correctly fails against a fresh switch-in — that is a positive
+  fact the engine has a distinct variant for. Collapsing it into `None` would relabel
+  knowledge as ignorance.
+
+**PP.** Sim-probed rather than assumed: with the redirect firing, `seismictoss` went 32 -> 30
+across two turns while the chosen `rest` stayed at **16, untouched**. PP is charged to the
+**encored** move. Pinned, because a PP mis-charge is exactly the sort of secondary divergence
+that resurfaces two cycles later as a phantom PP row with no visible link to Encore.
+
+**Unresolvable last moves stay `None` on purpose.** If the observed move is absent from the
+constructed moveset (an unrevealed slot on a sampled world), the seed is left `None` rather
+than guessed — reproducing today's behaviour for that side instead of inventing a lock.
+
+## Z4.4 An information-boundary assertion that needed narrowing
+
+`test_public_materialization_samples_deferred_baton_pass_action_without_private_request`
+asserted that `"harden"` appears **nowhere** in the public payload, as a proxy for "nothing
+was copied from p2's private request". Adding `lastUsedMove` broke it — and the proxy, not
+the change, was at fault: p2 **visibly used Harden on turn 1**, verified by reading the
+protocol rather than by argument (`|move|p2a: Ditto|Harden|p2a: Ditto`). Its appearance is
+public fact. The turn-2 Harden that Baton Pass interrupted is the one that must not leak, and
+does not — it never reached a `|move|` line. The assertion now checks the real invariant on
+p2's subtree (no moveset, no deferred action, and Protect — never publicly used — absent).
+
+## Z4.5 Carries from the #957 verification
+
+* **The relabel above is the one #957's merge note announced as incoming.** It does not
+  weaken the c9 gate: the rows stay attributed, the family assignment improves, and the
+  story strengthens — engine already correct plus a missing seed is a smaller blast radius
+  than an engine-behaviour patch.
+* **Erratum 1.** The committed c9 walk artifact was serialized by a slightly earlier walker
+  iteration than the committed script. Direction of error: conservative.
+* **Erratum 2.** 1500242/60's committed branch table lists **7 of 15** branches while
+  claiming `branches_truncated: 0`; the 8 omitted are zero-reproducing crit arms. Direction
+  of error: conservative (the omitted arms could not have reproduced the observation).
+
+## Z4.6 Differential: predicted 11, cleared 12 — and the 12th is the interesting one
+
+300 games, seeds 1500000-1500299, strict matcher, same fingerprint. Prediction was recorded
+before the run (`reports/c10_encore_prediction.md`).
+
+| | predicted | actual |
+| --- | --- | --- |
+| the 11 `encore_redirect_gap` rows | 11 clear | **11/11 clear** |
+| other families | **zero change** | **one more row cleared** |
+| outside-limits population | 108 -> 97 | 108 -> **96** |
+
+The extra row is **seed 1500285 step 14**, which c9 filed under
+`measurement_boundary_residual_truncation`. Replayed at the base build before concluding
+anything:
+
+```
+|move|p2a: Smeargle|Encore|p1a: Octillery      chose: thunderwave
+|-start|p1a: Octillery|Encore
+|move|p1a: Octillery|Hidden Power|p2a: Smeargle    <- the ENCORED move
+|-crit| |-damage|p2a: Smeargle|0 fnt  |faint|      <- KO ends the turn
+engine (base): ChangeStatus PARALYZE + Heal SideOne 17 + Heal SideTwo 15
+```
+
+It is the same mechanism as the other 11. It was classified by its **downstream symptom**
+rather than its cause: the redirect's crit-KO ends the turn before residuals, so the engine's
+surviving Leftovers looked exactly like the boundary-truncation signature (#876/U.3.2), and
+the row was filed there. The truncation reading was a true description of what the row looked
+like and a false one of why.
+
+So the family was **under-counted by one**, and the correct size is **12**. The prediction
+missing by +1 in this direction is the healthy direction — it means the fix reached a row the
+census had not attributed to it, not that it perturbed something unrelated.
+
+**The `zero change elsewhere` half of the prediction held exactly.** Nothing outside the
+Encore mechanism moved: the 5 adjudicated `limit:roll_divergent_lethality` rows and the 3
+`limit_not_established_keeps_label` rows are all still present and unchanged, as are the
+remaining 96. The 39 rows present now but absent from the c9 108 are precisely the 39
+`limit:*` rows that the outside-limits population excludes by definition — not regressions.
+
+**Method note.** The 12th row was found by diffing the c9 row identities against the new run
+rather than by comparing counts, and diagnosed by reverting the change (via a saved diff, not
+a stash) to replay the row at the base build. A count-level comparison would have shown
+"12 cleared, expected 11" and invited a hand-wave about noise; the identity diff named the
+row, and the replay named the cause.

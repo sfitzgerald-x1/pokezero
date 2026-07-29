@@ -1045,6 +1045,24 @@ class ShowdownReplayState:
     # converges. Both derived ONLY from public protocol lines — no engine-side hidden state.
     stall_counter: Mapping[str, int] = field(default_factory=dict)
     stall_move_pending: Mapping[str, bool] = field(default_factory=dict)
+    # Public per-side last EXECUTED move (gen3 ``Pokemon.lastMove``), as the id string, or
+    # the sentinel ``"switch"`` for a mon that just came in, or absent for "never moved".
+    #
+    # Semantics are transcribed from the truth table that
+    # ``third_party/poke-engine-gen3-lastmove-semantics.patch`` already made the ENGINE obey,
+    # so the two halves cannot disagree: Showdown sets ``lastMove`` in ``Pokemon.moveUsed()``,
+    # reached only AFTER the BeforeMove gate and the PP deduction, and BEFORE ``useMove``.
+    # Consequences, and why each is publicly readable:
+    #   * a move that MISSES, FAILS, or is blocked by Protect still counts as used — Showdown
+    #     emits its ``|move|`` line either way, so recording on ``|move|`` is exactly right;
+    #   * every immobilizer (par/slp/frz/flinch/confusion-self-hit/attract) returns false from
+    #     onBeforeMove, so no ``|move|`` line is emitted at all — Showdown emits ``|cant|``
+    #     instead, and this parser records nothing, matching by construction;
+    #   * a CALLED move (Sleep Talk's callee) goes through ``useMove``, which never touches
+    #     lastMove, while the CALLER does record. Called moves carry a ``[from]`` tag on their
+    #     ``|move|`` line, which is the public discriminator used below.
+    # Derived ONLY from public protocol lines — no engine-side hidden state.
+    last_used_move: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1235,6 +1253,8 @@ class _ReplayParser:
         # See ShowdownReplayState.stall_counter / stall_move_pending.
         self.stall_counter: dict[str, int] = {"p1": 0, "p2": 0}
         self.stall_move_pending: dict[str, bool] = {"p1": False, "p2": False}
+        # See ShowdownReplayState.last_used_move for the transcribed truth table.
+        self.last_used_move: dict[str, str | None] = {"p1": None, "p2": None}
 
     @classmethod
     def from_snapshot(cls, snapshot: ShowdownReplayState) -> "_ReplayParser":
@@ -1301,6 +1321,9 @@ class _ReplayParser:
         }
         parser.stall_move_pending = {
             slot: bool(snapshot.stall_move_pending.get(slot, False)) for slot in ("p1", "p2")
+        }
+        parser.last_used_move = {
+            slot: (snapshot.last_used_move.get(slot) or None) for slot in ("p1", "p2")
         }
         return parser
 
@@ -1385,6 +1408,13 @@ class _ReplayParser:
                 # flag too so no stale stall move carries onto the replacement.
                 self.stall_counter[pokemon.showdown_slot] = 0
                 self.stall_move_pending[pokemon.showdown_slot] = False
+                # ``Pokemon.clearVolatile()`` nulls lastMove on switch-out, so the mon coming
+                # in genuinely has none. Recorded as the ``switch`` sentinel rather than
+                # "unknown" because the engine distinguishes them: LastUsedMove::Switch is a
+                # POSITIVE fact (Encore correctly fails against a fresh switch-in), whereas
+                # None means the world never knew. Collapsing the two would relabel a fact as
+                # ignorance.
+                self.last_used_move[pokemon.showdown_slot] = "switch"
                 # Confusion turns-so-far (spec v3) belong to the mon that just left. A plain
                 # switch/drag drops the confusion volatile (reset); a Baton Pass that carried
                 # confusion (it is a copied volatile) keeps the counter running on the inheritor,
@@ -1817,6 +1847,17 @@ class _ReplayParser:
             return
         if event_type == "move" and len(parts) >= 4:
             slot = _slot_from_ident(parts[2])
+            if slot in self.last_used_move:
+                # A ``|move|`` line IS the public mirror of ``Pokemon.moveUsed()`` -- with one
+                # exception. A move CALLED by another (Sleep Talk's callee, and Metronome /
+                # Mirror Move where reachable) runs through ``useMove``, which never touches
+                # lastMove; only the caller records. Showdown tags the callee's line with
+                # ``[from]``, so that tag is the discriminator. Getting this backwards would
+                # make Encore lock the CALLED move -- the exact inversion the engine-side
+                # lastmove-semantics patch called out as the naive mistake.
+                called_by_another_move = any(part.startswith("[from]") for part in parts[4:])
+                if not called_by_another_move:
+                    self.last_used_move[slot] = _normalize_identifier(parts[3])
             if slot in self.stall_counter:
                 if _normalize_identifier(parts[3]) in _STALL_MOVE_IDS:
                     # A stall move is in flight; its ``-singleturn`` (success) or ``-fail``
@@ -1889,6 +1930,9 @@ class _ReplayParser:
             },
             rest_sleep_counts=dict(self.rest_sleep_counts),
             stall_counter=dict(self.stall_counter),
+            last_used_move={
+                slot: value for slot, value in self.last_used_move.items() if value
+            },
             stall_move_pending=dict(self.stall_move_pending),
         )
 

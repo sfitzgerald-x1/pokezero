@@ -1111,6 +1111,14 @@ def _build_side_spec(
         wish = (remaining, party[active_index].maxhp // 2)
 
     last_used_move = ""
+    # Public last EXECUTED move for this side, straight off the payload (the parser derives it
+    # from ``|move|`` / ``|cant|`` / switch lines under the engine's own truth table). Falls
+    # back to the caller-supplied ``encored_move`` so the search lane, which derives the same
+    # fact by scanning recent public events, keeps working unchanged.
+    raw_last_used = side_payload.get("lastUsedMove")
+    last_used_move_id = normalize_id(raw_last_used) if raw_last_used else None
+    if last_used_move_id == "switch":
+        last_used_move_id = "switch"
     volatile_durations: dict[str, int] = {}
     if "encore" in volatiles:
         active_specs = party[active_index].moves
@@ -1146,6 +1154,32 @@ def _build_side_spec(
         # wiring.
         last_used_move = f"move:{encored_index}"
         volatile_durations["encore"] = 1
+    elif last_used_move_id:
+        # Seed it for EVERY side, not only an already-encored one. Until 2026-07-29 this
+        # block was the only writer, so a mon that had visibly just moved still reached the
+        # engine as LastUsedMove::None -- and Encore's onStart reads it, so
+        # `move_has_no_effect` fired `LastUsedMove::None => true` and Encore failed outright.
+        # The engine was correct at every step; the world simply never told it. 11 rows of the
+        # cycle-nine census were this, mislabelled as a missing same-turn redirect that the
+        # engine has implemented all along (generate_instructions.rs, the onOverrideAction
+        # mirror).
+        if last_used_move_id == "switch":
+            # A POSITIVE fact, not ignorance: a fresh switch-in genuinely has no lastMove
+            # (`Pokemon.clearVolatile()`), and Encore correctly fails against it. The engine
+            # has a distinct variant for exactly this.
+            last_used_move = "switch:0"
+        else:
+            index = _resolve_encored_move_index(
+                party[active_index].moves,
+                rows_for_active=None,
+                encored_move=last_used_move_id,
+            )
+            # Unresolvable means the observed move is not in the constructed moveset (an
+            # unrevealed slot on a sampled world). Leave it None rather than guess: None is
+            # the honest "this world does not know", and it reproduces exactly today's
+            # behaviour for that side instead of inventing a lock.
+            if index is not None:
+                last_used_move = f"move:{index}"
 
     if "yawn" in volatiles:
         # Seed the counter at 1, NOT the struct default of 0. Showdown applies
