@@ -2525,7 +2525,24 @@ TRACKED_VOLATILES = frozenset({
     "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
     "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
     "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire",
+    # Mid-charge state of a two-turn move, keyed by the MOVE id (see
+    # _CHARGE_MOVE_VOLATILES). Note "charge" three lines up is a different thing
+    # entirely -- the Charge MOVE's Electric-damage doubler -- and conflating the
+    # two would hand a Solar Beam user a phantom Electric boost.
+    "solarbeam",
 })
+
+# Two-turn charge moves whose mid-charge state we surface, keyed by the MOVE id so it
+# maps straight onto the engine's own charge volatile (gen3 choice_effects.rs
+# `charge_choice_to_volatile`: SOLARBEAM -> PokemonVolatileStatus::SOLARBEAM). The
+# volatile IS the commitment on both sides -- the engine's `active_is_charging_move`
+# locks get_all_options to that move, and releases it in generate_instructions.
+#
+# Only Solar Beam is reachable. Of the 17 moves carrying the dex `charge: 1` flag, it is
+# the only one in the gen3 randbats pool (4 sets: Exeggutor, Sunflora, Tangela,
+# Victreebel). Read that flag, never a substring of the move data: `recharge: 1` is a
+# DIFFERENT mechanic (Hyper Beam and 9 others) that a naive match sweeps in.
+_CHARGE_MOVE_VOLATILES = frozenset({"solarbeam"})
 
 # Pokemon Showdown's Gen 3 `Pokemon.copyVolatileFrom` carries conditions whose
 # `noCopy` flag is false. This is the tracked subset. The parser preserves these
@@ -2630,10 +2647,39 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
         # (sleep, freeze, paralysis, flinch, recharge, Attract) does emit
         # ``cant`` and is already covered above.
         volatiles[slot] -= _SINGLEMOVE_VOLATILES
+        # A two-turn charge ends on whichever action consumes it, and BOTH ways end
+        # here. `|move|SLOT|Solar Beam|TARGET|[from] lockedmove` is the release.
+        # `|cant|SLOT|...` is an outright CANCEL: gen3's `twoturnmove.onMoveAborted`
+        # drops the volatile with no `-end` line, so the `cant` is the only
+        # announcement the charge is over -- a mon fully paralysed on its release turn
+        # loses the charge and re-charges from scratch afterwards (verified against the
+        # sim). Without this arm the world carries a phantom charge forever.
+        #
+        # The CHARGE turn's own `|move|SLOT|Solar Beam||[still]` also lands here, and
+        # harmlessly: the `|-prepare|` that immediately follows it re-arms the volatile.
+        volatiles[slot] -= _CHARGE_MOVE_VOLATILES
+        return
+    if event_type == "-anim":
+        # A charge move that skips its charge turn — Solar Beam in SUN — still emits
+        # `|move|...||[still]` and `|-prepare|`, then fires in the SAME turn via
+        # `|-anim|SLOT|<Move>|TARGET` + damage, with no second `|move|` line. So
+        # `-anim` is the "it actually executed" signal, and without this arm a sunny
+        # Solar Beam user carries a phantom charge until its NEXT action clears it —
+        # the world would offer it only Solar Beam while it is in fact free.
+        # (The ordinary two-turn release emits no `-anim`; it is a real `|move|`
+        # line tagged `[from] lockedmove`, handled above.)
+        volatiles[slot] -= _CHARGE_MOVE_VOLATILES
         return
     if len(parts) < 4:
         return
     name = _side_condition_identifier(parts[3])  # strips move:/ability:/item: prefix + normalizes
+    if event_type == "-prepare":
+        # `|-prepare|SLOT|<Move>` is the public charge announcement, emitted right after
+        # the paired `|move|` line's `[still]`. It leaks nothing: it names only the move
+        # the opponent just watched being charged, which is exactly what a human sees.
+        if name in _CHARGE_MOVE_VOLATILES:
+            volatiles[slot].add(name)
+        return
     if event_type == "-singlemove":
         if name in TRACKED_VOLATILES:
             volatiles[slot].add(name)

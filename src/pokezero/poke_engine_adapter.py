@@ -86,6 +86,18 @@ class PokeEngineMctsEntrypointMissingError(PokeEngineUnavailableError):
     """
 
 
+class PokeEngineChargeStateUnsupportedError(PokeEngineUnavailableError):
+    """Raised when a world carries a mid-charge state the binding cannot express.
+
+    The charge volatile IS the commitment: the engine keys `active_is_charging_move`
+    off it to lock the side to that one move, and releases it in
+    `generate_instructions`. A binding that drops the volatile does not decline the
+    world -- it builds one where the charging mon is FREE, so search lets it pick any
+    move and, if it picks Solar Beam, starts a fresh charge instead of releasing. That
+    is the silent wrongness this fails closed on.
+    """
+
+
 class PokeEngineAttractUnsupportedError(PokeEngineUnavailableError):
     """Raised when a state needs Attract but the native patch is absent.
 
@@ -358,6 +370,56 @@ def _move_trap_supported(engine: Any) -> bool:
             return False
         # #878 made serialization a fixed point; a volatile that survives the
         # first write but not the read would still corrupt a search root.
+        return str(state_type.from_string(serialized).to_string()) == serialized
+    except Exception:  # noqa: BLE001 - capability checks must fail closed
+        return False
+
+
+def require_charge_state_support(engine: Any | None = None) -> None:
+    """Prove the installed binding round-trips a two-turn charge volatile.
+
+    Same house pattern as :func:`require_move_trap_support`, and for the same reason:
+    `PokemonVolatileStatus::from_str` is generated with ``default = NONE``, so an
+    engine that does not know SOLARBEAM ACCEPTS the token and silently discards it.
+    Probing the round trip is the only way to tell the two apart.
+    """
+
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_charge_state_supported(engine)
+    except TypeError:
+        # Explicit test doubles can be unhashable; production modules are not.
+        supported = _charge_state_supported(engine)
+    if not supported:
+        raise PokeEngineChargeStateUnsupportedError(
+            "A mid-charge (Solar Beam) world requires a poke-engine that models the "
+            "charge volatile; the installed engine dropped SOLARBEAM instead of "
+            "round-tripping it, which would build the charging Pokemon FREE and let "
+            "search start a fresh charge instead of releasing. Rebuild with: "
+            f"{POKE_ENGINE_BUILD_COMMAND}"
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_charge_state_supported(engine: Any) -> bool:
+    return _charge_state_supported(engine)
+
+
+def _charge_state_supported(engine: Any) -> bool:
+    """Return whether the binding preserves the SOLARBEAM volatile end to end."""
+
+    state_type = getattr(engine, "State", None)
+    side_type = getattr(engine, "Side", None)
+    if state_type is None or side_type is None:
+        return False
+    try:
+        state = state_type(
+            side_one=side_type(volatile_statuses={"solarbeam"}),
+            side_two=side_type(),
+        )
+        serialized = str(state.to_string())
+        if "SOLARBEAM" not in serialized.upper():
+            return False
         return str(state_type.from_string(serialized).to_string()) == serialized
     except Exception:  # noqa: BLE001 - capability checks must fail closed
         return False
