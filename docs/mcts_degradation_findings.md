@@ -1,11 +1,18 @@
 # MCTS degradation: why search loses to its own prior
 
-**Status:** cause localized. Search logic and belief aggregation are exonerated;
-the evidence points at dynamics-model divergence compounding over rollout depth.
+**Status:** mechanism OPEN. Three candidate causes have been tested and two are
+refuted, including this document's own original conclusion. The depth decay
+itself is reproduced across two builds ~115 commits apart and remains unexplained.
 
-**Date:** 2026-07-28
+**Date:** 2026-07-28, revised 2026-07-29 after the falsifying re-bench (§9)
 **Checkpoint:** `v3hist-k64-enthalf-5m-20260723` @ `iteration-2657` (= 4.25M games)
-**Eval build:** Python `046f58f`, crate image `mcts-eval-crate-20260726d`
+**Eval builds:** original — Python `046f58f`, image `mcts-eval-crate-20260726d`;
+re-bench — image `mcts-rb-bf72636` (main @ `bf72636`, crate + poke_engine
+canary-verified before launch)
+
+> **Read §9 before acting on §5.** The "implicated: dynamics divergence"
+> conclusion below was tested by the prediction it generated, and failed. It is
+> retained unedited so the reasoning that produced a wrong answer stays legible.
 
 ---
 
@@ -199,3 +206,79 @@ Recorded so they are not re-cited:
 
 **Acceptance:** search ≥ 0.500 vs raw at d4/s1024 over 200 mirrored-pair games,
 on a build whose SHA is recorded in the report.
+
+---
+
+## 9. The falsifying re-bench (2026-07-29)
+
+§8 committed to a prediction chosen so it could fail cleanly:
+
+> if dynamics divergence is the cause, the *depth decay should flatten* — d6
+> should rise toward d1, not merely shift upward.
+
+**It did not rise.** Between the two runs, ~115 commits landed on main, including
+22+ vendored gen3 engine patches and the whole simulator-fidelity campaign
+(`docs/engine_divergence_ledger_20260728.md`).
+
+| cell | n | score | Wilson 95% | pre-patch | change |
+|---|---|---|---|---|---|
+| control (raw v raw) | 100 | 0.480 | [0.385, 0.577] | 0.520 | −0.04 |
+| `d1`-s1024 | 100 | 0.560 | [0.462, 0.653] | 0.530 | +0.03 |
+| `d4`-s1024 | *in flight* | ~0.43 | — | — | — |
+| **`d6`-s1024** | **66** | **0.364** | [0.258, 0.484] | **0.360** | **+0.004** |
+
+The slope is fully intact: **0.560 → ~0.43 → 0.364** across d1 → d4 → d6, the
+same monotone decay measured before any fidelity work existed. `d6` moved by
+four thousandths.
+
+**Therefore: dynamics-model divergence is NOT the cause of the depth decay.**
+The §5 conclusion is retracted. Substantially fixing the divergences had no
+effect on the curve they were supposed to explain.
+
+### What still stands
+
+- The depth decay is **real and reproducible** — measured twice, on independent
+  builds ~115 commits apart, with a validated null both times.
+- d1 remains at parity with raw and with the control on both runs.
+- Something compounds per ply of rollout. That is the one durable fact, and it
+  now has no confirmed mechanism.
+
+### Caveats on this run
+
+- `d6` is n=66 (three shards; ±0.11 half-width). A *partial* flattening could
+  hide inside that. A flattening large enough to explain a 14-point deficit
+  could not.
+- The control drifted 0.520 → 0.480 on identical seeds. Raw-vs-raw never touches
+  the search engine, so a pure engine patch should have left it byte-identical.
+  It did not, because main also advanced on the observation side (charge-state
+  surfacing, positional residual attribution, the Baton Pass parser change). The
+  two runs are therefore paired on **seeds**, not on "everything but the
+  engine", and 3–4 point differences carry no signal.
+- `d4` is still filling and its number here is an in-flight log tally, not
+  audited harness output.
+
+### Hypotheses now refuted, in order of confidence spent on them
+
+1. **Strategy fusion** in the cross-world visit-share vote — refuted by §4.4
+   (`w1`, where the vote is a no-op, is still 14 points below parity).
+2. **Dynamics-model divergence** compounding over depth — refuted by this
+   section.
+
+Both were argued at length before being tested. The pattern worth carrying
+forward: each was plausible, each explained the shape of the table, and each was
+wrong. The next candidate should be cheap to falsify *before* it is written up
+as a cause.
+
+### What has NOT been tested
+
+- **Leaf-value orientation under depth.** §5 exonerated it by the d1 argument (a
+  perspective flip would corrupt d1 too). That argument is sound for a *global*
+  flip but not for one that depends on ply parity — a sign error applied per
+  level would leave d1 clean and degrade even depths. The plan's Step 2 crate
+  test (mirrored state, assert `v01` reflects about 0.5) is still unwritten and
+  is now the cheapest untested candidate.
+- **Backup at chance nodes** across the simultaneous-move branch structure.
+- Whether depth > 6 being inert (§4.3) shares a cause with the decay.
+
+**No third mechanism is asserted here.** The honest state is: reproducible
+effect, two eliminated causes, no confirmed explanation.
