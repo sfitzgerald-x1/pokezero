@@ -1053,6 +1053,48 @@ Seeds burned by this appendix: 981000–981149 (A/B, re-used deliberately),
 
 ---
 
+# Method rule — resolve gen3 data through the Dex, never read base data
+
+**Read move and condition data through `Dex.mod('gen3')`. Never read
+`data/moves.ts` directly, and never hand-walk the mod chain.**
+
+`scripts/gen3_dex_resolve.py` is the probe:
+
+```
+$ python scripts/gen3_dex_resolve.py toxic spikes flail thunderwave
+resolved through Dex.mod('gen3') — moves
+  toxic          accuracy=85  ...
+  spikes         accuracy=True ...   condition callbacks: onEntryHazard, ...
+  flail          accuracy=100 ...    callbacks: basePowerCallback
+  thunderwave    accuracy=100 ...
+```
+
+This rule exists because the inheritance-chain trap has produced **four** wrong
+reads in this program, each of which reached a hand-off before being caught:
+
+| Move / condition | The trap |
+| --- | --- |
+| Spikes | layer fractions live in the **gen4** mod, not base |
+| burn | residual fraction changed at **gen6**, so base is wrong for gen3 |
+| Flail / Reversal | gen3 has its **own** override; the gen4 ladder is not it |
+| Thunder Wave | **gen6** declares a value BELOW gen3 in the chain |
+
+The failure is always the same shape and always looks like diligence: someone
+opens the right file, reads a real value, and reports it — having walked a chain
+that was truncated, or not walked one at all. "gen3 inherits gen4, not gen5" is a
+useful heuristic and is **not** a substitute for resolution: Flail and Thunder
+Wave both satisfy the heuristic and both were still read wrong.
+
+Two corollaries:
+
+* The resolved value is the simulator's, chain fully applied — it is *the*
+  answer, not evidence toward one.
+* Where the rule lives in a **callback body** (`basePowerCallback`,
+  `durationCallback`, `onResidual`), the probe lists which callbacks survive
+  resolution. Read the body in source — but only after the probe has told you
+  **which file's** version survives, which is exactly the step the four misreads
+  skipped.
+
 # Method rule — replay before you label
 
 **Triaging a residue class starts by replaying the recorded boundary through the
