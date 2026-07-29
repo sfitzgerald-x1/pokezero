@@ -1,18 +1,29 @@
 # MCTS degradation: why search loses to its own prior
 
-**Status:** mechanism OPEN. Three candidate causes have been tested and two are
-refuted, including this document's own original conclusion. The depth decay
-itself is reproduced across two builds ~115 commits apart and remains unexplained.
+**Status:** mechanism **IDENTIFIED** (§10–§11), pending the §8 acceptance
+re-bench. The leaf value was consumed with the wrong seat orientation whenever
+PokeZero played p2, and the per-seat split of the recorded grids (§11) shows the
+p2 seat carries essentially the whole deficit at every depth and every
+simulation budget, on both builds. Four candidate causes were tested before it;
+three are refuted, including this document's own original conclusion.
 
-**Date:** 2026-07-28, revised 2026-07-29 after the falsifying re-bench (§9)
+**Every strength number in §4, §7 and §9 was produced by an engine that played
+one of its two seats backwards. Treat them as void, not as a baseline.**
+
+**Date:** 2026-07-28, revised 2026-07-29 after the falsifying re-bench (§9),
+then again 2026-07-29 with §10 (orientation audit) and §11 (the seat split)
 **Checkpoint:** `v3hist-k64-enthalf-5m-20260723` @ `iteration-2657` (= 4.25M games)
 **Eval builds:** original — Python `046f58f`, image `mcts-eval-crate-20260726d`;
 re-bench — image `mcts-rb-bf72636` (main @ `bf72636`, crate + poke_engine
 canary-verified before launch)
 
-> **Read §9 before acting on §5.** The "implicated: dynamics divergence"
-> conclusion below was tested by the prediction it generated, and failed. It is
-> retained unedited so the reasoning that produced a wrong answer stays legible.
+> **Read §9 before acting on §5, and §10–§11 before acting on anything.** The
+> "implicated: dynamics divergence" conclusion below was tested by the
+> prediction it generated, and failed. §5's exoneration of leaf value
+> orientation was sound for a *global* flip and for a *per-ply* one (§10
+> refutes the latter directly) but not for a flip that fires on one seat only —
+> which is what it was. Both are retained unedited so the reasoning that
+> produced wrong answers stays legible.
 
 ---
 
@@ -409,15 +420,164 @@ Following §9's lesson — name the falsifier before writing the cause up:
   not a measurement: the priors carry the p2 seat at d1 (they were always
   correctly oriented), and inverted values gain leverage over them as depth and
   sims grow — which is also the shape of §4.2's sims ablation. Untested.
+  **→ Now tested. See §11: the prediction held.**
 - **The cheap falsifier, to run before this is called the cause:** split the
   ALREADY-RECORDED grid by seat. `mcts_eval/scoring.py` keeps `seat` on every
   result. If the `d6` deficit is symmetric between the p1 and p2 seats, this
   defect is not the cause and this section must be retracted the way §5 was. If
   the p2 seat carries essentially all of it, re-bench on the fixed build with
-  the §8 acceptance criterion.
+  the §8 acceptance criterion. **→ Run in §11. p2 carries it.**
 - The `d1`-parity argument in §5 remains sound for global flips; it never
   covered a flip that only fires on one seat, because every reported cell
   averages the two seats.
 - §4.3 (depth > 6 inert) reproduces here in miniature: `max_depth_reached`
   saturates at 4 for `max_depth` 5 and 6 on the symmetric fixture. Visit
   dilution, unrelated to orientation.
+
+---
+
+## 11. The seat split: the depth decay is the p2 seat, and only the p2 seat
+
+**Date:** 2026-07-29. Source: the recorded shards under
+`/shared/scott-experiment/mcts-power-overlay-20260728/results` (404 files),
+read on the `olfusa` cluster. Reproduce with
+`scripts/mcts_seat_split.py <results-dir>` — plain `python3`, no repo imports,
+so it drops straight into a controller pod.
+
+§10.5 named the falsifier: split the already-recorded grid by seat, and retract
+§10's mechanism claim if the deficit is seat-symmetric. **It is not. The p2 seat
+carries essentially all of it, at every depth and every simulation budget, on
+both builds.**
+
+### 11.1 Method
+
+Each shard carries `per_game` = `{seed, search_seat, winner}`. Score is
+`mcts_eval/scoring.py`'s: win 1, tie 0.5, loss 0; results deduped on
+(arm, seat, seed).
+
+- **Cell identity is the shard FILENAME, not the `config` field.** The control
+  shards carry a leftover `config: d4-s1024-b64-w4` from the runner's defaults;
+  keying on `config` silently merges 100 raw-vs-raw games into the d4 search
+  cell. (This bit me first time through.)
+- **Identity of each arm with the published cells was established by
+  reproducing §4's pooled numbers**, not by file dates: `d2` 0.450, `d6-s1024`
+  0.360, `d4-s2048` 0.310, `d4-s4096` 0.270, `d4-s8192` 0.270, `d6-s2048`
+  0.360, `w1` 0.360, `w16` 0.430 — all exact or within one game of the table.
+  The `fb-*` arms reproduce §9's re-bench (control 0.485 vs 0.480, `d1` 0.565
+  vs 0.560, `d6` 0.360 vs 0.364 now that it filled from n=66 to n=100).
+- **Seat assignment is by seed parity**: p1 = even seeds 600000–600098, p2 =
+  odd 600001–600099. All seventeen n=50 arms use the *identical* two seed sets,
+  so every ladder below is paired on seeds *within* a seat.
+
+### 11.2 Depth ladder, s1024 w4 (original grid)
+
+| cell | p1 seat | p2 seat | pooled |
+|---|---|---|---|
+| control (raw v raw) | 0.550 [0.413, 0.679] | 0.500 [0.366, 0.634] | 0.525 |
+| `d1` | 0.560 [0.423, 0.688] | 0.510 [0.376, 0.643] | 0.535 |
+| `d2` | 0.480 [0.348, 0.615] | 0.420 [0.294, 0.558] | 0.450 |
+| `d6` | 0.460 [0.330, 0.596] | **0.260** [0.159, 0.396] | 0.360 |
+| `d8` | 0.460 [0.330, 0.596] | **0.260** [0.159, 0.396] | 0.360 |
+
+n = 50 per seat per cell. (§4.3 confirmed in passing: `d6` and `d8` share all
+100 seeds with **identical winners, 100/100**.)
+
+### 11.3 Simulation ladder — the decisive one
+
+| cell | p1 seat | p2 seat | pooled |
+|---|---|---|---|
+| `d4-s512` (n=20) | 0.400 [0.219, 0.613] | 0.400 [0.219, 0.613] | 0.400 |
+| `d4-s2048` | 0.480 [0.348, 0.615] | 0.140 [0.070, 0.262] | 0.310 |
+| `d4-s4096` | 0.540 [0.404, 0.670] | **0.000** [0.000, 0.071] | 0.270 |
+| `d4-s8192` | 0.540 [0.404, 0.670] | **0.000** [0.000, 0.071] | 0.270 |
+| `d6-s1024` | 0.460 [0.330, 0.596] | 0.260 [0.159, 0.396] | 0.360 |
+| `d6-s2048` | 0.520 [0.385, 0.652] | 0.200 [0.112, 0.330] | 0.360 |
+| `d6-s4096` | 0.590 [0.452, 0.715] | **0.000** [0.000, 0.071] | 0.295 |
+
+**On the p1 seat more search is better** — 0.400 → 0.480 → 0.540 → 0.540 at d4,
+0.460 → 0.520 → 0.590 at d6, on the same 50 seeds throughout. **On the p2 seat
+more search goes to zero** — 0.400 → 0.140 → 0.000 → 0.000, and 0.260 → 0.200 →
+0.000. Three cells are **0 wins and 0 draws in 50 games**, in an arm whose own
+`d1` cell scored 0.510 on those very seeds.
+
+§4.2's "an 8× simulation budget costs ~5× wall time and *loses* strength" was
+the average of a search that works and a search that anti-optimizes.
+
+### 11.4 §9 re-bench — same split, independent build
+
+| cell | p1 seat | p2 seat | pooled |
+|---|---|---|---|
+| control (raw v raw) | 0.430 [0.303, 0.567] | 0.540 [0.404, 0.670] | 0.485 |
+| `d1-s1024` | 0.610 [0.472, 0.733] | 0.520 [0.385, 0.652] | 0.565 |
+| `d6-s1024` | 0.540 [0.404, 0.670] | **0.180** [0.098, 0.308] | 0.360 |
+
+The "fully intact slope" of §9 is a p2 slope. p1 goes 0.430 → 0.610 → 0.540 —
+no decay at all.
+
+### 11.5 Significance and attribution
+
+Two-proportion z, p1 vs p2, and the p2 seat's share of each cell's pooled
+deviation from the 0.500 null:
+
+| cell | z (p1 − p2) | p2 share of the deficit |
+|---|---|---|
+| control (orig) | +0.50 | — (no deficit) |
+| control (re-bench) | −1.10 | — (no deficit) |
+| `d1` (orig / re-bench) | +0.50 / +0.91 | 14% / 15% |
+| `d2` | +0.60 | 80% |
+| `d6-s1024` | +2.08 | 86% |
+| `d6-s2048` | +3.33 | 107% |
+| `d6-s4096` | **+6.47** | 122% |
+| `d4-s2048` | +3.68 | 95% |
+| `d4-s4096` / `d4-s8192` | **+6.08** | 109% |
+| `d6-s1024` (re-bench) | +3.75 | 114% |
+
+Both controls are null, so the harness has no seat bias. Both `d1` cells are
+null, matching §5's observation that d1 is at parity — and now explaining it:
+at one ply the correctly-oriented priors still dominate the visit count, so an
+inverted Q has almost no leverage. Every deep or high-sim cell separates, and
+shares above 100% mean the p1 seat is *above* 0.500 there — the correctly
+oriented seat was gaining from search while the pooled number fell.
+
+### 11.6 Verdict
+
+**Outcome (b). The seat-constant value inversion of §10 is the depth-decay
+mechanism.** The three facts of §9's "what still stands" now read:
+
+- the decay is real and reproducible — yes, and it is a **p2-seat** decay;
+- `d1` is at parity — because priors, not values, drive d1;
+- "something compounds per ply of rollout" — an inverted leaf value compounds
+  per ply *and* per simulation, on the one seat where it was inverted.
+
+The worlds ablation stays flat on **both** seats (p1 0.420/0.460/0.460/0.440/
+0.460, p2 0.300/0.270/0.260/0.260/0.400 across w1→w16), so §4.4's refutation of
+the aggregation hypothesis stands on its own. The mild w16 uptick is a p2
+effect, consistent with more determinizations diluting a systematically
+inverted Q.
+
+### 11.7 What this still does not settle
+
+- **A small residual on the correctly-oriented seat cannot be excluded.** p1
+  sits at 0.480 / 0.460 / 0.460 for d2 / d6 / d8 against 0.550–0.560 for control
+  and d1. Every interval overlaps and the sims ladder runs the other way, so
+  this is consistent with noise — but a 2–5 point real effect would hide inside
+  n = 50. Only the §8 acceptance re-bench resolves it.
+- **The two seats hold disjoint seed sets** (parity split), so p1-vs-p2 is a
+  between-seed comparison. The two controls bound that at +0.05 and −0.11, both
+  null; and no seed-set luck produces 0/50 in a cell whose own d1 arm scored
+  0.510 on the same seeds. But the seat gap itself should not be quoted to
+  better than a few points.
+- **Fallback rises in the largest cells** (up to 0.217 in one `d6-s4096`
+  shard, against 0.000–0.005 typical). Far too small and too late to
+  manufacture a 0/50, but it should be watched on the re-bench.
+
+### 11.8 Next
+
+Run the §8 acceptance criterion on the fixed build (PR #937): search ≥ 0.500 vs
+raw at `d4`/`s1024` over 200 mirrored-pair games, **reported per seat**. The
+prediction this makes falsifiable: p1 stays where it is and p2 rises to meet it.
+If p2 does not recover, §10 and §11 both retract.
+
+Every strength number in §4, §7 and §9 was produced by an engine that played one
+of its two seats backwards. They should be treated as void, not as a baseline to
+improve on.
