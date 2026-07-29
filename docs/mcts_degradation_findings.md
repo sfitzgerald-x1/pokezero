@@ -1,7 +1,9 @@
 # MCTS degradation: why search loses to its own prior
 
-**Status:** mechanism **IDENTIFIED** (§10–§11), pending the §8 acceptance
-re-bench. The leaf value was consumed with the wrong seat orientation whenever
+**Status:** mechanism **IDENTIFIED and CONFIRMED** (§10–§12). The §8 acceptance
+criterion is **met** on the fixed build: 0.615 [0.573, 0.658] over 220 within-seed
+mirrored pairs, +0.115 over its own prior. One residual seat asymmetry remains open
+(§12.4). The leaf value was consumed with the wrong seat orientation whenever
 PokeZero played p2, and the per-seat split of the recorded grids (§11) shows the
 p2 seat carries essentially the whole deficit at every depth and every
 simulation budget, on both builds. Four candidate causes were tested before it;
