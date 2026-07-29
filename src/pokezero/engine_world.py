@@ -523,6 +523,26 @@ def battle_spec_from_payload(
 
     weather, weather_turns = _weather_fields(payload)
     built_sides = _apply_forecast_types(built_sides, weather=weather)
+    # LAST of the three retype arms, deliberately. Precedence, from sim source:
+    #
+    #   * `_apply_transform` (above) mirrors Transform, which copies the donor's types.
+    #   * `_apply_forecast_types` (above) DERIVES Castform's type from public weather,
+    #     mirroring Forecast's `onUpdate`.
+    #   * this arm applies an OBSERVED `|-start|...|typechange|<type>|` -- Color Change's
+    #     `onAfterMoveSecondary` calling `setType(type)` (data/abilities.ts:554-562).
+    #
+    # Observation beats derivation, so it goes last: the other two reconstruct what the
+    # types SHOULD be from a rule, while this one is the sim telling us what they ARE. If a
+    # transformed mon is then Color Change'd, Showdown's later `setType` wins because both
+    # mutate `pokemon.types` in event order; applying the observation last reproduces that
+    # without having to model the ordering.
+    #
+    # Only the `type:` form is consumed. `forme:` (Castform Forecast) is deliberately left
+    # to `_apply_forecast_types`: that arm already derives the same answer from the same
+    # public weather, and Forecast is `onUpdate`, so it cannot lag the observation. Handling
+    # it here too would give Castform two writers that must agree -- the shape that made the
+    # encoder-vocabulary bug survive for months.
+    built_sides = _apply_live_typechange(built_sides, payload)
     spec = BattleSpec(
         side_one=built_sides["p1"],
         side_two=built_sides["p2"],
@@ -726,6 +746,33 @@ def _require_world_reproduces_trap(
         "self active request flags ['trapped'] constrain legality beyond this construction "
         f"(sampled world does not trap: foe ability {foe_ability!r})",
     )
+
+
+def _apply_live_typechange(
+    sides: Mapping[str, SideSpec], payload: Mapping[str, Any]
+) -> dict[str, SideSpec]:
+    """Stamp an observed Color Change retype onto the active mon.
+
+    Mono-type by construction: Showdown's Color Change calls `setType(type)`, which
+    REPLACES the type list rather than appending, so a retyped Kecleon is single-typed.
+
+    Reverts on switch-out are already handled upstream -- the parser clears
+    `live_type_override` in its switch block -- so an empty value here means "base types",
+    not "unknown", and this is a no-op.
+    """
+    result = dict(sides)
+    for slot, side in tuple(result.items()):
+        raw = ((payload.get("sides") or {}).get(slot) or {}).get("liveTypeOverride")
+        if not raw or not str(raw).startswith("type:"):
+            continue
+        live_type = str(raw).split(":", 1)[1].strip()
+        if not live_type:
+            continue
+        mon = side.pokemon[side.active_index]
+        party = list(side.pokemon)
+        party[side.active_index] = replace(mon, types=(live_type,))
+        result[slot] = replace(side, pokemon=tuple(party))
+    return result
 
 
 def _apply_forecast_types(sides: Mapping[str, SideSpec], *, weather: str) -> dict[str, SideSpec]:

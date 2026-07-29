@@ -2121,6 +2121,19 @@ def _public_materialization_payload(
             # duration, the move-slot lock, and the same-turn redirect the engine already
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
+            # Live in-battle retype of the ACTIVE mon, which the species token cannot
+            # express. The parser has produced this since the v3 obs work but only the
+            # OBSERVATION path consumed it (`_apply_live_type_override`); the world was
+            # still built from base Pokedex types, so a Kecleon whose Color Change had
+            # retyped it reached the engine as plain Normal. That is wrong in BOTH
+            # directions at once: it grants STAB the mon no longer has when it attacks,
+            # and it prices incoming type effectiveness against the wrong defensive type.
+            #
+            # Format is the parser's: "type:<Type>" (Color Change -- the payload IS the
+            # type) or "forme:<forme>" (Castform Forecast -- unresolved, the forme's type
+            # is dex-resolved by the consumer). engine_world consumes only the "type:"
+            # form; see the precedence note there for why Forecast stays derived.
+            "liveTypeOverride": replay.live_type_override.get(player) or "",
             "sideConditions": dict(replay.side_condition_counts.get(player, {})),
             "sideConditionSetTurns": dict(replay.side_condition_set_turns.get(player, {})),
         }
