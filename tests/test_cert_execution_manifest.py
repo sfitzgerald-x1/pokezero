@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import cert_execution_manifest as manifest  # noqa: E402
+import cert_sweep_readout as readout  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -593,6 +594,21 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        c14 = json.loads(
+            (ROOT / "reports" / "c14_cert_sweep_readout.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        c15 = json.loads(
+            (ROOT / "reports" / "c15_instrument_coverage.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        c17 = json.loads(
+            (ROOT / "reports" / "c17_substitute_retained_verification.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertEqual(manifest.validate_final_contract_schema(contract), [])
         gates = contract["certification_gates"]
         self.assertEqual(
@@ -622,8 +638,22 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         self.assertEqual(
             table["calibration_boundaries"],
-            calibration["source_evidence"]["boundaries_measured"],
+            c14["aggregate"]["boundaries_measured"],
         )
+        self.assertEqual(
+            calibration["source_evidence"]["boundaries_measured"],
+            c14["aggregate"]["boundaries_measured"],
+        )
+        self.assertEqual(
+            calibration["source_evidence"]["coverage_measured_fraction"],
+            c14["coverage_measured_fraction"],
+        )
+        c14_raw_counts = {
+            divergence_class: entry["observed"]
+            for divergence_class, entry in c14[
+                "per_class_observed_vs_predicted"
+            ].items()
+        }
         self.assertEqual(
             {
                 divergence_class: entry["expected_10k"]
@@ -631,15 +661,71 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     "predicted_class_rates_10k"
                 ].items()
             },
-            calibration["raw_class_archive_counts"],
+            c14_raw_counts,
         )
+        self.assertEqual(calibration["raw_class_archive_counts"], c14_raw_counts)
         self.assertEqual(len(contract["predicted_class_rates_10k"]), 61)
+        source_counts = {
+            "limit:roll_divergent_lethality": c15["family_attribution"][
+                "limit:roll_divergent_lethality"
+            ],
+            "I1_cap_state_shape": c15["family_attribution"]["I1_cap_state_shape"],
+            "LS_capped_lethal_shape": c15["family_attribution"][
+                "LS_capped_lethal_shape"
+            ],
+            "limit:world_sample_drag_target": c15["family_attribution"][
+                "limit:world_sample_drag_target"
+            ],
+            "I3_roll_inherited": c15["family_attribution"]["I3_roll_inherited"],
+            "I6_sleeptalk_callee_union": c15["family_attribution"][
+                "I6_sleeptalk_callee_union"
+            ],
+            "I4_attribution_tie": c15["family_attribution"]["I4_attribution_tie"],
+            "I5_boundary_truncation": c15["family_attribution"][
+                "I5_boundary_truncation"
+            ],
+            "I2_matcher_accounting": c15["family_attribution"][
+                "I2_matcher_accounting"
+            ],
+            "LS_crit_arm_pairing_echo": c15["family_attribution"][
+                "LS_crit_arm_pairing_echo"
+            ],
+            "LS_confusion_fan": c15["family_attribution"]["LS_confusion_fan"],
+            "LS_structural_arm_echo": next(
+                count
+                for label, count in c15["unattributed_named_shapes"].items()
+                if label.startswith("structural component-count mismatch")
+            ),
+            "limit:world_substitute_health_unknown": c17["summary"]["identities"],
+        }
+        self.assertEqual(
+            calibration["registered_family_source_counts"], source_counts
+        )
+        calibration_boundaries = c14["aggregate"]["boundaries_measured"]
+        expected_intervals = {}
+        for family, count in source_counts.items():
+            lower_rate, upper_rate = readout.wilson(count, calibration_boundaries)
+            lower = round(lower_rate * calibration_boundaries)
+            upper = round(upper_rate * calibration_boundaries)
+            expected_intervals[family] = [
+                lower
+                if family
+                in {
+                    "limit:roll_divergent_lethality",
+                    "limit:world_sample_drag_target",
+                }
+                else 0,
+                upper,
+            ]
         self.assertEqual(
             {
                 family: entry["wilson95"]
                 for family, entry in table["documented_families"].items()
             },
-            calibration["registered_family_count_intervals"],
+            expected_intervals,
+        )
+        self.assertEqual(
+            calibration["registered_family_count_intervals"], expected_intervals
         )
 
 

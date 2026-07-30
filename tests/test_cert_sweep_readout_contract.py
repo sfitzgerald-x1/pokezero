@@ -486,6 +486,52 @@ class CertificationContractTests(unittest.TestCase):
             ["registered family 'I1_cap_state_shape' rate 0.04 exceeds registered upper rate 0.03"],
         )
 
+    def test_counter_backed_limit_over_upper_bound_fails_full_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            for index, seed in enumerate((1000, 2000)):
+                self._shard(paths[index], seed)
+                shard = json.loads(paths[index].read_text(encoding="utf-8"))
+                shard["counters"]["limit:world_substitute_health_unknown"] = 1
+                paths[index].write_text(json.dumps(shard), encoding="utf-8")
+            contract = self._contract()
+            contract["pre_registered_family_rate_table"]["documented_families"] = {
+                "limit:world_substitute_health_unknown": {
+                    "wilson95_rate": [0.0, 0.0]
+                }
+            }
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            for entry in manifest["shards"]:
+                checkpoint_path = Path(entry["checkpoint"]["path"])
+                record = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                record["counters"]["limit:world_substitute_health_unknown"] = 1
+                checkpoint_path.write_text(
+                    json.dumps(record) + "\n", encoding="utf-8"
+                )
+                entry["checkpoint"]["sha256"] = readout._sha256(checkpoint_path)
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertEqual(
+            payload["comparison_limit_counters"],
+            {"limit:world_substitute_health_unknown": 2},
+        )
+        evidence = payload["family_rate_evidence"]["families"][
+            "limit:world_substitute_health_unknown"
+        ]
+        self.assertEqual(evidence["observed"], 2)
+        self.assertEqual(evidence["divergence_row_observed"], 0)
+        self.assertEqual(evidence["aggregate_counter_observed"], 2)
+        self.assertEqual(
+            payload["gate_failures"],
+            [
+                "registered family 'limit:world_substitute_health_unknown' rate "
+                "0.01 exceeds registered upper rate 0"
+            ],
+        )
+
     def test_checkpoint_requires_every_game_record_and_complete_report_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

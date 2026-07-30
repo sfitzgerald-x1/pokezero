@@ -993,6 +993,7 @@ def _family_rate_gates(
     contract: Mapping[str, Any],
     *,
     boundaries_measured: int,
+    aggregate_counters: Mapping[str, int] | None = None,
     exclusion_counts: Mapping[str, int] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Bind registered upper rates and predicted-zero counters.
@@ -1024,7 +1025,14 @@ def _family_rate_gates(
     if calibration_boundaries is None:
         calibration_boundaries = -1
 
-    observed_families = set(family_counts) - {"UNATTRIBUTED"}
+    counter_families = {
+        key: value
+        for key, value in (aggregate_counters or {}).items()
+        if isinstance(key, str) and key.startswith("limit:")
+    }
+    observed_families = (
+        set(family_counts) - {"UNATTRIBUTED"}
+    ) | set(counter_families)
     for family in observed_families - set(registered):
         failures.append(f"attributed family {family!r} was not pre-registered")
     for family, prediction in registered.items():
@@ -1086,13 +1094,20 @@ def _family_rate_gates(
         if prediction_interval is not None and not has_prediction_interval:
             failures.append(f"registered family {family!r} has an invalid prediction interval")
             continue
-        count = _strict_int(family_counts.get(family, 0))
-        if count is None or count < 0:
+        row_count = _strict_int(family_counts.get(family, 0))
+        counter_count = _strict_int(counter_families.get(family, 0))
+        if row_count is None or row_count < 0:
             failures.append(f"family {family!r} has a malformed observed count")
-            count = 0
+            row_count = 0
+        if counter_count is None or counter_count < 0:
+            failures.append(f"family counter {family!r} has a malformed observed count")
+            counter_count = 0
+        count = row_count + counter_count
         observed_rate = count / max(1, boundaries_measured)
         evidence["families"][family] = {
             "observed": int(count),
+            "divergence_row_observed": int(row_count),
+            "aggregate_counter_observed": int(counter_count),
             "observed_rate_per_measured_boundary": observed_rate,
             "registered_wilson95_rate": rate_interval,
             "lower_rate_advisory": lower_rate,
@@ -1359,6 +1374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         fam_counts,
         pred,
         boundaries_measured=agg["boundaries_measured"],
+        aggregate_counters=aggregate_counters,
         exclusion_counts=exclusion_counts,
     )
     repro_failures = _repro_integrity_gates(rows, shards)
@@ -1374,6 +1390,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         key: value for key, value in sorted(aggregate_counters.items())
         if key.startswith("skip:")
     }
+    comparison_limit_counters = {
+        key: value for key, value in sorted(aggregate_counters.items())
+        if key.startswith("limit:")
+    }
     full_rounds = max(1, agg["boundaries_full_round"])
     skip_counter_rates = {
         key: value / full_rounds for key, value in skip_counters.items()
@@ -1385,6 +1405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
         "skip_counters": skip_counters,
         "skip_counter_rates_per_full_round": skip_counter_rates,
+        "comparison_limit_counters": comparison_limit_counters,
         "repros_complete_all_shards": retention_ok,
         "rows_retained": len(rows),
         "repro_integrity_failures": repro_failures,

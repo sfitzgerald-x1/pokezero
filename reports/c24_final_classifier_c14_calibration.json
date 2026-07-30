@@ -6,13 +6,13 @@
     "boundaries_measured": 791757,
     "coverage_measured_fraction": 0.9773,
     "current_classifier_source_commit": "9ec00db077356c01bc6f7b416e75625e3895f055",
-    "current_classifier_readout_sha256": "92e832afc8bc0faac247609e4cd729053fa3e2b987b3e488db6848eceae4b325",
+    "current_classifier_readout_sha256": "bd42d95d435ed234b7a575290c7e7c70dbf53213c45266f855cb1303f3cc2053",
     "fresh_sweep2_measurements_inspected": 0
   },
   "method": {
     "classifier_replay": "Run the archived C14 shard reports through the final cert_sweep_readout.py classifier with the explicit historical legacy opt-out.",
     "upper_rate_policy": "Use the larger conservative historical Wilson upper count where classifier tightening moved old rows out of an attributed family. Wilson lower counts remain advisory and are set to zero for newly registered families.",
-    "substitute_limit_policy": "The archived rows predate canonical Substitute provenance. reports/c17_substitute_retained_verification.json independently verifies all 13 retained identities under the current classifier, so the historical [8,22] Wilson count interval is the pre-registered bound.",
+    "substitute_limit_policy": "The archived rows predate canonical Substitute provenance. reports/c17_substitute_retained_verification.json independently verifies all 13 retained identities at source 7f323515de379c2fed864edbb144a01ce21b57ff; the relevant counter emission remained unchanged through the registered source, so its Wilson upper count is the pre-registered bound.",
     "no_two_sided_prediction": "No prediction_interval_rate is registered. Only each Wilson upper rate is binding."
   },
   "current_classifier_archive_replay": {
@@ -105,6 +105,21 @@
     "limit:roll_divergent_lethality": 1281,
     "limit:world_sample_drag_target": 271,
     "roll_scaled_component": 1049
+  },
+  "registered_family_source_counts": {
+    "limit:roll_divergent_lethality": 1281,
+    "I1_cap_state_shape": 517,
+    "LS_capped_lethal_shape": 478,
+    "limit:world_sample_drag_target": 271,
+    "I3_roll_inherited": 240,
+    "I6_sleeptalk_callee_union": 215,
+    "I4_attribution_tie": 166,
+    "I5_boundary_truncation": 164,
+    "I2_matcher_accounting": 111,
+    "LS_crit_arm_pairing_echo": 28,
+    "LS_confusion_fan": 26,
+    "LS_structural_arm_echo": 41,
+    "limit:world_substitute_health_unknown": 13
   },
   "registered_family_count_intervals": {
     "limit:roll_divergent_lethality": [1213, 1353],
