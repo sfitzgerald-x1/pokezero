@@ -379,32 +379,95 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
-    def test_a_sleep_talk_user_retires_its_rest_clock(self) -> None:
-        """gen3 refunds Sleep Talk / Snore turns, so k stops meaning "attempts elapsed".
+    def test_a_sleep_talk_bench_row_refunds_its_rest_clock(self) -> None:
+        """A benched Sleep Talker carries the exact post-refund Rest counter.
 
-        A sleepUsable move emits ``|cant|...|slp`` and THEN acts, and gen3 banks the turn
-        as ``skippedTime``, handing it back at the next switch-in
-        (``slp.onSwitchIn``: ``time += skippedTime``). Measured at the sim, one Rest by a
-        Sleep Talk user that pivots emits FOUR cants rather than two
-        (``--only restsleeptalkrefund``). Rather than keep counting a number that no
-        longer tracks the clock, the entry is retired and the mon falls back to the
-        pre-existing sleep handling — a declined world, never a wrong one.
+        This is the fail-unpatched/pass-patched pin. The old tracker retired its
+        Rest provenance at the direct Sleep Talk line, so the now-benched row
+        reached world construction as generic sleep. The direct world has no
+        ``skippedTime`` field, but a benched mon will receive the refund before
+        its next attempt, so ``attempts - skipped`` is exact.
         """
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 0)
+
+    def test_snore_bench_row_refunds_its_rest_clock_too(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 0)
+
+    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="active-sleep-talk")
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertNotIn("restSleepAttempts", rows[0])
+
+    def test_benched_sleep_talk_clock_does_not_tick_until_switch_back(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Snorlax|Body Slam|p2a: Starmie",
+            "|upkeep",
+            "|turn|3",
+            "|move|p1a: Snorlax|Body Slam|p2a: Starmie",
+            "|upkeep",
+            "|turn|4",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 0)
+
+    def test_switch_back_applies_the_skipped_time_refund_once(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="sleep-talk-return")
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 0)
+        self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
+
+    def test_plain_sleep_turn_after_sleep_talk_cancels_the_refund(self) -> None:
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
             "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
             "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
             "|upkeep",
             "|turn|2",
-        ])
-        self.assertNotIn("restSleepAttempts", rows[0])
-
-    def test_snore_retires_it_too(self) -> None:
-        rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
-            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+            "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
+            "|upkeep",
+            "|turn|3",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
         ])
-        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertEqual(rows[0]["restSleepAttempts"], 2)
 
     def test_an_awake_sleep_talk_user_has_nothing_to_retire(self) -> None:
         """Case A: Sleep Talk with no Rest entry in play must be inert.
