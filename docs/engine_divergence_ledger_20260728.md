@@ -5915,3 +5915,87 @@ Zero clearance overlap between the parents held (the near-miss 1500248/78 is #96
 clear and this lane's stale stay, per the Z10.6 bridge). The merged-main residue
 frame for the next cycle: **103 diverged = 58 adjudicated outside-limits + 5
 relabeled + 2 I1-candidate new rows + 38 limit.**
+
+---
+
+# Appendix Z13 — Truant loaf phase: derived, probed, and 40 of 45
+
+Branch `scott/engine-world-truant-phase`. Parser + `engine_world` only; engine unchanged
+(41 patches, `3204c777dec347aa`). Prediction pre-registered in its own commit before any code.
+
+## Z13.1 gen3 owns Truant, and the existing rule was a proxy for the wrong thing
+
+`data/mods/gen3/abilities.ts` replaces base's volatile machinery (`onStart: undefined`) with a
+free-running boolean:
+
+```js
+onSwitchIn(p) { p.truantTurn = this.turn !== 0; }
+onResidualOrder: 27
+onResidual(p) { p.truantTurn = !p.truantTurn; }   // EVERY turn end, unconditionally
+```
+
+`engine_search._truant_loaf_slots` used **"moved last round -> loafs now"**. That is a proxy
+for the bit, not the bit: the first turn a holder is stopped by something OTHER than Truant
+(sleep, paralysis, flinch, freeze, recharge, a switch) the two disagree, and **the parity
+stays inverted for the rest of the stint**. One mechanism, tens of rows.
+
+## Z13.2 Probe over derivation — and the probe corrected the derivation once
+
+The composed derivation for a TRACED Truant (patch 32: a copied ability's Start event does not
+fire, so `onSwitchIn` never runs for the tracer; `sim/pokemon.ts` leaves `truantTurn` false on
+entry; `onResidual` flips regardless) predicts the tracer LOAFS on its first move turn — the
+opposite of native. Three `gen3customgame` probes:
+
+| scenario | first move turn | matches derivation? |
+| --- | --- | --- |
+| traced at **turn 0** (lead) | **ACTS** | no — derivation said loaf |
+| traced **mid-battle** (turn 2) | **LOAFS** | yes |
+| switch out, re-enter, **re-trace** | **LOAFS** again (parity resets) | yes |
+
+The lead exception is the same missing **end-of-turn-0 residual** that broke the native lead:
+there is no residual to flip before turn 1. Both cases collapse to one rule once that is
+accounted for. The derivation was right about the mechanism and wrong about one boundary
+condition, which is exactly what the probe-over-derivation rule exists to catch.
+
+## Z13.3 What shipped, and what a flip-count model cannot do
+
+* **Native** holders (`slakoth`/`slaking`, both mono-ability): seeded at switch-in with
+  `turn != 0`, flipped per `|turn|` **from turn 2** (no end-of-turn-0 residual).
+* **Traced** holders: **no derived seed.** Seeding `false` at acquisition and counting `|turn|`
+  flips reproduces the probe in the common case and misses when the acquisition switch-in is a
+  mid-turn replacement **after a faint** — there is no `|turn|` boundary between acquisition
+  and the next move, so the count is short by one and the parity inverts. Measured: it cost a
+  new divergence (2200291/41) while fixing three. Removing it made the same seed 3 -> 0 clean.
+* **Anchors** establish and correct the phase from what the sim publishes:
+  `|cant|...|ability: Truant` means loafing this turn, a holder's own `|move|` means acting.
+  Exact, and needs no flip accounting.
+
+**The general lesson: a derived counter and an observed fact are not interchangeable.** The
+derivation is worth having — it explains the family — but where the protocol states the answer
+outright, anchor on it. The four earlier formulations of this fix all fought because they were
+deriving a quantity the sim was already publishing.
+
+## Z13.4 Re-read: 40 cleared, 3 still divergent, 2 newly divergent
+
+Re-read of every candidate seed through the fixed build (43 of 44; one run did not complete):
+
+| | |
+| --- | --- |
+| CLEARED | **40** |
+| still divergent | 3 |
+| newly divergent | **2** (2100487/48, 2300743/79) |
+
+**Not zero, and not collateral.** Both new rows are `|cant| Slaking|ability: Truant` with the
+engine attacking — the SAME family in the opposite direction, i.e. residual instances of the
+parity this fix is closing, not damage to an unrelated mechanism. Net +38 of ~45. The
+remaining 5 are all engine-attacks-where-Showdown-loafed, which is where an anchor cannot help:
+the anchor arrives DURING the turn whose world was already built.
+
+## Z13.5 Family correction, forwarded
+
+Seed 2400315's rows are **not** loaf parity. They are `|cant|`-BOUNDARY residual drops
+(`component_missing_in_engine:sandstorm` on both `|cant| Truant` and `|cant| recharge` lines):
+engine and sim agree on who loafed and disagree on whether the end-of-turn block runs. The
+recharge-residual-gap family is therefore **broader than `|cant| recharge`** — it is any
+`|cant|` boundary. My signature filter mis-bucketed them, which also explains part of the
+44-vs-48 gap.
