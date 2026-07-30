@@ -22,9 +22,11 @@ import engine_transition_differential as differential  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     _split_components,
     branch_event_legal_rolls,
+    branch_component_legal_rolls,
     classify_divergence,
     count_world_construction_limit,
     damage_components,
+    roll_component_events_agree,
     roll_components_agree,
     world_construction_limit,
 )
@@ -418,12 +420,20 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertEqual(self.loaded_states, [])
 
     def test_branch_local_support_does_not_reprice_an_earlier_hit(self):
-        support = differential.BranchLegalRollSupport("p1", {21, 22, 23, 24, 25})
+        support = differential.BranchLegalRollSupport(
+            target_side="p1",
+            event_index=7,
+            critical=False,
+            damages={21, 22, 23, 24, 25},
+        )
+        selected = differential.DamageComponent("", -21, 7)
+        earlier = differential.DamageComponent("", -41, 6)
 
         self.assertEqual(
             differential.branch_component_legal_rolls(
                 support,
                 target_side="p1",
+                component=selected,
                 pre_legal={41, 42},
             ),
             {21, 22, 23, 24, 25},
@@ -432,9 +442,112 @@ class EventAwareBranchLegality(unittest.TestCase):
             differential.branch_component_legal_rolls(
                 support,
                 target_side="p2",
+                component=earlier,
                 pre_legal={41, 42},
             ),
             {41, 42},
+        )
+
+    def test_critical_direct_hit_cannot_borrow_the_noncritical_range(self):
+        def calculate_damage(_state, _side_one, _side_two, _first):
+            # The Python engine exposes [normal, critical] bases per actor.
+            return [25, 100], [30, 120]
+
+        differential.poke_engine.calculate_damage = calculate_damage
+        support = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Fire Blast|p2a: B",
+                    "|-boost|p1a: A|spa|1",
+                    "|-crit|p2a: B",
+                    "|-damage|p2a: B|100/200",
+                ],
+                "legal_roll_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="splash",
+        )
+
+        self.assertTrue(support.critical)
+        self.assertEqual(support.damages, set(range(85, 101)))
+        self.assertNotIn(25, support.damages)
+
+    def test_noncritical_direct_hit_cannot_borrow_the_critical_range(self):
+        def calculate_damage(_state, _side_one, _side_two, _first):
+            return [25, 100], [30, 120]
+
+        differential.poke_engine.calculate_damage = calculate_damage
+        support = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Fire Blast|p2a: B",
+                    "|-boost|p1a: A|spa|1",
+                    "|-damage|p2a: B|100/200",
+                ],
+                "legal_roll_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="splash",
+        )
+
+        self.assertFalse(support.critical)
+        self.assertEqual(support.damages, {21, 22, 23, 24, 25})
+        self.assertNotIn(85, support.damages)
+
+    def test_selected_direct_support_cannot_legalize_other_components(self):
+        support = differential.BranchLegalRollSupport(
+            target_side="p1",
+            event_index=7,
+            critical=False,
+            damages={21, 22, 23, 24, 25},
+        )
+        pre_legal = {41, 42}
+        selected = differential.DamageComponent("", -21, 7)
+        same_side_direct = differential.DamageComponent("", -21, 9)
+        confusion = differential.DamageComponent("confusion", -21, 8)
+        recoil = differential.DamageComponent("recoil", -21, 8)
+        drain = differential.DamageComponent("drain", 21, 8)
+
+        self.assertEqual(
+            branch_component_legal_rolls(
+                support, target_side="p1", component=selected, pre_legal=pre_legal
+            ),
+            support.damages,
+        )
+        for component in (same_side_direct, confusion, recoil, drain):
+            with self.subTest(component=component):
+                self.assertEqual(
+                    branch_component_legal_rolls(
+                        support,
+                        target_side="p1",
+                        component=component,
+                        pre_legal=pre_legal,
+                    ),
+                    pre_legal,
+                )
+
+    def test_observed_critical_cannot_match_a_noncritical_branch(self):
+        support = differential.BranchLegalRollSupport("p1", 7, False, {21, 22, 23, 24, 25})
+        self.assertFalse(
+            roll_component_events_agree(
+                [differential.DamageComponent("", -21, 3, True)],
+                [differential.DamageComponent("", -21, 7, False)],
+                support=support,
+                target_side="p1",
+                pre_legal={21, 22, 23, 24, 25},
+            )
+        )
+
+    def test_observed_noncritical_cannot_match_a_critical_branch(self):
+        support = differential.BranchLegalRollSupport("p1", 7, True, {85, 86, 87})
+        self.assertFalse(
+            roll_component_events_agree(
+                [differential.DamageComponent("", -85, 3, False)],
+                [differential.DamageComponent("", -85, 7, True)],
+                support=support,
+                target_side="p1",
+                pre_legal={85, 86, 87},
+            )
         )
 
 

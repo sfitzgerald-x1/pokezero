@@ -357,12 +357,22 @@ _PARTIAL_TRAP_SOURCES = frozenset({
 _CANONICAL_PARTIAL_TRAP = "partialtrap"
 
 
-def damage_components(
+@dataclasses.dataclass(frozen=True)
+class DamageComponent:
+    """One protocol HP event, retaining its source and exact input event."""
+
+    source: str
+    delta: int
+    event_index: int
+    critical: bool | None = None
+
+
+def damage_component_events(
     lines: Sequence[str],
     initial_hp: Mapping[str, int] | None = None,
     *,
     unattributed_damage_as_roll: bool = False,
-) -> dict[str, list[tuple[str, int]]]:
+) -> dict[str, list[DamageComponent]]:
     """Per-source HP deltas from a protocol slice, keyed by slot.
 
     ``initial_hp`` seeds the running HP per slot with the PRE-STEP value. Without
@@ -382,16 +392,14 @@ def damage_components(
     move in the gen3 pool that emits the tag, and it emits TWO lines, one per
     slot, the target's first and `[silent]`; both must be read.
 
-    Returns ``{"p1": [(source, delta), ...], "p2": [...]}`` where ``delta`` is
-    signed (negative = damage) and ``source`` is the normalized ``[from]`` tag
-    ("" for a bare damage line = direct move damage, "heal" for a bare heal).
-    Deltas are computed against the running HP for that slot, so a slot's
-    components sum to its net change and each is independently comparable.
+    Returns a per-slot ordered list. ``event_index`` is the original protocol
+    index, which lets a selected direct hit receive rebuilt support without
+    widening it to a different same-side HP event.
     """
 
     running: dict[str, int] = dict(initial_hp or {})
-    out: dict[str, list[tuple[str, int]]] = {"p1": [], "p2": []}
-    for line in lines:
+    out: dict[str, list[DamageComponent]] = {"p1": [], "p2": []}
+    for event_index, line in enumerate(lines):
         parts = line.split("|")
         if len(parts) < 3:
             continue
@@ -457,9 +465,42 @@ def damage_components(
             # that changed nothing carries no information, and recording it made
             # the component LISTS differ in length — surfacing as a spurious
             # roll-scaled mismatch (seed 1340000 step 110).
-            out[slot].append((source, new_hp - previous))
+            critical = None
+            if tag == "-damage" and source == "":
+                critical = _direct_hit_is_critical(
+                    lines,
+                    direct_damage_index=event_index,
+                    target_side=slot,
+                )
+            out[slot].append(
+                DamageComponent(source, new_hp - previous, event_index, critical)
+            )
         running[slot] = new_hp
     return out
+
+
+def damage_components(
+    lines: Sequence[str],
+    initial_hp: Mapping[str, int] | None = None,
+    *,
+    unattributed_damage_as_roll: bool = False,
+) -> dict[str, list[tuple[str, int]]]:
+    """Compatibility projection of :func:`damage_component_events`.
+
+    Existing reporting tools consume ``(source, delta)`` pairs. Strict branch
+    matching uses the event-preserving form above so selected-hit support cannot
+    leak to another component.
+    """
+
+    events = damage_component_events(
+        lines,
+        initial_hp,
+        unattributed_damage_as_roll=unattributed_damage_as_roll,
+    )
+    return {
+        slot: [(component.source, component.delta) for component in components]
+        for slot, components in events.items()
+    }
 
 
 def _maxhp_of(condition: str) -> int:
@@ -532,6 +573,8 @@ class BranchLegalRollSupport:
     """Exact roll support for one defender hit after a state mutation."""
 
     target_side: str
+    event_index: int
+    critical: bool
     damages: set[int]
 
 
@@ -550,6 +593,30 @@ def _event_changes_roll_state(event: object) -> bool:
     except (IndexError, ValueError):
         # A malformed stage event must not regain the stale-support fallback.
         return True
+
+
+def _direct_hit_is_critical(
+    events: Sequence[object],
+    *,
+    direct_damage_index: int,
+    target_side: str,
+) -> bool:
+    """Whether the selected direct hit, not another turn event, is critical."""
+
+    move_index = -1
+    for index in range(direct_damage_index - 1, -1, -1):
+        event = events[index]
+        if isinstance(event, str) and event.startswith("|move|"):
+            move_index = index
+            break
+    for event in events[move_index + 1:direct_damage_index]:
+        if not isinstance(event, str) or not event.startswith("|-crit|"):
+            continue
+        fields = event.split("|")
+        crit_target = fields[2].split(":", maxsplit=1)[0][:2] if len(fields) > 2 else ""
+        if crit_target == target_side:
+            return True
+    return False
 
 
 def branch_event_legal_rolls(
@@ -629,9 +696,21 @@ def branch_event_legal_rolls(
         ) from error
     assert direct_damage_target is not None
     rolls = side_one_rolls if direct_damage_target == "p2" else side_two_rolls
+    direct_damage_critical = _direct_hit_is_critical(
+        events,
+        direct_damage_index=direct_damage_index,
+        target_side=direct_damage_target,
+    )
+    if not rolls:
+        raise BranchLegalRollError("selected direct hit has no legal damage base")
+    if direct_damage_critical and len(rolls) < 2:
+        raise BranchLegalRollError("critical direct hit has no critical damage base")
+    selected_base = rolls[1] if direct_damage_critical else rolls[0]
     return BranchLegalRollSupport(
         target_side=direct_damage_target,
-        damages=legal_roll_damages(list(rolls)),
+        event_index=direct_damage_index,
+        critical=direct_damage_critical,
+        damages=legal_roll_damages([selected_base]),
     )
 
 
@@ -639,13 +718,39 @@ def branch_component_legal_rolls(
     support: BranchLegalRollSupport | None,
     *,
     target_side: str,
+    component: DamageComponent,
     pre_legal: set[int] | None,
 ) -> set[int] | None:
-    """Use rebuilt support only for the branch hit it was captured before."""
+    """Use rebuilt support only for the exact selected direct-damage event."""
 
-    if support is not None and support.target_side == target_side:
+    if (
+        support is not None
+        and support.target_side == target_side
+        and component.event_index == support.event_index
+        and component.source == ""
+    ):
         return support.damages
     return pre_legal
+
+
+def _split_component_events(
+    components: Sequence[DamageComponent],
+) -> tuple[Counter, list[DamageComponent]]:
+    """Event-preserving counterpart to :func:`_split_components`."""
+
+    exact: Counter = Counter()
+    rolled: list[DamageComponent] = []
+    for component in components:
+        if component.source in _IGNORED_SOURCES:
+            continue
+        if (
+            component.source in _ROLL_SCALED_SOURCES
+            or component.source.endswith("_to_full")
+        ):
+            rolled.append(component)
+        else:
+            exact[(component.source, component.delta)] += 1
+    return exact, rolled
 
 
 def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
@@ -716,6 +821,52 @@ def roll_components_agree(
         low = abs(eng) * 0.92 - 1
         high = abs(eng) * 1.09 + 1
         if not (low <= magnitude <= high):
+            return False
+    return True
+
+
+def roll_component_events_agree(
+    observed: Sequence[DamageComponent],
+    engine: Sequence[DamageComponent],
+    *,
+    support: BranchLegalRollSupport | None,
+    target_side: str,
+    pre_legal: set[int] | None,
+) -> bool:
+    """Compare ordered roll components with per-event legal support.
+
+    The selected branch snapshot prices one direct hit. A side-wide support set
+    is unsound: a later confusion, recoil, drain, or second direct hit may have
+    a different causal roll. Protocol order is retained deliberately here; a
+    branch that moves HP events is a different branch rather than interchangeable
+    evidence for a sorted magnitude list.
+    """
+
+    if len(observed) != len(engine):
+        return False
+    for observed_component, engine_component in zip(observed, engine):
+        selected_direct_event = (
+            support is not None
+            and target_side == support.target_side
+            and engine_component.event_index == support.event_index
+            and engine_component.source == ""
+        )
+        if selected_direct_event and (
+            observed_component.source != ""
+            or observed_component.critical is not support.critical
+        ):
+            return False
+        legal = branch_component_legal_rolls(
+            support,
+            target_side=target_side,
+            component=engine_component,
+            pre_legal=pre_legal,
+        )
+        if not roll_components_agree(
+            [(observed_component.source, observed_component.delta)],
+            [(engine_component.source, engine_component.delta)],
+            legal,
+        ):
             return False
     return True
 
@@ -1169,9 +1320,12 @@ def evaluate_boundary_strict(
     # Both sides start from the same pre-state (the pre-state gate proved the
     # HP equal), so both extractions are seeded with it.
     pre_hp = {"p1": pre_features.p1_hp, "p2": pre_features.p2_hp}
-    observed_components = damage_components(step_lines, pre_hp)
-    obs_exact = {slot: _split_components(observed_components[slot])[0] for slot in ("p1", "p2")}
-    obs_rolled = {slot: _split_components(observed_components[slot])[1] for slot in ("p1", "p2")}
+    observed_components = damage_component_events(step_lines, pre_hp)
+    observed_split = {
+        slot: _split_component_events(observed_components[slot]) for slot in ("p1", "p2")
+    }
+    obs_exact = {slot: observed_split[slot][0] for slot in ("p1", "p2")}
+    obs_rolled = {slot: observed_split[slot][1] for slot in ("p1", "p2")}
 
     misses: list[tuple[int, str]] = []
     branch_total = 0
@@ -1229,7 +1383,7 @@ def evaluate_boundary_strict(
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
                 continue
             usable_branches += 1
-            engine_components = damage_components(
+            engine_components = damage_component_events(
                 branch.get("events") or [],
                 {engine_label_for_slot[slot]: pre_hp[slot] for slot in ("p1", "p2")},
                 unattributed_damage_as_roll=sleeptalk_union,
@@ -1238,22 +1392,21 @@ def evaluate_boundary_strict(
             reason = None
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
-                eng_exact, eng_rolled = _split_components(engine_components[label])
-                legal = branch_component_legal_rolls(
-                    branch_support,
+                eng_exact, eng_rolled = _split_component_events(engine_components[label])
+                # Branch-local support is tied to one direct protocol event.
+                # Every other rolled component remains on its ordinary pre-state
+                # range, including same-side recoil, drain, and confusion.
+                if not roll_component_events_agree(
+                    obs_rolled[slot],
+                    eng_rolled,
+                    support=branch_support,
                     target_side=label,
                     pre_legal=pre_legal,
-                )
-                # ROLL FIRST. A branch whose roll does not match is the wrong
-                # branch, and its deterministic components are then compared
-                # against a different damage history — reporting THAT as the
-                # miss points at the wrong mechanic. Reject on the roll and let
-                # a later branch be judged on its residuals.
-                if not roll_components_agree(obs_rolled[slot], eng_rolled, legal):
+                ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={sorted(obs_rolled[slot], key=lambda p: p[1])} "
-                        f"engine={sorted(eng_rolled, key=lambda p: p[1])}"
+                        f"observed={[(c.source, c.delta) for c in obs_rolled[slot]]} "
+                        f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
