@@ -3,9 +3,9 @@
 The export half (``ShowdownReplayState.rest_sleep_counts``, covered in
 ``tests/test_observation_spec_v3.py``) records, per sleeping mon, that the sleep came
 from its own Rest and how many move ATTEMPTS have already burned off it. This file
-covers everything downstream of that: the direct-world row annotation, the world
-constructor's ``3 - k`` reconstruction, the capability gate, and the claim that every
-input is public-line-derived.
+covers everything downstream of that: direct-world row annotation, ability-aware
+counter reconstruction, the capability gate, and the claim that every input is
+public-line-derived.
 
 Ground truth for the behaviour all of this exists to reproduce is
 ``scripts/gen3_switch_differential.py --only hypnosisrestclause hypnosisrestclausecontrol``
@@ -31,7 +31,7 @@ from pokezero.engine_world import (  # noqa: E402
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
 from pokezero.local_showdown import _apply_rest_sleep_provenance  # noqa: E402
-from pokezero.showdown import parse_showdown_replay  # noqa: E402
+from pokezero.showdown import _ReplayParser, parse_showdown_replay  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
 
@@ -93,6 +93,9 @@ _SNORLAX = FixturePokemon(species="Snorlax", moves=("bodyslam",), ability="Immun
 _SKARMORY = FixturePokemon(species="Skarmory", moves=("rest",), ability="Keen Eye",
                            item="Leftovers", level=76,
                            evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
+_SKARMORY_EARLY_BIRD = FixturePokemon(species="Skarmory", moves=("rest",), ability="Early Bird",
+                                      item="Leftovers", level=76,
+                                      evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
 _STARMIE = FixturePokemon(species="Starmie", moves=("surf",), ability="Natural Cure",
                           item="Leftovers", level=79,
                           evs={s: 85 for s in ("hp", "atk", "def", "spa", "spd", "spe")})
@@ -103,16 +106,24 @@ def _maxhp(mon: FixturePokemon, dex: ShowdownDex) -> int:
     return gen3_hp_stat(int(info.base_stats["hp"]), 31, int((mon.evs or {}).get("hp", 0)), mon.level)
 
 
-def _override() -> BattleStartOverride:
+def _override(*, sleeper: FixturePokemon = _SKARMORY) -> BattleStartOverride:
     return BattleStartOverride(
         player_teams={
             "p1": pack_team((_SNORLAX,)),
-            "p2": pack_team((_SKARMORY, _STARMIE)),
+            "p2": pack_team((sleeper, _STARMIE)),
         },
     )
 
 
-def _payload(dex: ShowdownDex, *, rest_attempts=None, sleeper_active=False):
+def _payload(
+    dex: ShowdownDex,
+    *,
+    rest_attempts=None,
+    refunded_time=None,
+    skipped_time=None,
+    refund_pending=False,
+    sleeper_active=False,
+):
     """A minimal two-seat payload whose p2 Skarmory is asleep.
 
     ``rest_attempts`` is the row annotation under test; ``None`` leaves the row
@@ -127,6 +138,12 @@ def _payload(dex: ShowdownDex, *, rest_attempts=None, sleeper_active=False):
     }
     if rest_attempts is not None:
         sleeper_row["restSleepAttempts"] = rest_attempts
+    if refunded_time is not None:
+        sleeper_row["restSleepRefundedTime"] = refunded_time
+    if skipped_time is not None:
+        sleeper_row["restSleepSkippedTime"] = skipped_time
+    if refund_pending:
+        sleeper_row["restSleepRefundPending"] = True
     other_row = {"species": "Starmie", "condition": "100/100", "active": not sleeper_active}
     return {
         "turn": 9,
@@ -178,7 +195,7 @@ _LEADS = [
 # --- the reconstruction -----------------------------------------------------------
 
 class RestTurnsReconstructionTests(unittest.TestCase):
-    """``rest_turns = 3 - k``, and what happens on either side of it."""
+    """Exact Rest reconstruction from attempts, refunds, and the world ability."""
 
     def setUp(self) -> None:
         self.dex = _dex()
@@ -186,8 +203,10 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         self.probe_calls = probe.__enter__()
         self.addCleanup(probe.__exit__, None, None, None)
 
-    def _sleeper(self, **kwargs):
-        world = battle_spec_from_payload(_payload(self.dex, **kwargs), _override(), dex=self.dex)
+    def _sleeper(self, *, sleeper: FixturePokemon = _SKARMORY, **kwargs):
+        world = battle_spec_from_payload(
+            _payload(self.dex, **kwargs), _override(sleeper=sleeper), dex=self.dex
+        )
         return world.spec.side_two.pokemon[0]
 
     def test_building_a_rest_sleeper_gates_on_the_capability(self) -> None:
@@ -205,8 +224,8 @@ class RestTurnsReconstructionTests(unittest.TestCase):
 
     def test_each_attempt_count_maps_onto_the_engines_own_counter(self) -> None:
         # The engine sets rest_turns 3 on Rest and decrements once per move ATTEMPT,
-        # waking at 1. k counts those same attempts off the public |cant| lines, so
-        # k attempts spent leave 3 - k -- 3, 2 or 1, never 0.
+        # waking at 1. In the ordinary (non-Early-Bird, no-refund) path, k public
+        # |cant| lines leave 3 - k -- 3, 2 or 1, never 0.
         for attempts, expected in ((0, 3), (1, 2), (2, 1)):
             with self.subTest(attempts=attempts):
                 sleeper = self._sleeper(rest_attempts=attempts)
@@ -272,7 +291,57 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         # to be declined outright.
         self.assertEqual(self._sleeper(rest_attempts=0).rest_turns, 3)
 
-    def test_an_unannotated_sleeper_keeps_the_old_behaviour_exactly(self) -> None:
+    def test_early_bird_consumes_two_units_per_attempt_and_refunds_one_per_sleep_talk(self) -> None:
+        # Rest begins at 3. Early Bird's first sleep attempt leaves 1; its public
+        # skippedTime refund restores one when the mon returns, so the constructed
+        # world must start at 2 rather than treating it as a fresh three-turn Rest.
+        sleeper = self._sleeper(
+            sleeper=_SKARMORY_EARLY_BIRD,
+            rest_attempts=1,
+            skipped_time=1,
+        )
+        self.assertEqual(sleeper.ability, "earlybird")
+        self.assertEqual(sleeper.rest_turns, 2)
+
+    def test_early_bird_keeps_a_refund_after_the_sleeper_has_reentered(self) -> None:
+        sleeper = self._sleeper(
+            sleeper=_SKARMORY_EARLY_BIRD,
+            rest_attempts=1,
+            refunded_time=1,
+        )
+        self.assertEqual(sleeper.rest_turns, 2)
+
+    def test_early_bird_inconsistent_attempts_fail_closed_even_with_approximation(self) -> None:
+        # Early Bird's second attempt wakes the mon, so a sleeping public row cannot
+        # legitimately carry either count. Exact Rest provenance must not degrade into
+        # generic induced sleep just because approximation is enabled.
+        for attempts in (2, 3):
+            with self.subTest(attempts=attempts):
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        _payload(self.dex, rest_attempts=attempts),
+                        _override(sleeper=_SKARMORY_EARLY_BIRD),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
+                    )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
+
+    def test_repeated_normal_sleep_talk_refunds_allow_a_raw_attempt_count_above_two(self) -> None:
+        sleeper = self._sleeper(rest_attempts=3, refunded_time=3)
+        self.assertEqual(sleeper.rest_turns, 3)
+
+    def test_pending_refund_refuses_even_when_approximate_sleep_is_enabled(self) -> None:
+        payload = _payload(self.dex, refund_pending=True, sleeper_active=True)
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override(),
+                dex=self.dex,
+                approximate_sleep_turns=True,
+            )
+        self.assertEqual(caught.exception.reason, "rest_sleep_skipped_time_pending")
+
+    def test_a_valid_unannotated_sleeper_can_still_use_approximation(self) -> None:
         # An opponent-induced sleeper is never annotated, so it must still fail
         # closed without the flag and still build as freshly-asleep with it. This
         # is the regression guard on the arm the fix does NOT change.
@@ -297,26 +366,35 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         self.assertEqual(benched.rest_turns, 2)
         self.assertEqual(active.rest_turns, 2)
 
-    def test_an_out_of_range_count_fails_closed_rather_than_clamping(self) -> None:
-        # k is 0..2 by construction. A value outside it means the tracker and this
-        # arithmetic have drifted apart, and a clamp would turn that into a
-        # plausible-looking wrong world instead of a declined decision.
+    def test_out_of_range_rest_provenance_fails_closed_even_with_approximation(self) -> None:
+        # The raw count can grow beyond two when Sleep Talk is repeatedly refunded
+        # across switches. It still must describe a live Rest counter in 1..3.
         for bad in (3, 7, -1):
             with self.subTest(bad=bad):
                 with self.assertRaises(EngineWorldUnsupported) as caught:
                     battle_spec_from_payload(
-                        _payload(self.dex, rest_attempts=bad), _override(), dex=self.dex
+                        _payload(self.dex, rest_attempts=bad),
+                        _override(),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
                     )
-                self.assertEqual(caught.exception.reason, "status_unsupported")
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
-    def test_a_non_integer_count_is_not_coerced(self) -> None:
-        # Bools are ints in Python: True must not read as "one attempt spent".
+    def test_malformed_or_non_integer_rest_provenance_fails_closed_with_approximation(self) -> None:
+        # Bools are ints in Python: True must not read as "one attempt spent". Set the
+        # key directly so None remains explicit provenance rather than unannotated sleep.
         for bad in (True, False, "1", 1.0, None):
             with self.subTest(bad=bad):
-                with self.assertRaises(EngineWorldUnsupported):
+                payload = _payload(self.dex, rest_attempts=0)
+                payload["sides"]["p2"]["pokemon"][0]["restSleepAttempts"] = bad
+                with self.assertRaises(EngineWorldUnsupported) as caught:
                     battle_spec_from_payload(
-                        _payload(self.dex, rest_attempts=bad), _override(), dex=self.dex
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
                     )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
     def test_a_fainted_row_never_carries_a_rest_state(self) -> None:
         payload = _payload(self.dex, rest_attempts=1)
@@ -361,6 +439,7 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
             "|cant|p2a: Skarmory|slp",
+            "|upkeep",
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 2)
 
@@ -379,32 +458,129 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
-    def test_a_sleep_talk_user_retires_its_rest_clock(self) -> None:
-        """gen3 refunds Sleep Talk / Snore turns, so k stops meaning "attempts elapsed".
+    def test_a_sleep_talk_bench_row_refunds_its_rest_clock(self) -> None:
+        """A benched Sleep Talker carries the exact post-refund Rest counter.
 
-        A sleepUsable move emits ``|cant|...|slp`` and THEN acts, and gen3 banks the turn
-        as ``skippedTime``, handing it back at the next switch-in
-        (``slp.onSwitchIn``: ``time += skippedTime``). Measured at the sim, one Rest by a
-        Sleep Talk user that pivots emits FOUR cants rather than two
-        (``--only restsleeptalkrefund``). Rather than keep counting a number that no
-        longer tracks the clock, the entry is retired and the mon falls back to the
-        pre-existing sleep handling — a declined world, never a wrong one.
+        This is the fail-unpatched/pass-patched pin. The old tracker retired its
+        Rest provenance at the direct Sleep Talk line, so the now-benched row
+        reached world construction as generic sleep. The direct world has no
+        ``skippedTime`` field, but a benched mon will receive the refund before
+        its next attempt. Preserve both public quantities so Early Bird can apply
+        its two-units-per-attempt rule during construction.
         """
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
+
+    def test_snore_bench_row_refunds_its_rest_clock_too(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
+
+    def test_active_sleep_talk_state_remains_fail_closed_until_it_pivots(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="active-sleep-talk")
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertTrue(rows[0]["restSleepRefundPending"])
+
+    def test_interrupted_sleep_usable_attempts_keep_the_switch_refund(self) -> None:
+        # The sleep handler (priority 10) increments skippedTime before each of
+        # these lower-priority gates. No direct Sleep Talk/Snore |move| follows
+        # when the gate aborts the action, but the next switch still refunds it.
+        interruptions = (
+            ("flinch", ("|cant|p2a: Skarmory|flinch",)),
+            ("truant", ("|cant|p2a: Skarmory|ability: Truant",)),
+            ("confusion", ("|-activate|p2a: Skarmory|confusion", "|-damage|p2a: Skarmory|80/100")),
+            ("attract", ("|-activate|p2a: Skarmory|move: Attract", "|cant|p2a: Skarmory|Attract")),
+        )
+        for name, events in interruptions:
+            with self.subTest(interruption=name):
+                rows = self._annotate(self._RESTED + [
+                    "|cant|p2a: Skarmory|slp",
+                    *events,
+                    "|switch|p2a: Starmie|Starmie, L79|100/100",
+                    "|upkeep",
+                    "|turn|2",
+                ])
+                self.assertEqual(rows[0]["restSleepAttempts"], 1)
+                self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
+
+    def test_unresolved_sleep_attempt_is_explicitly_refused(self) -> None:
+        rows = self._annotate(self._RESTED + ["|cant|p2a: Skarmory|slp"])
+        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertTrue(rows[0]["restSleepRefundPending"])
+
+    def test_benched_sleep_talk_clock_does_not_tick_until_switch_back(self) -> None:
+        rows = self._annotate(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Snorlax|Body Slam|p2a: Starmie",
+            "|upkeep",
+            "|turn|3",
+            "|move|p1a: Snorlax|Body Slam|p2a: Starmie",
+            "|upkeep",
+            "|turn|4",
+        ])
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepSkippedTime"], 1)
+
+    def test_switch_back_applies_the_skipped_time_refund_once(self) -> None:
+        lines = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="sleep-talk-return")
+        rows = self._rows()
+        rows[0]["active"] = True
+        rows[1]["active"] = False
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertEqual(rows[0]["restSleepRefundedTime"], 1)
+        self.assertEqual(dict(replay.rest_sleep_skipped_turns), {})
+        self.assertEqual(dict(replay.rest_sleep_refunded_turns), {"p2:skarmory": 1})
+
+    def test_plain_sleep_turn_after_sleep_talk_cancels_the_refund(self) -> None:
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
             "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
             "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
             "|upkeep",
             "|turn|2",
-        ])
-        self.assertNotIn("restSleepAttempts", rows[0])
-
-    def test_snore_retires_it_too(self) -> None:
-        rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
-            "|move|p2a: Skarmory|Snore|p1a: Snorlax",
+            "|move|p1a: Snorlax|Body Slam|p2a: Skarmory",
+            "|upkeep",
+            "|turn|3",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
         ])
-        self.assertNotIn("restSleepAttempts", rows[0])
+        self.assertEqual(rows[0]["restSleepAttempts"], 2)
 
     def test_an_awake_sleep_talk_user_has_nothing_to_retire(self) -> None:
         """Case A: Sleep Talk with no Rest entry in play must be inert.
@@ -438,6 +614,7 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
             "|move|p2a: Skarmory|Rest|p2a: Skarmory",  # a brand-new Rest
             "|-status|p2a: Skarmory|slp|[from] move: Rest",
             "|cant|p2a: Skarmory|slp",
+            "|upkeep",
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
@@ -456,6 +633,7 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         rows = self._annotate(self._RESTED + [
             "|cant|p2a: Skarmory|slp",
             "|move|p1a: Snorlax|Sleep Talk|p1a: Snorlax",
+            "|upkeep",
         ])
         self.assertEqual(rows[0]["restSleepAttempts"], 1)
 
@@ -507,6 +685,95 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         rows = [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}]
         _apply_rest_sleep_provenance(rows, replay, "p2")
         self.assertEqual(rows, [{"condition": "88/100 slp"}, {"species": None, "condition": "1/1"}])
+
+    @classmethod
+    def _all_rest_maps_live_lines(cls):
+        return cls._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|move|p2a: Skarmory|Splash|p2a: Skarmory|[from]move: Sleep Talk",
+            "|upkeep",
+            "|turn|2",
+            "|cant|p2a: Skarmory|slp",
+        ]
+
+    def _assert_rest_maps_cleared(self, replay) -> None:
+        for mapping in (
+            replay.rest_sleep_counts,
+            replay.rest_sleep_refunded_turns,
+            replay.rest_sleep_skipped_turns,
+            replay.rest_sleep_pending_attempt,
+        ):
+            self.assertNotIn("p2:skarmory", mapping)
+
+    def test_snapshot_restores_pending_and_skipped_state(self) -> None:
+        parser = _ReplayParser("rest-snapshot")
+        parser.feed(self._all_rest_maps_live_lines())
+        restored = _ReplayParser.from_snapshot(parser.snapshot())
+        self.assertEqual(restored.rest_sleep_counts, {"p2:skarmory": 2})
+        self.assertEqual(restored.rest_sleep_refunded_turns, {})
+        self.assertEqual(restored.rest_sleep_skipped_turns, {"p2:skarmory": 1})
+        self.assertEqual(restored.rest_sleep_pending_attempt, {"p2:skarmory": True})
+
+    def test_snapshot_restores_applied_refund_state(self) -> None:
+        parser = _ReplayParser("rest-refund-snapshot")
+        parser.feed(self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ])
+        restored = _ReplayParser.from_snapshot(parser.snapshot())
+        self.assertEqual(restored.rest_sleep_counts, {"p2:skarmory": 1})
+        self.assertEqual(restored.rest_sleep_refunded_turns, {"p2:skarmory": 1})
+        self.assertEqual(restored.rest_sleep_skipped_turns, {})
+        self.assertEqual(restored.rest_sleep_pending_attempt, {})
+
+    def test_natural_cure_clears_all_rest_maps(self) -> None:
+        parser = _ReplayParser("rest-natural-cure")
+        parser.feed(self._all_rest_maps_live_lines())
+        parser.feed([
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|-curestatus|p2a: Skarmory|slp|[silent]",
+        ])
+        self._assert_rest_maps_cleared(parser)
+
+    def test_team_cure_clears_all_rest_maps(self) -> None:
+        parser = _ReplayParser("rest-team-cure")
+        parser.feed(self._all_rest_maps_live_lines())
+        parser.feed(["|-cureteam|p2a: Starmie"])
+        self._assert_rest_maps_cleared(parser)
+
+    def test_faint_clears_all_rest_maps(self) -> None:
+        parser = _ReplayParser("rest-faint")
+        parser.feed(self._all_rest_maps_live_lines())
+        parser.feed(["|faint|p2a: Skarmory"])
+        self._assert_rest_maps_cleared(parser)
+
+    def test_cleanup_also_clears_an_applied_refund(self) -> None:
+        cleanup_lines = {
+            "natural_cure": [
+                "|switch|p2a: Starmie|Starmie, L79|100/100",
+                "|-curestatus|p2a: Skarmory|slp|[silent]",
+            ],
+            "team_cure": ["|-cureteam|p2a: Starmie"],
+            "faint": ["|faint|p2a: Skarmory"],
+        }
+        prefix = self._RESTED + [
+            "|cant|p2a: Skarmory|slp",
+            "|move|p2a: Skarmory|Sleep Talk|p2a: Skarmory",
+            "|switch|p2a: Starmie|Starmie, L79|100/100",
+            "|turn|2",
+            "|switch|p2a: Skarmory|Skarmory, L76|88/100 slp",
+        ]
+        for name, lines in cleanup_lines.items():
+            with self.subTest(cleanup=name):
+                parser = _ReplayParser(f"rest-refund-{name}")
+                parser.feed(prefix)
+                self.assertEqual(parser.rest_sleep_refunded_turns, {"p2:skarmory": 1})
+                parser.feed(lines)
+                self._assert_rest_maps_cleared(parser)
 
 
 # --- leakage ----------------------------------------------------------------------

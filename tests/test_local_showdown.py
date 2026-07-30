@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import random
 import shutil
 from types import SimpleNamespace
 import unittest
@@ -693,6 +694,50 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(actual.numeric_features, expected.numeric_features)
         self.assertEqual(actual.legal_action_mask, expected.legal_action_mask)
         self.assertEqual(branch.requested_players, ("p1", "p2"))
+
+    def test_public_materialization_preserves_benched_opponent_rest_after_sleep_talk(self) -> None:
+        """Pin the archived C16 seed through the real opponent public-row path.
+
+        At this boundary p1's Entei has used Rest, one Sleep Talk turn, then switched out
+        asleep. p2 therefore sees it only through ``public_revealed["p1"]``. Before this
+        repair the parser had retired the Rest provenance at Sleep Talk, so this exact row
+        reached world construction as generic sleep despite remaining publicly observable.
+        """
+
+        config = integration_config()
+        assert config is not None
+        seed = 2_000_281
+        rng = random.Random(seed ^ 0x5EED)
+        with LocalShowdownEnv(config) as env:
+            env.reset(seed=seed, format_id="gen3randombattle")
+            # Step 93 is Entei's Sleep Talk; step 94 switches it to the bench. The action
+            # sampler matches the archived transition-differential harness exactly.
+            for _ in range(94):
+                actions = {}
+                for player in env.requested_players():
+                    legal = [index for index, allowed in enumerate(env.legal_actions(player)) if allowed]
+                    self.assertTrue(legal)
+                    actions[player] = rng.choice(legal)
+                env.step(actions)
+
+            materialization = env.public_materialization_state("p2")
+            public_entei = next(
+                pokemon
+                for pokemon in materialization.replay.public_revealed["p1"]
+                if pokemon.species == "Entei"
+            )
+            payload = _public_materialization_payload(materialization)
+
+        self.assertEqual(public_entei.condition.split()[-1], "slp")
+        self.assertFalse(public_entei.active)
+        row = next(
+            row for row in payload["sides"]["p1"]["pokemon"] if row.get("species") == "Entei"
+        )
+        self.assertFalse(row["active"])
+        # Preserve the raw public attempt and its one-unit skippedTime refund separately.
+        # The constructed world then applies the sampled ability's decrement multiplier.
+        self.assertEqual(row["restSleepAttempts"], 1)
+        self.assertEqual(row["restSleepSkippedTime"], 1)
 
     def test_public_materialization_preserves_a_switched_active_pokemon(self) -> None:
         config = integration_config()
