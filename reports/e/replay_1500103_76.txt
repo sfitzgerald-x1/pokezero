@@ -1,0 +1,28 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500103  step 76  class=component_missing_in_engine:abilityroughskin  gating=exact  choices={'p1': 'doubleedge', 'p2': 'seismictoss'}
+
+-- Showdown step --
+   |
+   |t:|1785369882
+   |move|p2a: Illumise|Seismic Toss|p1a: Sharpedo
+   |-damage|p1a: Sharpedo|0 fnt
+   |-damage|p2a: Illumise|75/269|[from] ability: Rough Skin|[of] p1a: Sharpedo
+   |faint|p1a: Sharpedo
+
+-- pre-state HP: {'p1': 76, 'p2': 91} --
+
+-- observed components --
+   p1: exact=(none)  rolled=capped_lethal=-76
+   p2: exact=abilityroughskin=-16  rolled=(none)
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=(none) rolled=capped_lethal=-76  |  p2 exact=(none) rolled=(none)
+
+-- raw instructions, candidate 0, highest-probability branch --
+      SetLastUsedMove SideTwo: Move(M3) -> Move(M0)
+      Damage SideOne: 76
+      ToggleSideOneForceSwitch
+

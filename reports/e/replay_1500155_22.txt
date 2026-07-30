@@ -1,0 +1,37 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500155  step 22  class=roll_scaled_component  gating=exact  choices={'p1': 'hiddenpowerelectric70', 'p2': 'mirrorcoat'}
+
+-- Showdown step --
+   |
+   |t:|1785369888
+   |move|p1a: Seaking|Hidden Power|p2a: Wobbuffet
+   |-damage|p2a: Wobbuffet|150/446
+   |move|p2a: Wobbuffet|Mirror Coat|p1a: Seaking
+   |
+   |-heal|p2a: Wobbuffet|177/446|[from] item: Leftovers
+   |upkeep
+   |turn|22
+
+-- pre-state HP: {'p1': 290, 'p2': 214} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=itemleftovers=+27  rolled=move=-64
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=itemleftovers=+18 rolled=move=-118  |  p2 exact=itemleftovers=+27 rolled=move=-59
+      pct=  6.25  p1 exact=itemleftovers=+18 rolled=move=-236  |  p2 exact=itemleftovers=+27 rolled=move=-118
+
+-- raw instructions, candidate 0, highest-probability branch --
+      SetLastUsedMove SideOne: Move(M0) -> Move(M3)
+      Damage SideTwo: 59
+      ChangeDamageDealtDamage SideOne: 59
+      ChangeDamageDealtMoveCatagory SideOne: Physical -> Special
+      SetLastUsedMove SideTwo: Switch(P0) -> Move(M0)
+      Damage SideOne: 118
+      Heal SideOne: 18
+      Heal SideTwo: 27
+

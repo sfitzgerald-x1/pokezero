@@ -1,0 +1,38 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500024  step 9  class=roll_scaled_component  gating=exact  choices={'p1': 'return', 'p2': 'surf'}
+
+-- Showdown step --
+   |
+   |t:|1785361248
+   |move|p1a: Ursaring|Return|p2a: Slowbro
+   |-damage|p2a: Slowbro|148/290
+   |move|p2a: Slowbro|Surf|p1a: Ursaring
+   |-damage|p1a: Ursaring|138/278 psn
+   |
+   |-heal|p1a: Ursaring|155/278 psn|[from] item: Leftovers
+   |-damage|p1a: Ursaring|121/278 psn|[from] psn
+   |-heal|p2a: Slowbro|166/290|[from] item: Leftovers
+   |upkeep
+   |turn|8
+
+-- pre-state HP: {'p1': 244, 'p2': 249} --
+
+-- observed components --
+   p1: exact=itemleftovers=+17, psn=-34  rolled=move=-106
+   p2: exact=itemleftovers=+18  rolled=move=-101
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 3 branch(es)
+      pct= 87.89  p1 exact=itemleftovers=+17, psn=-34 rolled=move=-114  |  p2 exact=itemleftovers=+18 rolled=move=-111
+      pct=  5.86  p1 exact=itemleftovers=+17 rolled=move=-230, capped_lethal=-31  |  p2 exact=itemleftovers=+18 rolled=move=-111
+      pct=  6.25  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=capped_lethal=-249
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Damage SideTwo: 111
+      Damage SideOne: 114
+      Heal SideOne: 17
+      Damage SideOne: 34
+      Heal SideTwo: 18
+

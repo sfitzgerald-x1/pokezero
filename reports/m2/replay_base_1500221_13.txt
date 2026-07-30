@@ -1,0 +1,32 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500221  step 13  class=roll_scaled_component  gating=exact  choices={'p1': 'aerialace', 'p2': 'unown'}
+
+-- Showdown step --
+   |
+   |t:|1785361281
+   |switch|p2a: Unown|Unown-K|178/258
+   |move|p1a: Pidgeot|Aerial Ace|p2a: Unown
+   |-damage|p2a: Unown|76/258
+   |
+   |upkeep
+   |turn|13
+
+-- pre-state HP: {'p1': 286, 'p2': 297} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=(none)  rolled=move=-102
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=move=-113
+      pct=  6.25  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=capped_lethal=-178
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Switch SideTwo: P0 -> P2
+      SetLastUsedMove SideTwo: Switch(P0) -> Switch(P2)
+      Damage SideTwo: 113
+      ChangeDamageDealtDamage SideOne: 113
+

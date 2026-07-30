@@ -1,0 +1,33 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "games": 1,
+  "seeds": {
+    "min": 1500076,
+    "max": 1500076,
+    "distinct": 1
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "gating_exact": 87,
+  "gating_support_based": 0,
+  "elapsed_seconds": 3.51,
+  "games_per_hour": 1024.4,
+  "boundaries_full_round": 92,
+  "boundaries_measured": 87,
+  "transitions_matched": 87,
+  "transitions_diverged": 0,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 0.0,
+  "measured_fraction_of_full_rounds": 0.9457,
+  "divergence_classes": {},
+  "counters": {
+    "boundaries_full_round": 92,
+    "boundaries_measured": 87,
+    "gating:exact": 87,
+    "skip:single_seat_boundary": 8,
+    "skip:world_unsupported:volatile_unsupported": 5,
+    "transition:matched": 87
+  },
+  "repros": []
+}

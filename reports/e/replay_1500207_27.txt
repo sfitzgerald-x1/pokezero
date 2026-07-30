@@ -1,0 +1,38 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500207  step 27  class=roll_scaled_component  gating=exact  choices={'p1': 'doubleedge', 'p2': 'spikes'}
+
+-- Showdown step --
+   |
+   |t:|1785369881
+   |move|p2a: Cloyster|Spikes|p1a: Wigglytuff
+   |-sidestart|p1: PokeZero p1|Spikes
+   |move|p1a: Wigglytuff|Double-Edge|p2a: Cloyster
+   |-damage|p2a: Cloyster|141/216
+   |-damage|p1a: Wigglytuff|237/407|[from] Recoil|[of] p2a: Cloyster
+   |
+   |-heal|p2a: Cloyster|154/216|[from] item: Leftovers
+   |-heal|p1a: Wigglytuff|262/407|[from] item: Leftovers
+   |upkeep
+   |turn|26
+
+-- pre-state HP: {'p1': 262, 'p2': 216} --
+
+-- observed components --
+   p1: exact=itemleftovers=+25  rolled=recoil=-25
+   p2: exact=itemleftovers=+13  rolled=move=-75
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=itemleftovers=+25 rolled=recoil=-22  |  p2 exact=itemleftovers=+13 rolled=move=-69
+
+-- raw instructions, candidate 0, highest-probability branch --
+      SetLastUsedMove SideTwo: Switch(P0) -> Move(M1)
+      ChangeSideCondition SideOne Spikes: 1
+      SetLastUsedMove SideOne: Switch(P0) -> Move(M1)
+      Damage SideTwo: 69
+      Damage SideOne: 22
+      Heal SideTwo: 13
+      Heal SideOne: 25
+

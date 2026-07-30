@@ -1,0 +1,32 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500274  step 15  class=roll_scaled_component  gating=exact  choices={'p1': 'seismictoss', 'p2': 'sharpedo'}
+
+-- Showdown step --
+   |
+   |t:|1785369884
+   |switch|p2a: Sharpedo|Sharpedo, L85, M|256/256
+   |move|p1a: Togetic|Seismic Toss|p2a: Sharpedo
+   |-damage|p2a: Sharpedo|159/256
+   |-damage|p1a: Togetic|248/264|[from] ability: Rough Skin|[of] p2a: Sharpedo
+   |
+   |-heal|p1a: Togetic|264/264|[from] item: Leftovers
+   |upkeep
+   |turn|15
+
+-- pre-state HP: {'p1': 264, 'p2': 215} --
+
+-- observed components --
+   p1: exact=abilityroughskin=-16  rolled=itemleftovers_to_full=+16
+   p2: exact=(none)  rolled=move=-97
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=move=-97
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Boost SideTwo Attack: 2
+      Switch SideTwo: P0 -> P5
+      Damage SideTwo: 97
+

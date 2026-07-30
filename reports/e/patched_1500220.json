@@ -1,0 +1,112 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "games": 1,
+  "seeds": {
+    "min": 1500220,
+    "max": 1500220,
+    "distinct": 1
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "repro_retention": {
+    "repros_per_game": 8,
+    "keep_repro": 5000,
+    "repros_retained": 1,
+    "transitions_diverged": 1,
+    "repros_complete": true
+  },
+  "gating_exact": 90,
+  "gating_support_based": 13,
+  "elapsed_seconds": 3.74,
+  "games_per_hour": 961.6,
+  "boundaries_full_round": 103,
+  "boundaries_measured": 103,
+  "transitions_matched": 102,
+  "transitions_diverged": 1,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 1.0,
+  "measured_fraction_of_full_rounds": 1.0,
+  "divergence_classes": {
+    "limit:roll_divergent_lethality": 1
+  },
+  "counters": {
+    "boundaries_full_round": 103,
+    "boundaries_measured": 103,
+    "divergence_class:limit:roll_divergent_lethality": 1,
+    "gating:exact": 90,
+    "gating:support": 13,
+    "hidden_counter_support:sleep": 13,
+    "skip:single_seat_boundary": 10,
+    "transition:diverged": 1,
+    "transition:matched": 102
+  },
+  "repros": [
+    {
+      "kind": "transition_diverged",
+      "seed": 1500220,
+      "step": 77,
+      "choices": {
+        "p1": "hiddenpowerice70",
+        "p2": "doubleedge"
+      },
+      "engine_state": "LATIOS,66,DRAGON,PSYCHIC,DRAGON,PSYCHIC,0,215,LEVITATE,LEVITATE,SOULDEW,SERIOUS,85;85;85;85;85;85,123,144,210,184,184,NONE,0,0,60,CALMMIND;false;32,DRAGONCLAW;false;22,REFRESH;false;32,RECOVER;false;31,false,TYPELESS,MALE=AMPHAROS,82,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,214,282,STATIC,STATIC,LEFTOVERS,SERIOUS,85;85;85;85;85;85,129,169,236,195,137,TOXIC,0,0,61.5,THUNDERBOLT;false;24,HEALBELL;false;7,HIDDENPOWERICE70;false;22,TOXIC;false;14,false,TYPELESS,FEMALE=MISDREAVUS,85,GHOST,TYPELESS,GHOST,TYPELESS,0,241,LEVITATE,LEVITATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,151,151,193,193,193,NONE,0,0,1,PERISHSONG;false;6,MEANLOOK;false;4,SHADOWBALL;false;24,PROTECT;false;10,false,TYPELESS,FEMALE=BLASTOISE,82,WATER,TYPELESS,WATER,TYPELESS,0,264,TORRENT,TORRENT,LEFTOVERS,SERIOUS,85;85;85;85;85;85,141,211,187,219,175,NONE,0,0,85.5,SLEEPTALK;false;15,REST;false;16,TOXIC;false;14,SURF;false;22,false,TYPELESS,MALE=SCIZOR,82,BUG,STEEL,BUG,STEEL,226,249,SWARM,SWARM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,260,211,137,178,154,NONE,0,0,118,STEELWING;false;38,MORNINGSUN;false;6,SWORDSDANCE;false;47,HIDDENPOWERGROUND70;false;21,false,TYPELESS,MALE=ARMALDO,83,ROCK,BUG,ROCK,BUG,0,260,BATTLEARMOR,BATTLEARMOR,CHOICEBAND,SERIOUS,85;85;85;85;85;85,254,213,164,180,122,NONE,0,0,68.2,HIDDENPOWERBUG70;false;20,EARTHQUAKE;false;15,DOUBLEEDGE;false;24,ROCKSLIDE;false;15,false,TYPELESS,MALE=1=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;2;0;0==0;0;0;0;0;0=0=-1=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:3=false/RATICATE,85,NORMAL,TYPELESS,NORMAL,TYPELESS,218,232,GUTS,GUTS,CHOICEBAND,SERIOUS,85;85;85;85;85;85,186,151,133,167,214,TOXIC,0,0,18.5,RETURN;false;32,QUICKATTACK;false;48,HIDDENPOWERGROUND70;false;24,SHADOWBALL;false;24,false,TYPELESS,FEMALE=TORKOAL,90,FIRE,TYPELESS,FIRE,TYPELESS,131,272,WHITESMOKE,WHITESMOKE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,203,303,203,177,87,NONE,0,0,80.4,HIDDENPOWERGRASS70;false;24,FLAMETHROWER;false;24,EXPLOSION;false;8,TOXIC;false;16,false,TYPELESS,MALE=TAUROS,76,NORMAL,TYPELESS,NORMAL,TYPELESS,95,239,INTIMIDATE,INTIMIDATE,CHOICEBAND,SERIOUS,85;85;85;85;85;85,196,188,105,150,211,TOXIC,0,0,88.4,RETURN;false;32,HIDDENPOWERGHOST70;false;24,EARTHQUAKE;false;16,DOUBLEEDGE;false;24,false,TYPELESS,MALE=MINUN,89,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,54,252,MINUS,MINUS,LEFTOVERS,SERIOUS,85;85;85;85;85;85,77,139,184,202,220,NONE,0,0,4.2,HIDDENPOWERICE70;false;24,PROTECT;false;16,TOXIC;false;16,THUNDERBOLT;false;24,false,TYPELESS,MALE=ZAPDOS,74,ELECTRIC,FLYING,ELECTRIC,FLYING,0,255,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,139,168,228,176,191,NONE,0,0,52.6,HIDDENPOWERICE70;false;24,THUNDERBOLT;false;24,PROTECT;false;16,TOXIC;false;16,false,TYPELESS,NONE=YANMA,92,BUG,FLYING,BUG,FLYING,269,269,COMPOUNDEYES,COMPOUNDEYES,LEFTOVERS,SERIOUS,85;85;85;85;85;85,172,135,189,134,227,NONE,0,0,38,AERIALACE;false;32,HYPNOSIS;false;32,TOXIC;false;16,HIDDENPOWERGROUND70;false;24,false,TYPELESS,FEMALE=2=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;1;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+      "engine_states": [
+        "LATIOS,66,DRAGON,PSYCHIC,DRAGON,PSYCHIC,0,215,LEVITATE,LEVITATE,SOULDEW,SERIOUS,85;85;85;85;85;85,123,144,210,184,184,NONE,0,0,60,CALMMIND;false;32,DRAGONCLAW;false;22,REFRESH;false;32,RECOVER;false;31,false,TYPELESS,MALE=AMPHAROS,82,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,214,282,STATIC,STATIC,LEFTOVERS,SERIOUS,85;85;85;85;85;85,129,169,236,195,137,TOXIC,0,0,61.5,THUNDERBOLT;false;24,HEALBELL;false;7,HIDDENPOWERICE70;false;22,TOXIC;false;14,false,TYPELESS,FEMALE=MISDREAVUS,85,GHOST,TYPELESS,GHOST,TYPELESS,0,241,LEVITATE,LEVITATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,151,151,193,193,193,NONE,0,0,1,PERISHSONG;false;6,MEANLOOK;false;4,SHADOWBALL;false;24,PROTECT;false;10,false,TYPELESS,FEMALE=BLASTOISE,82,WATER,TYPELESS,WATER,TYPELESS,0,264,TORRENT,TORRENT,LEFTOVERS,SERIOUS,85;85;85;85;85;85,141,211,187,219,175,NONE,0,0,85.5,SLEEPTALK;false;15,REST;false;16,TOXIC;false;14,SURF;false;22,false,TYPELESS,MALE=SCIZOR,82,BUG,STEEL,BUG,STEEL,226,249,SWARM,SWARM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,260,211,137,178,154,NONE,0,0,118,STEELWING;false;38,MORNINGSUN;false;6,SWORDSDANCE;false;47,HIDDENPOWERGROUND70;false;21,false,TYPELESS,MALE=ARMALDO,83,ROCK,BUG,ROCK,BUG,0,260,BATTLEARMOR,BATTLEARMOR,CHOICEBAND,SERIOUS,85;85;85;85;85;85,254,213,164,180,122,NONE,0,0,68.2,HIDDENPOWERBUG70;false;20,EARTHQUAKE;false;15,DOUBLEEDGE;false;24,ROCKSLIDE;false;15,false,TYPELESS,MALE=1=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;2;0;0==0;0;0;0;0;0=0=-1=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:3=false/RATICATE,85,NORMAL,TYPELESS,NORMAL,TYPELESS,218,232,GUTS,GUTS,CHOICEBAND,SERIOUS,85;85;85;85;85;85,186,151,133,167,214,TOXIC,0,0,18.5,RETURN;false;32,QUICKATTACK;false;48,HIDDENPOWERGROUND70;false;24,SHADOWBALL;false;24,false,TYPELESS,FEMALE=TORKOAL,90,FIRE,TYPELESS,FIRE,TYPELESS,131,272,WHITESMOKE,WHITESMOKE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,203,303,203,177,87,NONE,0,0,80.4,HIDDENPOWERGRASS70;false;24,FLAMETHROWER;false;24,EXPLOSION;false;8,TOXIC;false;16,false,TYPELESS,MALE=TAUROS,76,NORMAL,TYPELESS,NORMAL,TYPELESS,95,239,INTIMIDATE,INTIMIDATE,CHOICEBAND,SERIOUS,85;85;85;85;85;85,196,188,105,150,211,TOXIC,0,0,88.4,RETURN;false;32,HIDDENPOWERGHOST70;false;24,EARTHQUAKE;false;16,DOUBLEEDGE;false;24,false,TYPELESS,MALE=MINUN,89,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,54,252,MINUS,MINUS,LEFTOVERS,SERIOUS,85;85;85;85;85;85,77,139,184,202,220,NONE,0,0,4.2,HIDDENPOWERICE70;false;24,PROTECT;false;16,TOXIC;false;16,THUNDERBOLT;false;24,false,TYPELESS,MALE=ZAPDOS,74,ELECTRIC,FLYING,ELECTRIC,FLYING,0,255,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,139,168,228,176,191,NONE,0,0,52.6,HIDDENPOWERICE70;false;24,THUNDERBOLT;false;24,PROTECT;false;16,TOXIC;false;16,false,TYPELESS,NONE=YANMA,92,BUG,FLYING,BUG,FLYING,269,269,COMPOUNDEYES,COMPOUNDEYES,LEFTOVERS,SERIOUS,85;85;85;85;85;85,172,135,189,134,227,NONE,0,0,38,AERIALACE;false;32,HYPNOSIS;false;32,TOXIC;false;16,HIDDENPOWERGROUND70;false;24,false,TYPELESS,FEMALE=2=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;1;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false"
+      ],
+      "gating": "exact",
+      "pre_features": {
+        "p1_hp": 214,
+        "p2_hp": 95,
+        "p1_status": "TOXIC",
+        "p2_status": "TOXIC",
+        "fainted": [],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": []
+        }
+      },
+      "observed": {
+        "p1_hp": 37,
+        "p2_hp": 0,
+        "p1_status": "TOXIC",
+        "p2_status": "NONE",
+        "fainted": [
+          "p2"
+        ],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": []
+        }
+      },
+      "observed_boost_deltas": {
+        "p1": {},
+        "p2": {}
+      },
+      "active_changed": {
+        "p1": false,
+        "p2": false
+      },
+      "divergence_class": "limit:roll_divergent_lethality",
+      "branch_count": 2,
+      "branch_misses": [
+        "pct=93.75: p2 roll-scaled components differ: observed=[('recoil', -59), ('capped_lethal', -36)] engine=[('recoil', -62), ('capped_lethal', -33)]",
+        "pct=6.25: p2 roll-scaled components differ: observed=[('recoil', -59), ('capped_lethal', -36)] engine=[('recoil', -71)]"
+      ],
+      "protocol": [
+        "|",
+        "|t:|1785372453",
+        "|move|p2a: Tauros|Double-Edge|p1a: Ampharos",
+        "|-damage|p1a: Ampharos|37/282 tox",
+        "|-damage|p2a: Tauros|36/239 tox|[from] Recoil|[of] p1a: Ampharos",
+        "|move|p1a: Ampharos|Hidden Power|p2a: Tauros",
+        "|-damage|p2a: Tauros|0 fnt",
+        "|faint|p2a: Tauros",
+        "|request|{\"wait\":true,\"side\":{\"name\":\"PokeZero p1\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ampharos\",\"details\":\"Ampharos, L82, F\",\"condition\":\"37/282 tox\",\"active\":true,\"stats\":{\"atk\":129,\"def\":169,\"spa\":236,\"spd\":195,\"spe\":137},\"moves\":[\"thunderbolt\",\"healbell\",\"hiddenpowerice\",\"toxic\"],\"baseAbility\":\"static\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":151,\"def\":151,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"perishsong\",\"meanlook\",\"shadowball\",\"protect\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Armaldo\",\"details\":\"Armaldo, L83, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":254,\"def\":213,\"spa\":164,\"spd\":180,\"spe\":122},\"moves\":[\"hiddenpowerbug\",\"earthquake\",\"doubleedge\",\"rockslide\"],\"baseAbility\":\"battlearmor\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Blastoise\",\"details\":\"Blastoise, L82, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":141,\"def\":211,\"spa\":187,\"spd\":219,\"spe\":175},\"moves\":[\"sleeptalk\",\"rest\",\"toxic\",\"surf\"],\"baseAbility\":\"torrent\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Scizor\",\"details\":\"Scizor, L82, M\",\"condition\":\"226/249\",\"active\":false,\"stats\":{\"atk\":260,\"def\":211,\"spa\":137,\"spd\":178,\"spe\":154},\"moves\":[\"steelwing\",\"morningsun\",\"swordsdance\",\"hiddenpowerground\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Latios\",\"details\":\"Latios, L66, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":123,\"def\":144,\"spa\":210,\"spd\":184,\"spe\":184},\"moves\":[\"calmmind\",\"dragonclaw\",\"refresh\",\"recover\"],\"baseAbility\":\"levitate\",\"item\":\"souldew\",\"pokeball\":\"pokeball\"}]}}",
+        "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZero p2\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Tauros\",\"details\":\"Tauros, L76, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":196,\"def\":188,\"spa\":105,\"spd\":150,\"spe\":211},\"moves\":[\"return102\",\"hiddenpowerghost\",\"earthquake\",\"doubleedge\"],\"baseAbility\":\"intimidate\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Zapdos\",\"details\":\"Zapdos, L74\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":139,\"def\":168,\"spa\":228,\"spd\":176,\"spe\":191},\"moves\":[\"hiddenpowerice\",\"thunderbolt\",\"protect\",\"toxic\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Minun\",\"details\":\"Minun, L89, M\",\"condition\":\"54/252\",\"active\":false,\"stats\":{\"atk\":77,\"def\":139,\"spa\":184,\"spd\":202,\"spe\":220},\"moves\":[\"hiddenpowerice\",\"protect\",\"toxic\",\"thunderbolt\"],\"baseAbility\":\"minus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, F\",\"condition\":\"218/232 tox\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"return102\",\"quickattack\",\"hiddenpowerground\",\"shadowball\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Torkoal\",\"details\":\"Torkoal, L90, M\",\"condition\":\"131/272\",\"active\":false,\"stats\":{\"atk\":203,\"def\":303,\"spa\":203,\"spd\":177,\"spe\":87},\"moves\":[\"hiddenpowergrass\",\"flamethrower\",\"explosion\",\"toxic\"],\"baseAbility\":\"whitesmoke\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, F\",\"condition\":\"269/269\",\"active\":false,\"stats\":{\"atk\":172,\"def\":135,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"aerialace\",\"hypnosis\",\"toxic\",\"hiddenpowerground\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+      ]
+    }
+  ]
+}

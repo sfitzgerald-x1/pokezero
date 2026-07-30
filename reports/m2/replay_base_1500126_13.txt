@@ -1,0 +1,37 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500126  step 13  class=roll_scaled_component  gating=exact  choices={'p1': 'doubleedge', 'p2': 'blastoise'}
+
+-- Showdown step --
+   |
+   |t:|1785361278
+   |switch|p2a: Blastoise|Blastoise, L82, M|188/264
+   |move|p1a: Aerodactyl|Double-Edge|p2a: Blastoise
+   |-damage|p2a: Blastoise|100/264
+   |
+   |-heal|p2a: Blastoise|116/264|[from] item: Leftovers
+   |upkeep
+   |turn|13
+
+-- pre-state HP: {'p1': 10, 'p2': 268} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=itemleftovers=+16  rolled=move=-88
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=(none) rolled=(none)  |  p2 exact=itemleftovers=+16 rolled=move=-97
+      pct=  6.25  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=capped_lethal=-188
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Switch SideTwo: P5 -> P3
+      SetLastUsedMove SideTwo: Switch(P0) -> Switch(P3)
+      DisableMove SideOne: M0
+      DisableMove SideOne: M2
+      DisableMove SideOne: M3
+      SetLastUsedMove SideOne: Switch(P0) -> Move(M1)
+      Damage SideTwo: 97
+      Heal SideTwo: 16
+

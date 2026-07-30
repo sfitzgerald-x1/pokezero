@@ -1,0 +1,35 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500124  step 58  class=component_extra_in_engine:abilitywaterabsorb  gating=exact  choices={'p1': 'raindance', 'p2': 'politoed'}
+
+-- Showdown step --
+   |
+   |t:|1785369882
+   |switch|p2a: Politoed|Politoed, L84, F|142/288 slp
+   |move|p1a: Seaking|Rain Dance|p1a: Seaking
+   |-weather|RainDance
+   |
+   |-weather|RainDance|[upkeep]
+   |-heal|p2a: Politoed|160/288 slp|[from] item: Leftovers
+   |upkeep
+   |turn|55
+
+-- pre-state HP: {'p1': 58, 'p2': 219} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=itemleftovers=+18  rolled=(none)
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=(none) rolled=(none)  |  p2 exact=abilitywaterabsorb=+72, itemleftovers=+18 rolled=(none)
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Switch SideTwo: P4 -> P3
+      DecrementPP SideOne: M2 1
+      ChangeWeather: NONE,0 -> RAIN,5
+      Heal SideTwo: 72
+      DecrementWeatherTurnsRemaining
+      Heal SideTwo: 18
+

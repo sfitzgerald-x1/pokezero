@@ -1,0 +1,46 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500251  step 56  class=component_missing_in_engine:itemleftovers  gating=exact  choices={'p1': 'surf', 'p2': 'shadowball'}
+
+-- Showdown step --
+   |
+   |t:|1785369881
+   |move|p2a: Banette|Shadow Ball|p1a: Wailord
+   |-damage|p1a: Wailord|139/438 slp
+   |-curestatus|p1a: Wailord|slp|[msg]
+   |move|p1a: Wailord|Surf|p2a: Banette
+   |-damage|p2a: Banette|12/256 tox
+   |
+   |-heal|p2a: Banette|28/256 tox|[from] item: Leftovers
+   |-damage|p2a: Banette|0 fnt|[from] psn
+   |faint|p2a: Banette
+   |-heal|p1a: Wailord|166/438|[from] item: Leftovers
+   |upkeep
+
+-- pre-state HP: {'p1': 304, 'p2': 128} --
+
+-- observed components --
+   p1: exact=itemleftovers=+27  rolled=move=-165
+   p2: exact=itemleftovers=+16  rolled=move=-116, capped_lethal=-28
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 5 branch(es)
+      pct= 43.95  p1 exact=itemleftovers=+27 rolled=move=-164  |  p2 exact=itemleftovers=+16 rolled=move=-120, capped_lethal=-24
+      pct= 31.05  p1 exact=(none) rolled=move=-164  |  p2 exact=(none) rolled=capped_lethal=-128
+      pct= 10.99  p1 exact=itemleftovers=+27 rolled=move=-164  |  p2 exact=itemleftovers=+16 rolled=move=-120, capped_lethal=-24
+      pct=  7.76  p1 exact=(none) rolled=move=-164  |  p2 exact=(none) rolled=capped_lethal=-128
+      pct=  6.25  p1 exact=(none) rolled=capped_lethal=-304  |  p2 exact=(none) rolled=(none)
+
+-- raw instructions, candidate 0, highest-probability branch --
+      SetLastUsedMove SideTwo: Move(M2) -> Move(M0)
+      Damage SideOne: 164
+      ChangeStatus SideOne-P0: SLEEP -> NONE
+      DecrementRestTurns SideOne
+      SetLastUsedMove SideOne: Move(M0) -> Move(M3)
+      Damage SideTwo: 120
+      Heal SideTwo: 16
+      Damage SideTwo: 24
+      ChangeSideCondition SideTwo ToxicCount: 1
+      Heal SideOne: 27
+

@@ -1,0 +1,33 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500287  step 76  class=component_missing_in_engine:brn  gating=exact  choices={'p1': 'seismictoss', 'p2': 'magcargo'}
+
+-- Showdown step --
+   |
+   |t:|1785369887
+   |switch|p2a: Magcargo|Magcargo, M|243/262
+   |move|p1a: Dusclops|Seismic Toss|p2a: Magcargo
+   |-damage|p2a: Magcargo|157/262
+   |-status|p1a: Dusclops|brn|[from] ability: Flame Body|[of] p2a: Magcargo
+   |
+   |-heal|p2a: Magcargo|173/262|[from] item: Leftovers
+   |-damage|p1a: Dusclops|183/209 brn|[from] brn
+   |upkeep
+   |turn|74
+
+-- pre-state HP: {'p1': 209, 'p2': 291} --
+
+-- observed components --
+   p1: exact=brn=-26  rolled=(none)
+   p2: exact=itemleftovers=+16  rolled=move=-86
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=(none) rolled=(none)  |  p2 exact=itemleftovers=+16 rolled=move=-86
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Switch SideTwo: P1 -> P0
+      Damage SideTwo: 86
+      Heal SideTwo: 16
+

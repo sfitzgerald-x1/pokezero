@@ -1,0 +1,42 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500028  step 44  class=roll_scaled_component  gating=exact  choices={'p1': 'shadowball', 'p2': 'mightyena'}
+
+-- Showdown step --
+   |
+   |t:|1785361253
+   |switch|p2a: Mightyena|Mightyena, L92, M|278/278
+   |-ability|p2a: Mightyena|Intimidate|boost
+   |-unboost|p1a: Vigoroth|atk|1
+   |move|p1a: Vigoroth|Shadow Ball|p2a: Mightyena
+   |-resisted|p2a: Mightyena
+   |-damage|p2a: Mightyena|260/278
+   |
+   |-weather|SunnyDay|[upkeep]
+   |-heal|p1a: Vigoroth|248/272|[from] item: Leftovers
+   |-heal|p2a: Mightyena|277/278|[from] item: Leftovers
+   |upkeep
+   |turn|44
+
+-- pre-state HP: {'p1': 231, 'p2': 210} --
+
+-- observed components --
+   p1: exact=itemleftovers=+17  rolled=(none)
+   p2: exact=itemleftovers=+17  rolled=move=-18
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 4 branch(es)
+      pct= 75.00  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=(none) rolled=move=-17, itemleftovers_to_full=+17
+      pct= 18.75  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=(none) rolled=move=-17, itemleftovers_to_full=+17
+      pct=  5.00  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+17 rolled=move=-53
+      pct=  1.25  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+17 rolled=move=-53
+
+-- raw instructions, candidate 0, highest-probability branch --
+      ChangeSideCondition SideTwo ToxicCount: -1
+      Switch SideTwo: P4 -> P3
+      Boost SideOne Attack: -1
+      Damage SideTwo: 17
+      Heal SideOne: 17
+      Heal SideTwo: 17
+

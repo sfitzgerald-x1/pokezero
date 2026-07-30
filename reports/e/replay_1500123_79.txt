@@ -1,0 +1,50 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500123  step 79  class=roll_scaled_component  gating=exact  choices={'p1': 'surf', 'p2': 'fireblast'}
+
+-- Showdown step --
+   |
+   |t:|1785369882
+   |move|p2a: Ninetales|Fire Blast|p1a: Octillery
+   |-resisted|p1a: Octillery
+   |-damage|p1a: Octillery|104/272 par
+   |move|p1a: Octillery|Surf|p2a: Ninetales
+   |-supereffective|p2a: Ninetales
+   |-damage|p2a: Ninetales|31/254 par
+   |
+   |-heal|p2a: Ninetales|46/254 par|[from] item: Leftovers
+   |-heal|p1a: Octillery|121/272 par|[from] item: Leftovers
+   |upkeep
+   |turn|71
+
+-- pre-state HP: {'p1': 182, 'p2': 235} --
+
+-- observed components --
+   p1: exact=itemleftovers=+17  rolled=move=-78
+   p2: exact=itemleftovers=+15  rolled=move=-204
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 12 branch(es)
+      pct=  6.25  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+15 rolled=(none)
+      pct= 17.58  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+15 rolled=move=-212
+      pct=  1.17  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=capped_lethal=-235
+      pct=  2.81  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+15 rolled=(none)
+      pct=  7.91  p1 exact=itemleftovers=+17 rolled=(none)  |  p2 exact=itemleftovers=+15 rolled=move=-212
+      pct=  0.53  p1 exact=(none) rolled=(none)  |  p2 exact=(none) rolled=capped_lethal=-235
+      pct= 14.94  p1 exact=itemleftovers=+17 rolled=move=-86  |  p2 exact=itemleftovers=+15 rolled=(none)
+      pct= 42.02  p1 exact=itemleftovers=+17 rolled=move=-86  |  p2 exact=itemleftovers=+15 rolled=move=-212
+
+-- raw instructions, candidate 0, highest-probability branch --
+      DecrementPP SideTwo: M2 1
+      SetLastUsedMove SideTwo: Move(M1) -> Move(M2)
+      Damage SideOne: 86
+      ChangeDamageDealtDamage SideTwo: 86
+      ChangeDamageDealtMoveCatagory SideTwo: Physical -> Special
+      SetLastUsedMove SideOne: Move(M0) -> Move(M2)
+      Damage SideTwo: 212
+      ChangeDamageDealtDamage SideOne: 212
+      ChangeDamageDealtMoveCatagory SideOne: Physical -> Special
+      Heal SideTwo: 15
+      Heal SideOne: 17
+

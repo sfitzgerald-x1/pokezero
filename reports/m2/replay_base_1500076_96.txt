@@ -1,0 +1,40 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500076  step 96  class=roll_scaled_component  gating=exact  choices={'p1': 'toxic', 'p2': 'hiddenpowergrass70'}
+
+-- Showdown step --
+   |
+   |t:|1785361275
+   |move|p2a: Arcanine|Hidden Power|p1a: Shuckle
+   |-damage|p1a: Shuckle|160/198 slp
+   |cant|p1a: Shuckle|slp
+   |
+   |-heal|p2a: Arcanine|185/268 tox|[from] item: Leftovers
+   |-damage|p2a: Arcanine|169/268 tox|[from] psn
+   |-heal|p1a: Shuckle|172/198 slp|[from] item: Leftovers
+   |upkeep
+   |turn|88
+
+-- pre-state HP: {'p1': 189, 'p2': 169} --
+
+-- observed components --
+   p1: exact=itemleftovers=+12  rolled=move=-29
+   p2: exact=itemleftovers=+16, psn=-16  rolled=(none)
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=itemleftovers=+12 rolled=move=-25  |  p2 exact=itemleftovers=+16, psn=-16 rolled=(none)
+      pct=  6.25  p1 exact=itemleftovers=+12 rolled=move=-53  |  p2 exact=itemleftovers=+16, psn=-16 rolled=(none)
+
+-- raw instructions, candidate 0, highest-probability branch --
+      SetLastUsedMove SideTwo: Switch(P0) -> Move(M1)
+      Damage SideOne: 25
+      ChangeDamageDealtDamage SideTwo: 25
+      ChangeDamageDealtMoveCatagory SideTwo: Physical -> Special
+      DecrementRestTurns SideOne
+      Heal SideTwo: 16
+      Damage SideTwo: 16
+      ChangeSideCondition SideTwo ToxicCount: 1
+      Heal SideOne: 12
+

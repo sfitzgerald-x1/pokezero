@@ -1,0 +1,37 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500264  step 40  class=roll_scaled_component  gating=exact  choices={'p1': 'hiddenpowergrass70', 'p2': 'mirrorcoat'}
+
+-- Showdown step --
+   |
+   |t:|1785369891
+   |move|p1a: Wailord|Hidden Power|p2a: Wobbuffet
+   |-damage|p2a: Wobbuffet|191/446
+   |move|p2a: Wobbuffet|Mirror Coat|p1a: Wailord
+   |
+   |-heal|p2a: Wobbuffet|218/446|[from] item: Leftovers
+   |upkeep
+   |turn|37
+
+-- pre-state HP: {'p1': 438, 'p2': 265} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=itemleftovers=+27  rolled=move=-74
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=itemleftovers=+27 rolled=move=-136  |  p2 exact=itemleftovers=+27 rolled=move=-68
+      pct=  6.25  p1 exact=itemleftovers=+27 rolled=move=-272  |  p2 exact=itemleftovers=+27 rolled=move=-136
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Damage SideTwo: 68
+      ChangeDamageDealtDamage SideOne: 68
+      ChangeDamageDealtMoveCatagory SideOne: Physical -> Special
+      SetLastUsedMove SideTwo: Move(M1) -> Move(M2)
+      Damage SideOne: 136
+      Heal SideOne: 27
+      ChangeVolatileStatusDuration SideOne ENCORE: 1
+      Heal SideTwo: 27
+

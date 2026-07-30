@@ -1,0 +1,34 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500192  step 91  class=roll_scaled_component  gating=exact  choices={'p1': 'counter', 'p2': 'seismictoss'}
+
+-- Showdown step --
+   |
+   |t:|1785369889
+   |move|p2a: Illumise|Seismic Toss|p1a: Wobbuffet
+   |-damage|p1a: Wobbuffet|208/446
+   |move|p1a: Wobbuffet|Counter|p2a: Illumise
+   |-damage|p2a: Illumise|85/269
+   |
+   |-heal|p2a: Illumise|101/269|[from] item: Leftovers
+   |-heal|p1a: Wobbuffet|235/446|[from] item: Leftovers
+   |upkeep
+   |turn|84
+
+-- pre-state HP: {'p1': 300, 'p2': 269} --
+
+-- observed components --
+   p1: exact=itemleftovers=+27  rolled=move=-92
+   p2: exact=itemleftovers=+16  rolled=move=-184
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 1 branch(es)
+      pct=100.00  p1 exact=itemleftovers=+27 rolled=move=-92  |  p2 exact=(none) rolled=(none)
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Damage SideOne: 92
+      SetLastUsedMove SideOne: Move(M2) -> Move(M0)
+      ChangeVolatileStatusDuration SideTwo ENCORE: 1
+      Heal SideOne: 27
+

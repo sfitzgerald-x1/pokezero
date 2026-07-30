@@ -1,0 +1,109 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "games": 1,
+  "seeds": {
+    "min": 1500253,
+    "max": 1500253,
+    "distinct": 1
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "gating_exact": 65,
+  "gating_support_based": 0,
+  "elapsed_seconds": 3.05,
+  "games_per_hour": 1180.1,
+  "boundaries_full_round": 65,
+  "boundaries_measured": 65,
+  "transitions_matched": 64,
+  "transitions_diverged": 1,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 1.0,
+  "measured_fraction_of_full_rounds": 1.0,
+  "divergence_classes": {
+    "component_magnitude:heal": 1
+  },
+  "counters": {
+    "boundaries_full_round": 65,
+    "boundaries_measured": 65,
+    "divergence_class:component_magnitude:heal": 1,
+    "gating:exact": 65,
+    "skip:single_seat_boundary": 8,
+    "transition:diverged": 1,
+    "transition:matched": 64
+  },
+  "repros": [
+    {
+      "kind": "transition_diverged",
+      "seed": 1500253,
+      "step": 70,
+      "choices": {
+        "p1": "brickbreak",
+        "p2": "hiddenpowergrass70"
+      },
+      "engine_state": "HOUNDOOM,79,DARK,FIRE,DARK,FIRE,0,248,FLASHFIRE,FLASHFIRE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,148,125,219,172,196,NONE,0,0,35,FIREBLAST;false;8,CRUNCH;false;24,PURSUIT;false;31,HIDDENPOWERGRASS70;false;24,false,TYPELESS,MALE=VENUSAUR,81,GRASS,POISON,GRASS,POISON,0,262,OVERGROW,OVERGROW,LEFTOVERS,SERIOUS,85;85;85;85;85;85,179,181,208,209,176,NONE,0,0,100,SLUDGEBOMB;false;14,SUBSTITUTE;false;15,LEECHSEED;false;15,HIDDENPOWERGRASS70;false;23,false,TYPELESS,MALE=FERALIGATR,83,WATER,TYPELESS,WATER,TYPELESS,0,276,TORRENT,TORRENT,NONE,SERIOUS,85;85;85;85;85;85,221,213,178,185,177,NONE,0,0,88.8,HIDDENPOWERFLYING70;false;22,EARTHQUAKE;false;16,HYDROPUMP;false;7,SWORDSDANCE;false;48,false,TYPELESS,MALE=GLIGAR,83,GROUND,FLYING,GROUND,FLYING,0,243,HYPERCUTTER,HYPERCUTTER,SALACBERRY,SERIOUS,85;85;85;85;85;85,171,221,105,155,189,NONE,0,0,64.8,EARTHQUAKE;false;13,ROCKSLIDE;true;15,HIDDENPOWERFLYING70;true;22,SWORDSDANCE;true;47,false,TYPELESS,MALE=LUGIA,70,PSYCHIC,FLYING,PSYCHIC,FLYING,0,264,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,131,223,167,257,195,NONE,0,0,216,CALMMIND;false;32,ICEBEAM;false;14,RECOVER;false;32,THUNDERBOLT;false;23,false,TYPELESS,NONE=HITMONTOP,86,FIGHTING,TYPELESS,FIGHTING,TYPELESS,114,226,INTIMIDATE,INTIMIDATE,CHOICEBAND,SERIOUS,85;85;85;85;85;85,213,212,109,238,170,NONE,0,0,48,BRICKBREAK;false;20,MACHPUNCH;true;47,HIDDENPOWERGHOST70;true;24,ROCKSLIDE;true;16,false,TYPELESS,MALE=5=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:0=false/SMEARGLE,89,NORMAL,TYPELESS,NORMAL,TYPELESS,0,243,OWNTEMPO,OWNTEMPO,LEFTOVERS,SERIOUS,85;85;85;85;85;85,86,113,86,131,184,NONE,0,0,58,EXPLOSION;false;8,SPIKES;false;32,SPORE;false;24,ENCORE;false;8,false,TYPELESS,MALE=LUVDISC,100,WATER,TYPELESS,WATER,TYPELESS,0,248,SWIFTSWIM,SWIFTSWIM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,65,167,137,187,251,NONE,0,0,8.7,SURF;false;24,ICEBEAM;false;16,TOXIC;false;16,PROTECT;false;16,false,TYPELESS,MALE=PELIPPER,88,WATER,FLYING,WATER,FLYING,86,249,KEENEYE,KEENEYE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,93,226,200,173,165,NONE,0,0,28,ICEBEAM;false;16,TOXIC;false;16,SURF;false;24,PROTECT;false;16,false,TYPELESS,MALE=CLAYDOL,81,GROUND,PSYCHIC,GROUND,PSYCHIC,0,230,LEVITATE,LEVITATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,160,217,160,241,168,NONE,0,0,108,ICEBEAM;false;16,EXPLOSION;false;8,EARTHQUAKE;false;16,RAPIDSPIN;false;64,false,TYPELESS,NONE=PIKACHU,87,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,0,203,STATIC,STATIC,LIGHTBALL,SERIOUS,85;85;85;85;85;85,102,101,137,119,206,NONE,0,0,6,SURF;false;24,HIDDENPOWERICE70;false;24,THUNDERBOLT;false;24,VOLTTACKLE;false;24,false,TYPELESS,MALE=SEVIPER,88,POISON,TYPELESS,POISON,TYPELESS,88,272,SHEDSKIN,SHEDSKIN,LEFTOVERS,SERIOUS,85;85;85;85;85;85,225,156,225,156,165,NONE,0,0,52.5,CRUNCH;false;24,HIDDENPOWERGRASS70;false;24,EARTHQUAKE;false;16,SLUDGEBOMB;false;16,false,TYPELESS,MALE=5=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0=LEECHSEED:=0;0;0;0;0;0=0=-1=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:0=false/NONE;0/NONE;0/false;0/false",
+      "engine_states": [
+        "HOUNDOOM,79,DARK,FIRE,DARK,FIRE,0,248,FLASHFIRE,FLASHFIRE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,148,125,219,172,196,NONE,0,0,35,FIREBLAST;false;8,CRUNCH;false;24,PURSUIT;false;31,HIDDENPOWERGRASS70;false;24,false,TYPELESS,MALE=VENUSAUR,81,GRASS,POISON,GRASS,POISON,0,262,OVERGROW,OVERGROW,LEFTOVERS,SERIOUS,85;85;85;85;85;85,179,181,208,209,176,NONE,0,0,100,SLUDGEBOMB;false;14,SUBSTITUTE;false;15,LEECHSEED;false;15,HIDDENPOWERGRASS70;false;23,false,TYPELESS,MALE=FERALIGATR,83,WATER,TYPELESS,WATER,TYPELESS,0,276,TORRENT,TORRENT,NONE,SERIOUS,85;85;85;85;85;85,221,213,178,185,177,NONE,0,0,88.8,HIDDENPOWERFLYING70;false;22,EARTHQUAKE;false;16,HYDROPUMP;false;7,SWORDSDANCE;false;48,false,TYPELESS,MALE=GLIGAR,83,GROUND,FLYING,GROUND,FLYING,0,243,HYPERCUTTER,HYPERCUTTER,SALACBERRY,SERIOUS,85;85;85;85;85;85,171,221,105,155,189,NONE,0,0,64.8,EARTHQUAKE;false;13,ROCKSLIDE;true;15,HIDDENPOWERFLYING70;true;22,SWORDSDANCE;true;47,false,TYPELESS,MALE=LUGIA,70,PSYCHIC,FLYING,PSYCHIC,FLYING,0,264,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,131,223,167,257,195,NONE,0,0,216,CALMMIND;false;32,ICEBEAM;false;14,RECOVER;false;32,THUNDERBOLT;false;23,false,TYPELESS,NONE=HITMONTOP,86,FIGHTING,TYPELESS,FIGHTING,TYPELESS,114,226,INTIMIDATE,INTIMIDATE,CHOICEBAND,SERIOUS,85;85;85;85;85;85,213,212,109,238,170,NONE,0,0,48,BRICKBREAK;false;20,MACHPUNCH;true;47,HIDDENPOWERGHOST70;true;24,ROCKSLIDE;true;16,false,TYPELESS,MALE=5=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:0=false/SMEARGLE,89,NORMAL,TYPELESS,NORMAL,TYPELESS,0,243,OWNTEMPO,OWNTEMPO,LEFTOVERS,SERIOUS,85;85;85;85;85;85,86,113,86,131,184,NONE,0,0,58,EXPLOSION;false;8,SPIKES;false;32,SPORE;false;24,ENCORE;false;8,false,TYPELESS,MALE=LUVDISC,100,WATER,TYPELESS,WATER,TYPELESS,0,248,SWIFTSWIM,SWIFTSWIM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,65,167,137,187,251,NONE,0,0,8.7,SURF;false;24,ICEBEAM;false;16,TOXIC;false;16,PROTECT;false;16,false,TYPELESS,MALE=PELIPPER,88,WATER,FLYING,WATER,FLYING,86,249,KEENEYE,KEENEYE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,93,226,200,173,165,NONE,0,0,28,ICEBEAM;false;16,TOXIC;false;16,SURF;false;24,PROTECT;false;16,false,TYPELESS,MALE=CLAYDOL,81,GROUND,PSYCHIC,GROUND,PSYCHIC,0,230,LEVITATE,LEVITATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,160,217,160,241,168,NONE,0,0,108,ICEBEAM;false;16,EXPLOSION;false;8,EARTHQUAKE;false;16,RAPIDSPIN;false;64,false,TYPELESS,NONE=PIKACHU,87,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,0,203,STATIC,STATIC,LIGHTBALL,SERIOUS,85;85;85;85;85;85,102,101,137,119,206,NONE,0,0,6,SURF;false;24,HIDDENPOWERICE70;false;24,THUNDERBOLT;false;24,VOLTTACKLE;false;24,false,TYPELESS,MALE=SEVIPER,88,POISON,TYPELESS,POISON,TYPELESS,88,272,SHEDSKIN,SHEDSKIN,LEFTOVERS,SERIOUS,85;85;85;85;85;85,225,156,225,156,165,NONE,0,0,52.5,CRUNCH;false;24,HIDDENPOWERGRASS70;false;24,EARTHQUAKE;false;16,SLUDGEBOMB;false;16,false,TYPELESS,MALE=5=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0=LEECHSEED:=0;0;0;0;0;0=0=-1=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:0=false/NONE;0/NONE;0/false;0/false"
+      ],
+      "gating": "exact",
+      "pre_features": {
+        "p1_hp": 114,
+        "p2_hp": 88,
+        "p1_status": "NONE",
+        "p2_status": "NONE",
+        "fainted": [],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": []
+        }
+      },
+      "observed": {
+        "p1_hp": 95,
+        "p2_hp": 0,
+        "p1_status": "NONE",
+        "p2_status": "NONE",
+        "fainted": [
+          "p2"
+        ],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": []
+        }
+      },
+      "observed_boost_deltas": {
+        "p1": {},
+        "p2": {}
+      },
+      "active_changed": {
+        "p1": false,
+        "p2": false
+      },
+      "divergence_class": "component_magnitude:heal",
+      "branch_count": 3,
+      "branch_misses": [
+        "pct=87.89: p1 attributed components differ: observed_only=[('heal', 27)] engine_only=[('heal', 28)]",
+        "pct=5.86: p1 attributed components differ: observed_only=[('heal', 27)] engine_only=[('heal', 28)]",
+        "pct=6.25: p1 roll-scaled components differ: observed=[('', -46)] engine=[]"
+      ],
+      "protocol": [
+        "|",
+        "|t:|1785364549",
+        "|move|p1a: Hitmontop|Brick Break|p2a: Seviper",
+        "|-resisted|p2a: Seviper",
+        "|-damage|p2a: Seviper|10/272",
+        "|move|p2a: Seviper|Hidden Power|p1a: Hitmontop",
+        "|-damage|p1a: Hitmontop|68/226",
+        "|",
+        "|-heal|p2a: Seviper|27/272|[from] item: Leftovers",
+        "|-damage|p2a: Seviper|0 fnt|[from] Leech Seed|[of] p1a: Hitmontop",
+        "|-heal|p1a: Hitmontop|95/226|[silent]",
+        "|faint|p2a: Seviper",
+        "|upkeep",
+        "|request|{\"wait\":true,\"side\":{\"name\":\"PokeZero p1\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Hitmontop\",\"details\":\"Hitmontop, L86, M\",\"condition\":\"95/226\",\"active\":true,\"stats\":{\"atk\":213,\"def\":212,\"spa\":109,\"spd\":238,\"spe\":170},\"moves\":[\"brickbreak\",\"machpunch\",\"hiddenpowerghost\",\"rockslide\"],\"baseAbility\":\"intimidate\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Lugia\",\"details\":\"Lugia, L70\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":131,\"def\":223,\"spa\":167,\"spd\":257,\"spe\":195},\"moves\":[\"calmmind\",\"icebeam\",\"recover\",\"thunderbolt\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"hydropump\",\"swordsdance\"],\"baseAbility\":\"torrent\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Venusaur\",\"details\":\"Venusaur, L81, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":208,\"spd\":209,\"spe\":176},\"moves\":[\"sludgebomb\",\"substitute\",\"leechseed\",\"hiddenpowergrass\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Gligar\",\"details\":\"Gligar, L83, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":171,\"def\":221,\"spa\":105,\"spd\":155,\"spe\":189},\"moves\":[\"earthquake\",\"rockslide\",\"hiddenpowerflying\",\"swordsdance\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Houndoom\",\"details\":\"Houndoom, L79, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"fireblast\",\"crunch\",\"pursuit\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+        "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZero p2\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Seviper\",\"details\":\"Seviper, L88, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":225,\"def\":156,\"spa\":225,\"spd\":156,\"spe\":165},\"moves\":[\"crunch\",\"hiddenpowergrass\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"shedskin\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pelipper\",\"details\":\"Pelipper, L88, M\",\"condition\":\"86/249\",\"active\":false,\"stats\":{\"atk\":93,\"def\":226,\"spa\":200,\"spd\":173,\"spe\":165},\"moves\":[\"icebeam\",\"toxic\",\"surf\",\"protect\"],\"baseAbility\":\"keeneye\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pikachu\",\"details\":\"Pikachu, L87, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":102,\"def\":101,\"spa\":137,\"spd\":119,\"spe\":206},\"moves\":[\"surf\",\"hiddenpowerice\",\"thunderbolt\",\"volttackle\"],\"baseAbility\":\"static\",\"item\":\"lightball\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Luvdisc\",\"details\":\"Luvdisc, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":65,\"def\":167,\"spa\":137,\"spd\":187,\"spe\":251},\"moves\":[\"surf\",\"icebeam\",\"toxic\",\"protect\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Smeargle\",\"details\":\"Smeargle, L89, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":86,\"def\":113,\"spa\":86,\"spd\":131,\"spe\":184},\"moves\":[\"explosion\",\"spikes\",\"spore\",\"encore\"],\"baseAbility\":\"owntempo\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Claydol\",\"details\":\"Claydol, L81\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":160,\"def\":217,\"spa\":160,\"spd\":241,\"spe\":168},\"moves\":[\"icebeam\",\"explosion\",\"earthquake\",\"rapidspin\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+      ]
+    }
+  ]
+}

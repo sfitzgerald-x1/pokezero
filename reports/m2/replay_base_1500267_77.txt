@@ -1,0 +1,32 @@
+1 matching row(s); replaying 1
+
+====================================================================================================
+seed 1500267  step 77  class=roll_scaled_component  gating=exact  choices={'p1': 'hiddenpowerground70', 'p2': 'dunsparce'}
+
+-- Showdown step --
+   |
+   |t:|1785361286
+   |switch|p2a: Dunsparce|Dunsparce, L88, F|283/319
+   |move|p1a: Crobat|Hidden Power|p2a: Dunsparce
+   |-damage|p2a: Dunsparce|220/319
+   |
+   |-heal|p2a: Dunsparce|239/319|[from] item: Leftovers
+   |upkeep
+   |turn|72
+
+-- pre-state HP: {'p1': 261, 'p2': 184} --
+
+-- observed components --
+   p1: exact=(none)  rolled=(none)
+   p2: exact=itemleftovers=+19  rolled=move=-63
+
+-- engine: 1 candidate state(s) (hidden-counter sweep) --
+   candidate 0: 2 branch(es)
+      pct= 93.75  p1 exact=(none) rolled=(none)  |  p2 exact=itemleftovers=+19 rolled=move=-70
+      pct=  6.25  p1 exact=(none) rolled=(none)  |  p2 exact=itemleftovers=+19 rolled=move=-140
+
+-- raw instructions, candidate 0, highest-probability branch --
+      Switch SideTwo: P2 -> P5
+      Damage SideTwo: 70
+      Heal SideTwo: 19
+

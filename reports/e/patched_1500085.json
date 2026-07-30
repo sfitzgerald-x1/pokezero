@@ -1,0 +1,120 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "games": 1,
+  "seeds": {
+    "min": 1500085,
+    "max": 1500085,
+    "distinct": 1
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "repro_retention": {
+    "repros_per_game": 8,
+    "keep_repro": 5000,
+    "repros_retained": 1,
+    "transitions_diverged": 1,
+    "repros_complete": true
+  },
+  "gating_exact": 53,
+  "gating_support_based": 7,
+  "elapsed_seconds": 2.2,
+  "games_per_hour": 1634.4,
+  "boundaries_full_round": 61,
+  "boundaries_measured": 60,
+  "transitions_matched": 59,
+  "transitions_diverged": 1,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 1.0,
+  "measured_fraction_of_full_rounds": 0.9836,
+  "divergence_classes": {
+    "limit:roll_divergent_lethality": 1
+  },
+  "counters": {
+    "boundaries_full_round": 61,
+    "boundaries_measured": 60,
+    "divergence_class:limit:roll_divergent_lethality": 1,
+    "gating:exact": 53,
+    "gating:support": 7,
+    "hidden_counter_support:sleep": 7,
+    "skip:single_seat_boundary": 7,
+    "transition:diverged": 1,
+    "transition:matched": 59,
+    "world_prestate_mismatch": 1,
+    "world_prestate_mismatch:p1_hp": 1
+  },
+  "repros": [
+    {
+      "kind": "transition_diverged",
+      "seed": 1500085,
+      "step": 61,
+      "choices": {
+        "p1": "doubleedge",
+        "p2": "return"
+      },
+      "engine_state": "TYPHLOSION,79,FIRE,TYPELESS,FIRE,TYPELESS,58,253,BLAZE,BLAZE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,178,168,218,180,204,NONE,0,0,79.5,FLAMETHROWER;false;23,HIDDENPOWERICE70;false;24,THUNDERPUNCH;false;23,EARTHQUAKE;false;13,false,TYPELESS,MALE=CLOYSTER,82,WATER,ICE,WATER,ICE,106,216,SHELLARMOR,SHELLARMOR,LEFTOVERS,SERIOUS,85;85;85;85;85;85,203,342,187,121,162,NONE,0,0,132.5,SPIKES;false;30,RAPIDSPIN;false;63,SURF;false;22,ICEBEAM;false;14,false,TYPELESS,FEMALE=SHARPEDO,85,WATER,DARK,WATER,DARK,186,257,ROUGHSKIN,ROUGHSKIN,CHOICEBAND,SERIOUS,85;85;85;85;85;85,252,116,209,116,210,NONE,0,0,88.8,EARTHQUAKE;true;16,DOUBLEEDGE;false;23,HYDROPUMP;true;8,HIDDENPOWERFLYING70;true;24,false,TYPELESS,FEMALE=PARASECT,98,BUG,GRASS,BUG,GRASS,0,276,EFFECTSPORE,EFFECTSPORE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,241,211,173,211,114,NONE,0,0,29.5,RETURN;false;31,SPORE;false;23,AROMATHERAPY;false;6,HIDDENPOWERBUG70;false;22,false,TYPELESS,MALE=ALAKAZAM,76,PSYCHIC,TYPELESS,PSYCHIC,TYPELESS,57,209,SYNCHRONIZE,SYNCHRONIZE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,81,112,249,173,226,TOXIC,0,0,48,CALMMIND;false;32,PSYCHIC;false;16,THUNDERPUNCH;false;22,FIREPUNCH;false;23,false,TYPELESS,FEMALE=SNORLAX,71,NORMAL,TYPELESS,NORMAL,TYPELESS,222,345,IMMUNITY,IMMUNITY,LEFTOVERS,SERIOUS,85;85;85;85;85;85,198,134,134,198,84,NONE,0,0,460,BODYSLAM;false;22,CURSE;false;15,EARTHQUAKE;false;14,REST;false;15,false,TYPELESS,MALE=2=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:1=false/SEAKING,90,WATER,TYPELESS,WATER,TYPELESS,0,290,SWIFTSWIM,SWIFTSWIM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,217,168,167,195,174,NONE,0,0,39,MEGAHORN;false;16,RAINDANCE;false;8,HIDDENPOWERELECTRIC70;false;24,HYDROPUMP;false;8,false,TYPELESS,FEMALE=RAIKOU,74,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,0,255,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,132,153,213,191,213,NONE,0,0,178,HIDDENPOWERICE70;false;24,REST;false;16,SLEEPTALK;false;16,THUNDERBOLT;false;24,false,TYPELESS,NONE=KINGLER,90,WATER,TYPELESS,WATER,TYPELESS,14,245,HYPERCUTTER,HYPERCUTTER,NONE,SERIOUS,85;85;85;85;85;85,285,257,141,140,186,NONE,0,0,60,DOUBLEEDGE;false;24,SWORDSDANCE;false;48,HIDDENPOWERGHOST70;false;24,SURF;false;24,false,TYPELESS,FEMALE=NOCTOWL,93,NORMAL,FLYING,NORMAL,FLYING,337,337,INSOMNIA,INSOMNIA,LEFTOVERS,SERIOUS,85;85;85;85;85;85,146,146,194,231,183,PARALYZE,0,0,40.8,WHIRLWIND;false;32,RETURN;false;32,HYPNOSIS;false;32,TOXIC;false;16,false,TYPELESS,MALE=HOUNDOOM,79,DARK,FIRE,DARK,FIRE,0,248,FLASHFIRE,FLASHFIRE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,147,125,219,172,196,NONE,0,0,35,FIREBLAST;false;8,CRUNCH;false;24,WILLOWISP;false;24,PURSUIT;false;32,false,TYPELESS,MALE=LATIOS,66,DRAGON,PSYCHIC,DRAGON,PSYCHIC,0,215,LEVITATE,LEVITATE,SOULDEW,SERIOUS,85;85;85;85;85;85,123,144,210,184,184,NONE,0,0,60,DRAGONCLAW;false;24,CALMMIND;false;32,REFRESH;false;32,RECOVER;false;32,false,TYPELESS,MALE=3=0;0;0;0;0;0;0;0;0;0;0;0;2;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+      "engine_states": [
+        "TYPHLOSION,79,FIRE,TYPELESS,FIRE,TYPELESS,58,253,BLAZE,BLAZE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,178,168,218,180,204,NONE,0,0,79.5,FLAMETHROWER;false;23,HIDDENPOWERICE70;false;24,THUNDERPUNCH;false;23,EARTHQUAKE;false;13,false,TYPELESS,MALE=CLOYSTER,82,WATER,ICE,WATER,ICE,106,216,SHELLARMOR,SHELLARMOR,LEFTOVERS,SERIOUS,85;85;85;85;85;85,203,342,187,121,162,NONE,0,0,132.5,SPIKES;false;30,RAPIDSPIN;false;63,SURF;false;22,ICEBEAM;false;14,false,TYPELESS,FEMALE=SHARPEDO,85,WATER,DARK,WATER,DARK,186,257,ROUGHSKIN,ROUGHSKIN,CHOICEBAND,SERIOUS,85;85;85;85;85;85,252,116,209,116,210,NONE,0,0,88.8,EARTHQUAKE;true;16,DOUBLEEDGE;false;23,HYDROPUMP;true;8,HIDDENPOWERFLYING70;true;24,false,TYPELESS,FEMALE=PARASECT,98,BUG,GRASS,BUG,GRASS,0,276,EFFECTSPORE,EFFECTSPORE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,241,211,173,211,114,NONE,0,0,29.5,RETURN;false;31,SPORE;false;23,AROMATHERAPY;false;6,HIDDENPOWERBUG70;false;22,false,TYPELESS,MALE=ALAKAZAM,76,PSYCHIC,TYPELESS,PSYCHIC,TYPELESS,57,209,SYNCHRONIZE,SYNCHRONIZE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,81,112,249,173,226,TOXIC,0,0,48,CALMMIND;false;32,PSYCHIC;false;16,THUNDERPUNCH;false;22,FIREPUNCH;false;23,false,TYPELESS,FEMALE=SNORLAX,71,NORMAL,TYPELESS,NORMAL,TYPELESS,222,345,IMMUNITY,IMMUNITY,LEFTOVERS,SERIOUS,85;85;85;85;85;85,198,134,134,198,84,NONE,0,0,460,BODYSLAM;false;22,CURSE;false;15,EARTHQUAKE;false;14,REST;false;15,false,TYPELESS,MALE=2=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:1=false/SEAKING,90,WATER,TYPELESS,WATER,TYPELESS,0,290,SWIFTSWIM,SWIFTSWIM,LEFTOVERS,SERIOUS,85;85;85;85;85;85,217,168,167,195,174,NONE,0,0,39,MEGAHORN;false;16,RAINDANCE;false;8,HIDDENPOWERELECTRIC70;false;24,HYDROPUMP;false;8,false,TYPELESS,FEMALE=RAIKOU,74,ELECTRIC,TYPELESS,ELECTRIC,TYPELESS,0,255,PRESSURE,PRESSURE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,132,153,213,191,213,NONE,0,0,178,HIDDENPOWERICE70;false;24,REST;false;16,SLEEPTALK;false;16,THUNDERBOLT;false;24,false,TYPELESS,NONE=KINGLER,90,WATER,TYPELESS,WATER,TYPELESS,14,245,HYPERCUTTER,HYPERCUTTER,NONE,SERIOUS,85;85;85;85;85;85,285,257,141,140,186,NONE,0,0,60,DOUBLEEDGE;false;24,SWORDSDANCE;false;48,HIDDENPOWERGHOST70;false;24,SURF;false;24,false,TYPELESS,FEMALE=NOCTOWL,93,NORMAL,FLYING,NORMAL,FLYING,337,337,INSOMNIA,INSOMNIA,LEFTOVERS,SERIOUS,85;85;85;85;85;85,146,146,194,231,183,PARALYZE,0,0,40.8,WHIRLWIND;false;32,RETURN;false;32,HYPNOSIS;false;32,TOXIC;false;16,false,TYPELESS,MALE=HOUNDOOM,79,DARK,FIRE,DARK,FIRE,0,248,FLASHFIRE,FLASHFIRE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,147,125,219,172,196,NONE,0,0,35,FIREBLAST;false;8,CRUNCH;false;24,WILLOWISP;false;24,PURSUIT;false;32,false,TYPELESS,MALE=LATIOS,66,DRAGON,PSYCHIC,DRAGON,PSYCHIC,0,215,LEVITATE,LEVITATE,SOULDEW,SERIOUS,85;85;85;85;85;85,123,144,210,184,184,NONE,0,0,60,DRAGONCLAW;false;24,CALMMIND;false;32,REFRESH;false;32,RECOVER;false;32,false,TYPELESS,MALE=3=0;0;0;0;0;0;0;0;0;0;0;0;2;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false"
+      ],
+      "gating": "exact",
+      "pre_features": {
+        "p1_hp": 186,
+        "p2_hp": 337,
+        "p1_status": "NONE",
+        "p2_status": "PARALYZE",
+        "fainted": [],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": [
+            "spikes"
+          ]
+        }
+      },
+      "observed": {
+        "p1_hp": 0,
+        "p2_hp": 118,
+        "p1_status": "NONE",
+        "p2_status": "PARALYZE",
+        "fainted": [
+          "p1"
+        ],
+        "weather": "NONE",
+        "side_conditions": {
+          "p1": [],
+          "p2": [
+            "spikes"
+          ]
+        }
+      },
+      "observed_boost_deltas": {
+        "p1": {},
+        "p2": {}
+      },
+      "active_changed": {
+        "p1": false,
+        "p2": false
+      },
+      "divergence_class": "limit:roll_divergent_lethality",
+      "branch_count": 3,
+      "branch_misses": [
+        "pct=23.44: p1 roll-scaled components differ: observed=[('capped_lethal', -120), ('recoil', -66)] engine=[('recoil', -69)]",
+        "pct=70.31: p1 roll-scaled components differ: observed=[('capped_lethal', -120), ('recoil', -66)] engine=[('capped_lethal', -117), ('recoil', -69)]",
+        "pct=6.25: p1 roll-scaled components differ: observed=[('capped_lethal', -120), ('recoil', -66)] engine=[('recoil', -112)]"
+      ],
+      "protocol": [
+        "|",
+        "|t:|1785372452",
+        "|move|p1a: Sharpedo|Double-Edge|p2a: Noctowl",
+        "|-damage|p2a: Noctowl|139/337 par",
+        "|-damage|p1a: Sharpedo|120/257|[from] Recoil|[of] p2a: Noctowl",
+        "|move|p2a: Noctowl|Return|p1a: Sharpedo",
+        "|-damage|p1a: Sharpedo|0 fnt",
+        "|-damage|p2a: Noctowl|118/337 par|[from] ability: Rough Skin|[of] p1a: Sharpedo",
+        "|faint|p1a: Sharpedo",
+        "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZero p1\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Sharpedo\",\"details\":\"Sharpedo, L85, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":252,\"def\":116,\"spa\":209,\"spd\":116,\"spe\":210},\"moves\":[\"earthquake\",\"doubleedge\",\"hydropump\",\"hiddenpowerflying\"],\"baseAbility\":\"roughskin\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cloyster\",\"details\":\"Cloyster, L82, F\",\"condition\":\"106/216\",\"active\":false,\"stats\":{\"atk\":203,\"def\":342,\"spa\":187,\"spd\":121,\"spe\":162},\"moves\":[\"spikes\",\"rapidspin\",\"surf\",\"icebeam\"],\"baseAbility\":\"shellarmor\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Typhlosion\",\"details\":\"Typhlosion, L79, M\",\"condition\":\"58/253\",\"active\":false,\"stats\":{\"atk\":178,\"def\":168,\"spa\":218,\"spd\":180,\"spe\":204},\"moves\":[\"flamethrower\",\"hiddenpowerice\",\"thunderpunch\",\"earthquake\"],\"baseAbility\":\"blaze\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"57/209 tox\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"calmmind\",\"psychic\",\"thunderpunch\",\"firepunch\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Parasect\",\"details\":\"Parasect, L98, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":241,\"def\":211,\"spa\":173,\"spd\":211,\"spe\":114},\"moves\":[\"return102\",\"spore\",\"aromatherapy\",\"hiddenpowerbug\"],\"baseAbility\":\"effectspore\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"222/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"bodyslam\",\"curse\",\"earthquake\",\"rest\"],\"baseAbility\":\"immunity\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+        "|request|{\"wait\":true,\"side\":{\"name\":\"PokeZero p2\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Noctowl\",\"details\":\"Noctowl, L93, M\",\"condition\":\"118/337 par\",\"active\":true,\"stats\":{\"atk\":146,\"def\":146,\"spa\":194,\"spd\":231,\"spe\":183},\"moves\":[\"whirlwind\",\"return102\",\"hypnosis\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"14/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"doubleedge\",\"swordsdance\",\"hiddenpowerghost\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":147,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"fireblast\",\"crunch\",\"willowisp\",\"pursuit\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raikou\",\"details\":\"Raikou, L74\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":132,\"def\":153,\"spa\":213,\"spd\":191,\"spe\":213},\"moves\":[\"hiddenpowerice\",\"rest\",\"sleeptalk\",\"thunderbolt\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Latios\",\"details\":\"Latios, L66, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":123,\"def\":144,\"spa\":210,\"spd\":184,\"spe\":184},\"moves\":[\"dragonclaw\",\"calmmind\",\"refresh\",\"recover\"],\"baseAbility\":\"levitate\",\"item\":\"souldew\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Seaking\",\"details\":\"Seaking, L90, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":217,\"def\":168,\"spa\":167,\"spd\":195,\"spe\":174},\"moves\":[\"megahorn\",\"raindance\",\"hiddenpowerelectric\",\"hydropump\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+      ]
+    }
+  ]
+}
