@@ -2654,10 +2654,65 @@ fn post_state_summary(state: &State) -> serde_json::Value {
     serde_json::Value::Object(sides)
 }
 
+/// Serialize the exact branch prefix that prices a direct hit after a
+/// same-turn switch or stat-stage change.
+///
+/// The transition differential cannot use a branch's completed post-state for
+/// this: post-state may include the hit itself plus reaction effects such as
+/// Knock Off's item removal.  Re-segment the engine instruction list, locate
+/// the first damage to each acting phase's defender, and snapshot only the
+/// instructions before that hit.  A snapshot is emitted only when that prefix
+/// contains a switch or boost; ordinary branches keep using their pre-boundary
+/// damage support.
+fn legal_roll_state_before_direct_damage(
+    state: &mut State,
+    s1_move: &MoveChoice,
+    s2_move: &MoveChoice,
+    full: &[Instruction],
+    branch_on_damage: bool,
+) -> Option<String> {
+    let segmentation = segment(state, s1_move, s2_move, full, branch_on_damage)?;
+    let phases = [
+        (0, segmentation.p1_end, segmentation.first),
+        (
+            segmentation.p1_end,
+            segmentation.p2_end,
+            other_side(segmentation.first),
+        ),
+    ];
+
+    for (start, end, attacker) in phases {
+        let defender = other_side(attacker);
+        let Some(direct_damage_index) = full[start..end]
+            .iter()
+            .position(|instruction| match instruction {
+                Instruction::Damage(damage) | Instruction::DamageSubstitute(damage) => {
+                    damage.side_ref == defender
+                }
+                _ => false,
+            }) else {
+            continue;
+        };
+        let prefix = full[..start + direct_damage_index].to_vec();
+        let requires_reprice = prefix.iter().any(|instruction| {
+            matches!(instruction, Instruction::Switch(_) | Instruction::Boost(_))
+        });
+        if !requires_reprice {
+            continue;
+        }
+
+        state.apply_instructions(&prefix);
+        let serialized = state.serialize();
+        state.reverse_instructions(&prefix);
+        return Some(serialized);
+    }
+    None
+}
+
 /// Enumerate the engine's chance outcomes for a joint action and render each
 /// as protocol lines (the instruction→event mapping), returning JSON:
 /// `{"end_of_turn": bool, "branches": [{"percentage", "events", "turn_completed",
-///   "lossy", "post", "post_state"}]}`.
+///   "lossy", "post", "post_state", "legal_roll_state"}]}`.
 ///
 /// `ctx_json`: `{"p1": [display species...], "p2": [...], "turn": N}` with
 /// species in ENGINE PARTY ORDER (see `EngineWorld.party_species`).
@@ -2688,6 +2743,17 @@ pub fn branch_events(
         }));
     }
     for branch in &generated {
+        let legal_roll_state = if include_post_state {
+            legal_roll_state_before_direct_damage(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                branch_on_damage,
+            )
+        } else {
+            None
+        };
         let rendered = render_branch_events(
             &mut state,
             &s1,
@@ -2713,6 +2779,9 @@ pub fn branch_events(
         });
         if let Some(post_state) = post_state {
             obj["post_state"] = serde_json::Value::String(post_state);
+        }
+        if let Some(legal_roll_state) = legal_roll_state {
+            obj["legal_roll_state"] = serde_json::Value::String(legal_roll_state);
         }
         branches.push(obj);
     }
@@ -2747,6 +2816,62 @@ mod tests {
             &MoveChoice::Switch(PokemonIndex::P1),
             &MoveChoice::None,
         ));
+    }
+
+    #[test]
+    fn legal_roll_snapshot_includes_an_earlier_stat_boost_but_not_the_hit() {
+        let fixture = MINIMAL
+            .trim()
+            .replacen("EMBER;false;32", "FIREBLAST;false;8", 1)
+            .replacen("WATERGUN;false;32", "CALMMIND;false;32", 1);
+        let mut state = parse_state(&fixture).expect("fixture parses");
+        let before = state.serialize();
+        let s1 = MoveChoice::from_string("fireblast", &state.side_one).expect("Fire Blast");
+        let s2 = MoveChoice::from_string("calmmind", &state.side_two).expect("Calm Mind");
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+
+        let snapshot = branches.iter().find_map(|branch| {
+            legal_roll_state_before_direct_damage(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+            )
+        });
+        let snapshot = snapshot.expect("Calm Mind before Fire Blast has a local roll state");
+        let priced = State::deserialize(&snapshot);
+
+        assert_eq!(priced.side_two.special_attack_boost, 1);
+        assert_eq!(priced.side_two.special_defense_boost, 1);
+        assert_eq!(priced.side_two.get_active_immutable().hp, 100);
+        assert_eq!(state.serialize(), before, "snapshotting must restore the source state");
+    }
+
+    #[test]
+    fn legal_roll_snapshot_replaces_the_defender_before_a_same_turn_hit() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_two.pokemon[PokemonIndex::P1] = state.side_two.pokemon[PokemonIndex::P0].clone();
+        let before = state.serialize();
+        let s1 = MoveChoice::from_string("tackle", &state.side_one).expect("Tackle");
+        let s2 = MoveChoice::Switch(PokemonIndex::P1);
+        let branches = generate_instructions_from_move_pair(&mut state, &s1, &s2, true);
+
+        let snapshot = branches.iter().find_map(|branch| {
+            legal_roll_state_before_direct_damage(
+                &mut state,
+                &s1,
+                &s2,
+                &branch.instruction_list,
+                true,
+            )
+        });
+        let snapshot = snapshot.expect("switch before Tackle has a local roll state");
+        let priced = State::deserialize(&snapshot);
+
+        assert_eq!(priced.side_two.active_index, PokemonIndex::P1);
+        assert_eq!(priced.side_two.get_active_immutable().hp, 100);
+        assert_eq!(state.serialize(), before, "snapshotting must restore the source state");
     }
 
     #[test]

@@ -1,0 +1,16 @@
+{
+  "schema": "pokezero.c17.matcher-nonzero-stat-event-prediction.v1",
+  "source": "Fresh independent Codex review of the prefix-state correction.",
+  "problem": "The event mapper renders a capped status move as |-boost|...|0 even when the engine emitted no Boost instruction. Python treated that presentation-only zero as a state-changing event, required legal_roll_state, and falsely skipped a later opponent hit.",
+  "required_mechanism": [
+    "Treat Switch as state-changing.",
+    "Treat |-boost| and |-unboost| as state-changing only when their rendered stage amount is nonzero.",
+    "Treat a malformed stat-event amount conservatively as state-changing so the branch remains fail-closed."
+  ],
+  "regression_prediction": "A capped Swords Dance rendering |-boost|...|0 before an opponent Tackle must not load a branch-local state or raise BranchLegalRollError.",
+  "containment": [
+    "Do not change the Rust prefix snapshot mechanism.",
+    "Do not relax handling of actual nonzero boosts or unboosts.",
+    "Do not widen accepted damage supports, attribution, residual handling, or divergence classes."
+  ]
+}

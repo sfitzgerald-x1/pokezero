@@ -1,0 +1,16 @@
+{
+  "schema": "pokezero.c17.matcher-affected-hit-prediction.v1",
+  "source": "Fresh independent Codex review of the prefix-state correction.",
+  "problem": "The matcher stopped at the first bare opponent-hit line in a branch. If that hit applies a nonzero stat drop and the opposing move damages later in the same turn, the first hit is unaffected while the second hit needs branch-local support. Returning at the first hit silently misses the actual state-dependent roll.",
+  "required_mechanism": [
+    "Scan bare opponent-hit lines in order.",
+    "Select the first such hit preceded by an actual Switch or nonzero Boost/Unboost event, not merely the first hit in the branch.",
+    "Use the existing legal_roll_state only for that affected hit; preserve ordinary pre-state support when no opponent hit is affected."
+  ],
+  "regression_prediction": "Aurora Beam damage followed by its nonzero Attack drop and then the defender's Tackle must consume legal_roll_state for the later Tackle, not return None at the earlier Aurora Beam damage.",
+  "containment": [
+    "Do not change the Rust prefix snapshot mechanism.",
+    "Do not apply branch-local support to an earlier unaffected hit.",
+    "Do not widen accepted damage supports, attribution, residual handling, or divergence classes."
+  ]
+}
