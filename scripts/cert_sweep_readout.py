@@ -751,6 +751,35 @@ def _family_rate_gates(
     return failures, evidence
 
 
+def _repro_integrity_gates(
+    rows: Sequence[Mapping[str, Any]],
+    shards: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    failures: list[str] = []
+    identities: list[tuple[int, int]] = []
+    ranges: list[tuple[int, int]] = []
+    for shard in shards:
+        seeds = shard.get("seeds")
+        if isinstance(seeds, Mapping):
+            ranges.append((int(seeds.get("min", -1)), int(seeds.get("max", -1))))
+    for index, row in enumerate(rows):
+        seed, step = row.get("seed"), row.get("step")
+        if not isinstance(seed, int) or not isinstance(step, int):
+            failures.append(f"retained repro {index} has a malformed seed/step identity")
+            continue
+        identities.append((seed, step))
+        if not any(start <= seed <= end for start, end in ranges):
+            failures.append(
+                f"retained repro identity ({seed}, {step}) is outside all shard seed bands"
+            )
+    duplicate_count = len(identities) - len(set(identities))
+    if duplicate_count:
+        failures.append(
+            f"retained repro population contains {duplicate_count} duplicate seed/step identities"
+        )
+    return failures
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--shards", nargs="+", required=True)
@@ -841,7 +870,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     family_failures, family_evidence = _family_rate_gates(
         fam_counts, pred, boundaries_measured=agg["boundaries_measured"]
     )
-    gate_failures = contract_failures + family_failures
+    repro_failures = _repro_integrity_gates(rows, shards)
+    gate_failures = contract_failures + family_failures + repro_failures
     verdict = "PASS" if (
         not unattributed
         and agg["engine_errors"] == 0
@@ -866,6 +896,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "skip_counter_rates_per_full_round": skip_counter_rates,
         "repros_complete_all_shards": retention_ok,
         "rows_retained": len(rows),
+        "repro_integrity_failures": repro_failures,
         "family_attribution": dict(fam_counts.most_common()),
         "unattributed_rows": unattributed,
         "per_class_observed_vs_predicted": per_class,

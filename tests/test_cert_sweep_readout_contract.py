@@ -275,6 +275,27 @@ class CertificationContractTests(unittest.TestCase):
         )
         self.assertEqual(evidence, {"enforced": False})
 
+    def test_duplicate_repro_cannot_replace_missing_identity(self) -> None:
+        rows = [
+            {"seed": 1000, "step": 7},
+            {"seed": 1000, "step": 7},
+        ]
+        shards = [{"seeds": {"min": 1000, "max": 1000, "distinct": 1}}]
+        self.assertEqual(
+            readout._repro_integrity_gates(rows, shards),
+            [
+                "retained repro population contains 1 duplicate seed/step identities"
+            ],
+        )
+
+    def test_repro_must_belong_to_a_supplied_seed_band(self) -> None:
+        rows = [{"seed": 999, "step": 7}]
+        shards = [{"seeds": {"min": 1000, "max": 1000, "distinct": 1}}]
+        self.assertEqual(
+            readout._repro_integrity_gates(rows, shards),
+            ["retained repro identity (999, 7) is outside all shard seed bands"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
