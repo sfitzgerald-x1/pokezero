@@ -81,7 +81,7 @@ The plan's census (mean/median 30.7/28, p90/p99/max 57/90/96, 42.8% >32, 6.5%
 re-census on trained-policy games.
 
 Finding: the m50 and emeta **production per-iteration training caches are already
-cleaned** (`/shared/scott-experiment/<run>/cache/iteration-*` are empty) — the
+cleaned** (`<private-store>/<run>/cache/iteration-*` are empty) — the
 exact "before the smoke arms' caches are cleaned" window the plan warned about
 has passed. A faithful trained-policy census therefore requires re-generating
 games with the checkpoint and counting history fill on the encoded observations.
@@ -109,10 +109,9 @@ supersedes the FILL question, so this does not block the verdict.
 Grid: `k ∈ {16, 32, 64, 128}` × { m50 5M (`metamon-m50-2m-lr10m-ep7`
 iteration-3125), emeta S 3M (`emeta-v2-2-lr3m-3m-belief` iteration-0625) }.
 Both checkpoints confirmed present on the shared PVC (m50 iteration-3125 = the 5M
-target, written 2026-07-21). Run on GPU (pinned to the designated Crusoe nodepool
-`856c0ba6…`), sharded 4×/cell, paired seed band `--seed-start 50000000` shared
-across all cells. Launcher:
-`pokezero-deploy/foundation/history-truncation-probe.sh`.
+target, written 2026-07-21). Run on GPU, sharded 4×/cell, paired seed band `--seed-start 50000000` shared
+across all cells. Launcher: the history-truncation probe script in the private
+deployment tooling (not part of this repository).
 
 ### Ladder — DONE (n=1000 per opponent, paired; SE ≈ 1.6%)
 
@@ -190,13 +189,13 @@ this probe's k\* usage-map into a learned-summarization design).
 
 ## Provenance
 
-- Probe image: `scott-experiment:history-truncation-probe-20260721` (ladder) /
+- Probe image: `<internal-registry>:history-truncation-probe-20260721` (ladder) /
   `-r2` (foul-play, adds the play_online flag); reuse-runtime on the m50 training
   base, built from branch `scott/history-truncation-probe-harness` (PR #843).
-- Cluster: olfusa / scott, GPU pinned to nodepool `856c0ba6…` (the designated
-  rack), parallelism capped at 12 GPUs.
+- Cluster: the internal GPU environment (identifiers recorded in the private
+  deployment tooling), parallelism capped at 12 GPUs.
 - Checkpoints: `metamon-m50-2m-lr10m-ep7/run/iteration-3125` (5M target, written
   2026-07-21) and `emeta-v2-2-lr3m-3m-belief/run/iteration-0625`.
 - Reads: ladder n=1000/opponent (paired, seed band 50000000), foul-play n=1000
   (search 100 ms/move). Results on the shared PVC under
-  `/shared/scott-experiment/history-truncation-probe-20260721/`.
+  `<private-store>/history-truncation-probe-20260721/`.

@@ -1,0 +1,12 @@
+{
+ "registered_before_measurement": true,
+ "scope": "replay-first triage of the 161 sweep rows left PENDING by reports/c14_cert_sweep_readout.json",
+ "buckets": {
+  "magnitude_pair_majority (74)": "expect mostly instrument-family at sweep scale: kill-split arm values that the mechanical pass paired as plain averages (I2 accounting), roll-window edges, and some echoes of the four new mechanisms on adjacent boundaries; genuine unexplained magnitude gaps would be NEW (candidate-not-finding)",
+  "engine_only_damage_majority (30)": "expect a large share to be Truant rows the signature scan MISSED because it grepped Slaking/Truant but not SLAKOTH; remainder: sim-side miss/immune arms priced differently (accounting)",
+  "accuracy_miss_boundary (7)": "expect matcher accounting on miss-arm component pairing (I2)",
+  "other (50)": "expect minority-leftovers LS shapes filed under roll_scaled (signature threshold misses), attribution ties outside the majority miss, recharge rows missed by the choice-none test, Slakoth"
+ },
+ "discipline": "4-6 row sample per bucket before generalizing; mechanism-signature classification; WHAT-level candidates for anything without a proven WHY",
+ "expected_outcome": "most of the 161 fold into the four new named mechanisms or documented instrument families; NEW fix items beyond the four named are NOT expected but any found are named WHAT-level"
+}

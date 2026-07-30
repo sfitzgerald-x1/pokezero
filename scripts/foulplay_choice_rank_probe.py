@@ -17,8 +17,8 @@ Example:
     POKEZERO_BELIEF_SET_SOURCE=1 python scripts/foulplay_choice_rank_probe.py \\
       --showdown-root /path/to/pokemon-showdown \\
       --capture /tmp/fpmirror/capA.jsonl=FoulPlayA \\
-      --checkpoint /shared/.../original/iteration-0069/transformer-policy.pt=orig-110k \\
-      --checkpoint /shared/.../perturbed/iteration-0007/transformer-policy.pt=pert-110k \\
+      --checkpoint <private-store>/.../original/iteration-0069/transformer-policy.pt=orig-110k \\
+      --checkpoint <private-store>/.../perturbed/iteration-0007/transformer-policy.pt=pert-110k \\
       --pair orig-110k:pert-110k \\
       --out /tmp/foulplay-choice-ranks.json
 """

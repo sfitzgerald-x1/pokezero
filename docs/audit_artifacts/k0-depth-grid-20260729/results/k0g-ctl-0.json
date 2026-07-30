@@ -1,6 +1,6 @@
 {
   "arm": "ctl",
-  "checkpoint": "/shared/scott-experiment/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/transformer-policy.pt",
+  "checkpoint": "<private-store>/v3hist-k0-enthalf-5m-20260724/run/iteration-2519/transformer-policy.pt",
   "checkpoint_sha256": "5ac9d88b26f79f27ac02127d9ec0998d776f4ad17358e60bfac787c47212e772",
   "config": "d4-s1024-b64-w4",
   "depth": 4,

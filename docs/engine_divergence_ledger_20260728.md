@@ -5918,6 +5918,248 @@ relabeled + 2 I1-candidate new rows + 38 limit.**
 
 ---
 
+# Appendix Z11 — Cycle fourteen: the A1 walks, the last engine row dissolves, and the instrument adjudication
+
+Commit `05c4624` (main at #968), fingerprint `3204c777…`, 41 patches, probes 9/9.
+Walked against the c13 re-baseline (`repros_complete: true`, 103/103). Predictions
+pre-registered in `reports/c14_predictions.json` (separate first commit).
+
+## Z11.1 The A1 walks: predicted 5/2/0/0, actual 2/1/0/4 — and both misses taught the walker something
+
+| row | exit | mass |
+|---|---|---|
+| 1500200/47 | **limit** (RELABELED) | 5.86% |
+| 1500217/112 | **limit** (RELABELED) | 11.72% |
+| 1500055/60 | limit_not_established | 0.687% |
+| 1500054/125, 1500108/67, 1500112/40, 1500182/25 | cannot_enumerate | — |
+
+The four refusals share one structural cause, verified per row: a faint-capped
+damage value on a boundary where `calculate_damage` prices the wrong move or
+defender (Sleep Talk callee, or damage into a mid-turn switch-in), so no move
+admits a determinate roll index — X.3.4's licence, quoted per row in
+`reports/c14_walks.json`. The walker previously INFERRED a base there; the
+first sample-of-4 produced two damage_calc verdicts that hand-replay exposed as
+base artifacts, and the walker now refuses instead (predicted-vs-actual scored
+honestly: the split prediction was wrong).
+
+**Kill-split correction (Z10.1), propagated to every verdict.** The engine's
+kill-split non-lethal arm applies `compare_health_with_damage_multiples`' 
+conditional average, not `trunc(0.925·max)`. The walker now derives bases
+through BOTH identities against `calculate_damage`'s maxes and uses the
+engine's float-increment roll ladder. All 7 prior relabels re-verified under
+the corrected derivation — identical verdicts and masses (1500050/33's recorded
+base corrects 63 -> 66, mass unchanged at 6.59%). **1500251/56's c9 damage_calc
+verdict is formally corrected**: true max 135 (kill-split identity, matching
+Z10.1's live verification), observed 116 reachable at 0.215% mass ->
+`limit_not_established`, I1 cap-state shape, instrument lane. The last
+engine-side attributed row dissolves.
+
+## Z11.2 The two Z10.8 I1-candidates: walked per the registered conditional
+
+Replay showed both are roll-divergent capped-tick shapes on clean boundaries
+(not heal-cap shapes) — P2's "formalize without a walk" was wrong, its
+conditional fired. 1500129/46: reachable, 0.343% (two-roll conjunction), keeps
+its label. 1500200/87: reachable at **4.40%** — above the floor, recorded as
+candidate evidence with the demonstration attached, **NOT relabeled** (not a
+member of the sanctioned adjudication set; pre-registered as such).
+
+## Z11.3 The adjudicated frame after this cycle
+
+65 observed outside-limits = **7 relabeled** (5 from c9 + 2 this cycle, every
+demonstration re-verified at 41 patches) + **58 residue**, all attributed:
+
+| lane | rows |
+|---|---|
+| instrument families (I1–I6) | 46 |
+| limit-shape candidates (incl. both I1-walk rows and 1500251/56) | 12 |
+| engine-side | **0** |
+| world-side | **0** |
+
+## Z11.4 Instrument adjudication (the #965-endorsed disjunction, exercised)
+
+**Instrument families are adjudicated rather than fixed because the divergence
+is in the comparison, not the engine.** Per family: I1 heal-cap/cap-state
+shapes (11 incl. 1500028/44 and 1500251/56), I2 matcher accounting +
+legal-set availability (17), I3 roll-inherited exact components (3), I4 mapper
+attribution (4), I5 measurement-boundary truncation (6), I6 Sleep Talk callee
+union (7) — 46 rows plus the 12 limit-shape candidates whose divergence is a
+sampling comparison against a stochastic branch set. Each family's mechanism
+is documented with row identities in `reports/c12_decomposition.json` (bases
+carried, content byte-identity verified through four fix boundaries) and the
+per-row walk evidence in `reports/c9_capped_lethal_walk.json` /
+`reports/c12_walk_rederivation.json` / `reports/c14_walks.json`. For the
+certification claim these families are the documented comparison-limit
+classes: the engine is not wrong on them, and no engine change can clear them.
+
+## Z11.5 GATE: held
+
+Every row attributed; engine-side known divergences all fixed (#967/#968,
+patches 34–41) or formally zero-row (E6 was fixed as patch 41 with its first
+attributed row; no engine-side family retains an attributed row). The
+certification sweep is authorized under its standing requirements.
+
+---
+
+# Appendix Z12 — The certification sweep: 10,000 games, and an honest FAIL
+
+Run per the standing requirements: 8 x 1250 games, seeds `2000000 + k*100000`
+(validated against the full protected-band registry — 26 bands — with this
+sweep's own reservation filed BEFORE launch; the registry and reservations live
+outside this repository); per-shard wheel REBUILD into eight separate venvs + in-shard
+behavioral probes — all 8 gates 9/9 at `3204c777` (41 patches); `--checkpoint`
+retention on every shard (which is what saved the run: the shards died once
+mid-flight and resumed from checkpoint with zero loss, 1081-1149 games each at
+the restart); class-rate table pre-registered in its own commit before launch
+(`reports/c14_sweep_prediction.json`).
+
+## Z12.1 Aggregate, against the pre-registration
+
+| | predicted | observed |
+|---|---|---|
+| diverged | 3433, 95% [2832, 4161] | **3821 — inside the interval** |
+| engine errors | 0 | **0** |
+| coverage (measured fraction) | reported alongside | **0.9773** |
+| retention | complete | **3821/3821, all 8 shards `repros_complete`** |
+
+## Z12.2 VERDICT: **FAIL** under the pre-registered zero-unattributed criterion
+
+3479 of 3821 rows attribute mechanically to documented families (readout
+instrument validated 103/103 on the c13 population before any fresh row was
+read — a validation that, per Z12.6, was structurally blind to absorb shapes):
+1552 documented limit classes, 524 I1, 505 LS shapes, 240 I3, 215 I6, 165 I5,
+166 I4, 112 I2. **342 rows do not attribute** (as amended by the #969 review,
+Z12.6) — and per the pre-registration they are reported, not absorbed:
+
+**Four NEW named mechanisms (183 rows as amended, samples replayed per family):**
+
+| rows | mechanism |
+|---|---|
+| 56 | **recharge-turn residual gap** — on a `\|cant\|<mon>\|recharge` boundary (choice `none`), the engine's branch emits NO end-of-turn residuals; Showdown runs the block (Leftovers, psn tick observed-only at 100%) |
+| 48 | **Truant loaf-phase drift** — Slaking boundaries where the engine's branch loafs when the sim attacked (engine=[] vs observed damage) or vice versa: the world's truant phase is mis-seeded |
+| 45 | **absorb-ability heal fires through Protect** (26 uncapped + 19 capped `_to_full`, per Z12.6) — Showdown blocks the move entirely; the engine emits the Water/Volt Absorb quarter heal anyway (the #944 Protect-gate class, one dispatcher arm wider) |
+| 34 | absorb-ability variants (15 incl. Sleep-Talk-callee misses + 19 heals applied on MISSED moves, per Z12.6) |
+
+**161 rows PENDING replay-first triage** (next cycle's brief, sub-shapes
+counted mechanically): magnitude pairs in the majority miss (74), engine-only
+damage in the majority (30), accuracy-miss boundaries (7), other (50).
+
+## Z12.3 Why 300-game cycles never saw these
+
+The four new families sum to ~1.4% of divergences ≈ 0.014/game; a 300-game
+census expects ~1-4 rows TOTAL across them, and drew ~0 by chance. The
+certification sweep did exactly what a 33x scale-up is for: it priced the tail.
+The residue program's method holds — every one of the 3517 attributed rows
+lands in a family this ledger derived at 300-game scale, the pre-registered
+total interval CONTAINED the observation, and the four new families arrived
+with signatures crisp enough to name from samples. The gate that matters
+stays honest: **zero UNEXPLAINED is the criterion, and 304 rows are currently
+unexplained.** No certification is claimed.
+
+## Z12.4 Artifacts
+
+- `reports/c14_sweep_prediction.json` — pre-registered before launch (separate commit)
+- `reports/c14_cert_sweep_readout.json` — full readout: per-class observed-vs-
+  predicted with Wilson intervals, per-row attribution, the 304 with failure
+  families
+- `scripts/cert_sweep_readout.py` — the attribution instrument (validated
+  103/103 pre-sweep)
+- shard checkpoints/reports retained off-tree (scratchpad `cert/`), seeds
+  2000000-2701249 consumed and filed in the registry
+
+## Z12.5 Triage of the 161 (replay-first, bucket-sampled, pre-registered)
+
+Predictions in `reports/c14_triage_predictions.json` (own commit, first); 4-6 rows
+replayed per bucket before generalizing; full per-row table in
+`reports/c14_cert_sweep_readout.json` (`triage_161`). Scored: the Slakoth
+hypothesis was WRONG (zero Slakoth rows); "most fold into documented families or
+the new mechanisms" held at 101/161.
+
+| rows | verdict |
+|---|---|
+| 58 | LS structural-arm echo — observed shape lives in a sibling arm; majority complains on count (documented comparison family, sweep-scale variant) |
+| 33 | LS crit-arm pairing echo — observed crit outcome paired against the non-crit majority (incl. crit-KO-ends-turn) |
+| 6 + 2 | I4 attribution ties at multi-residual boundaries; I2 window accounting |
+| 2 | absorb-family echoes (join the fix lane's population) |
+| **28** | **CANDIDATE (WHAT): unresolved majority-magnitude gaps** |
+| **12** | **CANDIDATE (WHAT): recoil basis when the hit broke a Substitute** |
+| **11** | **CANDIDATE (WHAT): incapacitated-arm pricing (observed `|cant|` frz / fresh-slp not the engine majority)** |
+| **9** | **CANDIDATE (WHAT): same-turn boost/status boundaries with ratio 0.70-0.96** |
+
+**Updated ledger arithmetic for the 304**: 99 fold into documented comparison
+families; 145 sit in the four NEW named mechanisms (recharge 56, Truant 48,
+absorb-through-Protect 26, absorb variants 15 — fix lanes running); **60 remain
+WHAT-level candidates in four named shapes, WHY open — these are the honest
+unexplained count now**, and at least recoil-vs-Substitute looks engine-side,
+i.e. the 161 DO add candidate fix items beyond the three running lanes.
+
+**Re-sweep readiness**: a fresh certification sweep on unburned blocks needs
+(1) the recharge/absorb/Truant fixes landed with identity-diff verification;
+(2) WHY-level adjudication of the four candidate shapes (60 rows, replay
+evidence retained in the shard checkpoints); (3) the readout instrument taught
+this cycle's sweep-scale signatures so its mechanical coverage starts where
+this one ended (96.9% raw, ~99% after triage). Seeds 2000000-2701249 are
+consumed and registry-filed; the next sweep draws fresh blocks.
+
+## Z12.6 Amendments from the #969 review
+
+**Instrument correction (material):** the I1 `_to_full` signature fired BEFORE
+any absorb check, hiding **38 rows** of the sweep's new absorb mechanisms inside
+documented families — 19 absorb-through-Protect where the heal happened to CAP
+(e.g. 2000377/9) and 19 absorb-on-MISSED-move (e.g. 2000014/84: the engine heals
+in both accuracy arms while the sim rolled the miss). The absorb-shape exclusion
+now precedes the I1 rule in `scripts/cert_sweep_readout.py`; deterministic
+re-run: **UNATTRIBUTED 304 -> 342** (I1 559 -> 524, LS 481 -> 479, I5 166 ->
+165), absorb-through-Protect **45** (26 uncapped + 19 capped), absorb variants
+**34** (15 + 19 missed-move). **The 103/103 validation was structurally blind to
+this signature: c13 contains zero absorb rows** — a validation set can only
+validate the shapes it contains.
+
+**Z12.3 denominator correction:** 143 (now 179) new-mechanism rows are 3.7%
+(4.7%) **of divergences** but ~1.4% (1.8%) **of games**. And "drew ~0 by
+chance" understates what the census could see: the measured per-game rate is
+~1 in 60, i.e. a 300-game census expected ~5 such rows near-unclustered across
+four mechanisms (P per-mechanism ~1.3-1.7%) — thin classes it could plausibly
+miss or file singly, not a fluke of zero.
+
+**Durability:** shard reports, checkpoints, probe logs and the readout are
+archived at `~/workspace/agents/pokezero-agent/cert-sweep-20260730/`; their
+sha256s are committed here so the evidence is pinned even off-tree:
+
+```
+a24719a0e9ce76d6fc630d93ffad2d945d03c43961c1b1947e2cc4d84a2044ac  cert_readout_v2.json
+b4a0d2c2a182e693554b3fbe2b241126d367178319cd6d9f690e28e8d524dd59  cert_shard_0.json
+6819192a8a520923d0e2bba21f3e000ed63f4d7fed4a23a47af20b2d5bcf1e89  cert_shard_0.jsonl
+3259aa315252f505002b5570343f74b2f305ed00f30e1437ad19d081590e2c3a  cert_shard_1.json
+4ff386cfe852d1978776ae00281e5d69c9c5f4635138d57b897efc254d6c81a1  cert_shard_1.jsonl
+8003fbc80d86c7d07b2fbb9f39c521093d047ce98b2cb4c2c9497d0df4722d7b  cert_shard_2.json
+e93269f8aae14fbed41c51c1715e9889b1c522fadd448c590dea410d4cae15e4  cert_shard_2.jsonl
+442417c845c9046d7b7e4855dcdc4cba9d20f17a3acf76a447cddfa61882786c  cert_shard_3.json
+638d460e51cd04ae6559a4d28c290587e070a444d832bcf43c3813268f6e870c  cert_shard_3.jsonl
+486b635854c62e6eecf0eae54c98dcf53f49940404f14b96c9d2ab5994985d0d  cert_shard_4.json
+ac7ff66f252df9f775c16e32fa6f32c3e3a66b13459547e1b2349f5de4752be9  cert_shard_4.jsonl
+5a9e87fd694da86a7fa36a2c8db0f05b424485328769b1729aee7fca28073a95  cert_shard_5.json
+ea207da8ad2ec84b5028fa0ae26ed6f45a37345909fa97c9435cddb4d9a7910a  cert_shard_5.jsonl
+962ac6efd52cd4b689154ac083678ae8ba6e28c96465c1b963c4453cbcb953c4  cert_shard_6.json
+502562b27ba284e9a9ee4fe9eb1094fafc4405ee31ccb4ec507d4aeb460c8099  cert_shard_6.jsonl
+5c0235d98fbc91f72338e51001a4b82506899c46eae3cbdfdfe9d86c5e9e462d  cert_shard_7.json
+7b3e3523ad3bb415c35d6bfa15ca2e88e36a56ab11d13b826314dd37ff4a23ce  cert_shard_7.jsonl
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_0_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_1_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_2_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_3_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_4_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_5_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_6_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_7_probes.log
+```
+
+**Ordering standard (process):** the c14 walk RESULTS were committed one commit
+before the walker CODE that produced them (caught in review). Standing order
+going forward: instrument change first, artifacts it produces second — the same
+separation the prediction-first rule already enforces on the other side.
+
+---
+
 # Appendix Z13 — Truant loaf phase: derived, probed, and 40 of 45
 
 Branch `scott/engine-world-truant-phase`. Parser + `engine_world` only; engine unchanged

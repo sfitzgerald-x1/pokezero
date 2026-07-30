@@ -94,7 +94,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                 "--shard",
                 "0/1",
                 "--json",
-                "/shared/private/audit.json",
+                "<private-store>/private/audit.json",
             ]
             depth_rounds = 0 if stage == "static" else 8
             if depth_rounds:
@@ -162,7 +162,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     "--interaction-registry",
                     "--protocol-fixtures",
                     "--json",
-                    "/shared/private/party.json",
+                    "<private-store>/private/party.json",
                 ]
             ),
         }
@@ -225,7 +225,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                         "120",
                         "--interaction-registry",
                         "--json",
-                        "/shared/private/silent.json",
+                        "<private-store>/private/silent.json",
                     ]
                 ),
             },
@@ -247,7 +247,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                         "120",
                         "--interaction-registry",
                         "--json",
-                        "/shared/private/silent.json",
+                        "<private-store>/private/silent.json",
                     ]
                 ),
             },
@@ -272,7 +272,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                         "--max-decisions",
                         "100000",
                         "--out",
-                        "/shared/private/collision.json",
+                        "<private-store>/private/collision.json",
                     ]
                 ),
             },
@@ -283,7 +283,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                 "schema_version": "pokezero.collision-audit-controller-complete.v1",
                 "status": "clean",
                 "image_digest": IMAGE,
-                "audit_path": "/shared/private/collision.json",
+                "audit_path": "<private-store>/private/collision.json",
                 "audit_sha256": hashlib.sha256(
                     (collision / "audit" / "collision-audit.json").read_bytes()
                 ).hexdigest(),
@@ -324,16 +324,16 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
                     "tag_count": 7,
                     "audit_provenance": [
                         {
-                            "path": "/shared/private/observed-audit.json",
+                            "path": "<private-store>/private/observed-audit.json",
                             "audit_provenance": provenance(
-                                command=["scripts/deep_line_audit.py", "--json", "/shared/private/observed.json"]
+                                command=["scripts/deep_line_audit.py", "--json", "<private-store>/private/observed.json"]
                             ),
                         }
                     ],
                     "learned_policy_census": {"status": "present"},
                 },
                 "audit_provenance": provenance(
-                    command=["scripts/protocol_emission_inventory.py", "--out", "/shared/private/inventory.json"]
+                    command=["scripts/protocol_emission_inventory.py", "--out", "<private-store>/private/inventory.json"]
                 ),
             },
         )
@@ -373,7 +373,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["layers"]["encoding_collision"]["records_scanned"], 100000)
         self.assertEqual(payload["layers"]["encoding_collision"]["input_group_count"], 3)
         self.assertNotIn("registry.example.invalid", serialized)
-        self.assertNotIn("/shared/private", serialized)
+        self.assertNotIn("<private-store>/private", serialized)
         self.assertIn("<artifact-path>", serialized)
 
     def test_publishes_targeted_party_evidence_without_private_paths(self):
@@ -391,7 +391,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["layer"]["terminal_stage"], "party")
         self.assertEqual(payload["layer"]["required_scenario"], "natural_cure_switch")
         self.assertNotIn("registry.example.invalid", serialized)
-        self.assertNotIn("/shared/private", serialized)
+        self.assertNotIn("<private-store>/private", serialized)
 
     def test_targeted_party_cli_mode(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -615,7 +615,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             coverage = self._coverage_root(root)
             audit_path = coverage / "static" / "shards" / "shard-00" / "audit.json"
             audit = json.loads(audit_path.read_text(encoding="utf-8"))
-            audit["audit_provenance"]["seed_range"] = {"start": "/shared/private", "end": 3}
+            audit["audit_provenance"]["seed_range"] = {"start": "<private-store>/private", "end": 3}
             write_json(audit_path, audit)
 
             with self.assertRaisesRegex(ValueError, "seed start"):
@@ -650,11 +650,11 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             [
                 "scripts/protocol_emission_inventory.py",
                 "--observed-audit",
-                "/shared/private/census.json",
+                "<private-store>/private/census.json",
                 "--observed-kind",
                 "learned-selfplay",
                 "--out",
-                "/shared/private/inventory.json",
+                "<private-store>/private/inventory.json",
             ],
             label="inventory command",
         )
@@ -678,7 +678,7 @@ class PublishV3AuditEvidenceTests(unittest.TestCase):
             coverage = self._coverage_root(root)
             summary_path = coverage / "static" / "summary.json"
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            summary["uncovered"]["moves"] = ["/shared/private"]
+            summary["uncovered"]["moves"] = ["<private-store>/private"]
             write_json(summary_path, summary)
             complete_path = coverage / "complete.json"
             complete = json.loads(complete_path.read_text(encoding="utf-8"))
