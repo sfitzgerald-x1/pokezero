@@ -6280,3 +6280,93 @@ engine and sim agree on who loafed and disagree on whether the end-of-turn block
 recharge-residual-gap family is therefore **broader than `|cant| recharge`** — it is any
 `|cant|` boundary. My signature filter mis-bucketed them, which also explains part of the
 44-vs-48 gap.
+
+---
+
+# Appendix Z14 — WHY-adjudication of two sweep shapes (and a refused ownership)
+
+Branch `scott/c15-why-adjudication`. Engine 41 patches, fingerprint `3204c777dec347aa`,
+unchanged — this round is adjudication, not repair.
+
+**Scope honesty up front: two of the four assigned shapes are adjudicated here.**
+`CAND_unresolved_magnitude` (28 rows) and `CAND_same_turn_stat_event_gap` (9 rows) were NOT
+sampled and carry no verdict from me. They are listed so the next reader knows the boundary of
+this appendix rather than inferring coverage from its title.
+
+## Z14.1 CAND_recoil_vs_substitute_basis (12 rows) — WHY established, engine lane
+
+**Derived from source, then confirmed by replay.** gen3 has no `substitute` override, so the
+condition resolves UP to **gen4's** (`data/mods/gen4/moves.ts:1283`), whose
+`onTryPrimaryHit` does:
+
+```js
+if (damage > target.volatiles['substitute'].hp) {
+    damage = target.volatiles['substitute'].hp;      // CLAMP to what the sub had left
+}
+...
+if (move.recoil && damage) {
+    this.damage(this.actions.calcRecoilDamage(damage, move, source), source, target, 'recoil');
+}
+return this.HIT_SUBSTITUTE;                          // === 0 (sim/battle.ts:273)
+```
+
+Three facts compose the rule:
+
+1. **The recoil basis is the CLAMPED damage** — what the Substitute actually absorbed, not the
+   damage the move would have dealt. Recoil is applied *inside* the Substitute handler.
+2. **`HIT_SUBSTITUTE === 0`**, so `move.totalDamage` is falsy and the outer recoil block
+   (`gen3/scripts.ts:460`) does not fire. There is no double-application.
+3. **gen3 owns `calcRecoilDamage`** (`data/mods/gen3/scripts.ts:480`) and uses **`Math.floor`**
+   where base uses `Math.round`, min-clamped to 1.
+
+**WHY:** the engine computes recoil from the FULL damage; gen3 computes it from the damage
+clamped to the Substitute's remaining HP. The gap is therefore largest exactly when a hit
+overkills a nearly-empty Substitute — which is most sub-breaking hits.
+
+Row evidence (Double-Edge, recoil 1/3):
+
+| row | Showdown | engine | implies |
+| --- | --- | --- | --- |
+| 2000031/60 | **-10** = floor(31/3) | **-21** = floor(63/3) | sub had 31 left; engine used the full ~63 |
+| 2100227/35 | **-1** (min-1 clamp) | **-19** = floor(57/3) | sub nearly empty; engine used the full ~57 |
+
+**Predicted clearance if fixed: all 12**, and the signature is a magnitude mechanism (a wrong
+number inside an otherwise-correct branch), so by the Z6.4 rule expect them to clear IN PLACE
+with no scatter — and expect NO bonus clears from other families.
+
+**Lane: engine (damage patch).** Not implemented here, per the brief.
+
+## Z14.2 CAND_incapacitated_arm_pricing (11 rows) — REFUSED: not the world's
+
+The brief's hypothesis was the hidden-duration support gating
+(`approximate_hidden_duration_volatiles`), i.e. one of my own four one-consumer candidates.
+**Replay says it is not.** Two rows, two different mechanisms, and in both the world is right:
+
+**2000131/47 — freeze.** Omastar is frozen; Showdown emits `|cant|...|frz`. The world seeded
+it correctly: `pre_features p1_status = FREEZE`. The engine's branch set is a 93.75/6.25 CRIT
+split with no 80/20 freeze arm at all, and its majority has the frozen mon attacking for 59.
+The world told the engine the truth and the engine did not gate on it.
+
+**2000281/99 — fresh sleep.** Umbreon is slept by Lovely Kiss *during the turn* and then
+`|cant|...|slp`. The world correctly has `p1_status = NONE` at the boundary, because the sleep
+did not exist yet. The engine applies the sleep and then still lets Umbreon move. This is the
+same-turn shape as the Encore redirect: a status applied by the first mover must gate the
+second mover's move within the same turn.
+
+**Neither is a world-seeding or hidden-counter gap**, so I am not taking this one. The world
+is supplying correct state in both directions — an already-frozen mon and a not-yet-asleep
+mon — and the divergence is downstream of it. Filing it in my lane would have produced a fix
+that seeds something already seeded.
+
+**Lane: engine (incapacitation gating).** Sub-shapes for whoever takes it: (a) the freeze arm
+not firing on a correctly-seeded FREEZE, (b) same-turn status not gating the second mover.
+Predicted clearance is therefore split across two fixes, not one.
+
+## Z14.3 The pattern this round adds
+
+Both adjudications moved a shape OUT of the lane its WHAT suggested. The recoil rows looked
+like a damage-roll family and are an inheritance-chain question about which mod owns
+`substitute`; the incapacitated rows looked like a hidden-counter family and are two engine
+gating bugs. **A WHAT names where a divergence is VISIBLE; the lane follows from the WHY, and
+the two are routinely different** — this is the fourth consecutive round where the documented
+WHY pointed at the wrong lane or the wrong cause.
