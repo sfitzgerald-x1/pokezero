@@ -1073,10 +1073,20 @@ def _build_side_spec(
         # without it, searched worlds hand the recharging mon a free action.
         volatiles = volatiles + ["mustrecharge"]
         supported = supported | {"mustrecharge"}
-    if truant_loafs:
-        # Truant phase is publicly derivable (acted last round -> loafs now).
-        # The engine models the alternation once seeded with the volatile;
-        # without it every sampled world has Slaking about to act.
+    # Truant phase. The PAYLOAD value wins when present: the parser tracks the sim's own
+    # free-running toggle (`onResidual` flips `truantTurn` every turn unconditionally, seeded
+    # at switch-in by `this.turn !== 0`), whereas the `truant_loafs` argument is a caller-side
+    # "acted last round -> loafs now" proxy. The proxy agrees with the bit until the first
+    # turn a holder is stopped from moving by something OTHER than Truant -- sleep, paralysis,
+    # flinch, freeze, recharge, a switch -- after which it is inverted for the rest of the
+    # stint. That single failure produced the 48-row loaf-phase family.
+    #
+    # `None` means genuinely unknown (no holder, or a truncated prefix whose switch-in was
+    # never seen) and falls back to the caller's value, preserving previous behaviour rather
+    # than asserting an acting phase we cannot support.
+    payload_phase = side_payload.get("truantPhase")
+    loafs = bool(payload_phase) if isinstance(payload_phase, bool) else bool(truant_loafs)
+    if loafs:
         volatiles = volatiles + ["truant"]
         supported = supported | {"truant"}
     unsupported = sorted(set(volatiles) - supported)
