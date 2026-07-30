@@ -1,0 +1,58 @@
+{
+  "schema": "pokezero.c17.matcher-final-results.v1",
+  "prediction_commit": "49dfb6c",
+  "implementation_commit": "cb67a28",
+  "implementation_after_prediction": true,
+  "scope": "Event-aware strict-matcher legal-roll support only. No engine behavior, exact-component comparison, divergence attribution, or class-routing rule changed.",
+  "verification": {
+    "pre_implementation_test": {
+      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher",
+      "exit_code": 1,
+      "result": "Expected failure: ImportError for the not-yet-implemented branch_event_legal_rolls helper."
+    },
+    "post_implementation_tests": [
+      {
+        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher",
+        "result": "pass, 40 tests"
+      },
+      {
+        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m py_compile scripts/engine_transition_differential.py tests/test_transition_differential_matcher.py",
+        "result": "pass"
+      },
+      {
+        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_public_invariant",
+        "result": "pass, 1 test"
+      }
+    ]
+  },
+  "retained_row_rereads": [
+    {
+      "identity": {
+        "seed": 2300552,
+        "step": 117
+      },
+      "current_verdict": "matched",
+      "controlled_support": {
+        "pre_state": [24, 25, 26, 27, 28, 29],
+        "post_calm_mind_branch": [21, 22, 23, 24, 25],
+        "observed_direct_damage": 21
+      },
+      "readout": "The branch-local support contains the observed value. This current-build reread was already matched, so it is mechanism confirmation rather than an aggregate-clearance claim."
+    },
+    {
+      "identity": {
+        "seed": 2600362,
+        "step": 82
+      },
+      "current_verdict": "diverged",
+      "controlled_support": {
+        "pre_state": [20, 21, 22, 23, 24],
+        "post_switch_branch": [21, 22, 23, 24, 25],
+        "observed_direct_damage": 21
+      },
+      "remaining_miss": "exact poison residual: observed -126 versus engine -119",
+      "readout": "The direct-damage legality is now branch-local, while the independent exact residual disagreement remains divergent and un-reclassified."
+    }
+  ],
+  "residual_risk": "The mapper provides only completed branch post_state, not a native pre-damage state snapshot. The correction is intentionally restricted to branches whose switch/boost/unboost is visibly before direct damage and remains an additional roll-membership accept path; a future native prefix-state API could make the support proof exact for mechanics whose own damage changes later state."
+}
