@@ -225,7 +225,14 @@ class CertificationContractTests(unittest.TestCase):
             "readout_sha256": readout._sha256(Path(readout.__file__)),
         }
 
-    def _run(self, root: Path, *, contract: dict | None = None, manifest: dict | None = None) -> dict:
+    def _run(
+        self,
+        root: Path,
+        *,
+        contract: dict | None = None,
+        manifest: dict | None = None,
+        legacy_opt_out: bool = False,
+    ) -> dict:
         paths = [root / "shard-0.json", root / "shard-1.json"]
         contract_path = root / "contract.json"
         manifest_path = root / "manifest.json"
@@ -235,18 +242,19 @@ class CertificationContractTests(unittest.TestCase):
             json.dumps(manifest or self._manifest(paths, contract_path)), encoding="utf-8"
         )
         with patch.object(readout, "_current_runtime_provenance", return_value=self._runtime()):
-            exit_code = readout.main(
-                [
-                    "--shards",
-                    *(os.fspath(path) for path in paths),
-                    "--prediction",
-                    os.fspath(contract_path),
-                    "--execution-manifest",
-                    os.fspath(manifest_path),
-                    "--json",
-                    os.fspath(output_path),
-                ]
-            )
+            argv = [
+                "--shards",
+                *(os.fspath(path) for path in paths),
+                "--prediction",
+                os.fspath(contract_path),
+                "--execution-manifest",
+                os.fspath(manifest_path),
+                "--json",
+                os.fspath(output_path),
+            ]
+            if legacy_opt_out:
+                argv.append("--legacy-opt-out")
+            exit_code = readout.main(argv)
         payload = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(exit_code, 0 if payload["verdict"] == "PASS" else 1)
         return payload
@@ -326,6 +334,21 @@ class CertificationContractTests(unittest.TestCase):
         self.assertTrue(any("certification gates are absent" in failure for failure in failures))
         self.assertEqual(evidence["enforcement_status"], "refused-final-contract")
         self.assertFalse(evidence["legacy_opt_out"])
+
+    def test_malformed_gates_cannot_pass_full_readout_via_legacy_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = {
+                "certification_gates": [],
+                "legacy_contract_opt_out": True,
+            }
+            payload = self._run(root, contract=contract, legacy_opt_out=True)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertEqual(payload["enforcement_status"], "refused-final-contract")
+        self.assertIn("certification gates are absent", payload["gate_failures"][0])
 
     def test_unregistered_legacy_requires_two_explicit_opt_ins(self) -> None:
         contract = {"legacy_contract_opt_out": True}
