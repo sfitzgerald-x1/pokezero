@@ -1091,6 +1091,13 @@ class ShowdownReplayState:
     #     ``|move|`` line, which is the public discriminator used below.
     # Derived ONLY from public protocol lines — no engine-side hidden state.
     last_used_move: Mapping[str, str] = field(default_factory=dict)
+    # Public Substitute-health provenance for the active slot. ``full`` is
+    # exact immediately after ``-start Substitute``; ``unknown`` means a
+    # non-breaking hit was publicly announced but its absorbed amount was not;
+    # ``broken`` is exact immediately after ``-end Substitute``. This stays
+    # distinct from volatile presence because an active Substitute can exist
+    # while its remaining HP is not public.
+    substitute_health_state: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1242,6 +1249,7 @@ class _ReplayParser:
         self.side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
+        self.substitute_health_state: dict[str, str] = {"p1": "absent", "p2": "absent"}
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
@@ -1310,6 +1318,10 @@ class _ReplayParser:
         parser.boosts = {slot: dict(snapshot.boosts.get(slot, {})) for slot in ("p1", "p2")}
         parser.volatiles = {
             slot: set(snapshot.volatiles.get(slot, ())) for slot in ("p1", "p2")
+        }
+        parser.substitute_health_state = {
+            slot: str(snapshot.substitute_health_state.get(slot, "absent"))
+            for slot in ("p1", "p2")
         }
         parser.direct_materialization_blockers = {
             slot: set(snapshot.direct_materialization_blockers.get(slot, ()))
@@ -1493,6 +1505,11 @@ class _ReplayParser:
                     self.volatiles[pokemon.showdown_slot] = set()
                     self.direct_materialization_blockers[pokemon.showdown_slot].clear()
                     self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
+                # The existing Baton-Pass path deliberately declines to
+                # materialize a passed Substitute: its HP belongs to the
+                # passer and cannot be reconstructed for the recipient. Keep
+                # this provenance surface aligned with that fail-closed world.
+                self.substitute_health_state[pokemon.showdown_slot] = "absent"
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
@@ -1627,6 +1644,7 @@ class _ReplayParser:
         self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
+        _update_substitute_health_state(parts, self.substitute_health_state)
         self._update_live_type_override(parts)
         self._update_traced_ability(parts, line)
         self._anchor_truant_phase(parts, line)
@@ -2124,6 +2142,7 @@ class _ReplayParser:
             },
             boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
+            substitute_health_state=dict(self.substitute_health_state),
             direct_materialization_blockers={
                 slot: tuple(sorted(blockers))
                 for slot, blockers in self.direct_materialization_blockers.items()
@@ -3094,6 +3113,33 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
         volatiles[slot].add(name)
     else:
         volatiles[slot].discard(name)
+
+
+def _update_substitute_health_state(
+    parts: Sequence[str], substitute_health_state: dict[str, str]
+) -> None:
+    """Track the public knowledge state of an active Substitute's HP.
+
+    Showdown publishes the creation rule and a break, but a non-breaking hit
+    exposes no absorbed amount. The middle state must therefore remain unknown
+    to direct-world construction.
+    """
+
+    if len(parts) < 4:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in substitute_health_state:
+        return
+    event_type = parts[1]
+    name = _side_condition_identifier(parts[3])
+    if name != "substitute":
+        return
+    if event_type == "-start":
+        substitute_health_state[slot] = "full"
+    elif event_type == "-activate":
+        substitute_health_state[slot] = "unknown"
+    elif event_type == "-end":
+        substitute_health_state[slot] = "broken"
 
 
 # Delayed-damage moves (Future Sight / Doom Desire): used on one turn, they land on the target's

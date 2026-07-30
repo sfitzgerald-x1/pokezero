@@ -26,9 +26,10 @@ Design points that make this different from
   the gate are reported separately as world-construction divergences, so
   constructor error is never charged to the engine's transition model (and
   never silently passes either).
-* **Fail-closed skips are counted, not hidden.** ``EngineWorldUnsupported``
+* **Fail-closed outcomes are counted, not hidden.** ``EngineWorldUnsupported``
   reasons, single-seat (force-switch) boundaries and unmappable choices each
-  get their own counted bucket.
+  get their own counted bucket. Public-information limits use their existing
+  ``limit:*`` family rather than masquerading as an engine transition result.
 
 Matching reuses the shipped matchers: exact boost-delta filter
 (:func:`pokezero.engine_fidelity_multiturn.observed_boost_deltas`), then exact
@@ -731,6 +732,14 @@ def hidden_counter_recovery(error: EngineWorldUnsupported) -> str | None:
         if part.strip()
     }
     return "confusion" if names == {"confusion"} else None
+
+
+def world_construction_limit(error: EngineWorldUnsupported) -> str | None:
+    """Return a named comparison limit for public state that cannot be known."""
+
+    if error.reason == "substitute_health_unknown":
+        return "limit:world_substitute_health_unknown"
+    return None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1459,6 +1468,9 @@ def _prepare_boundary(
         world = _build(approximate_sleep_turns=approximate_sleep, hidden_volatiles=False)
         specs = [world.spec]
     except EngineWorldUnsupported as error:
+        if limit := world_construction_limit(error):
+            counts[limit] += 1
+            return None
         mechanic = hidden_counter_recovery(error) if hidden_counter_support else None
         if mechanic is None:
             counts[f"skip:world_unsupported:{error.reason}"] += 1

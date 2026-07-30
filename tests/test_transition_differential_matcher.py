@@ -21,7 +21,22 @@ from engine_transition_differential import (  # noqa: E402
     classify_divergence,
     damage_components,
     roll_components_agree,
+    world_construction_limit,
 )
+from pokezero.engine_world import EngineWorldUnsupported  # noqa: E402
+
+
+class WorldConstructionLimits(unittest.TestCase):
+    def test_unknown_substitute_health_is_a_named_limit(self):
+        error = EngineWorldUnsupported("substitute_health_unknown", "public hit without amount")
+        self.assertEqual(
+            world_construction_limit(error),
+            "limit:world_substitute_health_unknown",
+        )
+
+    def test_other_world_errors_remain_non_limit_skips(self):
+        error = EngineWorldUnsupported("payload_malformed", "bad payload")
+        self.assertIsNone(world_construction_limit(error))
 
 
 class HealToFullTolerance(unittest.TestCase):

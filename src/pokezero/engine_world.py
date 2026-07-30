@@ -384,6 +384,11 @@ def battle_spec_from_payload(
     the item). A species named by BOTH signals is contradictory belief state
     and fails closed. Raises :class:`EngineWorldUnsupported` whenever the
     position holds public state this construction cannot express exactly.
+
+    ``substituteHealthState`` is the replay's public Substitute provenance:
+    only ``"full"`` can build an active Substitute. The protocol does not
+    expose damage absorbed by a non-breaking hit, so ``"unknown"`` is a
+    deliberate fail-closed comparison limit rather than an approximation.
     """
 
     _reject_unsupported_globals(payload)
@@ -1110,10 +1115,26 @@ def _build_side_spec(
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
     substitute_health = 0
+    substitute_health_state = normalize_id(
+        str(side_payload.get("substituteHealthState") or "")
+    )
     if "substitute" in volatiles:
-        # Public info does not carry the sub's remaining HP; a fresh sub costs
-        # maxhp/4, so that is the documented upper-bound approximation.
+        # A freshly-created Substitute is public-exact at floor(maxhp / 4).
+        # A non-breaking hit does not reveal its absorbed amount, so replaying
+        # it as full would silently construct a false world.
+        if substitute_health_state != "full":
+            raise EngineWorldUnsupported(
+                "substitute_health_unknown",
+                f"side {slot!r} has active Substitute with public state "
+                f"{substitute_health_state or 'missing'!r}",
+            )
         substitute_health = party[active_index].maxhp // 4
+    elif substitute_health_state not in {"", "absent", "broken"}:
+        raise EngineWorldUnsupported(
+            "payload_malformed",
+            f"side {slot!r} has no Substitute volatile but health state "
+            f"{substitute_health_state!r}",
+        )
 
     boosts: dict[str, int] = {}
     for key, value in (side_payload.get("boosts") or {}).items():

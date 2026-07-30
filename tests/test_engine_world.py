@@ -452,16 +452,41 @@ class BattleSpecConstructionTests(unittest.TestCase):
         # exactly this surface (seed-7001 bench repro).
         self.assertEqual(world.party_species["p2"], ("unownc",))
 
-    def test_substitute_supported_only_with_approximation_flag(self) -> None:
+    def test_substitute_requires_publicly_known_health_state(self) -> None:
         payload = _payload(self.dex)
         payload["sides"]["p2"]["volatiles"] = ["Substitute"]
         self._assert_reason(payload, "volatile_unsupported")
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_substitute_health=True
+            )
+        self.assertEqual(caught.exception.reason, "substitute_health_unknown")
+
+        payload["sides"]["p2"]["substituteHealthState"] = "full"
         world = battle_spec_from_payload(
             payload, _override(), dex=self.dex, approximate_substitute_health=True
         )
         side = world.spec.side_two
         self.assertIn("substitute", side.volatile_statuses)
         self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
+
+        payload["sides"]["p2"]["volatiles"] = []
+        payload["sides"]["p2"]["substituteHealthState"] = "broken"
+        broken = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        ).spec.side_two
+        self.assertNotIn("substitute", broken.volatile_statuses)
+        self.assertEqual(broken.substitute_health, 0)
+
+    def test_substitute_unknown_after_public_hit_fails_closed(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "unknown"
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_substitute_health=True
+            )
+        self.assertEqual(caught.exception.reason, "substitute_health_unknown")
 
     def test_sleep_approximation_flag(self) -> None:
         payload = _payload(self.dex)

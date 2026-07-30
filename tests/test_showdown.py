@@ -1914,6 +1914,30 @@ class Phase2DynamicStateTest(unittest.TestCase):
             live.direct_materialization_blockers["p2"],
         )
 
+    def test_substitute_public_health_state_tracks_creation_hit_and_break(self) -> None:
+        parser = _ReplayParser()
+        parser.feed(
+            [
+                "|switch|p1a: Swampert|Swampert, L84|300/300",
+                "|switch|p2a: Snorlax|Snorlax, L80|400/400",
+                "|-start|p2a: Snorlax|Substitute",
+            ]
+        )
+        fresh = parser.snapshot()
+        self.assertEqual(fresh.substitute_health_state["p2"], "full")
+        self.assertEqual(fresh.volatiles["p2"], ("substitute",))
+
+        restored = _ReplayParser.from_snapshot(fresh)
+        restored.feed(["|-activate|p2a: Snorlax|Substitute|[damage]"])
+        hit = restored.snapshot()
+        self.assertEqual(hit.substitute_health_state["p2"], "unknown")
+        self.assertEqual(hit.volatiles["p2"], ("substitute",))
+
+        restored.feed(["|-end|p2a: Snorlax|Substitute"])
+        broken = restored.snapshot()
+        self.assertEqual(broken.substitute_health_state["p2"], "broken")
+        self.assertEqual(broken.volatiles["p2"], ())
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.
