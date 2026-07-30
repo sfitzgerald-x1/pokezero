@@ -301,7 +301,30 @@ fn move_order(state: &State, c1: &Choice, c2: &Choice) -> Order {
 }
 
 /// Replica of the private `end_of_turn_triggered`.
-fn end_of_turn_triggered(s1: &MoveChoice, s2: &MoveChoice) -> bool {
+///
+/// Mirrors the engine's recharge-turn-residuals patch: a (switch, None) ply
+/// where the None side still carries MUSTRECHARGE is a full turn — the engine
+/// now emits the whole end-of-turn block on it, so segmentation must expect
+/// an end-of-turn phase there (previously these plies ended at the volatile
+/// removal and the residual instructions failed the grammar as
+/// `segmentation_failed`).
+fn end_of_turn_triggered(state: &State, s1: &MoveChoice, s2: &MoveChoice) -> bool {
+    if state.side_one.force_switch || state.side_two.force_switch {
+        return true;
+    }
+    if (s1 == &MoveChoice::None
+        && state
+            .side_one
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::MUSTRECHARGE))
+        || (s2 == &MoveChoice::None
+            && state
+                .side_two
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::MUSTRECHARGE))
+    {
+        return true;
+    }
     !(matches!(s1, MoveChoice::Switch(_)) && s2 == &MoveChoice::None)
         && !(s1 == &MoveChoice::None && matches!(s2, MoveChoice::Switch(_)))
 }
@@ -342,7 +365,7 @@ fn segment(
         Order::Tie => vec![Order::SideOne, Order::SideTwo],
         other => vec![other],
     };
-    let eot = end_of_turn_triggered(s1_move, s2_move);
+    let eot = end_of_turn_triggered(state, s1_move, s2_move);
 
     for order in orders {
         let (first_ref, mut first_choice, mut second_choice) = match order {
@@ -669,7 +692,7 @@ pub fn render_branch_events(
     out.lines.push("|".to_string());
 
     // Replacement / pivot plies ((switch, none) shapes): no end-of-turn phase.
-    let eot_triggered = end_of_turn_triggered(s1_move, s2_move);
+    let eot_triggered = end_of_turn_triggered(state, s1_move, s2_move);
     // For (switch, none) shapes: was the switching side's active already
     // fainted (faint replacement — the faint ply already ran residuals +
     // upkeep) or alive (pivot — the engine never runs the pivot turn's
@@ -1481,7 +1504,6 @@ fn render_move_phase(
         && !non_ghost_curse
         && ability_immune.is_none()
         && !deals_damage_to_defender
-        && !defender_protected
         && effectiveness > 0.0
         && choice.accuracy < 100.0
     {
@@ -1806,6 +1828,19 @@ fn render_move_phase(
                 }
             }
             Instruction::Heal(heal) => {
+                if heal.heal_amount == 0 && heal.side_ref == defender {
+                    if defender_protected {
+                        out.lines
+                            .push(format!("|-activate|{defender_ident}|Protect"));
+                    } else if let Some(ability) = absorb {
+                        out.lines.push(format!(
+                            "|-immune|{defender_ident}|[from] ability: {ability}"
+                        ));
+                    } else {
+                        out.lossy.push("unattributed_noop_heal_marker".to_string());
+                    }
+                    continue;
+                }
                 sim.apply(ins);
                 let target_ident = ctx.active_ident(sim.state, heal.side_ref);
                 let condition = sim.hp_condition(heal.side_ref);
@@ -2682,7 +2717,7 @@ pub fn branch_events(
         branches.push(obj);
     }
     let report = serde_json::json!({
-        "end_of_turn": end_of_turn_triggered(&s1, &s2),
+        "end_of_turn": end_of_turn_triggered(&state, &s1, &s2),
         "branches": branches,
     });
     serde_json::to_string(&report)
@@ -2701,6 +2736,17 @@ mod tests {
             turn: 4,
             hp_percent: [false, false],
         }
+    }
+
+    #[test]
+    fn force_switch_keeps_end_of_turn_open() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.force_switch = true;
+        assert!(end_of_turn_triggered(
+            &state,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            &MoveChoice::None,
+        ));
     }
 
     #[test]

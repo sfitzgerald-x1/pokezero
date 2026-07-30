@@ -123,6 +123,36 @@ class BranchEventsTest(unittest.TestCase):
         self.assertIn("|[miss]", miss_text)
         self.assertIn("|-miss|p1a: Rattata|p2a: Chansey", miss_text)
 
+    def test_full_hp_absorb_keeps_public_hit_and_miss_histories(self) -> None:
+        state = _build_state(
+            ("hydropump",),
+            ("splash",),
+            s2_ability="waterabsorb",
+            s2_hp=100,
+            s2_maxhp=100,
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "hydropump", "splash", CTX, True, False)
+        )
+        by_pct = {round(branch["percentage"]): branch for branch in report["branches"]}
+        self.assertIn("|-immune|p2a: Chansey|[from] ability: Water Absorb", by_pct[80]["events"])
+        self.assertIn("|-miss|p1a: Rattata|p2a: Chansey", by_pct[20]["events"])
+
+    def test_inaccurate_move_into_protect_keeps_public_hit_and_miss_histories(self) -> None:
+        state = _build_state(
+            ("hydropump",),
+            ("protect",),
+            s2_ability="waterabsorb",
+            s2_hp=100,
+            s2_maxhp=100,
+        )
+        report = json.loads(
+            pokezero_search.branch_events(state, "hydropump", "protect", CTX, True, False)
+        )
+        by_pct = {round(branch["percentage"]): branch for branch in report["branches"]}
+        self.assertIn("|-activate|p2a: Chansey|Protect", by_pct[80]["events"])
+        self.assertIn("|-miss|p1a: Rattata|p2a: Chansey", by_pct[20]["events"])
+
     def test_fold_input_contract_ascii_integers(self) -> None:
         # fold.rs input contract: hp fields are plain ASCII integers.
         for branch in self.branches("seismictoss", "splash")["branches"]:
