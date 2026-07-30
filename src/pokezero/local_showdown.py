@@ -2098,6 +2098,7 @@ def _public_materialization_payload(
             belief_snapshot.side(player),
             blockers,
         )
+        _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
         sides[player] = {
             "pokemon": rows,
@@ -2260,6 +2261,36 @@ def _pokemon_materialization_row(pokemon: ShowdownPokemon) -> dict[str, Any]:
         "condition": pokemon.condition,
         "active": pokemon.active,
     }
+
+
+def _apply_traced_ability_materialization_state(
+    rows: list[dict[str, Any]],
+    traced: str | None,
+) -> None:
+    """Attach the ability the ACTIVE mon is currently borrowing via Trace.
+
+    A sampled set's ability is the battle-start assignment, and for almost every mon that
+    stays true. Trace does not: the holder publicly copies the opponent's ability, and a world
+    rebuilt from the sampled set hands the engine `TRACE`, playing the mon without the copied
+    ability at all -- damaging straight through a traced Flash Fire immunity, for instance.
+
+    **Only the active mon, and only the CURRENT trace.** The first version of this read
+    `belief.revealed_ability`, which is the right field for an ability a mon merely revealed
+    (persistent) and the wrong one for a traced ability (transient: re-fired on every
+    switch-in, dropped on switch-out). That version stamped the LAST ability the mon had ever
+    traced, which handed a Gardevoir `levitate` from an earlier switch-in and silently granted
+    it Spikes immunity -- turning a fix into a two-row regression. The parser now tracks the
+    live copy and clears it on switch-out; this consumes that.
+
+    Only the ability FIELD is seeded. gen3 does not fire the copied ability's Start event on
+    acquisition (#962 patch 32), so no activation is simulated here.
+    """
+
+    if not traced:
+        return
+    for row in rows:
+        if row.get("active"):
+            row["revealedAbility"] = normalize_id(str(traced))
 
 
 def _apply_public_item_materialization_state(
