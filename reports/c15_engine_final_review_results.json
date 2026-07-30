@@ -1,0 +1,34 @@
+{
+  "purpose": "Results for the final independent engine review corrections",
+  "chronology": {
+    "prediction_commit": "82d5f51",
+    "implementation_after_prediction": true
+  },
+  "findings": {
+    "reread_error_exit_status": "fixed: any reread_error exits nonzero",
+    "retained_identity_completeness": "fixed: duplicate or malformed seed/step identities are rejected",
+    "focused_test_accounting": "fixed: 29 focused fidelity tests and 1 public-invariant test are reported separately",
+    "patch_whitespace": "fixed: equivalent blank-line replacements preserve source while git diff --check passes"
+  },
+  "prediction_score": {
+    "reread_error_exit_status": "confirmed",
+    "retained_identity_completeness": "confirmed",
+    "focused_test_accounting": "partial: prediction expected 27 focused tests; two new negative contract tests raised the measured total to 29",
+    "patch_whitespace": "confirmed"
+  },
+  "build": {
+    "patch_count": 45,
+    "fingerprint": "0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10",
+    "python_builder": "PASS: every patch applied with fuzz=0",
+    "vendored_builder": "PASS: every patch applied with fuzz=0",
+    "fixture_refresh_last": true
+  },
+  "verification": {
+    "focused_python_fidelity": "29/29 PASS",
+    "public_invariant": "1/1 PASS",
+    "behavioral_probes": "9/9 PASS",
+    "rust_release_suite": "289/289 PASS",
+    "git_diff_check": "PASS"
+  },
+  "scope_boundary": "This hardens retained-population evidence and patch packaging. It does not replace the fresh 10k zero-unattributed certification sweep."
+}

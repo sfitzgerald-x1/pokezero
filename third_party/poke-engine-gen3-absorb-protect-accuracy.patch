@@ -37,7 +37,8 @@
                      target: MoveTarget::Opponent,
 @@ -850,8 +869,14 @@
              let activate = attacker_choice.move_type == PokemonType::ELECTRIC;
- 
+-
++
              if activate {
 +                // (same Protect/accuracy preservation as WATERABSORB above —
 +                // the explicit accuracy = 100 here was the miss half of the

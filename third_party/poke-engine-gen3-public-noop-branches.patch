@@ -1,6 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -1145,6 +1145,16 @@
+@@ -1145,5 +1145,15 @@
          });
          target_pkmn.hp += health_recovered;
          incoming_instructions.instruction_list.push(ins);
@@ -16,7 +16,6 @@
 +            }));
      }
  }
- 
 @@ -1821,7 +1831,11 @@
          .contains(&PokemonVolatileStatus::PROTECT)
          && choice.flags.protect
@@ -45,6 +44,7 @@
 +                heal_amount: 0,
 +            }));
 +    }
- 
+-
++
      if incoming_instructions.percentage == 0.0 {
          state.reverse_instructions(&incoming_instructions.instruction_list);

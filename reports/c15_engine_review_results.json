@@ -6,7 +6,7 @@
   },
   "build": {
     "patch_count": 45,
-    "fingerprint": "7376b4dcd9c30d373baa7305d3d7237bbdcf17a7e5887c64af4ad7d9612fcf99",
+    "fingerprint": "0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10",
     "python_builder": "PASS: every patch applied with fuzz=0",
     "vendored_builder": "PASS: every patch applied with fuzz=0",
     "fixture_refresh_last": true
@@ -36,7 +36,8 @@
     }
   },
   "verification": {
-    "focused_python": "28/28 PASS",
+    "focused_python": "29/29 PASS",
+    "public_invariant": "1/1 PASS",
     "rust_release_suite": "289/289 PASS",
     "behavioral_probes": "9/9 PASS",
     "force_switch_mapper_pin": "PASS"

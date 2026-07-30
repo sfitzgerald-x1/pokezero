@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "cert_sweep_reread.py"
 
@@ -84,6 +85,34 @@ class RetainedInputContractTests(unittest.TestCase):
                 f"{directory}/cert_shard_*.json", expected_rows=2,
             )
         self.assertEqual(loaded, rows)
+
+    def test_duplicate_transition_identity_cannot_satisfy_expected_count(self) -> None:
+        rows = [
+            {"kind": "transition_diverged", "seed": 1, "step": 2},
+            {"kind": "transition_diverged", "seed": 1, "step": 2},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            self._write_shard(directory, "cert_shard_01.json", _shard(rows))
+            with self.assertRaisesRegex(ValueError, "duplicate transition identity"):
+                REREAD.load_retained_rows(
+                    f"{directory}/cert_shard_*.json", expected_rows=2,
+                )
+
+    def test_main_fails_on_reread_error_without_expect_flag(self) -> None:
+        rows = [{"kind": "transition_diverged", "seed": 1, "step": 2}]
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            output = directory / "reread.json"
+            self._write_shard(directory, "cert_shard_01.json", _shard(rows))
+            with patch.object(REREAD, "reread_row", side_effect=ValueError("broken row")):
+                code = REREAD.main([
+                    "--shards", f"{directory}/cert_shard_*.json",
+                    "--json", str(output),
+                    "--expected-rows", "1",
+                ])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(output.read_text())["tally"], {"reread_error": 1})
 
 
 if __name__ == "__main__":  # pragma: no cover

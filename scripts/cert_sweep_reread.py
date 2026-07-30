@@ -142,6 +142,24 @@ def load_retained_rows(shard_glob: str, *, expected_rows: int) -> list[Mapping[s
             )
         rows.extend(transition_rows)
 
+    identities: set[tuple[int, int]] = set()
+    for row in rows:
+        seed = row.get("seed")
+        step = row.get("step")
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, int)
+            or isinstance(step, bool)
+            or not isinstance(step, int)
+        ):
+            raise ValueError(
+                "retained input has a transition row without an integer seed/step identity"
+            )
+        identity = (seed, step)
+        if identity in identities:
+            raise ValueError(f"retained input has duplicate transition identity {identity}")
+        identities.add(identity)
+
     if len(rows) != expected_rows:
         raise ValueError(
             "retained input does not satisfy the expected-row contract "
@@ -205,7 +223,10 @@ def main(argv=None) -> int:
     Path(args.json).write_text(json.dumps(out, indent=1))
     print(f"re-read {len(results)} rows: {dict(tally)} -> {args.json}")
 
-    if args.expect == "diverged" and (tally.get("matched") or tally.get("reread_error")):
+    if tally.get("reread_error"):
+        print("REREAD FAILED: one or more retained rows could not be evaluated")
+        return 1
+    if args.expect == "diverged" and tally.get("matched"):
         print("VALIDATION GATE FAILED: matched/error rows on the reference build")
         return 1
     return 0
