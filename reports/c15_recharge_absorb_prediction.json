@@ -1009,6 +1009,6 @@
     ]
    }
   },
-  "revised_reread_prediction": "3821 -> between 3690 (all pure+mixed clear: 3821-131) and 3675+15=3690... stated precisely: at least the 131 pure rows clear (3821 -> at most 3690); the 15 mixed rows are candidates; every row outside the 146 signature rows re-reads diverged with its recorded class; census unchanged (103, identity)"
+  "revised_reread_prediction": "3,675-3,690 divergent rows after reread: at least the 131 pure rows clear (3821 -> at most 3,690); up to 15 mixed rows are candidates (3821 - 131 - 15 = 3,675); every row outside the 146 signature rows re-reads diverged with its recorded class; census unchanged (103, identity)"
  }
 }

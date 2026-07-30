@@ -46,19 +46,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import poke_engine  # noqa: E402
-
-from pokezero.engine_fidelity import TurnFeatures  # noqa: E402
-
-from engine_transition_differential import (  # noqa: E402
-    classify_divergence,
-    evaluate_boundary_strict,
-)
-
 _MON_NAME = re.compile(r"(?:^|=)([A-Z0-9]+),\d+,[A-Z]+,[A-Z]+,")
+DEFAULT_EXPECTED_ROWS = 3821
 
 
 def _features(payload: Mapping[str, Any]) -> TurnFeatures:
+    from pokezero.engine_fidelity import TurnFeatures
+
     return TurnFeatures(
         p1_hp=int(payload["p1_hp"]),
         p2_hp=int(payload["p2_hp"]),
@@ -83,6 +77,10 @@ def _party_display(state_str: str) -> dict[str, list[str]]:
 
 
 def reread_row(row: Mapping[str, Any]) -> tuple[str, list[str], int]:
+    import poke_engine
+
+    from engine_transition_differential import evaluate_boundary_strict
+
     states = [poke_engine.State.from_string(s) for s in row["engine_states"]]
     slot_sides = {"p1": "side_one", "p2": "side_two"}
     counts: Counter = Counter()
@@ -101,37 +99,101 @@ def reread_row(row: Mapping[str, Any]) -> tuple[str, list[str], int]:
     )
 
 
+def load_retained_rows(shard_glob: str, *, expected_rows: int) -> list[Mapping[str, Any]]:
+    """Load one complete retained population, refusing partial shard sets.
+
+    The certification archive has exactly 3,821 transition-divergence rows. A
+    smaller input could make a clearance count look better merely because rows
+    were omitted, so both each shard's retention declaration and the aggregate
+    row count are part of the reread contract.
+    """
+    shard_paths = sorted(glob.glob(shard_glob))
+    if not shard_paths:
+        raise ValueError(f"no shard files matched {shard_glob!r}")
+
+    rows: list[Mapping[str, Any]] = []
+    for shard_path in shard_paths:
+        data = json.loads(Path(shard_path).read_text())
+        if not isinstance(data, Mapping):
+            raise ValueError(f"{shard_path}: expected a JSON object")
+        retention = data.get("repro_retention")
+        if not isinstance(retention, Mapping) or retention.get("repros_complete") is not True:
+            raise ValueError(f"{shard_path}: retained input is incomplete (repros_complete != true)")
+
+        retained = retention.get("repros_retained")
+        diverged = retention.get("transitions_diverged")
+        repros = data.get("repros")
+        if not isinstance(retained, int) or not isinstance(diverged, int) or not isinstance(repros, list):
+            raise ValueError(f"{shard_path}: incomplete retained-input metadata")
+        if retained != diverged:
+            raise ValueError(
+                f"{shard_path}: retained input is incomplete "
+                f"({retained} retained != {diverged} divergent)"
+            )
+
+        transition_rows = [
+            row for row in repros
+            if isinstance(row, Mapping) and row.get("kind") == "transition_diverged"
+        ]
+        if len(transition_rows) != diverged:
+            raise ValueError(
+                f"{shard_path}: retained input is incomplete "
+                f"({len(transition_rows)} transition rows != {diverged} declared)"
+            )
+        rows.extend(transition_rows)
+
+    if len(rows) != expected_rows:
+        raise ValueError(
+            "retained input does not satisfy the expected-row contract "
+            f"({len(rows)} rows != {expected_rows})"
+        )
+    return rows
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--shards", required=True)
     parser.add_argument("--json", required=True)
+    parser.add_argument(
+        "--expected-rows",
+        type=int,
+        default=DEFAULT_EXPECTED_ROWS,
+        help=("required retained transition-row population "
+              f"(default: {DEFAULT_EXPECTED_ROWS})"),
+    )
     parser.add_argument("--expect", choices=["diverged"], default=None,
                         help="validation gate: every row must re-read diverged")
     args = parser.parse_args(argv)
 
+    if args.expected_rows < 1:
+        parser.error("--expected-rows must be positive")
+    try:
+        retained_rows = load_retained_rows(args.shards, expected_rows=args.expected_rows)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"RETAINED INPUT FAILED: {error}", file=sys.stderr)
+        return 2
+
+    from engine_transition_differential import classify_divergence
+
     results = []
     tally: Counter = Counter()
-    for shard in sorted(glob.glob(args.shards)):
-        data = json.loads(Path(shard).read_text())
-        for row in data.get("repros") or []:
-            if row.get("kind") != "transition_diverged":
-                continue
-            key = {"seed": row["seed"], "step": row["step"],
-                   "recorded_class": row.get("divergence_class")}
-            try:
-                verdict, misses, _branches = reread_row(row)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as error:  # noqa: BLE001
-                tally["reread_error"] += 1
-                results.append({**key, "verdict": f"error:{type(error).__name__}"})
-                continue
-            entry = {**key, "verdict": verdict}
-            if verdict == "diverged":
-                entry["class"] = classify_divergence(row["protocol"], misses)
-                entry["misses"] = misses[:4]
-            results.append(entry)
-            tally[verdict] += 1
+    for row in retained_rows:
+        key = {"seed": row["seed"], "step": row["step"],
+               "recorded_class": row.get("divergence_class")}
+        try:
+            verdict, misses, _branches = reread_row(row)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as error:  # noqa: BLE001
+            tally["reread_error"] += 1
+            results.append({**key, "verdict": f"error:{type(error).__name__}"})
+            continue
+        entry = {**key, "verdict": verdict}
+        if verdict == "diverged":
+            entry["class"] = classify_divergence(row["protocol"], misses)
+            entry["misses"] = misses[:4]
+        results.append(entry)
+        tally[verdict] += 1
 
     out = {
         "engine_note": "verdicts computed against the CURRENTLY INSTALLED build; "

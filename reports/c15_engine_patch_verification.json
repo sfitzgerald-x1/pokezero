@@ -27,7 +27,7 @@
   },
   "verification": {
     "behavioral_probes": "9/9 PASS",
-    "focused_python": "12/12 PASS",
+    "focused_python": "11/11 PASS",
     "rust_release_suite": "PASS: all test binaries",
     "patch_44_fail_unpatched": {
       "result": "PASS",
@@ -37,15 +37,14 @@
   "retained_sweep_reread": {
     "source_rows": 3821,
     "source_retention": "complete",
+    "artifact_availability": "Raw patch-43 and patch-44 reread reports are not available in this worktree; their historical totals below are not independently hash-auditable here.",
     "patch_43": {
       "diverged": 3668,
-      "matched": 153,
-      "artifact_sha256": "0c046bb1582319e823d235e7b74964e7005c19aea6ac5657af020d586c24799f"
+      "matched": 153
     },
     "patch_44": {
       "diverged": 3663,
-      "matched": 158,
-      "artifact_sha256": "dc0548e21666577541a7bde6aaf078390fe471eafb4dc1f107ab3f4d39b521ca"
+      "matched": 158
     },
     "patch_44_only_clearances": [
       [2000131, 47],
@@ -103,8 +102,7 @@
       "counter_changes": 0,
       "canonical_identity_sha256": "f7f1c580146100d6b11531cd06fa158af1d7e2b10852a1285f35fe1d4f1b9d60"
     },
-    "report_sha256": "dfebf9ec4da2ff02e2c371ace04c73ce9edff57334d6602a39b4d1d251f7ae5f",
-    "checkpoint_sha256": "4f0ad61c8e0b0fe4bfd1954ca4e048ca682032115f72153c0fec31fd0fbc5aeb",
+    "raw_artifact_availability": "The fresh-census raw report and checkpoint are not available in this worktree, so their SHA-256 claims are intentionally omitted; the canonical identity/class digest above remains the recorded comparison identity.",
     "process_exit": "1 by design because the differential reports retained divergences; artifact generation completed"
   },
   "conclusion": "Patches 42-44 clear their replayed mechanisms with no fresh-census identity or class regression. This is lane verification, not engine certification: 3663 retained sweep rows remain for documented limits, follow-ups, and the final zero-unattributed re-sweep."
