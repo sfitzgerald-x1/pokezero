@@ -96,6 +96,64 @@ class CheckpointProvenanceTests(unittest.TestCase):
                 runner.load_checkpoint(checkpoint)
             self.assertEqual(checkpoint.read_bytes(), original)
 
+    def test_resume_rejects_parseable_non_records_without_rewriting(self) -> None:
+        valid = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
+        for malformed in ({}, 42, []):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as tmp:
+                checkpoint = Path(tmp) / "checkpoint.jsonl"
+                original = (
+                    json.dumps(valid, separators=(",", ":")).encode("utf-8")
+                    + b"\n"
+                    + json.dumps(malformed, separators=(",", ":")).encode("utf-8")
+                    + b"\n"
+                )
+                checkpoint.write_bytes(original)
+                with self.assertRaisesRegex(ValueError, "invalid checkpoint record at line 2"):
+                    runner.load_checkpoint(checkpoint)
+                self.assertEqual(checkpoint.read_bytes(), original)
+
+    def test_resume_rejects_parseable_mid_file_non_record(self) -> None:
+        first = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
+        second = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1001}
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            original = (
+                json.dumps(first, separators=(",", ":")).encode("utf-8")
+                + b"\n{}\n"
+                + json.dumps(second, separators=(",", ":")).encode("utf-8")
+                + b"\n"
+            )
+            checkpoint.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "invalid checkpoint record at line 2"):
+                runner.load_checkpoint(checkpoint)
+            self.assertEqual(checkpoint.read_bytes(), original)
+
+    def test_checkpoint_binding_includes_divergence_classes(self) -> None:
+        record = {
+            "counters": {
+                "boundaries_full_round": 1,
+                "boundaries_measured": 1,
+                "divergence_class:branch_event": 7,
+                "engine_error": 0,
+                "transition:diverged": 7,
+                "transition:matched": 0,
+            },
+            "repros": [],
+        }
+        report = runner.build_report(
+            [record],
+            elapsed=1.0,
+            approximate_sleep=False,
+            matcher="strict",
+            keep_repro=0,
+        )
+        self.assertEqual(report["divergence_classes"], {"branch_event": 7})
+        report["divergence_classes"] = {}
+        self.assertIn(
+            "report divergence_classes does not match the checkpoint aggregate",
+            runner.checkpoint_report_binding_failures([record], report),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

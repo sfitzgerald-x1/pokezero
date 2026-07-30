@@ -48,6 +48,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                         "transition:diverged": 0,
                         "transition:matched": 1,
                     },
+                    "divergence_classes": {},
                     "engine_errors": 0,
                     "games": 1,
                     "repros": [],

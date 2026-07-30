@@ -1979,6 +1979,11 @@ def checkpoint_report_aggregate(
     full_rounds = totals["boundaries_full_round"]
     return {
         "counters": dict(sorted(totals.items())),
+        "divergence_classes": {
+            key.split(":", 1)[1]: value
+            for key, value in sorted(totals.items())
+            if key.startswith("divergence_class:")
+        },
         "transitions_diverged": diverged,
         "engine_errors": engine_errors,
         "transitions_matched": matched,
@@ -2006,6 +2011,7 @@ def checkpoint_report_binding_failures(
     failures: list[str] = []
     for field in (
         "counters",
+        "divergence_classes",
         "transitions_diverged",
         "engine_errors",
         "transitions_matched",
@@ -2083,8 +2089,12 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
             )
             _truncate_torn_checkpoint_tail(path, prefix_bytes)
             break
-        if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
-            records.append(dict(record))
+        if not isinstance(record, Mapping) or record.get("schema") != CHECKPOINT_SCHEMA:
+            raise ValueError(
+                f"{path}: invalid checkpoint record at line {line_number + 1}; "
+                f"expected an object with schema {CHECKPOINT_SCHEMA!r}"
+            )
+        records.append(dict(record))
         if line_number == last_index and not raw.endswith(b"\n"):
             # A hard kill may lose only the newline after an otherwise complete
             # JSON record. Restore that delimiter before ``open('a')`` can join
@@ -2174,11 +2184,7 @@ def build_report(
             if totals["boundaries_full_round"]
             else None
         ),
-        "divergence_classes": {
-            key.split(":", 1)[1]: value
-            for key, value in sorted(totals.items())
-            if key.startswith("divergence_class:")
-        },
+        "divergence_classes": aggregate["divergence_classes"],
         "counters": dict(sorted(totals.items())),
         "repros": repros,
         "checkpoint_provenance": {

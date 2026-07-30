@@ -640,12 +640,17 @@ def _contract_gates(
 
     gates = contract.get("certification_gates")
     registered = contract.get("registered_before_launch") is True
-    final = registered or contract.get("requires_execution_contract") is True or isinstance(gates, Mapping)
+    final = (
+        registered
+        or contract.get("requires_execution_contract") is True
+        or "certification_gates" in contract
+    )
     explicit_legacy = (
         legacy_opt_out
         and contract.get("legacy_contract_opt_out") is True
         and not registered
         and contract.get("requires_execution_contract") is not True
+        and "certification_gates" not in contract
     )
     if not isinstance(gates, Mapping):
         if explicit_legacy:

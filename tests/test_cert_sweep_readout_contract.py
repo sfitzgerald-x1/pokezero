@@ -309,6 +309,24 @@ class CertificationContractTests(unittest.TestCase):
         self.assertTrue(any("registered_before_launch is not true" in failure for failure in failures))
         self.assertEqual(evidence["enforcement_status"], "enforced")
 
+    def test_malformed_gates_bearing_contract_is_final_not_legacy(self) -> None:
+        failures, evidence = readout._contract_gates(
+            paths=[],
+            shards=[],
+            contract={
+                "certification_gates": [],
+                "legacy_contract_opt_out": True,
+            },
+            contract_path=Path(readout.__file__),
+            execution_manifest=None,
+            coverage=1.0,
+            aggregate={"games": 0},
+            legacy_opt_out=True,
+        )
+        self.assertTrue(any("certification gates are absent" in failure for failure in failures))
+        self.assertEqual(evidence["enforcement_status"], "refused-final-contract")
+        self.assertFalse(evidence["legacy_opt_out"])
+
     def test_unregistered_legacy_requires_two_explicit_opt_ins(self) -> None:
         contract = {"legacy_contract_opt_out": True}
         failures, evidence = readout._contract_gates(
