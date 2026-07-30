@@ -1,0 +1,47 @@
+{
+  "schema": "pokezero.c17.matcher-final-prediction.v1",
+  "prediction_id": "c17-event-aware-branch-legality-2026-07-30",
+  "scope": "Only the retained strict-matcher defects where legal roll support is priced from the pre-state despite a same-turn state change before direct damage.",
+  "retained_archive": {
+    "path": "/Users/scott/workspace/agents/pokezero-agent/cert-sweep-20260730",
+    "replay_method": "scripts/cert_sweep_reread.py::reread_row with the current installed poke_engine build and current branch matcher"
+  },
+  "predictions": [
+    {
+      "identity": {
+        "seed": 2300552,
+        "step": 117
+      },
+      "mechanism": "Calm Mind raises the defender's Special Defense before Fire Blast resolves.",
+      "recorded_observed_direct_damage": 21,
+      "pre_state_legal_rolls": [24, 25, 26, 27, 28, 29],
+      "branch_event_legal_rolls": [21, 22, 23, 24, 25],
+      "current_reread_verdict": "matched",
+      "current_reread_note": "The current engine representative branch happens to fall within the proportional roll window, so this replay is no longer a failing aggregate row. The stale legality construction remains directly observable and must be corrected without claiming this row as post-fix clearance.",
+      "implementation_prediction": "For a mapper branch with a boost or unboost event before direct damage, derive the additional legal-roll support from that branch's post_state rather than the boundary pre-state. The support must include 21."
+    },
+    {
+      "identity": {
+        "seed": 2600362,
+        "step": 82
+      },
+      "mechanism": "Lanturn switches in before Sableye's Knock Off resolves.",
+      "recorded_observed_direct_damage": 21,
+      "pre_state_legal_rolls": [20, 21, 22, 23, 24],
+      "branch_event_legal_rolls": [21, 22, 23, 24, 25],
+      "current_reread_verdict": "diverged",
+      "current_reread_note": "The retained row still diverges on the exact poison residual (observed -126 versus engine -119); this lane must not relabel or soften that residual. Its direct-damage support is nevertheless priced against the wrong pre-switch target today.",
+      "implementation_prediction": "For a mapper branch with a switch event before direct damage, derive the additional legal-roll support from that branch's post_state rather than the boundary pre-state. The support must include 21 and must be consulted only for the affected branch."
+    }
+  ],
+  "containment": [
+    "Do not change exact-component comparison, branch ranking, divergence classification, or attribution labels.",
+    "Do not use a branch post_state when its switch, boost, or unboost occurs after the first direct-damage event.",
+    "Treat branch-specific support as an additional roll-membership accept path only; it never excuses an exact residual mismatch."
+  ],
+  "success_criteria": [
+    "Focused tests fail before the helper exists and pass after it derives post-event support only when the event precedes direct damage.",
+    "The 2300552/117 replay's branch support contains the observed 21 after the state-changing event.",
+    "The 2600362/82 replay remains divergent on its poison residual after the direct-damage legality correction."
+  ]
+}
