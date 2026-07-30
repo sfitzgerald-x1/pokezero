@@ -26,11 +26,16 @@ is a terminal instrumentation/provenance contradiction, not a comparison
 limit and not a reason to rebuild the Substitute at full health.
 
 Where chronology supplies a publicly deterministic Gen 3 fixed-damage hit,
-the fold will instead carry the exact remaining Substitute HP. The predicted
-supported cases are Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom;
-this is deliberately limited to hits whose exact public damage can be derived
-without private state. All other non-breaking Substitute damage remains
-explicitly unknown.
+the fold will instead carry cumulative exact depletion since Substitute
+creation. Each sampled world will derive its own remaining HP as
+`floor(sampled maxhp / 4) - depletion`; replay-scale absolute remaining HP is
+not portable across sampled max-HP variants. The predicted supported cases are
+Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom; this is deliberately
+limited to hits whose exact public damage can be derived without private state.
+All other non-breaking Substitute damage remains explicitly unknown. A sampled
+world whose initial Substitute could not have publicly survived the exact
+depletion fails with a distinct incompatibility reason, never the accepted
+unknown-health limit.
 
 ## Predicted Affected Certification Rows
 
@@ -73,8 +78,14 @@ Substitute HP cannot be known.
    counted in any `limit:*` bucket.
 5. A `|faint|` line clears Substitute and its health provenance before the
    force-switch snapshot is built.
-6. Publicly deterministic Gen 3 fixed-damage chronology updates exact
-   remaining Substitute HP for Seismic Toss, Night Shade, Dragon Rage, and
-   Sonic Boom, while non-deterministic damage remains unknown.
-7. Non-Substitute construction and the pre-existing `volatile_unsupported`
+6. Publicly deterministic Gen 3 fixed-damage chronology accumulates exact
+   depletion for Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom, while
+   non-deterministic damage remains unknown.
+7. A replay with max HP 387 and 50 exact depletion materializes a sampled
+   max-HP-370 world at `floor(370 / 4) - 50 = 42` Substitute HP, not the
+   replay-scale absolute remainder 46.
+8. A sampled Substitute with initial HP less than or equal to exact depletion
+   fails with a precise sampled-world incompatibility reason that differential
+   accounting does not count as `limit:world_substitute_health_unknown`.
+9. Non-Substitute construction and the pre-existing `volatile_unsupported`
    behavior when the opt-in flag is disabled remain unchanged.
