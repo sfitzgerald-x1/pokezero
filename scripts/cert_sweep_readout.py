@@ -27,6 +27,13 @@ Usage::
     PYTHONPATH=src python scripts/cert_sweep_readout.py \\
         --shards cert_shard_*.json --prediction reports/c14_sweep_prediction.json \\
         --json cert_readout.json
+
+Final certification contracts set ``requires_execution_contract=true`` and
+also require ``--execution-manifest``. The manifest binds each shard's durable
+completion marker and report hash to the registered source, engine, contract,
+readout, and behavioral-probe provenance. Legacy evidence regeneration remains
+available only for older prediction artifacts that do not require that
+execution contract.
 """
 
 from __future__ import annotations
@@ -748,7 +755,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--shards", nargs="+", required=True)
     ap.add_argument("--prediction", type=Path, required=True)
-    ap.add_argument("--execution-manifest", type=Path, default=None)
+    ap.add_argument(
+        "--execution-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "generic engine-cert-execution-manifest/1 provenance; required by "
+            "final certification contracts"
+        ),
+    )
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
 
