@@ -5584,6 +5584,11 @@ transient bookkeeping for other fields rather than world state.
 | newly divergent | **0** | **2** | **0** |
 | outside-limits | 78 -> 75 or better | 78 -> 75 | 78 -> **74** |
 
+Frame bridge: 78 and 74 are the DIFFERENTIAL-OBSERVED counts. On the adjudicated frame
+(Z8's 73, after #965's five ledger-level limit relabels, which do not overlap this batch's
+four clears), the residue is now **69** — verified at row level by the #967 execution gate
+(74 observed = 69 adjudicated + the 5 relabeled rows still counted by the classifier).
+
 **The extra W2 row is 1500294/110** — Suicune woken from Rest-sleep and freshly Toxic'd,
 ticking stage 1 (`-16` on a 270 HP mon). Same signature as the named row, same class
 (`component_missing_in_engine:psn`); the backlog had simply attributed one instance of it and
