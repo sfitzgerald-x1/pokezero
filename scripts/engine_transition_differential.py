@@ -548,16 +548,27 @@ def branch_event_legal_rolls(
     if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
         raise BranchLegalRollError("branch events are missing or malformed")
 
-    direct_damage_index = next(
-        (
-            index
-            for index, event in enumerate(events)
-            if isinstance(event, str)
-            and event.startswith("|-damage|")
-            and "[from]" not in event
-        ),
-        None,
-    )
+    acting_side: str | None = None
+    direct_damage_index: int | None = None
+    for index, event in enumerate(events):
+        if not isinstance(event, str):
+            continue
+        fields = event.split("|")
+        if event.startswith("|move|"):
+            actor = fields[2] if len(fields) > 2 else ""
+            candidate = actor.split(":", maxsplit=1)[0][:2]
+            acting_side = candidate if candidate in {"p1", "p2"} else None
+            continue
+        if not event.startswith("|-damage|") or "[from]" in event:
+            continue
+        target = fields[2] if len(fields) > 2 else ""
+        target_side = target.split(":", maxsplit=1)[0][:2]
+        # A bare Substitute HP cost is not an opponent hit. It needs no damage
+        # support and the mapper correctly has no pre-hit snapshot for it.
+        # Malformed idents remain fail-closed as potential direct damage.
+        if acting_side is None or target_side not in {"p1", "p2"} or target_side != acting_side:
+            direct_damage_index = index
+            break
     if direct_damage_index is None:
         return None
 

@@ -340,6 +340,23 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertIsNone(legal)
         self.assertEqual(self.loaded_states, [])
 
+    def test_ignores_a_self_hp_cost_after_a_same_turn_stat_boost(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Calm Mind|p1a: Rattata",
+                    "|-boost|p1a: Rattata|spa|1",
+                    "|move|p2a: Chansey|Substitute|p2a: Chansey",
+                    "|-damage|p2a: Chansey|75/100",
+                ],
+            },
+            side_one_choice="calmmind",
+            side_two_choice="substitute",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
     def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
         with self.assertRaises(differential.BranchLegalRollError):
             branch_event_legal_rolls(
