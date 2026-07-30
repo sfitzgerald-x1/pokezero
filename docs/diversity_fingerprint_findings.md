@@ -118,6 +118,6 @@ divergence in specific choices does not create macro-level strategic structure.
   that test is unambiguous — zero cycles, p=1.000, every residual <2% — the per-seed φ refinement
   would not change the matchup verdict; it is deferred, not improvised around.
 
-Artifacts: `/shared/diversity-fingerprints/diversity-20260711a/` (per-checkpoint fingerprints,
+Artifacts: `<private-store>/diversity-fingerprints/diversity-20260711a/` (per-checkpoint fingerprints,
 pairwise.json, style.json, matchup.json, report.html). Regenerate the report with
 `scripts/diversity_report.py --analysis-dir <dir>`.

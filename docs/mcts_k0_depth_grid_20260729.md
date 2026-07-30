@@ -63,7 +63,7 @@ worlds 4`, seeds 600000–600099, seats mirrored by seed parity. n = 100 per cel
 Same architecture (d=512, 3 layers, window 1, 87 tokens) and comparable training
 state (policy accuracy 0.752 vs 0.726, value loss 0.0578 vs 0.0579).
 
-Image `scott-experiment:mcts-rb-bf72636` — the same build §9 used, chosen so the
+Image `<internal-registry>:mcts-rb-bf72636` — the same build §9 used, chosen so the
 k64 arm is comparable to §9 rather than to nothing. It predates #937 and #939.
 
 ---
