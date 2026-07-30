@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engine-cert-execution-manifest-v2.schema.json",
+  "title": "File-backed engine certification execution manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "producer",
+    "source",
+    "contract_blob",
+    "readout_blob",
+    "engine_provenance",
+    "aggregate_provenance",
+    "shards"
+  ],
+  "properties": {
+    "schema": {"const": "engine-cert-execution-manifest/2"},
+    "producer": {"$ref": "#/$defs/file"},
+    "source": {
+      "type": "object",
+      "required": ["commit", "checkout"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "checkout": {"type": "string", "minLength": 1}
+      }
+    },
+    "contract_blob": {"$ref": "#/$defs/file"},
+    "readout_blob": {"$ref": "#/$defs/file"},
+    "engine_provenance": {
+      "type": "object",
+      "required": ["fingerprint", "stamp"],
+      "properties": {
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "stamp": {"$ref": "#/$defs/file"}
+      }
+    },
+    "aggregate_provenance": {"$ref": "#/$defs/probes"},
+    "shards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "seed_start",
+          "report",
+          "checkpoint",
+          "completion_marker",
+          "image_commit",
+          "behavioral_probes",
+          "branch_events_probe"
+        ],
+        "properties": {
+          "seed_start": {"type": "integer", "minimum": 0},
+          "report": {"$ref": "#/$defs/file"},
+          "checkpoint": {"$ref": "#/$defs/file"},
+          "completion_marker": {"$ref": "#/$defs/file"},
+          "image_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "behavioral_probes": {"$ref": "#/$defs/probes"},
+          "branch_events_probe": {"$ref": "#/$defs/probes"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "probes": {
+      "type": "object",
+      "required": ["behavioral_probes", "branch_events_probe"],
+      "properties": {
+        "behavioral_probes": {"$ref": "#/$defs/file"},
+        "branch_events_probe": {"$ref": "#/$defs/file"}
+      }
+    }
+  }
+}

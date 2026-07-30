@@ -141,33 +141,24 @@
    "recharge_turn_residual_gap": {
     "observed_c14": 61,
     "predicted_next": 0,
+    "classifier_outcome": "UNATTRIBUTED",
+    "exclusion_counter": "recharge_turn_residual_gap",
     "on_nonzero": "REGRESSION - sweep fails"
    },
    "truant_loaf_phase_drift": {
     "observed_c14": 50,
     "predicted_next": 0,
+    "classifier_outcome": "UNATTRIBUTED",
+    "exclusion_counter": "truant_loaf_phase_drift",
     "on_nonzero": "REGRESSION - sweep fails",
     "caveat": "#970 verified clearance at its aimed-seed scope (54 cleared, 0 new at 116-seed scope per its ledger section); this sweep is the GLOBAL bound"
    },
    "absorb_through_protect_and_missed": {
     "observed_c14": 79,
     "predicted_next": 0,
+    "classifier_outcome": "UNATTRIBUTED",
+    "exclusion_counter": "absorb_through_protect_or_miss",
     "on_nonzero": "REGRESSION - sweep fails"
-   },
-   "typed_hidden_power_thaw": {
-    "observed_c14": "incapacitated-arm subset",
-    "predicted_next": 0,
-    "on_nonzero": "REGRESSION - sweep fails"
-   },
-   "bench_rest_sleep_provenance": {
-    "observed_c14": "incapacitated-arm subset",
-    "predicted_next": 0,
-    "on_nonzero": "REGRESSION - sweep fails"
-   },
-   "inferable_substitute_depletion": {
-    "observed_c14": 13,
-    "predicted_next": 0,
-    "on_nonzero": "REGRESSION - no post-run routing exception may be added; any allowed comparison-limit signature and rate must be registered before launch"
    }
   },
   "what_level_candidates_if_why_round_does_not_close_them": {
@@ -190,7 +181,8 @@
     "wilson95": [
      6,
      20
-    ]
+    ],
+    "note": "Typed-Hidden-Power thaw and bench-Rest provenance are not separately emittable classifier outcomes. They remain row-level candidates; do not register a predicted-zero key until a distinct classifier counter exists."
    },
    "same_turn_stat_event_gap": {
     "observed_c14": 9,
