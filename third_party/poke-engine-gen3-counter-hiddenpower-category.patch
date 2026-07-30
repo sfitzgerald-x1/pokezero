@@ -1,0 +1,48 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1356,6 +1356,23 @@
+                     side_ref: *side_reference,
+                 },
+             ));
++    }
++}
++
++// pokezero gen3 fidelity fix (Counter/Mirror Coat Hidden Power semantics):
++// gen3 Showdown counts a Hidden Power hit as PHYSICAL for Counter and NEVER
++// for Mirror Coat, regardless of the elemental type its IVs give it — the
++// clauses are explicit in the sim (data/mods/gen3/moves.ts: counter's
++// onDamage takes `category === 'Physical' || effect.id === 'hiddenpower'`,
++// mirrorcoat's takes `category === 'Special' && effect.id !== 'hiddenpower'`).
++// The engine recorded damage_dealt with the choice's type-derived category, so
++// a special-typed Hidden Power was Mirror Coat-bounceable (rows 1500155/22,
++// 1500264/40: the sim's Mirror Coat did nothing, the engine retaliated 2x)
++// and, inversely, was invisible to Counter.
++fn damage_dealt_category(choice: &Choice) -> MoveCategory {
++    match choice.move_id {
++        Choices::HIDDENPOWER | Choices::HIDDENPOWERBUG60 | Choices::HIDDENPOWERBUG70 | Choices::HIDDENPOWERDARK60 | Choices::HIDDENPOWERDARK70 | Choices::HIDDENPOWERDRAGON60 | Choices::HIDDENPOWERDRAGON70 | Choices::HIDDENPOWERELECTRIC60 | Choices::HIDDENPOWERELECTRIC70 | Choices::HIDDENPOWERFIGHTING60 | Choices::HIDDENPOWERFIGHTING70 | Choices::HIDDENPOWERFIRE60 | Choices::HIDDENPOWERFIRE70 | Choices::HIDDENPOWERFLYING60 | Choices::HIDDENPOWERFLYING70 | Choices::HIDDENPOWERGHOST60 | Choices::HIDDENPOWERGHOST70 | Choices::HIDDENPOWERGRASS60 | Choices::HIDDENPOWERGRASS70 | Choices::HIDDENPOWERGROUND60 | Choices::HIDDENPOWERGROUND70 | Choices::HIDDENPOWERICE60 | Choices::HIDDENPOWERICE70 | Choices::HIDDENPOWERPOISON60 | Choices::HIDDENPOWERPOISON70 | Choices::HIDDENPOWERPSYCHIC60 | Choices::HIDDENPOWERPSYCHIC70 | Choices::HIDDENPOWERROCK60 | Choices::HIDDENPOWERROCK70 | Choices::HIDDENPOWERSTEEL60 | Choices::HIDDENPOWERSTEEL70 | Choices::HIDDENPOWERWATER60 | Choices::HIDDENPOWERWATER70 => MoveCategory::Physical,
++        _ => choice.category,
+     }
+ }
+ 
+@@ -1379,17 +1396,18 @@
+         attacking_side.damage_dealt.damage = damage_dealt;
+     }
+ 
+-    if attacking_side.damage_dealt.move_category != choice.category {
++    let recorded_category = damage_dealt_category(choice);
++    if attacking_side.damage_dealt.move_category != recorded_category {
+         incoming_instructions
+             .instruction_list
+             .push(Instruction::ChangeDamageDealtMoveCatagory(
+                 ChangeDamageDealtMoveCategoryInstruction {
+                     side_ref: *attacking_side_ref,
+-                    move_category: choice.category,
++                    move_category: recorded_category,
+                     previous_move_category: attacking_side.damage_dealt.move_category,
+                 },
+             ));
+-        attacking_side.damage_dealt.move_category = choice.category;
++        attacking_side.damage_dealt.move_category = recorded_category;
+     }
+ 
+     if attacking_side.damage_dealt.hit_substitute != hit_substitute {

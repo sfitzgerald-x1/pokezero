@@ -1,0 +1,50 @@
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -7129,6 +7129,12 @@
+         Choices::HAIL,
+         Choice {
+             move_id: Choices::HAIL,
++            // pokezero gen3 fidelity fix (weather-move targeting): field moves
++            // never TryHit the opposing Pokemon, so the defender-side ability
++            // interceptors (Water Absorb, Flash Fire, ...) must not see them.
++            // The upstream default target of Opponent let a typed weather move
++            // reach those arms (Water Absorb healed off Rain Dance).
++            target: MoveTarget::User,
+             move_type: PokemonType::ICE,
+             flags: Flags {
+                 ..Default::default()
+@@ -13242,6 +13248,12 @@
+         Choices::RAINDANCE,
+         Choice {
+             move_id: Choices::RAINDANCE,
++            // pokezero gen3 fidelity fix (weather-move targeting): field moves
++            // never TryHit the opposing Pokemon, so the defender-side ability
++            // interceptors (Water Absorb, Flash Fire, ...) must not see them.
++            // The upstream default target of Opponent let a typed weather move
++            // reach those arms (Water Absorb healed off Rain Dance).
++            target: MoveTarget::User,
+             move_type: PokemonType::WATER,
+             flags: Flags {
+                 ..Default::default()
+@@ -14201,6 +14213,8 @@
+         Choices::SANDSTORM,
+         Choice {
+             move_id: Choices::SANDSTORM,
++            // pokezero gen3 fidelity fix (weather-move targeting): see RAINDANCE.
++            target: MoveTarget::User,
+             move_type: PokemonType::ROCK,
+             flags: Flags {
+                 wind: true,
+@@ -16596,6 +16610,12 @@
+         Choices::SUNNYDAY,
+         Choice {
+             move_id: Choices::SUNNYDAY,
++            // pokezero gen3 fidelity fix (weather-move targeting): field moves
++            // never TryHit the opposing Pokemon, so the defender-side ability
++            // interceptors (Water Absorb, Flash Fire, ...) must not see them.
++            // The upstream default target of Opponent let a typed weather move
++            // reach those arms (Water Absorb healed off Rain Dance).
++            target: MoveTarget::User,
+             move_type: PokemonType::FIRE,
+             flags: Flags {
+                 ..Default::default()

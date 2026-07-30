@@ -1,0 +1,38 @@
+--- a/src/gen3/damage_calc.rs
++++ b/src/gen3/damage_calc.rs
+@@ -129,9 +129,14 @@
+ fn volatile_status_modifier(choice: &Choice, attacking_side: &Side, defending_side: &Side) -> f32 {
+     let mut modifier = 1.0;
+     let atk = &attacking_side.volatile_statuses;
+-    if atk.contains(&PokemonVolatileStatus::FLASHFIRE) && choice.move_type == PokemonType::FIRE {
+-        modifier *= 1.5;
+-    }
++    // (Flash Fire's 1.5x moved INTO the stepwise pipeline: gen3 hooks the
++    // volatile onto ModifyDamagePhase1 — data/mods/gen4/abilities.ts flashfire
++    // condition, inherited by gen3 — which runs BEFORE the +2/crit/STAB/type
++    // steps with battle.modify's fixed-point floor. The trailing float
++    // position here left the engine one point high on resisted boosted Fire
++    // moves: repro row 1500123/79, Flash-Fired Ninetales Fire Blast into
++    // Octillery — sim max 92, engine 93, observed 78 = the sim's exact min
++    // roll.)
+     if atk.contains(&PokemonVolatileStatus::SLOWSTART) && choice.category == MoveCategory::Physical
+     {
+         modifier *= 0.5;
+@@ -484,6 +489,17 @@
+         damage = (damage * 0.5).floor();
+     }
+ 
++    // ModifyDamagePhase1: the Flash Fire volatile chains here (with screens,
++    // which stay at the caller because they are pool-unreachable per the
++    // ledger's damage_calc brief), floored at 4096 scale BEFORE the +2.
++    if attacking_side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::FLASHFIRE)
++        && choice.move_type == PokemonType::FIRE
++    {
++        damage = fp_modify(damage as i32, FP_1_5) as f32;
++    }
++
+     // weather, floored per step (screens are handled by the caller and the
+     // spread modifier does not exist in singles)
+     if attacker.ability != Abilities::CLOUDNINE
