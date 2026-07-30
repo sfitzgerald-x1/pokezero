@@ -1,0 +1,15 @@
+{
+  "schema": "pokezero.cert-contract-producer-boundary-prediction.v1",
+  "recorded_at": "2026-07-30",
+  "review_source": "fresh-independent-codex-review",
+  "prediction": {
+    "id": "boolean-zero-producer-boundary-regression",
+    "current_behavior": "The strict integer-zero rule is tested only through the schema helper, leaving the file-backed manifest-production boundary unpinned.",
+    "expected_fix": "The regression serializes false into an otherwise-valid final contract, invokes produce_manifest, observes a fail-closed ValueError, and proves that no output manifest was written.",
+    "production_change_expected": false
+  },
+  "verification_plan": {
+    "focused_tests": "Run producer, readout, schema, provenance, and public-invariant tests.",
+    "review": "Require the same independent reviewer to return PASS."
+  }
+}
