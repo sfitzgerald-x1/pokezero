@@ -527,6 +527,23 @@ class BranchLegalRollError(ValueError):
     """A state-changing branch could not supply its required local support."""
 
 
+def _event_changes_roll_state(event: object) -> bool:
+    """Whether a rendered pre-hit event changes the damage-calculation state."""
+
+    if not isinstance(event, str):
+        return False
+    if event.startswith("|switch|"):
+        return True
+    if not event.startswith(("|-boost|", "|-unboost|")):
+        return False
+    fields = event.split("|")
+    try:
+        return int(fields[4]) != 0
+    except (IndexError, ValueError):
+        # A malformed stage event must not regain the stale-support fallback.
+        return True
+
+
 def branch_event_legal_rolls(
     branch: Mapping[str, Any],
     *,
@@ -573,9 +590,7 @@ def branch_event_legal_rolls(
         return None
 
     state_changed_before_damage = any(
-        isinstance(event, str)
-        and event.startswith(("|switch|", "|-boost|", "|-unboost|"))
-        for event in events[:direct_damage_index]
+        _event_changes_roll_state(event) for event in events[:direct_damage_index]
     )
     if not state_changed_before_damage:
         return None

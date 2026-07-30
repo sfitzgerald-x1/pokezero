@@ -357,6 +357,23 @@ class EventAwareBranchLegality(unittest.TestCase):
         self.assertIsNone(legal)
         self.assertEqual(self.loaded_states, [])
 
+    def test_ignores_a_capped_stat_event_before_an_opponent_hit(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: Rattata|Swords Dance|p1a: Rattata",
+                    "|-boost|p1a: Rattata|atk|0",
+                    "|move|p2a: Chansey|Tackle|p1a: Rattata",
+                    "|-damage|p1a: Rattata|80/100",
+                ],
+            },
+            side_one_choice="swordsdance",
+            side_two_choice="tackle",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
+
     def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
         with self.assertRaises(differential.BranchLegalRollError):
             branch_event_legal_rolls(
