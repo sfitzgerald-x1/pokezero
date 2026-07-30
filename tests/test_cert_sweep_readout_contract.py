@@ -84,6 +84,10 @@ class CertificationContractTests(unittest.TestCase):
                 "repros_complete": True,
             },
             "repros": [],
+            "checkpoint_provenance": {
+                "records_with_provenance": 1,
+                "complete": True,
+            },
             "seeds": {"min": seed, "max": seed, "distinct": 1},
             "transitions_diverged": 0,
             "transitions_matched": measured,
@@ -117,6 +121,9 @@ class CertificationContractTests(unittest.TestCase):
                 "required_image_commit": self.image_commit,
                 "required_engine_fingerprint": self.engine_fingerprint,
                 "required_readout_sha256": readout_sha,
+                "required_execution_manifest_producer_sha256": readout._sha256(
+                    ROOT / "scripts" / "cert_execution_manifest.py"
+                ),
             },
             "pre_registered_family_rate_table": {
                 "documented_families": {},
@@ -143,7 +150,14 @@ class CertificationContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         evidence = self._file(path)
-        evidence["records"] = 1
+        evidence.update({
+            "records": 1,
+            "resume_provenance": {
+                "source_commit": self.source_commit,
+                "engine_fingerprint": self.engine_fingerprint,
+                "image_commit": self.image_commit,
+            },
+        })
         return evidence
 
     def _manifest(self, paths: list[Path], contract_path: Path, *, complete: bool = True) -> dict:
@@ -314,17 +328,146 @@ class CertificationContractTests(unittest.TestCase):
         self.assertTrue(any("coverage" in failure for failure in output["gate_failures"]))
         self.assertTrue(any("malformed seed summary" in failure for failure in output["gate_failures"]))
 
-    def test_family_bounds_cover_registered_but_unobserved_families(self) -> None:
+    def test_wilson_lower_bound_is_advisory_for_unobserved_family(self) -> None:
         contract = self._contract()
         contract["pre_registered_family_rate_table"]["documented_families"] = {
             "I1_cap_state_shape": {"wilson95_rate": [0.01, 0.03]}
         }
         failures, evidence = readout._family_rate_gates({}, contract, boundaries_measured=100)
+        self.assertEqual(failures, [])
+        self.assertEqual(evidence["families"]["I1_cap_state_shape"]["observed"], 0)
+        self.assertEqual(evidence["families"]["I1_cap_state_shape"]["lower_rate_advisory"], 0.01)
+
+    def test_pre_registered_prediction_lower_bound_is_binding(self) -> None:
+        contract = self._contract()
+        contract["pre_registered_family_rate_table"]["documented_families"] = {
+            "I1_cap_state_shape": {
+                "wilson95_rate": [0.01, 0.03],
+                "prediction_interval_rate": [0.01, 0.03],
+            }
+        }
+        failures, _ = readout._family_rate_gates({}, contract, boundaries_measured=100)
         self.assertEqual(
             failures,
-            ["registered family 'I1_cap_state_shape' rate 0 is below registered lower rate 0.01"],
+            ["registered family 'I1_cap_state_shape' rate 0 is below pre-registered prediction lower rate 0.01"],
         )
-        self.assertEqual(evidence["families"]["I1_cap_state_shape"]["observed"], 0)
+
+    def test_wilson_upper_bound_remains_binding(self) -> None:
+        contract = self._contract()
+        contract["pre_registered_family_rate_table"]["documented_families"] = {
+            "I1_cap_state_shape": {"wilson95_rate": [0.01, 0.03]}
+        }
+        failures, _ = readout._family_rate_gates(
+            {"I1_cap_state_shape": 4}, contract, boundaries_measured=100
+        )
+        self.assertEqual(
+            failures,
+            ["registered family 'I1_cap_state_shape' rate 0.04 exceeds registered upper rate 0.03"],
+        )
+
+    def test_checkpoint_requires_every_game_record_and_complete_report_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checkpoint = self._checkpoint(root, 1000)
+            failures: list[str] = []
+            readout._checkpoint_provenance(
+                checkpoint,
+                label="two-game checkpoint",
+                failures=failures,
+                required_source=self.source_commit,
+                required_fingerprint=self.engine_fingerprint,
+                required_image=self.image_commit,
+                expected_seed_range=(1000, 1001),
+                expected_records=2,
+                expected_distinct_seeds=2,
+            )
+        self.assertIn("two-game checkpoint has 1 checkpoint records, expected 2 for its shard", failures)
+        self.assertIn("two-game checkpoint has 1 distinct checkpoint seeds, expected 2 for its shard", failures)
+
+    def test_incomplete_shard_checkpoint_provenance_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            first = json.loads(paths[0].read_text(encoding="utf-8"))
+            first["checkpoint_provenance"]["complete"] = False
+            paths[0].write_text(json.dumps(first), encoding="utf-8")
+            payload = self._run(root)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertIn("shard-0.json: checkpoint_provenance is not complete", payload["gate_failures"])
+
+    def test_consumer_rejects_manifest_missing_per_shard_probe_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract_path = root / "contract.json"
+            contract = self._contract()
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            manifest["shards"][0]["behavioral_probes"].pop("total")
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(any("behavioral_probes is missing required field 'total'" in failure
+                            for failure in payload["gate_failures"]))
+
+    def test_missing_aggregate_scalar_never_defaults_to_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            first = json.loads(paths[0].read_text(encoding="utf-8"))
+            first.pop("engine_errors")
+            paths[0].write_text(json.dumps(first), encoding="utf-8")
+            payload = self._run(root)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertIn("shard-0.json: missing or malformed aggregate scalar 'engine_errors'", payload["gate_failures"])
+
+    def test_malformed_first_seed_summary_cannot_mislabel_second_shard_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            first = json.loads(paths[0].read_text(encoding="utf-8"))
+            first["seeds"]["min"] = True
+            paths[0].write_text(json.dumps(first), encoding="utf-8")
+            contract = self._contract()
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            manifest["shards"][1]["checkpoint"]["sha256"] = "0" * 64
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertTrue(any(failure.startswith("shard-1.json checkpoint SHA-256")
+                            for failure in payload["gate_failures"]))
+        self.assertFalse(any(failure.startswith("shard-0.json checkpoint SHA-256")
+                             for failure in payload["gate_failures"]))
+
+    def test_runtime_provenance_uses_injected_public_commit_without_git(self) -> None:
+        with patch.object(readout, "public_repo_commit", return_value=self.source_commit):
+            runtime = readout._current_runtime_provenance()
+            checkout = readout._checkout_commit(Path("/no-git-image"))
+        self.assertEqual(runtime["source_commit"], self.source_commit)
+        self.assertEqual(checkout, self.source_commit)
+
+    def test_contract_producer_hash_is_checked_against_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            manifest["producer"]["sha256"] = "0" * 64
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertTrue(any("execution manifest producer SHA-256 does not match its artifact" in failure
+                            for failure in payload["gate_failures"]))
 
     def test_predicted_zero_requires_an_emittable_exclusion_counter(self) -> None:
         contract = self._contract()

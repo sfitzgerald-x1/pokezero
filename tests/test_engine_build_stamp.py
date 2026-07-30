@@ -46,6 +46,36 @@ class EngineBuildStampTests(unittest.TestCase):
         self.assertTrue(any("does not attest both installed consumers" in problem for problem in problems))
         self.assertTrue(any("artifacts do not match" in problem for problem in problems))
 
+    def test_cargo_manifests_and_locks_change_native_build_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            patch_list = root / "third_party" / "poke-engine-gen3-patches.txt"
+            patch_list.parent.mkdir(parents=True)
+            patch_list.write_text("fixture.patch\n", encoding="utf-8")
+            (root / "third_party" / "fixture.patch").write_text("patch\n", encoding="utf-8")
+            crate = root / "rust" / "pokezero-search"
+            vendored = root / "third_party" / "poke-engine-src"
+            (crate / "src").mkdir(parents=True)
+            vendored.mkdir(parents=True)
+            (crate / "src" / "lib.rs").write_text("fn x() {}\n", encoding="utf-8")
+            for directory in (crate, vendored):
+                (directory / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
+                (directory / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+            with (
+                patch.object(fingerprint, "REPO_ROOT", root),
+                patch.object(fingerprint, "PATCH_LIST", patch_list),
+                patch.object(fingerprint, "VENDORED", vendored),
+                patch.object(fingerprint, "CRATE_ROOT", crate),
+                patch.object(fingerprint, "CRATE_SRC", crate / "src"),
+            ):
+                before = fingerprint.compute_fingerprint()["fingerprint"]
+                (vendored / "Cargo.lock").write_text("version = 4\n# changed\n", encoding="utf-8")
+                after_vendored_lock = fingerprint.compute_fingerprint()["fingerprint"]
+                (crate / "Cargo.toml").write_text("[package]\nname='changed'\n", encoding="utf-8")
+                after_crate_manifest = fingerprint.compute_fingerprint()["fingerprint"]
+        self.assertNotEqual(before, after_vendored_lock)
+        self.assertNotEqual(after_vendored_lock, after_crate_manifest)
+
 
 if __name__ == "__main__":
     unittest.main()

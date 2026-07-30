@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engine-cert-final-contract.schema.json",
+  "title": "Public final engine certification contract",
+  "type": "object",
+  "required": ["registered_before_launch", "requires_execution_contract", "certification_gates", "pre_registered_family_rate_table", "predicted_class_rates_10k"],
+  "properties": {
+    "registered_before_launch": {"const": true},
+    "requires_execution_contract": {"const": true},
+    "certification_gates": {
+      "type": "object",
+      "required": ["required_source_commit", "required_image_commit", "required_engine_fingerprint", "required_readout_sha256", "required_execution_manifest_producer_sha256"],
+      "properties": {
+        "required_source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_image_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_engine_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_readout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_execution_manifest_producer_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "pre_registered_family_rate_table": {
+      "type": "object",
+      "required": ["documented_families", "new_mechanisms_post_fix"],
+      "properties": {
+        "documented_families": {"type": "object"},
+        "new_mechanisms_post_fix": {"type": "object"}
+      }
+    },
+    "predicted_class_rates_10k": {"type": "object"}
+  }
+}

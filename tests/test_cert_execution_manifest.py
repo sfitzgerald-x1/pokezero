@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -36,7 +37,16 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         image = "c" * 40
         report = self._write(
             root / "shard.json",
-            json.dumps({"seeds": {"min": 1000, "max": 1000, "distinct": 1}}),
+            json.dumps(
+                {
+                    "games": 1,
+                    "seeds": {"min": 1000, "max": 1000, "distinct": 1},
+                    "checkpoint_provenance": {
+                        "complete": True,
+                        "records_with_provenance": 1,
+                    },
+                }
+            ),
         )
         checkpoint = self._write(
             root / "shard.jsonl",
@@ -82,6 +92,32 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             "branch": branch,
         }
 
+    def _final_contract(self, paths: dict[str, Path]) -> None:
+        source = self._source_commit()
+        paths["contract"].write_text(
+            json.dumps(
+                {
+                    "registered_before_launch": True,
+                    "requires_execution_contract": True,
+                    "certification_gates": {
+                        "required_source_commit": source,
+                        "required_image_commit": "c" * 40,
+                        "required_engine_fingerprint": "b" * 64,
+                        "required_readout_sha256": _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
+                        "required_execution_manifest_producer_sha256": _sha256(
+                            ROOT / "scripts" / "cert_execution_manifest.py"
+                        ),
+                    },
+                    "pre_registered_family_rate_table": {
+                        "documented_families": {},
+                        "new_mechanisms_post_fix": {},
+                    },
+                    "predicted_class_rates_10k": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def test_producer_hashes_logs_and_freezes_content_addressed_blobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -103,6 +139,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             persisted = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(payload, persisted)
             self.assertEqual(payload["schema"], "engine-cert-execution-manifest/2")
+            self.assertEqual(manifest.validate_execution_manifest_schema(payload), [])
             self.assertEqual(
                 payload["aggregate_provenance"]["behavioral_probes"]["sha256"],
                 _sha256(paths["behavior"]),
@@ -112,6 +149,30 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             self.assertEqual(
                 _sha256(Path(payload["contract_blob"]["path"])), _sha256(paths["contract"])
             )
+
+    def test_producer_rejects_checkpoint_shorter_than_reported_game_population(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            report = json.loads(paths["report"].read_text(encoding="utf-8"))
+            report["games"] = 2
+            report["seeds"] = {"min": 1000, "max": 1001, "distinct": 2}
+            report["checkpoint_provenance"]["records_with_provenance"] = 2
+            paths["report"].write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "checkpoint record population"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
 
     def test_producer_rejects_mixed_checkpoint_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -134,6 +195,43 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     aggregate_branch_log=paths["branch"],
                     engine_stamp=paths["stamp"],
                 )
+
+    def test_final_contract_producer_uses_injected_public_commit_without_git(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            with patch.object(manifest, "public_repo_commit", return_value=self._source_commit()):
+                payload = manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                    repo_root=Path("/no-git-image"),
+                )
+        self.assertEqual(payload["source"]["commit"], self._source_commit())
+
+    def test_no_git_producer_fails_closed_without_injected_public_commit(self) -> None:
+        with patch.object(manifest, "public_repo_commit", return_value=None):
+            with self.assertRaisesRegex(ValueError, "cannot resolve public source commit"):
+                manifest._source_checkout(Path("/no-git-image"))
+
+    def test_final_contract_schema_rejects_missing_predicted_class_table(self) -> None:
+        contract = {
+            "registered_before_launch": True,
+            "requires_execution_contract": True,
+            "certification_gates": {},
+            "pre_registered_family_rate_table": {},
+        }
+        errors = manifest.validate_final_contract_schema(contract)
+        self.assertIn("final contract predicted_class_rates_10k is not an object", errors)
 
 
 if __name__ == "__main__":

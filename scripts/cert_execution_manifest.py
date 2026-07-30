@@ -26,13 +26,16 @@ import argparse
 import hashlib
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
+
 CHECKPOINT_SCHEMA = "engine-transition-differential/1"
 MANIFEST_SCHEMA = "engine-cert-execution-manifest/2"
 STAMP_SCHEMA = "pokezero-engine-build/2"
@@ -54,6 +57,157 @@ def _strict_int(value: object) -> int | None:
     return value if type(value) is int else None
 
 
+def validate_execution_manifest_schema(payload: object) -> list[str]:
+    """Validate the bounded v2 schema without adding a runtime dependency.
+
+    The checked-in JSON Schema remains the interoperable specification.  This
+    deliberately small validator enforces the same required fields at both
+    producer and consumer seams, so a missing per-shard probe record cannot
+    become valid merely because the local image lacks ``jsonschema``.
+    """
+
+    errors: list[str] = []
+
+    def mapping(value: object, label: str, required: Sequence[str]) -> Mapping[str, Any] | None:
+        if not isinstance(value, Mapping):
+            errors.append(f"{label} is not an object")
+            return None
+        for field in required:
+            if field not in value:
+                errors.append(f"{label} is missing required field {field!r}")
+        return value
+
+    def file(value: object, label: str) -> None:
+        entry = mapping(value, label, ("path", "sha256"))
+        if entry is None:
+            return
+        if not isinstance(entry.get("path"), str) or not entry["path"]:
+            errors.append(f"{label}.path is not a non-empty string")
+        if not isinstance(entry.get("sha256"), str) or not _SHA256_RE.fullmatch(entry["sha256"]):
+            errors.append(f"{label}.sha256 is not a lowercase SHA-256")
+
+    def behavioral_probe(value: object, label: str) -> None:
+        file(value, label)
+        entry = mapping(value, label, ("path", "sha256", "passed", "total"))
+        if entry is None:
+            return
+        passed, total = _strict_int(entry.get("passed")), _strict_int(entry.get("total"))
+        if passed is None or passed < 0 or total is None or total < 0 or passed > total:
+            errors.append(f"{label} has malformed passed/total counts")
+
+    def branch_probe(value: object, label: str) -> None:
+        file(value, label)
+        entry = mapping(value, label, ("path", "sha256", "passed"))
+        if entry is not None and type(entry.get("passed")) is not bool:
+            errors.append(f"{label}.passed is not a boolean")
+
+    root = mapping(
+        payload,
+        "manifest",
+        ("schema", "producer", "source", "contract_blob", "readout_blob", "engine_provenance", "aggregate_provenance", "shards"),
+    )
+    if root is None:
+        return errors
+    if root.get("schema") != MANIFEST_SCHEMA:
+        errors.append(f"manifest.schema is not {MANIFEST_SCHEMA}")
+    file(root.get("producer"), "producer")
+    file(root.get("contract_blob"), "contract_blob")
+    file(root.get("readout_blob"), "readout_blob")
+    source = mapping(root.get("source"), "source", ("commit", "checkout"))
+    if source is not None:
+        if not isinstance(source.get("commit"), str) or not _GIT_RE.fullmatch(source["commit"]):
+            errors.append("source.commit is not a lowercase Git SHA")
+        if not isinstance(source.get("checkout"), str) or not source["checkout"]:
+            errors.append("source.checkout is not a non-empty string")
+    engine = mapping(root.get("engine_provenance"), "engine_provenance", ("fingerprint", "stamp"))
+    if engine is not None:
+        if not isinstance(engine.get("fingerprint"), str) or not _SHA256_RE.fullmatch(engine["fingerprint"]):
+            errors.append("engine_provenance.fingerprint is not a lowercase SHA-256")
+        file(engine.get("stamp"), "engine_provenance.stamp")
+    aggregate = mapping(root.get("aggregate_provenance"), "aggregate_provenance", ("behavioral_probes", "branch_events_probe"))
+    if aggregate is not None:
+        behavioral_probe(aggregate.get("behavioral_probes"), "aggregate_provenance.behavioral_probes")
+        branch_probe(aggregate.get("branch_events_probe"), "aggregate_provenance.branch_events_probe")
+    shards = root.get("shards")
+    if not isinstance(shards, list) or not shards:
+        errors.append("shards is not a non-empty array")
+        return errors
+    for index, raw in enumerate(shards):
+        label = f"shards[{index}]"
+        shard = mapping(
+            raw,
+            label,
+            ("seed_start", "report", "checkpoint", "completion_marker", "image_commit", "behavioral_probes", "branch_events_probe"),
+        )
+        if shard is None:
+            continue
+        seed_start = _strict_int(shard.get("seed_start"))
+        if seed_start is None or seed_start < 0:
+            errors.append(f"{label}.seed_start is not a non-negative integer")
+        file(shard.get("report"), f"{label}.report")
+        file(shard.get("completion_marker"), f"{label}.completion_marker")
+        if not isinstance(shard.get("image_commit"), str) or not _GIT_RE.fullmatch(shard["image_commit"]):
+            errors.append(f"{label}.image_commit is not a lowercase Git SHA")
+        behavioral_probe(shard.get("behavioral_probes"), f"{label}.behavioral_probes")
+        branch_probe(shard.get("branch_events_probe"), f"{label}.branch_events_probe")
+        checkpoint = mapping(shard.get("checkpoint"), f"{label}.checkpoint", ("path", "sha256", "records", "resume_provenance"))
+        if checkpoint is not None:
+            file(checkpoint, f"{label}.checkpoint")
+            records = _strict_int(checkpoint.get("records"))
+            if records is None or records <= 0:
+                errors.append(f"{label}.checkpoint.records is not a positive integer")
+            provenance = mapping(checkpoint.get("resume_provenance"), f"{label}.checkpoint.resume_provenance", ("source_commit", "engine_fingerprint", "image_commit"))
+            if provenance is not None:
+                for field, pattern in (("source_commit", _GIT_RE), ("engine_fingerprint", _SHA256_RE), ("image_commit", _GIT_RE)):
+                    value = provenance.get(field)
+                    if not isinstance(value, str) or not pattern.fullmatch(value):
+                        errors.append(f"{label}.checkpoint.resume_provenance.{field} is malformed")
+    return errors
+
+
+def validate_final_contract_schema(contract: object) -> list[str]:
+    """Validate public final-contract fields shared by producer and readout.
+
+    This intentionally validates only public, execution-relevant state. Cluster
+    configuration and any private rate-table implementation stay outside this
+    repository and cannot become implicit certification inputs.
+    """
+
+    if not isinstance(contract, Mapping):
+        return ["final contract root is not an object"]
+    final = contract.get("registered_before_launch") is True or contract.get("requires_execution_contract") is True
+    if not final:
+        return []
+    errors: list[str] = []
+    if contract.get("registered_before_launch") is not True:
+        errors.append("final contract registered_before_launch is not true")
+    if contract.get("requires_execution_contract") is not True:
+        errors.append("final contract requires_execution_contract is not true")
+    gates = contract.get("certification_gates")
+    if not isinstance(gates, Mapping):
+        return errors + ["final contract has no certification_gates object"]
+    for field, pattern in (
+        ("required_source_commit", _GIT_RE),
+        ("required_image_commit", _GIT_RE),
+        ("required_engine_fingerprint", _SHA256_RE),
+        ("required_readout_sha256", _SHA256_RE),
+        ("required_execution_manifest_producer_sha256", _SHA256_RE),
+    ):
+        value = gates.get(field)
+        if not isinstance(value, str) or not pattern.fullmatch(value):
+            errors.append(f"final contract {field} is not a valid lowercase hash")
+    table = contract.get("pre_registered_family_rate_table")
+    if not isinstance(table, Mapping):
+        errors.append("final contract has no pre_registered_family_rate_table object")
+    else:
+        for field in ("documented_families", "new_mechanisms_post_fix"):
+            if not isinstance(table.get(field), Mapping):
+                errors.append(f"final contract pre_registered_family_rate_table.{field} is not an object")
+    if not isinstance(contract.get("predicted_class_rates_10k"), Mapping):
+        errors.append("final contract predicted_class_rates_10k is not an object")
+    return errors
+
+
 def _file(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError(f"artifact is not a file: {path}")
@@ -61,17 +215,15 @@ def _file(path: Path) -> dict[str, str]:
     return {"path": str(resolved), "sha256": _sha256(resolved)}
 
 
-def _source_checkout(repo_root: Path) -> dict[str, str]:
-    try:
-        commit = subprocess.check_output(
-            ("git", "-C", str(repo_root), "rev-parse", "HEAD"),
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip().lower()
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise ValueError(f"cannot resolve source checkout commit: {error}") from error
+def _source_checkout(repo_root: Path, *, source_commit: str | None = None) -> dict[str, str]:
+    """Resolve image-injected source identity before falling back to local git."""
+
+    commit = (source_commit or public_repo_commit(repo_root) or "").strip().lower()
     if not _GIT_RE.fullmatch(commit):
-        raise ValueError("source checkout did not resolve to a full lowercase Git SHA")
+        raise ValueError(
+            "cannot resolve public source commit; set POKEZERO_PUBLIC_REPO_COMMIT "
+            "in no-.git images or pass --source-commit"
+        )
     return {"commit": commit, "checkout": str(repo_root.resolve())}
 
 
@@ -161,12 +313,21 @@ def _checkpoint(path: Path, *, report: Mapping[str, Any]) -> tuple[dict[str, Any
         _strict_int(report_seeds.get("max")),
         _strict_int(report_seeds.get("distinct")),
     )
-    if start is None or end is None or distinct is None:
+    games = _strict_int(report.get("games"))
+    if start is None or end is None or distinct is None or games is None or games <= 0:
         raise ValueError(f"{path}: paired shard report has malformed seed summary")
+    if end != start + games - 1 or distinct != games:
+        raise ValueError(f"{path}: paired shard report does not describe a complete contiguous game range")
+    report_provenance = report.get("checkpoint_provenance")
+    if not isinstance(report_provenance, Mapping):
+        raise ValueError(f"{path}: paired shard report has no checkpoint provenance summary")
+    if report_provenance.get("complete") is not True or _strict_int(
+            report_provenance.get("records_with_provenance")) != games:
+        raise ValueError(f"{path}: paired shard report has incomplete checkpoint provenance")
     seeds = [_strict_int(record.get("seed")) for record in records]
     if any(seed is None or not start <= seed <= end for seed in seeds):
         raise ValueError(f"{path}: checkpoint seed is outside paired shard seed band")
-    if len(set(seeds)) != len(seeds) or len(seeds) != distinct:
+    if len(records) != games or len(set(seeds)) != games:
         raise ValueError(f"{path}: checkpoint record population does not match paired shard report")
     provenance_rows = [record["provenance"] for record in records]
 
@@ -207,6 +368,7 @@ def produce_manifest(
     aggregate_branch_log: Path,
     engine_stamp: Path,
     repo_root: Path = REPO_ROOT,
+    source_commit: str | None = None,
 ) -> dict[str, Any]:
     sequences = (reports, checkpoints, completion_markers, behavioral_logs, branch_logs)
     if not reports or any(len(values) != len(reports) for values in sequences[1:]):
@@ -217,9 +379,22 @@ def produce_manifest(
         raise ValueError(f"contract is invalid JSON: {error}") from error
     if not isinstance(contract_payload, Mapping):
         raise ValueError("contract root is not an object")
+    contract_errors = validate_final_contract_schema(contract_payload)
+    if contract_errors:
+        raise ValueError("final contract schema validation failed: " + "; ".join(contract_errors))
     artifact_dir = output.resolve().parent / "cert-provenance-blobs"
-    source = _source_checkout(repo_root)
+    source = _source_checkout(repo_root, source_commit=source_commit)
     engine = _engine_provenance(engine_stamp)
+    gates = contract_payload.get("certification_gates")
+    if isinstance(gates, Mapping):
+        if gates.get("required_source_commit") != source["commit"]:
+            raise ValueError("source checkout commit does not match final contract")
+        if gates.get("required_engine_fingerprint") != engine["fingerprint"]:
+            raise ValueError("engine build fingerprint does not match final contract")
+        if gates.get("required_readout_sha256") != _sha256(readout):
+            raise ValueError("readout hash does not match final contract")
+        if gates.get("required_execution_manifest_producer_sha256") != _sha256(Path(__file__)):
+            raise ValueError("execution manifest producer hash does not match final contract")
     shards: list[dict[str, Any]] = []
     for report_path, checkpoint_path, marker_path, behavior_log, branch_log in zip(
         reports, checkpoints, completion_markers, behavioral_logs, branch_logs
@@ -240,6 +415,8 @@ def produce_manifest(
             raise ValueError(f"{checkpoint_path}: source commit is not this producer checkout")
         if provenance["engine_fingerprint"] != engine["fingerprint"]:
             raise ValueError(f"{checkpoint_path}: engine fingerprint is not the supplied engine stamp")
+        if isinstance(gates, Mapping) and image_commit != gates.get("required_image_commit"):
+            raise ValueError(f"{checkpoint_path}: image commit does not match final contract")
         shards.append({
             "seed_start": seed_start,
             "report": _file(report_path),
@@ -264,6 +441,9 @@ def produce_manifest(
         },
         "shards": sorted(shards, key=lambda entry: entry["seed_start"]),
     }
+    schema_errors = validate_execution_manifest_schema(manifest)
+    if schema_errors:
+        raise ValueError("produced execution manifest violates v2 schema: " + "; ".join(schema_errors))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
@@ -283,6 +463,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--aggregate-branch-events-probe-log", type=Path, required=True)
     parser.add_argument("--engine-stamp", type=Path, default=Path(sys.prefix) / ".engine-build-fingerprint.json")
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument(
+        "--source-commit",
+        default=None,
+        help="explicit immutable public source commit for a no-.git image",
+    )
     args = parser.parse_args(argv)
     try:
         manifest = produce_manifest(
@@ -298,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             aggregate_branch_log=args.aggregate_branch_events_probe_log,
             engine_stamp=args.engine_stamp,
             repo_root=args.repo_root,
+            source_commit=args.source_commit,
         )
     except (OSError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
