@@ -212,6 +212,28 @@ class CertificationContractTests(unittest.TestCase):
             ],
         )
 
+    def test_blocked_draft_cannot_fall_back_to_legacy_mode(self) -> None:
+        failures, evidence = readout._contract_gates(
+            paths=[],
+            shards=[],
+            contract={
+                "registered_before_launch": False,
+                "requires_execution_contract": True,
+            },
+            contract_path=Path(readout.__file__),
+            execution_manifest=None,
+            coverage=1.0,
+            aggregate={"games": 0},
+        )
+        self.assertEqual(
+            failures,
+            [
+                "contract requires certification_gates, but none were registered",
+                "contract was not registered before launch",
+            ],
+        )
+        self.assertEqual(evidence, {"enforced": False})
+
 
 if __name__ == "__main__":
     unittest.main()

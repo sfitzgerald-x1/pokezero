@@ -409,6 +409,18 @@ def _contract_gates(
 
     gates = contract.get("certification_gates")
     if not isinstance(gates, Mapping):
+        failures = []
+        if contract.get("requires_execution_contract") is True:
+            failures.append(
+                "contract requires certification_gates, but none were registered"
+            )
+        if (
+            "registered_before_launch" in contract
+            and contract.get("registered_before_launch") is not True
+        ):
+            failures.append("contract was not registered before launch")
+        if failures:
+            return failures, {"enforced": False}
         return [], {"enforced": False}
 
     failures: list[str] = []

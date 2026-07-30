@@ -1,6 +1,7 @@
 {
   "spec_version": "engine-cert-sweep-2 draft-2 (blocked after independent review)",
   "registered_before_launch": false,
+  "requires_execution_contract": true,
   "launch_registration": {
     "status": "BLOCKED",
     "review": "Independent Opus review blocked the premature final registration before any fresh measurement was launched.",
