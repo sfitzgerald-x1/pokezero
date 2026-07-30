@@ -6293,80 +6293,122 @@ unchanged — this round is adjudication, not repair.
 sampled and carry no verdict from me. They are listed so the next reader knows the boundary of
 this appendix rather than inferring coverage from its title.
 
-## Z14.1 CAND_recoil_vs_substitute_basis (12 rows) — WHY established, engine lane
+## Z14.1 CAND_recoil_vs_substitute_basis (12 rows) — CORRECTED: world knowledge-limit
 
-**Derived from source, then confirmed by replay.** gen3 has no `substitute` override, so the
-condition resolves UP to **gen4's** (`data/mods/gen4/moves.ts:1283`), whose
-`onTryPrimaryHit` does:
+**The sim-chain half of this entry stands; the engine half was wrong and is withdrawn.**
 
-```js
-if (damage > target.volatiles['substitute'].hp) {
-    damage = target.volatiles['substitute'].hp;      // CLAMP to what the sub had left
-}
-...
-if (move.recoil && damage) {
-    this.damage(this.actions.calcRecoilDamage(damage, move, source), source, target, 'recoil');
-}
-return this.HIT_SUBSTITUTE;                          // === 0 (sim/battle.ts:273)
+### What holds
+
+gen3 has no `substitute` override, so the condition resolves UP to **gen4's**
+(`data/mods/gen4/moves.ts:1283`), which clamps `damage` to the sub's remaining HP, applies
+recoil *inside* that handler from the clamped value, and returns `HIT_SUBSTITUTE === 0` — so
+`move.totalDamage` is falsy and the outer recoil block (`gen3/scripts.ts:460`) never
+double-applies. gen3 also owns `calcRecoilDamage` and **floors** where base rounds.
+
+### What was FALSE
+
+I wrote that "the engine computes recoil from the FULL damage". **It does not.** The engine's
+substitute path sets `damage_dealt = min(calculated, substitute_health)` and recoil consumes
+the clamped value — **semantically identical to gen4's handler**. The engine path is
+**verified sim-exact**.
+
+### The real mechanism, and how I got it wrong
+
+`engine_world.py` seeds the sub with a **documented upper-bound approximation**:
+
+```python
+substitute_health = 0
+if "substitute" in volatiles:
+    # Public info does not carry the sub's remaining HP; a fresh sub costs
+    # maxhp/4, so that is the documented upper-bound approximation.
+    substitute_health = party[active_index].maxhp // 4
 ```
 
-Three facts compose the rule:
+There is **no depletion tracking**. So the engine clamps correctly — to a sub that the world
+believes is always full. Venusaur: `262 // 4 = 65`, and `floor(65/3) = 21` — **exactly** the
+engine's observed recoil. The engine was reading its own seeded 65, not a full-damage figure.
 
-1. **The recoil basis is the CLAMPED damage** — what the Substitute actually absorbed, not the
-   damage the move would have dealt. Recoil is applied *inside* the Substitute handler.
-2. **`HIT_SUBSTITUTE === 0`**, so `move.totalDamage` is falsy and the outer recoil block
-   (`gen3/scripts.ts:460`) does not fire. There is no double-application.
-3. **gen3 owns `calcRecoilDamage`** (`data/mods/gen3/scripts.ts:480`) and uses **`Math.floor`**
-   where base uses `Math.round`, min-clamped to 1.
+My −21/−19 arithmetic **back-fitted**: I inferred "full damage ≈ 63" from `floor(x/3) = 21`
+when **63, 64 and 65 all floor to 21**, and picked the value that fit my hypothesis instead of
+reading the retained `DamageSubstitute` instruction, which states the number outright. The
+artifact was in hand and I reasoned past it.
 
-**WHY:** the engine computes recoil from the FULL damage; gen3 computes it from the damage
-clamped to the Substitute's remaining HP. The gap is therefore largest exactly when a hit
-overkills a nearly-empty Substitute — which is most sub-breaking hits.
+### Re-laned, and the prediction replaced
 
-Row evidence (Double-Edge, recoil 1/3):
+**Lane: world / knowledge limit**, not engine damage.
 
-| row | Showdown | engine | implies |
-| --- | --- | --- | --- |
-| 2000031/60 | **-10** = floor(31/3) | **-21** = floor(63/3) | sub had 31 left; engine used the full ~63 |
-| 2100227/35 | **-1** (min-1 clamp) | **-19** = floor(57/3) | sub nearly empty; engine used the full ~57 |
+* An **engine patch clears ZERO rows** — there is nothing wrong with the engine path.
+* **Depletion tracking** in the world clears the **inferable subset**: sub-breaking hits whose
+  absorbed amounts can be reconstructed from public damage lines.
+* The remainder is a **genuine limit shape**: Showdown does not publish how much a Substitute
+  absorbed on a non-breaking hit, so the world cannot always know the remaining HP. Part of
+  this family is not fixable without hidden information, and should be adjudicated as a limit
+  rather than carried as an open defect.
 
-**Predicted clearance if fixed: all 12**, and the signature is a magnitude mechanism (a wrong
-number inside an otherwise-correct branch), so by the Z6.4 rule expect them to clear IN PLACE
-with no scatter — and expect NO bonus clears from other families.
+## Z14.2 CAND_incapacitated_arm_pricing (11 rows) — CORRECTED: split, and one refusal withdrawn
 
-**Lane: engine (damage patch).** Not implemented here, per the brief.
+The blanket refusal was **half right and is half withdrawn**. Three rows sampled; two
+mechanisms, two lanes.
 
-## Z14.2 CAND_incapacitated_arm_pricing (11 rows) — REFUSED: not the world's
+### Freeze rows — engine lane, mechanism corrected
 
-The brief's hypothesis was the hidden-duration support gating
-(`approximate_hidden_duration_volatiles`), i.e. one of my own four one-consumer candidates.
-**Replay says it is not.** Two rows, two different mechanisms, and in both the world is right:
+I wrote that the engine "has no 80/20 freeze arm". **It has one; it did not fire.** The thaw
+exclusion at `gen3/generate_instructions.rs:1580` reads:
 
-**2000131/47 — freeze.** Omastar is frozen; Showdown emits `|cant|...|frz`. The world seeded
-it correctly: `pre_features p1_status = FREEZE`. The engine's branch set is a 93.75/6.25 CRIT
-split with no 80/20 freeze arm at all, and its majority has the frozen mon attacking for 59.
-The world told the engine the truth and the engine did not gate on it.
+```rust
+&& ![Choices::HIDDENPOWER, Choices::WEATHERBALL].contains(&choice.move_id)
+```
 
-**2000281/99 — fresh sleep.** Umbreon is slept by Lovely Kiss *during the turn* and then
-`|cant|...|slp`. The world correctly has `p1_status = NONE` at the boundary, because the sleep
-did not exist yet. The engine applies the sleep and then still lets Umbreon move. This is the
-same-turn shape as the Encore redirect: a status applied by the first mover must gate the
-second mover's move within the same turn.
+— only the **generic** `HIDDENPOWER`. Espeon's `HIDDENPOWERFIRE70` is a distinct enum variant,
+so the engine treated it as a thawing fire hit, thawed the frozen mon, and let it act. gen3
+says Hidden Power must not thaw.
 
-**Neither is a world-seeding or hidden-counter gap**, so I am not taking this one. The world
-is supplying correct state in both directions — an already-frozen mon and a not-yet-asleep
-mon — and the divergence is downstream of it. Filing it in my lane would have produced a fix
-that seeds something already seeded.
+The same file already enumerates **all 33 HP variants** thirty lines earlier (line 1374, for
+`MoveCategory`), so the fix class is exactly the enumerate-every-variant pattern this ledger
+established for the counter/mirrorcoat Hidden Power work — a known precedent, not a new design.
 
-**Lane: engine (incapacitation gating).** Sub-shapes for whoever takes it: (a) the freeze arm
-not firing on a correctly-seeded FREEZE, (b) same-turn status not gating the second mover.
-Predicted clearance is therefore split across two fixes, not one.
+Confirmed on a second row: **2100471/18**, Chimecho's Hidden Power into a frozen Sableye, same
+absent freeze arm, engine's Sableye acting for 185.
 
-## Z14.3 The pattern this round adds
+### The fresh-sleep row — refusal WITHDRAWN, world lane (mine)
 
-Both adjudications moved a shape OUT of the lane its WHAT suggested. The recoil rows looked
-like a damage-roll family and are an inheritance-chain question about which mod owns
-`substitute`; the incapacitated rows looked like a hidden-counter family and are two engine
-gating bugs. **A WHAT names where a divergence is VISIBLE; the lane follows from the WHY, and
-the two are routinely different** — this is the fourth consecutive round where the documented
-WHY pointed at the wrong lane or the wrong cause.
+**2000281/99 was my lane and I refused it wrongly.** The engine does not "apply the sleep and
+then let the mon move" — it emits **zero instructions on every branch**, because its
+rest-aware sleep clause saw a **benched Entei seeded with `rest_turns = 0`**. The world's
+rest-provenance machinery (`restSleepAttempts` → `3 − k`) failed to mark a **BENCHED** public
+Rest sleeper, so the clause could not engage.
+
+That is a world-construction gap — precisely the lane I declined. **Sub-shape (b)
+("same-turn status not gating the second mover") is withdrawn**: no sampled row exhibits it,
+and it should be re-established from a row that does before anyone builds on it.
+
+### Sizing the split
+
+Of three sampled rows: **2 engine** (HP-variant thaw), **1 world** (benched Rest provenance).
+A 3-row sample cannot size an 11-row family with confidence; it establishes that the family is
+**mixed**, which is the part that matters for routing. The remaining 8 need the same
+treatment before either lane commits to a clearance number.
+
+## Z14.3 The rule, and the appendix that instantiated it
+
+The original text of this section proposed: *a WHAT names where a divergence is VISIBLE; the
+lane follows from the WHY, and the two are routinely different.* The rule survives. What did
+not survive is my application of it — **this appendix was itself an instance**, and the split
+falls exactly along one line:
+
+| WHY derived from | outcome |
+| --- | --- |
+| **sim source, read directly** (gen4 substitute chain, `HIT_SUBSTITUTE`, gen3 `calcRecoilDamage`) | **held** |
+| **arithmetic, without reading the retained branch instructions** (engine recoil basis, "no freeze arm", "applies the sleep then moves") | **all three refuted** |
+
+I have a standing rule for this — replay before narrating, read the artifact rather than the
+note — and I applied it to the SIM and skipped it on the ENGINE. The retained repros carried
+`DamageSubstitute`, the branch dumps, and the instruction lists that state each of the three
+answers outright. Every failed claim was an inference over a number when the number's
+provenance was one field away.
+
+**Sharpened rule: derivation is licensed for a source you are READING and never for a
+component whose output you are only INFERRING.** Reading Showdown's chain to predict engine
+behaviour is half a derivation; the other half is opening the engine's own recorded output.
+The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
+artifact said 65.
