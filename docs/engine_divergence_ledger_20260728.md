@@ -5892,3 +5892,26 @@ toxic ticks.
   `reports/c13_batch_e_differential.json` (binding run, 107/107),
   `tests/test_engine_fixed_damage_and_hooks_fidelity.py`, patches
   `poke-engine-gen3-{weather-move-targeting,recoil-rounding,fixed-damage-pipeline,counter-hiddenpower-category,flashfire-phase1}.patch` (37-41, fixture-refresh still last).
+
+## Z10.8 Cycle-13 integration re-baseline (merged tree: batch E + #967)
+
+Fresh 300-game strict run on the merged tree (engine fingerprint `3204c777...`
+unchanged — #967 is Python-only; probes 9/9), pre-registered in
+`reports/c13_rebaseline_prediction.json` (separate commit, before the run) and
+identity-diffed against BOTH parents, all three artifacts `repros_complete: true`
+(c13 batch E 107/107, c12 trace-toxic 113/113, this run 103/103).
+
+| | predicted | actual |
+|---|---|---|
+| diverged | 103 (= 117 - 12 - 4 + 2) | **103** |
+| identity | batch E's 107 minus #967's four clears, exactly | **exact match** |
+| vs batch-E parent | -4 (#967's rows), nothing else | **exactly those 4, 0 new** |
+| vs trace-toxic parent | -12 (batch E's rows), +2 (the I1 recoil rows) | **exactly those** |
+| outside-limits | 65 observed = 58 adjudicated + 5 relabeled + 2 new-I1 | **65 / 58 / 38 limit** |
+| class changes | 0 | **0** |
+| capped-lethal walk | 9/9 present | **9/9** |
+
+Zero clearance overlap between the parents held (the near-miss 1500248/78 is #967's
+clear and this lane's stale stay, per the Z10.6 bridge). The merged-main residue
+frame for the next cycle: **103 diverged = 58 adjudicated outside-limits + 5
+relabeled + 2 I1-candidate new rows + 38 limit.**
