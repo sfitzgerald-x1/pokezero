@@ -1,0 +1,981 @@
+{
+  "archive": {
+    "all_rows_were_originally_transition_diverged": true,
+    "identity": "c14 certification retained population",
+    "rows": 3821,
+    "sha256s_manifest": "7a1022c4fa45f658a6e38cdf9d57ab5ae32904261050da24cb2ee25d2f82de52",
+    "shards": 8
+  },
+  "controls_preserved": [
+    "Switch and nonzero stat-event branches still use their mapper-supplied pre-hit snapshot.",
+    "Substitute HP costs remain excluded from direct-hit support.",
+    "Spikes, exact stat events, and non-roll components retain their existing comparison paths.",
+    "Only the selected bare direct-damage event receives branch-local membership; confusion, recoil, drain, capped-lethal, and other same-side events retain pre-state membership."
+  ],
+  "critical_marker_consistency": {
+    "interpretation": "For branch-local repricing, the repaired matcher requires the selected direct component and the observed paired direct component to carry the same critical marker. The transition counts are reported separately because rows without a branch-local snapshot retain the pre-existing baseline comparator.",
+    "observed_critical_identity_transition_counts": {
+      "diverged_to_diverged": 579,
+      "diverged_to_matched": 4,
+      "matched_to_diverged": 96,
+      "matched_to_matched": 1
+    },
+    "previous_false_matches_rejected_with_observed_critical_marker": 96,
+    "remaining_matches_with_observed_critical_marker": 5
+  },
+  "identity_changes": {
+    "false_matches_rejected": [
+      {
+        "observed_critical": true,
+        "seed": 2000050,
+        "step": 26
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000091,
+        "step": 6
+      },
+      {
+        "observed_critical": false,
+        "seed": 2000091,
+        "step": 19
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000109,
+        "step": 39
+      },
+      {
+        "observed_critical": false,
+        "seed": 2000147,
+        "step": 62
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000224,
+        "step": 4
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000249,
+        "step": 39
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000263,
+        "step": 34
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000309,
+        "step": 78
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000342,
+        "step": 20
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000348,
+        "step": 53
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000382,
+        "step": 104
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000393,
+        "step": 10
+      },
+      {
+        "observed_critical": false,
+        "seed": 2000464,
+        "step": 49
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000510,
+        "step": 13
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000621,
+        "step": 100
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000622,
+        "step": 59
+      },
+      {
+        "observed_critical": false,
+        "seed": 2000664,
+        "step": 21
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000728,
+        "step": 30
+      },
+      {
+        "observed_critical": true,
+        "seed": 2000892,
+        "step": 34
+      },
+      {
+        "observed_critical": false,
+        "seed": 2000969,
+        "step": 30
+      },
+      {
+        "observed_critical": false,
+        "seed": 2001007,
+        "step": 60
+      },
+      {
+        "observed_critical": true,
+        "seed": 2001025,
+        "step": 50
+      },
+      {
+        "observed_critical": true,
+        "seed": 2001146,
+        "step": 8
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100243,
+        "step": 2
+      },
+      {
+        "observed_critical": true,
+        "seed": 2100613,
+        "step": 23
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100614,
+        "step": 6
+      },
+      {
+        "observed_critical": true,
+        "seed": 2100650,
+        "step": 6
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100689,
+        "step": 8
+      },
+      {
+        "observed_critical": true,
+        "seed": 2100690,
+        "step": 4
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100851,
+        "step": 32
+      },
+      {
+        "observed_critical": true,
+        "seed": 2100867,
+        "step": 36
+      },
+      {
+        "observed_critical": true,
+        "seed": 2100895,
+        "step": 54
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100935,
+        "step": 78
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100968,
+        "step": 27
+      },
+      {
+        "observed_critical": false,
+        "seed": 2100969,
+        "step": 28
+      },
+      {
+        "observed_critical": true,
+        "seed": 2101031,
+        "step": 16
+      },
+      {
+        "observed_critical": true,
+        "seed": 2101089,
+        "step": 10
+      },
+      {
+        "observed_critical": true,
+        "seed": 2101108,
+        "step": 95
+      },
+      {
+        "observed_critical": true,
+        "seed": 2101182,
+        "step": 114
+      },
+      {
+        "observed_critical": true,
+        "seed": 2101205,
+        "step": 87
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200002,
+        "step": 23
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200086,
+        "step": 38
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200264,
+        "step": 96
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200348,
+        "step": 18
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200366,
+        "step": 20
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200396,
+        "step": 14
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200403,
+        "step": 10
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200573,
+        "step": 37
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200651,
+        "step": 21
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200659,
+        "step": 18
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200668,
+        "step": 80
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200708,
+        "step": 78
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200715,
+        "step": 97
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200729,
+        "step": 65
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200765,
+        "step": 76
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200768,
+        "step": 32
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200775,
+        "step": 55
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200843,
+        "step": 34
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200943,
+        "step": 21
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200993,
+        "step": 4
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200995,
+        "step": 57
+      },
+      {
+        "observed_critical": true,
+        "seed": 2201028,
+        "step": 5
+      },
+      {
+        "observed_critical": false,
+        "seed": 2201070,
+        "step": 54
+      },
+      {
+        "observed_critical": true,
+        "seed": 2201113,
+        "step": 28
+      },
+      {
+        "observed_critical": false,
+        "seed": 2201145,
+        "step": 19
+      },
+      {
+        "observed_critical": false,
+        "seed": 2201145,
+        "step": 218
+      },
+      {
+        "observed_critical": false,
+        "seed": 2201146,
+        "step": 35
+      },
+      {
+        "observed_critical": true,
+        "seed": 2201199,
+        "step": 33
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300093,
+        "step": 7
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300251,
+        "step": 4
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300262,
+        "step": 31
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300364,
+        "step": 5
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300379,
+        "step": 46
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300458,
+        "step": 11
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300469,
+        "step": 10
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300542,
+        "step": 48
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300571,
+        "step": 62
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300775,
+        "step": 92
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300848,
+        "step": 29
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300874,
+        "step": 20
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300891,
+        "step": 70
+      },
+      {
+        "observed_critical": false,
+        "seed": 2300908,
+        "step": 44
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300915,
+        "step": 30
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300924,
+        "step": 69
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300945,
+        "step": 35
+      },
+      {
+        "observed_critical": false,
+        "seed": 2301000,
+        "step": 70
+      },
+      {
+        "observed_critical": false,
+        "seed": 2301127,
+        "step": 12
+      },
+      {
+        "observed_critical": true,
+        "seed": 2301141,
+        "step": 109
+      },
+      {
+        "observed_critical": true,
+        "seed": 2301195,
+        "step": 97
+      },
+      {
+        "observed_critical": false,
+        "seed": 2301224,
+        "step": 74
+      },
+      {
+        "observed_critical": true,
+        "seed": 2301236,
+        "step": 19
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400071,
+        "step": 15
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400085,
+        "step": 37
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400096,
+        "step": 80
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400151,
+        "step": 5
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400166,
+        "step": 72
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400516,
+        "step": 215
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400540,
+        "step": 5
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400551,
+        "step": 25
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400631,
+        "step": 79
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400635,
+        "step": 6
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400653,
+        "step": 40
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400655,
+        "step": 57
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400700,
+        "step": 11
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400774,
+        "step": 20
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400821,
+        "step": 25
+      },
+      {
+        "observed_critical": true,
+        "seed": 2400824,
+        "step": 21
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400837,
+        "step": 9
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400953,
+        "step": 26
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400965,
+        "step": 5
+      },
+      {
+        "observed_critical": false,
+        "seed": 2401055,
+        "step": 129
+      },
+      {
+        "observed_critical": true,
+        "seed": 2401089,
+        "step": 37
+      },
+      {
+        "observed_critical": true,
+        "seed": 2401207,
+        "step": 18
+      },
+      {
+        "observed_critical": false,
+        "seed": 2401207,
+        "step": 41
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500011,
+        "step": 12
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500020,
+        "step": 2
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500036,
+        "step": 75
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500081,
+        "step": 9
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500228,
+        "step": 82
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500378,
+        "step": 19
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500385,
+        "step": 144
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500406,
+        "step": 37
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500434,
+        "step": 55
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500444,
+        "step": 61
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500498,
+        "step": 51
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500507,
+        "step": 92
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500577,
+        "step": 5
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500731,
+        "step": 76
+      },
+      {
+        "observed_critical": true,
+        "seed": 2500735,
+        "step": 76
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500850,
+        "step": 51
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500939,
+        "step": 142
+      },
+      {
+        "observed_critical": false,
+        "seed": 2500939,
+        "step": 222
+      },
+      {
+        "observed_critical": true,
+        "seed": 2501028,
+        "step": 32
+      },
+      {
+        "observed_critical": false,
+        "seed": 2501129,
+        "step": 3
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600039,
+        "step": 71
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600320,
+        "step": 10
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600331,
+        "step": 72
+      },
+      {
+        "observed_critical": false,
+        "seed": 2600369,
+        "step": 48
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600442,
+        "step": 13
+      },
+      {
+        "observed_critical": false,
+        "seed": 2600497,
+        "step": 39
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600549,
+        "step": 9
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600581,
+        "step": 29
+      },
+      {
+        "observed_critical": false,
+        "seed": 2600628,
+        "step": 12
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600649,
+        "step": 18
+      },
+      {
+        "observed_critical": false,
+        "seed": 2600655,
+        "step": 12
+      },
+      {
+        "observed_critical": false,
+        "seed": 2600843,
+        "step": 3
+      },
+      {
+        "observed_critical": true,
+        "seed": 2600857,
+        "step": 54
+      },
+      {
+        "observed_critical": false,
+        "seed": 2601159,
+        "step": 34
+      },
+      {
+        "observed_critical": false,
+        "seed": 2601208,
+        "step": 124
+      },
+      {
+        "observed_critical": true,
+        "seed": 2601210,
+        "step": 48
+      },
+      {
+        "observed_critical": true,
+        "seed": 2601246,
+        "step": 15
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700073,
+        "step": 1
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700116,
+        "step": 22
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700117,
+        "step": 141
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700211,
+        "step": 78
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700261,
+        "step": 19
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700309,
+        "step": 12
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700311,
+        "step": 10
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700370,
+        "step": 6
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700370,
+        "step": 39
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700377,
+        "step": 39
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700401,
+        "step": 13
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700532,
+        "step": 14
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700550,
+        "step": 20
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700821,
+        "step": 37
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700895,
+        "step": 8
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700968,
+        "step": 51
+      },
+      {
+        "observed_critical": false,
+        "seed": 2700981,
+        "step": 36
+      },
+      {
+        "observed_critical": true,
+        "seed": 2701028,
+        "step": 36
+      },
+      {
+        "observed_critical": true,
+        "seed": 2701077,
+        "step": 103
+      },
+      {
+        "observed_critical": true,
+        "seed": 2701087,
+        "step": 46
+      },
+      {
+        "observed_critical": true,
+        "seed": 2701137,
+        "step": 5
+      }
+    ],
+    "new_matches_from_exact_component_scoping": [
+      {
+        "observed_critical": false,
+        "seed": 2100175,
+        "step": 132
+      },
+      {
+        "observed_critical": true,
+        "seed": 2200760,
+        "step": 86
+      },
+      {
+        "observed_critical": false,
+        "seed": 2200924,
+        "step": 60
+      },
+      {
+        "observed_critical": false,
+        "seed": 2201223,
+        "step": 7
+      },
+      {
+        "observed_critical": true,
+        "seed": 2300983,
+        "step": 40
+      },
+      {
+        "observed_critical": false,
+        "seed": 2400666,
+        "step": 69
+      },
+      {
+        "observed_critical": true,
+        "seed": 2700145,
+        "step": 92
+      },
+      {
+        "observed_critical": true,
+        "seed": 2701058,
+        "step": 56
+      }
+    ]
+  },
+  "implementation_after_prediction": true,
+  "implementation_commit": "9029800",
+  "method": {
+    "after_matcher_commit": "9029800",
+    "after_output_sha256": "177bc4f9a408f68e6a7beb77550063510356c4d693d2cd18aefcc22146558e9e",
+    "before_matcher_commit": "5c08dc9",
+    "before_output_sha256": "77f3c943d76f567e963c06679b9451b1d8edd4526d8297afe744e26de17c5e2a",
+    "same_archived_rows_for_both_rereads": true,
+    "same_installed_engine_for_both_rereads": true
+  },
+  "prediction_commit": "5c08dc9",
+  "reread_tallies": {
+    "after": {
+      "diverged": 3655,
+      "matched": 166
+    },
+    "before": {
+      "diverged": 3490,
+      "matched": 331
+    },
+    "identity_transition_counts": {
+      "diverged_to_diverged": 3482,
+      "diverged_to_matched": 8,
+      "matched_to_diverged": 173,
+      "matched_to_matched": 158
+    }
+  },
+  "residual_boundary": "Baseline pre-state support remains intentionally separate from the branch-local snapshot path. This change does not claim to repair branch rendering, state construction, action attribution, or any divergence outside exact selected-hit support.",
+  "review_example": {
+    "after": "diverged",
+    "before": "matched",
+    "incorrect_prior_match": "noncritical -106",
+    "observed": "critical -200",
+    "seed": 2000050,
+    "step": 26
+  },
+  "schema": "pokezero.c17.matcher-branch-local-crit-component-results.v1",
+  "scope": "Strict matcher branch-local roll support only. The engine, world constructor, branch renderer, retained archive, and acceptance denominator were not changed.",
+  "verification": {
+    "diff_check": "git diff --check: pass",
+    "focused_python": "PYTHONPATH=src .venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_public_invariant: pass, 51 tests",
+    "python_compile": "PYTHONPATH=src .venv/bin/python -m py_compile scripts/engine_transition_differential.py: pass",
+    "rust_events": "cargo test --manifest-path rust/pokezero-search/Cargo.toml events::tests --release: pass, 21 tests"
+  }
+}
