@@ -1,0 +1,30 @@
+{
+  "schema": "pokezero.c17.matcher-nonzero-stat-event-results.v1",
+  "prediction_commit": "ffb6b8c",
+  "implementation_commit": "4496880",
+  "implementation_after_prediction": true,
+  "scope": "Classifier correction within the strict matcher only. No mapper behavior, support widening, attribution, residual logic, or divergence routing changed.",
+  "verification": {
+    "pre_implementation_regression": {
+      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_capped_stat_event_before_an_opponent_hit",
+      "exit_code": 1,
+      "result": "Expected failure: a rendered |-boost|...|0 required a missing legal_roll_state before an opponent hit."
+    },
+    "post_implementation_tests": [
+      {
+        "command": "cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib events::tests",
+        "result": "pass, 21 tests"
+      },
+      {
+        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "result": "pass, 53 tests"
+      },
+      {
+        "command": "native mapper replay: capped Swords Dance followed by Tackle",
+        "result": "pass: no legal_roll_state is emitted and branch_event_legal_rolls returns None without loading a state"
+      }
+    ]
+  },
+  "readout": "Only actual nonzero stage deltas trigger branch-local support. A presentation-only zero-stage line is not a state mutation and uses the ordinary pre-state path. Malformed stage amounts remain fail-closed.",
+  "residual_risk": "The filter trusts the mapper's numeric stage field. Any change to that protocol shape becomes fail-closed rather than silently using stale support."
+}
