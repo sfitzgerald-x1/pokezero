@@ -1,0 +1,13 @@
+{
+  "schema": "engine-cert-contract-attestation/1",
+  "contract_source_commit": "e1ee668a57689375ff865293178e511fa12982ae",
+  "contract_path": "reports/c15_resweep_spec.json",
+  "contract_sha256": "3e1af2af626f278af6b640f5c340665a6b8374f7fe7af3fefdb889de2c3fb80d",
+  "launch_source_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
+  "required_engine_fingerprint": "d6f514411bfe4e2cd665b0b7af6eb77a33676c25f66734ca4e33cb9a635b75aa",
+  "registration": {
+    "pull_request": 983,
+    "fresh_sweep2_measurements_inspected": 0,
+    "purpose": "Bind the pre-registered final contract to immutable tracked bytes while keeping its executable source and image commit non-circular."
+  }
+}

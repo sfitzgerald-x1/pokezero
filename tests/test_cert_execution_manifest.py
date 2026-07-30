@@ -778,6 +778,54 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             contract["launch_registration"]["engine_patch_count"],
         )
 
+    def test_checked_in_contract_attestation_binds_tracked_contract_blob(
+        self,
+    ) -> None:
+        attestation_path = ROOT / "reports" / "c25_cert_contract_attestation.json"
+        attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            attestation["schema"], "engine-cert-contract-attestation/1"
+        )
+        contract_bytes = subprocess.check_output(
+            (
+                "git",
+                "-C",
+                str(ROOT),
+                "show",
+                f"{attestation['contract_source_commit']}:{attestation['contract_path']}",
+            )
+        )
+        self.assertEqual(
+            hashlib.sha256(contract_bytes).hexdigest(),
+            attestation["contract_sha256"],
+        )
+        contract = json.loads(contract_bytes)
+        gates = contract["certification_gates"]
+        self.assertEqual(
+            gates["required_source_commit"],
+            attestation["launch_source_commit"],
+        )
+        self.assertEqual(
+            gates["required_image_commit"],
+            attestation["launch_source_commit"],
+        )
+        self.assertEqual(
+            gates["required_engine_fingerprint"],
+            attestation["required_engine_fingerprint"],
+        )
+        subprocess.run(
+            (
+                "git",
+                "-C",
+                str(ROOT),
+                "ls-files",
+                "--error-unmatch",
+                str(attestation_path.relative_to(ROOT)),
+            ),
+            check=True,
+            capture_output=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
