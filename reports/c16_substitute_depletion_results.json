@@ -1,11 +1,12 @@
 {
-  "schema": "c16-substitute-depletion-results/2",
+  "schema": "c16-substitute-depletion-results/3",
   "disposition": "superseded_pending_remeasurement",
   "limit_family": "limit:world_substitute_health_unknown",
   "provenance_contract": {
     "accepted_limit": "Only an active Substitute with canonical, explicit substituteHealthState=unknown is counted in limit:world_substitute_health_unknown.",
     "terminal_contradictions": "Missing, absent, broken, malformed, arbitrary, or invalid exact Substitute provenance with an active volatile terminates as substitute_health_provenance_contradiction and is not a limit.",
-    "exact_public_cases": "The replay fold retains exact remaining HP only for directly preceding, non-breaking Gen 3 Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom hits."
+    "exact_public_cases": "The replay fold retains cumulative exact depletion only for directly preceding, non-breaking Gen 3 Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom hits. Each sampled world derives remaining HP from its own floor(maxhp/4).",
+    "sample_incompatibility": "If exact depletion is greater than or equal to a sampled world's initial Substitute HP, construction terminates as substitute_depletion_world_incompatible; this is not the accepted unknown-health limit."
   },
   "prediction_score": {
     "preregistered_rows": 12,
@@ -125,10 +126,10 @@
     "repros_complete": true
   },
   "current_verification": {
-    "focused_unittest": "263 passed across the engine/parser/accounting/public-invariant and local Showdown materialization suites",
+    "focused_unittest": "267 passed across engine world, replay parser, differential accounting, local Showdown materialization, and public-invariant suites",
     "public_invariant": "passed",
     "fresh_certification_sweep": "not run in this evidence update",
-    "identity_counts": "not asserted because retained v1 counts may include rows that now resolve to exact fixed-damage health or terminal provenance contradictions"
+    "identity_counts": "not asserted because retained v1 counts may include rows that now resolve to exact fixed-damage depletion, sampled-world incompatibility, or terminal provenance contradictions"
   },
   "coverage_boundary": "The retained v1 identity rows are historical evidence only. This revision makes no post-fix aggregate claim until a fresh differential sweep classifies every active Substitute as exact, explicit unknown limit, or terminal provenance contradiction."
 }

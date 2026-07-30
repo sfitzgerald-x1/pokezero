@@ -64,6 +64,16 @@ class WorldConstructionLimits(unittest.TestCase):
         self.assertFalse(count_world_construction_limit(counts, error))
         self.assertEqual(counts, Counter())
 
+    def test_substitute_sample_incompatibility_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_depletion_world_incompatible",
+            "sampled Substitute could not have survived exact depletion",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
 
 class HealToFullTolerance(unittest.TestCase):
     """`*_to_full` heals cap in the OPPOSITE direction to `capped_lethal`.

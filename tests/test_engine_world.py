@@ -173,6 +173,16 @@ def _override() -> BattleStartOverride:
     )
 
 
+def _override_with_trimmed_snorlax_hp() -> BattleStartOverride:
+    trimmed = replace(_SNORLAX, evs={**(_SNORLAX.evs or {}), "hp": 0})
+    return BattleStartOverride(
+        player_teams={
+            "p1": pack_team(_team(_SWAMPERT, _STARMIE)),
+            "p2": pack_team(_team(trimmed, _STARMIE)),
+        },
+    )
+
+
 class UnpackTeamTests(unittest.TestCase):
     def test_pack_unpack_round_trips_exactly(self) -> None:
         team = _team(_SWAMPERT, _SNORLAX, _STARMIE)
@@ -420,7 +430,7 @@ class BattleSpecConstructionTests(unittest.TestCase):
         # A fainted active cannot carry a stale Substitute into the forced
         # replacement world, even if the preceding snapshot had one.
         payload["sides"]["p1"]["substituteHealthState"] = "absent"
-        payload["sides"]["p1"]["substituteHealth"] = None
+        payload["sides"]["p1"]["substituteDepletion"] = None
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertTrue(world.spec.side_one.force_switch)
         self.assertFalse(world.spec.side_two.force_switch)
@@ -476,11 +486,11 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
 
         payload["sides"]["p2"]["substituteHealthState"] = "exact"
-        payload["sides"]["p2"]["substituteHealth"] = 7
+        payload["sides"]["p2"]["substituteDepletion"] = 7
         exact = battle_spec_from_payload(
             payload, _override(), dex=self.dex, approximate_substitute_health=True
         ).spec.side_two
-        self.assertEqual(exact.substitute_health, 7)
+        self.assertEqual(exact.substitute_health, exact.pokemon[0].maxhp // 4 - 7)
 
         payload["sides"]["p2"]["volatiles"] = []
         payload["sides"]["p2"]["substituteHealthState"] = "broken"
@@ -491,7 +501,7 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(broken.substitute_health, 0)
 
     def test_active_substitute_invalid_provenance_is_a_terminal_contradiction(self) -> None:
-        for state, health in (
+        for state, depletion in (
             (None, None),
             ("", None),
             ("absent", None),
@@ -500,13 +510,15 @@ class BattleSpecConstructionTests(unittest.TestCase):
             ("arbitrary", None),
             ("exact", None),
             ("exact", 0),
+            ("exact", -1),
+            ("exact", True),
         ):
-            with self.subTest(state=state, health=health):
+            with self.subTest(state=state, depletion=depletion):
                 payload = _payload(self.dex)
                 payload["sides"]["p2"]["volatiles"] = ["Substitute"]
                 if state is not None:
                     payload["sides"]["p2"]["substituteHealthState"] = state
-                payload["sides"]["p2"]["substituteHealth"] = health
+                payload["sides"]["p2"]["substituteDepletion"] = depletion
                 with self.assertRaises(EngineWorldUnsupported) as caught:
                     battle_spec_from_payload(
                         payload, _override(), dex=self.dex, approximate_substitute_health=True
@@ -515,6 +527,40 @@ class BattleSpecConstructionTests(unittest.TestCase):
                     caught.exception.reason,
                     "substitute_health_provenance_contradiction",
                 )
+
+    def test_exact_depletion_is_applied_relative_to_sampled_max_hp(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "387/387"
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        payload["sides"]["p2"]["substituteDepletion"] = 50
+
+        side = battle_spec_from_payload(
+            payload,
+            _override_with_trimmed_snorlax_hp(),
+            dex=self.dex,
+            approximate_substitute_health=True,
+        ).spec.side_two
+
+        self.assertEqual(side.pokemon[0].maxhp, 370)
+        self.assertEqual(side.substitute_health, 42)
+
+    def test_exact_depletion_rejects_sample_that_could_not_have_survived(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["pokemon"][0]["condition"] = "387/387"
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        # The replay's 96 HP Substitute survives at 4; the sampled world's
+        # 92 HP Substitute could not still be active.
+        payload["sides"]["p2"]["substituteDepletion"] = 92
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload,
+                _override_with_trimmed_snorlax_hp(),
+                dex=self.dex,
+                approximate_substitute_health=True,
+            )
+        self.assertEqual(caught.exception.reason, "substitute_depletion_world_incompatible")
 
     def test_substitute_unknown_after_public_hit_fails_closed(self) -> None:
         payload = _payload(self.dex)

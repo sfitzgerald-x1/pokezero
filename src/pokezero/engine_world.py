@@ -386,9 +386,11 @@ def battle_spec_from_payload(
     position holds public state this construction cannot express exactly.
 
     ``substituteHealthState`` is the replay's public Substitute provenance:
-    ``"full"`` and an exact ``"exact"`` + ``substituteHealth`` pair can build
-    an active Substitute. ``"unknown"`` is the sole public-information limit;
-    missing or invalid active provenance is an instrumentation contradiction.
+    ``"full"`` and an exact ``"exact"`` + ``substituteDepletion`` pair can
+    build an active Substitute. Exact depletion is subtracted from this
+    sampled world's initial Substitute HP; it is not replay-scale remaining HP.
+    ``"unknown"`` is the sole public-information limit; missing or invalid
+    active provenance is an instrumentation contradiction.
     """
 
     _reject_unsupported_globals(payload)
@@ -1121,25 +1123,33 @@ def _build_side_spec(
         if isinstance(raw_substitute_health_state, str)
         else None
     )
-    raw_substitute_health = side_payload.get("substituteHealth")
+    raw_substitute_depletion = side_payload.get("substituteDepletion")
     if "substitute" in volatiles:
         # A freshly-created Substitute is public-exact at floor(maxhp / 4).
         # Only canonical ``unknown`` provenance is a named public-information
         # limit. Missing or malformed provenance signals a broken fold.
+        initial_substitute_health = party[active_index].maxhp // 4
         if substitute_health_state == "full":
-            substitute_health = party[active_index].maxhp // 4
+            substitute_health = initial_substitute_health
         elif substitute_health_state == "exact":
             if (
-                isinstance(raw_substitute_health, bool)
-                or not isinstance(raw_substitute_health, int)
-                or not 0 < raw_substitute_health <= party[active_index].maxhp // 4
+                isinstance(raw_substitute_depletion, bool)
+                or not isinstance(raw_substitute_depletion, int)
+                or raw_substitute_depletion <= 0
             ):
                 raise EngineWorldUnsupported(
                     "substitute_health_provenance_contradiction",
-                    f"side {slot!r} has invalid exact Substitute HP "
-                    f"{raw_substitute_health!r}",
+                    f"side {slot!r} has invalid exact Substitute depletion "
+                    f"{raw_substitute_depletion!r}",
                 )
-            substitute_health = raw_substitute_health
+            substitute_health = initial_substitute_health - raw_substitute_depletion
+            if substitute_health <= 0:
+                raise EngineWorldUnsupported(
+                    "substitute_depletion_world_incompatible",
+                    f"side {slot!r} sampled max HP {party[active_index].maxhp} gives "
+                    f"initial Substitute HP {initial_substitute_health}, which could not "
+                    f"survive exact public depletion {raw_substitute_depletion}",
+                )
         elif substitute_health_state == "unknown":
             raise EngineWorldUnsupported(
                 "substitute_health_unknown",

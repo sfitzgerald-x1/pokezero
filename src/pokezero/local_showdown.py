@@ -2104,11 +2104,11 @@ def _public_materialization_payload(
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
-            # A fresh Substitute is exact. After a non-breaking hit the public
-            # protocol exposes that it survived, not how much it absorbed, so
-            # engine_world must decline rather than reseed its initial HP.
+            # A fresh Substitute is exact. Deterministic fixed-damage chronology
+            # carries world-portable depletion; other surviving hits remain
+            # explicitly unknown so engine_world declines them.
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
-            "substituteHealth": replay.substitute_health.get(player),
+            "substituteDepletion": replay.substitute_depletion.get(player),
             "materializationBlockers": sorted(blockers),
             # The parser's observation feature advances the toxic value at a new turn. The
             # simulator state at the request boundary is one residual behind that feature.

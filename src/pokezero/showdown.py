@@ -1092,14 +1092,15 @@ class ShowdownReplayState:
     # Derived ONLY from public protocol lines — no engine-side hidden state.
     last_used_move: Mapping[str, str] = field(default_factory=dict)
     # Public Substitute-health provenance for the active slot. ``full`` is
-    # exact immediately after ``-start Substitute``; ``unknown`` means a
-    # non-breaking hit was publicly announced but its absorbed amount was not;
-    # ``broken`` is exact immediately after ``-end Substitute``. This stays
-    # distinct from volatile presence because an active Substitute can exist
-    # while its remaining HP is not public.
+    # exact immediately after ``-start Substitute``; ``exact`` means cumulative
+    # fixed-damage depletion is known; ``unknown`` means a non-breaking hit was
+    # announced without a public amount; ``broken`` follows ``-end Substitute``.
+    # This stays distinct from volatile presence because an active Substitute
+    # can exist while its remaining HP is not public.
     substitute_health_state: Mapping[str, str] = field(default_factory=dict)
-    # Exact remaining HP when public fixed-damage chronology derives it.
-    substitute_health: Mapping[str, int | None] = field(default_factory=dict)
+    # Cumulative exact depletion since creation when public fixed-damage
+    # chronology derives it. This invariant is portable across sampled max HP.
+    substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1252,7 +1253,7 @@ class _ReplayParser:
         self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.substitute_health_state: dict[str, str] = {"p1": "absent", "p2": "absent"}
-        self.substitute_health: dict[str, int | None] = {"p1": None, "p2": None}
+        self.substitute_depletion: dict[str, int | None] = {"p1": None, "p2": None}
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
@@ -1326,8 +1327,8 @@ class _ReplayParser:
             slot: str(snapshot.substitute_health_state.get(slot, "absent"))
             for slot in ("p1", "p2")
         }
-        parser.substitute_health = {
-            slot: snapshot.substitute_health.get(slot) for slot in ("p1", "p2")
+        parser.substitute_depletion = {
+            slot: snapshot.substitute_depletion.get(slot) for slot in ("p1", "p2")
         }
         parser.direct_materialization_blockers = {
             slot: set(snapshot.direct_materialization_blockers.get(slot, ()))
@@ -1516,7 +1517,7 @@ class _ReplayParser:
                 # passer and cannot be reconstructed for the recipient. Keep
                 # this provenance surface aligned with that fail-closed world.
                 self.substitute_health_state[pokemon.showdown_slot] = "absent"
-                self.substitute_health[pokemon.showdown_slot] = None
+                self.substitute_depletion[pokemon.showdown_slot] = None
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
@@ -1683,21 +1684,17 @@ class _ReplayParser:
             # fainted mon's Substitute would construct a phantom active effect.
             self.volatiles[slot].discard("substitute")
             self.substitute_health_state[slot] = "absent"
-            self.substitute_health[slot] = None
+            self.substitute_depletion[slot] = None
             return
         if len(parts) < 4 or _side_condition_identifier(parts[3]) != "substitute":
             return
         if event_type == "-start":
-            active = self.public_active.get(slot)
-            _, max_hp = _hp_numerator_denominator(
-                active.condition if active is not None else None
-            )
             self.substitute_health_state[slot] = "full"
-            self.substitute_health[slot] = max_hp // 4 if max_hp else None
+            self.substitute_depletion[slot] = 0
             return
         if event_type == "-end":
             self.substitute_health_state[slot] = "broken"
-            self.substitute_health[slot] = None
+            self.substitute_depletion[slot] = None
             return
         if event_type != "-activate":
             return
@@ -1710,13 +1707,13 @@ class _ReplayParser:
             if any(part.strip() == "[damage]" for part in parts[4:])
             else None
         )
-        current = self.substitute_health.get(slot)
-        if damage is not None and current is not None and 0 < damage < current:
+        current = self.substitute_depletion.get(slot)
+        if damage is not None and current is not None and damage > 0:
             self.substitute_health_state[slot] = "exact"
-            self.substitute_health[slot] = current - damage
+            self.substitute_depletion[slot] = current + damage
         else:
             self.substitute_health_state[slot] = "unknown"
-            self.substitute_health[slot] = None
+            self.substitute_depletion[slot] = None
 
     def _fixed_substitute_damage_from_previous_move(self, target_slot: str) -> int | None:
         if not self.public_lines:
@@ -2219,7 +2216,7 @@ class _ReplayParser:
             boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
             substitute_health_state=dict(self.substitute_health_state),
-            substitute_health=dict(self.substitute_health),
+            substitute_depletion=dict(self.substitute_depletion),
             direct_materialization_blockers={
                 slot: tuple(sorted(blockers))
                 for slot, blockers in self.direct_materialization_blockers.items()
