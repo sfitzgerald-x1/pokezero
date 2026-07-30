@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import re
 import random
 import sys
@@ -94,12 +95,13 @@ from pokezero.local_showdown import (  # noqa: E402
 )
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 from pokezero.randbat import Gen3RandbatSource, canonical_gen3_randbat_species_id  # noqa: E402
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 
 # Engine "no action" choice string (waiting seat / MUSTRECHARGE).
 _ENGINE_NO_MOVE = "none"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from engine_build_fingerprint import assert_fresh  # noqa: E402
+from engine_build_fingerprint import STAMP_SCHEMA, assert_fresh, compute_fingerprint  # noqa: E402
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
 
 _ENGINE_BOOST_FIELDS = (
@@ -1580,6 +1582,43 @@ def _prepare_boundary(
 # ---------------------------------------------------------------------------------------------
 
 CHECKPOINT_SCHEMA = "engine-transition-differential/1"
+_FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def _checkpoint_provenance() -> dict[str, str | None]:
+    """Capture the runtime identity on every completed game, including resumes."""
+
+    source_commit = public_repo_commit(REPO_ROOT)
+    image_commit = os.environ.get("POKEZERO_IMAGE_COMMIT", "").strip().lower()
+    if not _FULL_GIT_SHA_RE.fullmatch(image_commit):
+        image_commit = None
+    stamp_path = Path(sys.prefix) / ".engine-build-fingerprint.json"
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        stamp = {}
+    fingerprint = stamp.get("fingerprint") if stamp.get("schema") == STAMP_SCHEMA else None
+    if fingerprint != compute_fingerprint()["fingerprint"]:
+        fingerprint = None
+    return {
+        "source_commit": source_commit,
+        "engine_fingerprint": fingerprint,
+        "image_commit": image_commit,
+    }
+
+
+def _resume_provenance_failures(
+    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | None]
+) -> list[str]:
+    failures: list[str] = []
+    for index, record in enumerate(records, start=1):
+        provenance = record.get("provenance")
+        if not isinstance(provenance, Mapping):
+            failures.append(f"checkpoint record {index} has no resume provenance")
+            continue
+        if dict(provenance) != dict(current):
+            failures.append(f"checkpoint record {index} provenance differs from this resume")
+    return failures
 
 
 def checkpoint_record(
@@ -1589,12 +1628,14 @@ def checkpoint_record(
     repros: Sequence[Mapping[str, Any]],
     seconds: float,
     build_check: str,
+    provenance: Mapping[str, str | None],
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
         # Carried per RECORD, not just per report, so a merge of many shards can
         # tell that ANY of them ran ungated.
         "build_check": build_check,
+        "provenance": dict(provenance),
         "seed": int(seed),
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
@@ -1671,11 +1712,15 @@ def build_report(
     seeds: list[int] = []
     total_seconds = 0.0
     build_checks: set[str] = set()
+    provenance_rows: list[Mapping[str, Any]] = []
     for record in records:
         build_checks.add(str(record.get("build_check", "unknown")))
         totals.update({str(k): int(v) for k, v in (record.get("counters") or {}).items()})
         seeds.append(int(record.get("seed", -1)))
         total_seconds += float(record.get("seconds") or 0.0)
+        provenance = record.get("provenance")
+        if isinstance(provenance, Mapping):
+            provenance_rows.append(provenance)
         for repro in record.get("repros") or ():
             if len(repros) < keep_repro:
                 repros.append(dict(repro))
@@ -1729,6 +1774,16 @@ def build_report(
         },
         "counters": dict(sorted(totals.items())),
         "repros": repros,
+        "checkpoint_provenance": {
+            "records_with_provenance": len(provenance_rows),
+            "complete": len(provenance_rows) == games,
+            "distinct": sorted(
+                {
+                    json.dumps(dict(provenance), sort_keys=True)
+                    for provenance in provenance_rows
+                }
+            ),
+        },
     }
     if sources:
         report["merged_from"] = list(sources)
@@ -1813,6 +1868,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     skipped_check = bool(args.skip_build_check) and not args.merge_from
     assert_fresh(skip=args.skip_build_check or bool(args.merge_from))
     build_check = "skipped" if skipped_check else "gated"
+    provenance = _checkpoint_provenance()
 
     # --- merge mode: pure aggregation, no simulator ---
     if args.merge_from:
@@ -1863,6 +1919,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
         done_records = load_checkpoint(args.checkpoint)
+        resume_failures = _resume_provenance_failures(done_records, provenance)
+        if resume_failures:
+            raise SystemExit(
+                "checkpoint resume provenance mismatch:\n  - " + "\n  - ".join(resume_failures)
+            )
         done_seeds = {int(r["seed"]) for r in done_records}
         print(f"resume: {len(done_seeds)} games already in {args.checkpoint}", flush=True)
 
@@ -1912,6 +1973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repros=game_repros,
                 seconds=time.perf_counter() - game_started,
                 build_check=build_check,
+                provenance=provenance,
             )
             records.append(record)
             if handle is not None:

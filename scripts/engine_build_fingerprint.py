@@ -31,7 +31,7 @@ Two independent checks, because they catch different halves:
 
 Usage::
 
-    python scripts/engine_build_fingerprint.py --write        # after building
+    python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
     python scripts/engine_build_fingerprint.py --check        # before measuring
     python scripts/engine_build_fingerprint.py --print        # show the hash
 """
@@ -54,6 +54,7 @@ VENDORED = REPO_ROOT / "third_party" / "poke-engine-src"
 # in practice while landing the positional attributor.
 CRATE_SRC = REPO_ROOT / "rust" / "pokezero-search" / "src"
 STAMP_NAME = ".engine-build-fingerprint.json"
+STAMP_SCHEMA = "pokezero-engine-build/2"
 
 REBUILD_HINT = """
   scripts/vendor_poke_engine_src.sh <venv-python>
@@ -62,7 +63,7 @@ REBUILD_HINT = """
   (cd rust/pokezero-search && touch src/lib.rs && maturin build --release \\
        --interpreter <venv-python> -o ../dist)
   uv pip install --python <venv-python> --force-reinstall rust/dist/*.whl
-  python scripts/engine_build_fingerprint.py --write
+  python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 """.rstrip()
 
 
@@ -85,6 +86,14 @@ def crate_sources() -> list[Path]:
     if not CRATE_SRC.exists():
         return []
     return sorted(CRATE_SRC.rglob("*.rs"))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def compute_fingerprint() -> dict[str, Any]:
@@ -169,12 +178,49 @@ def _installed_binaries() -> list[Path]:
     return found
 
 
+def _installed_artifacts() -> dict[str, dict[str, Any]]:
+    """Content identities for both installed consumers of the patched engine."""
+
+    artifacts: dict[str, dict[str, Any]] = {}
+    for name in ("poke_engine", "pokezero_search"):
+        try:
+            module = __import__(name)
+        except Exception as error:  # noqa: BLE001 -- emitted as a useful rebuild failure
+            raise RuntimeError(f"cannot import installed {name}: {type(error).__name__}: {error}") from error
+        module_path = Path(getattr(module, "__file__", "") or "").resolve()
+        if not module_path.is_file():
+            raise RuntimeError(f"installed {name} has no module file")
+        extension_paths = sorted(
+            path.resolve()
+            for suffix in ("*.so", "*.pyd")
+            for path in module_path.parent.glob(suffix)
+        )
+        if not extension_paths:
+            raise RuntimeError(f"installed {name} has no native extension artifact")
+        artifacts[name] = {
+            "module_path": str(module_path),
+            "module_sha256": _sha256(module_path),
+            "extensions": [
+                {"path": str(path), "sha256": _sha256(path)} for path in extension_paths
+            ],
+        }
+    return artifacts
+
+
 def _stamp_path() -> Path:
     return Path(sys.prefix) / STAMP_NAME
 
 
 def write_stamp() -> Path:
+    """Record the just-built source and installed artifacts for both consumers."""
+
     payload = compute_fingerprint()
+    payload.update(
+        {
+            "schema": STAMP_SCHEMA,
+            "artifacts": _installed_artifacts(),
+        }
+    )
     path = _stamp_path()
     path.write_text(json.dumps(payload, indent=2))
     return path
@@ -193,7 +239,19 @@ def check(*, strict_mtime: bool = True) -> list[str]:
             f"no build stamp at {stamp} — the installed engine's provenance is unknown"
         )
     else:
-        recorded = json.loads(stamp.read_text())
+        try:
+            recorded = json.loads(stamp.read_text())
+        except json.JSONDecodeError:
+            recorded = {}
+            problems.append(f"build stamp at {stamp} is not valid JSON")
+        if not isinstance(recorded, dict):
+            recorded = {}
+            problems.append(f"build stamp at {stamp} is not a JSON object")
+        if recorded.get("schema") != STAMP_SCHEMA:
+            problems.append(
+                f"build stamp at {stamp} does not attest both installed consumers "
+                f"({STAMP_SCHEMA} required)"
+            )
         fingerprint_ok = recorded.get("fingerprint") == expected["fingerprint"]
         if not fingerprint_ok:
             problems.append(
@@ -202,6 +260,16 @@ def check(*, strict_mtime: bool = True) -> list[str]:
                 f"({recorded.get('count','?')} patches)\n"
                 f"    HEAD    : {expected['fingerprint'][:16]} ({expected['count']} patches)"
             )
+        try:
+            actual_artifacts = _installed_artifacts()
+        except RuntimeError as error:
+            problems.append(str(error))
+        else:
+            if recorded.get("artifacts") != actual_artifacts:
+                problems.append(
+                    "installed poke_engine/pokezero_search artifacts do not match the "
+                    "two-consumer build stamp"
+                )
 
     if strict_mtime:
         sources = list(patch_files()) + [PATCH_LIST] + crate_sources()
@@ -276,12 +344,19 @@ def assert_fresh(*, skip: bool = False) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--write", action="store_true", help="stamp the current patch set")
+    group.add_argument("--write", action="store_true", help="stamp a completed two-consumer rebuild")
     group.add_argument("--check", action="store_true", help="verify installed vs HEAD")
     group.add_argument("--print", dest="show", action="store_true")
+    ap.add_argument(
+        "--after-two-consumer-rebuild",
+        action="store_true",
+        help="required acknowledgement from scripts/build_search_crate_engine.sh",
+    )
     args = ap.parse_args(argv)
 
     if args.write:
+        if not args.after_two_consumer_rebuild:
+            ap.error("--write requires --after-two-consumer-rebuild; one-consumer stamps are forbidden")
         path = write_stamp()
         payload = json.loads(path.read_text())
         print(
