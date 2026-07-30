@@ -50,7 +50,7 @@ from pokezero.mcts_eval.resolver import (  # noqa: E402
 
 def _contract(**overrides) -> CheckpointContract:
     values = dict(
-        checkpoint_path="/shared/ckpt.pt",
+        checkpoint_path="<private-store>/ckpt.pt",
         checkpoint_sha256="a" * 64,
         policy_id="foundation-midscale-iter-1438",
         schema_version="pokezero.observation.v3",
@@ -323,7 +323,7 @@ class EngineMctsPolicyModeTest(unittest.TestCase):
         from pokezero.foulplay_bridge import ControlledFoulPlayConfig
 
         values = dict(
-            checkpoint=P("/shared/ckpt.pt"),
+            checkpoint=P("<private-store>/ckpt.pt"),
             showdown_root=P("/opt/pokemon-showdown"),
             policy_mode="engine-mcts",
             engine_model_path=P("/artifacts/model_ts.pt"),

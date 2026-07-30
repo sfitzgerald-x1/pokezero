@@ -1,5 +1,5 @@
 {
-  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint": "<private-store>/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
   "config": "d6-s1024-b64-w4",
   "games": 34,
   "search_wins": 12,

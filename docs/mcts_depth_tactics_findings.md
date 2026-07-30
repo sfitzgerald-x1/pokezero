@@ -245,6 +245,6 @@ PYTHONPATH=src .venv/bin/python -m unittest tests.test_search_depth_tactics
 ```
 
 The checkpoint is not committed (40 MB; lives on the cluster at
-`/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt`);
+`<private-store>/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt`);
 `local-artifacts/` is untracked. Any engine-compatible checkpoint reproduces
 the probe through the same latch path.

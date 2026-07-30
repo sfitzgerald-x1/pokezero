@@ -21,7 +21,7 @@ Sources (repeatable, mixed freely):
 
 Usage:
   python scripts/history_slot_census.py \
-      --cache /shared/scott-experiment/<run>/cache \
+      --cache <private-store>/<run>/cache \
       --out runs/history-slot-census-<date>.json
 """
 

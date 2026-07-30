@@ -8,9 +8,9 @@ path, inference endpoint — so the private deployment repo only has to wrap it 
 a Job.
 
     python scripts/run_mcts_depth_eval.py \
-        --checkpoint /shared/.../transformer-policy.pt \
+        --checkpoint <private-store>/.../transformer-policy.pt \
         --showdown-root /opt/pokemon-showdown \
-        --out-root /shared/mcts-depth-eval/run-1 \
+        --out-root <private-store>/mcts-depth-eval/run-1 \
         --depths 2,4 --sims 512,1024 --corpus-decisions 64
 
 Stages reuse completed work on restart; nothing is held in memory across a

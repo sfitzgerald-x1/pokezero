@@ -1,0 +1,17 @@
+{
+ "registered_before_measurement": true,
+ "cycle": 14, "patches": 41,
+ "commit_sha": "05c4624",
+ "fingerprint": "3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce",
+ "probes": "9/9 PASS on this build before any row was walked",
+ "scope": "A1 walks (the 7 compound roll_divergent_lethality shapes from reports/c12_decomposition.json) + adjudication of the 2 Z10.8 I1-candidate rows. Walked against reports/c13_rebaseline_differential.json (repros_complete: true, 103/103) - fresh repros at 41 patches, so batch E's recoil-exactness values are the ones enumerated.",
+ "predictions": [
+  {"id":"P1","claim":"pre-registered split for the 7 A1 rows under the amended X standard (mass floor 1%, per-move roll consistency, widened target, four exits)",
+   "rows":[[1500054,125],[1500055,60],[1500108,67],[1500112,40],[1500182,25],[1500200,47],[1500217,112]],
+   "expect":{"limit:roll_divergent_lethality":5,"limit_not_established":2,"damage_calc":0,"cannot_enumerate":0},
+   "basis":"c9 replay evidence: majority-branch roll disagreements with observed values in or near the legal sets; 1500108/67 is a crit-arm x roll conjunction (predicted sub-floor); one sandstorm-pair row may also fall sub-floor. Scored predicted-vs-actual in the walk artifact",
+   "sample_first":"4 of 7 before generalizing, named now: 1500054:125, 1500108:67, 1500200:47, 1500217:112"},
+  {"id":"P2","claim":"the 2 I1-candidate rows (1500129/46, 1500200/87) formalize into the matcher_heal_cap_structural / avg-roll world-evolution family on replay (component-shape artifact through now-correct recoil), and do NOT need the X walk; walked only if replay shows a capped-lethal majority shape, and any limit-shaped verdict there is recorded as candidate evidence, NOT a relabel (they are not members of the sanctioned adjudication set)"},
+  {"id":"P3","claim":"no A1 walk verdict may reduce the residue except limit exits carrying the per-row demonstration; lne/damage_calc/cannot_enumerate leave labels untouched (X.3.3 asymmetry)"}
+ ]
+}

@@ -103,10 +103,10 @@ TIMELINE_TAIL="${POKEZERO_TIMELINE_TAIL:-500}"
 REQ_TIMEOUT="${POKEZERO_KUBECTL_TIMEOUT:-60s}"
 CP_TIMEOUT="${POKEZERO_CP_TIMEOUT:-1800}"
 
-KC=(kubectl --context "$CTX" -n "$NS" --request-timeout="$REQ_TIMEOUT")
+KC=(kubectl (internal context/namespace) --request-timeout="$REQ_TIMEOUT")
 # kubectl cp streams multi-GB checkpoints: it gets its own (long) request
 # timeout plus a hard wall-clock timeout via run_with_timeout below.
-KC_CP=(kubectl --context "$CTX" -n "$NS" --request-timeout="${CP_TIMEOUT}s")
+KC_CP=(kubectl (internal context/namespace) --request-timeout="${CP_TIMEOUT}s")
 HELPER=(python3 "$REPO/scripts/milestone_probes.py")
 HAZARD_PROBE="$REPO/scripts/hazard_probe.py"
 PROBE_ROOT="$REPO/runs/milestone-probes"
