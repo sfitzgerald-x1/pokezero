@@ -1,6 +1,6 @@
 {
   "arm": "k64c",
-  "checkpoint": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
+  "checkpoint": "<private-store>/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/transformer-policy.pt",
   "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
   "config": "d4-s1024-b64-w4",
   "depth": 4,
@@ -25,8 +25,8 @@
   "search_wall_per_decision": 4.5826,
   "provenance": {
     "arm": "k64c",
-    "tables_path": "/shared/scott-experiment/mcts-k0-grid-20260729/tables/k64/corrected/encoder_tables.json",
-    "model_path": "/shared/scott-experiment/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/.mcts-eval-artifacts-5e2e3e8c7899bfeb/model_ts.pt",
+    "tables_path": "<private-store>/mcts-k0-grid-20260729/tables/k64/corrected/encoder_tables.json",
+    "model_path": "<private-store>/v3hist-k64-enthalf-5m-20260723/run/iteration-2657/.mcts-eval-artifacts-5e2e3e8c7899bfeb/model_ts.pt",
     "tables_masks": {
       "exact_state": true,
       "stats_block": true,

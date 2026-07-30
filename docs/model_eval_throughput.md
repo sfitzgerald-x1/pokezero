@@ -297,7 +297,7 @@ Exact experiment (one job, <30 GPU-minutes):
   `python scripts/bench_model_eval.py --checkpoint <ckpt> --label <label>
   --devices cuda,cpu --dtypes fp32,fp16 --fp16-runtime ts
   --batch-sizes 1,16,64,128,256,512,1024 --partial-study 256
-  --out-json /shared/.../bench_<label>_cuda.json`
+  --out-json <private-store>/.../bench_<label>_cuda.json`
   (`--fp16-runtime ts` = real half weights traced — the thing MPS cannot
   run; add `--batch-sizes ...,2048` for m50 fp16 — tensor-core saturation
   sits higher than MPS's). CUDA artifacts for the crate come from

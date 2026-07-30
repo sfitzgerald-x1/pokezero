@@ -4,7 +4,7 @@
  "commit_sha": "05c4624",
  "patches": 41,
  "fingerprint": "3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce",
- "seed_registry": "validated via deployment/ checkout against 26 protected bands (13 reservation files); this sweep's own reservation filed as engine-cert-sweep-20260730 before launch",
+ "seed_registry": "validated against the private seed registry (26 protected bands, 13 reservation files); this sweep's own reservation filed as engine-cert-sweep-20260730 before launch",
  "per_shard_gates": "wheel REBUILT per shard venv (the #941 blind-spot rule) + scripts/engine_behavioral_probes.py 9/9 in-shard before measuring; any probe failure disqualifies the shard",
  "census_basis": {
   "games": 300,

@@ -4,25 +4,25 @@
 # Extractions run in parallel (JOBS, default 10); only active lineages are extracted (the seq
 # lineages are dropped from the report entirely). The report build runs after all extractions.
 set -u
-SCR=/shared/traits/scripts
-REPORT=/shared/traits/report
+SCR=<private-store>/traits/scripts
+REPORT=<private-store>/traits/report
 mkdir -p "$REPORT"
 export SCR REPORT
-export PYTHONPATH=/shared/traits/pokezero-src
+export PYTHONPATH=<private-store>/traits/pokezero-src
 ACTIVE="m50-ep7 l200-ep7-wu75 v22-lr3m v3-k16 v3-k32 v3-k64 v3-k64-enthalf v3-k64-eps-entq v3-k0-enthalf v3-k1-enthalf v3-k8-enthalf"   # v22-flat2m fork collapsed — dropped
 
 emit_tasks() {
   # Phase-2 500k: self + foul-play per lineage (v22-flat2m forks at 2M, so it has no 500k point)
   for lin in $ACTIVE; do
     for opp in self foulplay; do
-      d="/shared/traits/phase2/$lin/$opp"
+      d="<private-store>/traits/phase2/$lin/$opp"
       ls "$d"/events-*.jsonl.gz >/dev/null 2>&1 && printf '%s %s %s %s\n' "$d" "$lin" 500000 "$opp"
     done
   done
   # Milestone tree: self and (where run) foul-play per (lineage, milestone)
   for opp in self foulplay; do
     for lin in $ACTIVE; do
-      for d in /shared/traits/phase1/$lin/*/$opp; do
+      for d in <private-store>/traits/phase1/$lin/*/$opp; do
         [ -d "$d" ] || continue
         ls "$d"/events-*.jsonl.gz >/dev/null 2>&1 || continue
         mk=$(basename "$(dirname "$d")")            # e.g. 0100k

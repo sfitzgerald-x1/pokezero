@@ -481,9 +481,9 @@ Following §9's lesson — name the falsifier before writing the cause up:
 
 ## 11. The seat split: the depth decay is the p2 seat, and only the p2 seat
 
-**Date:** 2026-07-29. Source: the recorded shards under
-`/shared/scott-experiment/mcts-power-overlay-20260728/results` (404 files),
-read on the `olfusa` cluster. Reproduce with
+**Date:** 2026-07-29. Source: the recorded shards of the 2026-07-28
+power-overlay campaign (404 files; storage location recorded in the private
+deployment tooling), read in the internal GPU environment. Reproduce with
 `scripts/mcts_seat_split.py <results-dir>` — plain `python3`, no repo imports,
 so it drops straight into a controller pod.
 
