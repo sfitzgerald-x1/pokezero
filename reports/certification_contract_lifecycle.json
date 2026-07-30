@@ -1,13 +1,14 @@
 {
   "schema_version": "pokezero.engine-cert-contract-lifecycle/v1",
-  "stage": "build_source",
+  "stage": "contract_registered_attestation_pending",
   "launchable": false,
-  "purpose": "This commit is the immutable image source. The registered final contract and its calibration are intentionally added only by a later commit so they can pin this source without circular Git metadata.",
+  "purpose": "The registered final contract and calibration now pin the immutable build-source ancestor. A later commit must add the attestation that binds this exact contract blob before launch.",
   "required_absent_artifacts": [
-    "reports/c15_resweep_spec.json",
-    "reports/c24_final_classifier_c14_calibration.json",
     "reports/c25_cert_contract_attestation.json"
   ],
+  "registered_contract_path": "reports/c15_resweep_spec.json",
+  "registered_contract_sha256": "8e13da92bdf31d4ca2927287a78a58deb8fbbc5e0c2adf8106cf811c06642664",
+  "registered_calibration_path": "reports/c24_final_classifier_c14_calibration.json",
   "source_code_identity": {
     "execution_manifest_producer_sha256": "72facab503ac72672f17ee2e4c872c7fbc00c84a34dc32b629f1ea463b51ce02",
     "readout_sha256": "0982921eaffd4ca180f814dbb0d31d68f3859a8c685f2e4aade8316b3013c225",
