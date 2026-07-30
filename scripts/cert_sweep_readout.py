@@ -387,11 +387,20 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_lower_hex(value: object, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _contract_gates(
     *,
     paths: Sequence[Path],
     shards: Sequence[Mapping[str, Any]],
     contract: Mapping[str, Any],
+    contract_path: Path,
     execution_manifest: Mapping[str, Any] | None,
     coverage: float,
     aggregate: Mapping[str, int],
@@ -410,6 +419,12 @@ def _contract_gates(
     expected_shards = int(gates.get("expected_shards", -1))
     expected_games = int(gates.get("expected_games", -1))
     minimum_coverage = float(gates.get("minimum_coverage_measured_fraction", 1.0))
+    if expected_shards <= 0:
+        failures.append("expected_shards must be positive")
+    if expected_games <= 0:
+        failures.append("expected_games must be positive")
+    if not 0.0 < minimum_coverage <= 1.0:
+        failures.append("minimum_coverage_measured_fraction must be in (0, 1]")
     expected_blocks = gates.get("seed_blocks")
     if not isinstance(expected_blocks, list) or not expected_blocks:
         failures.append("contract has no explicit seed_blocks")
@@ -504,6 +519,22 @@ def _contract_gates(
     required_readout_sha = gates.get("required_readout_sha256")
     required_probe_passes = int(gates.get("required_behavioral_probe_passes", -1))
     actual_readout_sha = _sha256(Path(__file__).resolve())
+    actual_contract_sha = _sha256(contract_path)
+    if not _is_lower_hex(required_source, 40):
+        failures.append("required_source_commit is not a full lowercase Git SHA")
+    if not _is_lower_hex(required_fingerprint, 64):
+        failures.append("required_engine_fingerprint is not a lowercase SHA-256")
+    if not _is_lower_hex(required_readout_sha, 64):
+        failures.append("required_readout_sha256 is not a lowercase SHA-256")
+    if required_probe_passes <= 0:
+        failures.append("required_behavioral_probe_passes must be positive")
+    launch_registration = contract.get("launch_registration")
+    if not isinstance(launch_registration, Mapping):
+        failures.append("contract has no launch_registration provenance")
+    elif launch_registration.get("fresh_measurements_inspected_before_registration") != 0:
+        failures.append(
+            "contract does not prove zero fresh measurements inspected before registration"
+        )
     evidence.update(
         {
             "expected_shards": expected_shards,
@@ -514,6 +545,7 @@ def _contract_gates(
             "source_commit": required_source,
             "engine_fingerprint": required_fingerprint,
             "readout_sha256": actual_readout_sha,
+            "contract_sha256": actual_contract_sha,
         }
     )
     if actual_readout_sha != required_readout_sha:
@@ -528,9 +560,14 @@ def _contract_gates(
         ("source_commit", required_source),
         ("engine_fingerprint", required_fingerprint),
         ("readout_sha256", required_readout_sha),
+        ("contract_sha256", actual_contract_sha),
     ):
         if execution_manifest.get(field) != required:
             failures.append(f"execution manifest {field} does not match contract")
+    image_commit = execution_manifest.get("image_commit")
+    if not _is_lower_hex(image_commit, 40):
+        failures.append("execution manifest image_commit is not a full lowercase Git SHA")
+    evidence["image_commit"] = image_commit
 
     manifest_shards = execution_manifest.get("shards")
     if not isinstance(manifest_shards, list):
@@ -724,6 +761,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths=[Path(path) for path in paths],
         shards=shards,
         contract=pred,
+        contract_path=args.prediction.resolve(),
         execution_manifest=execution_manifest,
         coverage=coverage,
         aggregate=agg,

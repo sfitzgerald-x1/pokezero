@@ -50,6 +50,9 @@ class CertificationContractTests(unittest.TestCase):
     def _contract(self, *, minimum_coverage: float = 0.97) -> dict:
         return {
             "registered_before_launch": True,
+            "launch_registration": {
+                "fresh_measurements_inspected_before_registration": 0,
+            },
             "certification_gates": {
                 "expected_shards": 2,
                 "expected_games": 2,
@@ -74,12 +77,20 @@ class CertificationContractTests(unittest.TestCase):
             "predicted_class_rates_10k": {},
         }
 
-    def _manifest(self, paths: list[Path], *, complete: bool = True) -> dict:
+    def _manifest(
+        self,
+        paths: list[Path],
+        contract_path: Path,
+        *,
+        complete: bool = True,
+    ) -> dict:
         return {
             "schema": "engine-cert-execution-manifest/1",
             "source_commit": self.source_commit,
+            "image_commit": "c" * 40,
             "engine_fingerprint": self.engine_fingerprint,
             "readout_sha256": readout._sha256(Path(readout.__file__)),
+            "contract_sha256": readout._sha256(contract_path),
             "shards": [
                 {
                     "seed_start": 1000 if index == 0 else 2000,
@@ -108,7 +119,8 @@ class CertificationContractTests(unittest.TestCase):
             json.dumps(contract or self._contract()), encoding="utf-8"
         )
         manifest_path.write_text(
-            json.dumps(manifest or self._manifest(paths)), encoding="utf-8"
+            json.dumps(manifest or self._manifest(paths, contract_path)),
+            encoding="utf-8",
         )
         exit_code = readout.main(
             [
@@ -142,7 +154,14 @@ class CertificationContractTests(unittest.TestCase):
             paths = [root / "shard-0.json", root / "shard-1.json"]
             self._shard(paths[0], 1000)
             self._shard(paths[1], 2000)
-            payload = self._run(root, manifest=self._manifest(paths, complete=False))
+            contract = self._contract()
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            payload = self._run(
+                root,
+                contract=contract,
+                manifest=self._manifest(paths, contract_path, complete=False),
+            )
         self.assertEqual(payload["verdict"], "FAIL")
         self.assertTrue(
             any("completion marker" in failure for failure in payload["gate_failures"])
