@@ -5730,3 +5730,188 @@ identity-diff the full frame and attribute every extra, rather than checking the
 - `reports/c12_trace_toxic_differential.json` — 113 rows, `repros_complete: true`
 - pins: `tests/test_world_trace_and_toxic_seeding.py` (17), including
   `test_a_stale_trace_never_leaks_into_a_later_switch_in` for the self-inflicted regression
+# Appendix Z10 — Batch E (patches 37-41): five mechanisms, two family labels inverted, and the recoil exactness trade
+
+Fix-lane worktree, branch `scott/engine-gen3-damage-residue-wave`, based on main at #964
+(36 patches, fingerprint `bdb6ad30...`, probes 9/9); #965/#966 merged mid-work
+(docs/reports only — no engine or harness code), so the c12 decomposition's 73-frame and
+this appendix's letter follow Z8. All ten backlog rows (E1-E5,
+`reports/c12_decomposition.json` fix_backlog) regenerated from seed and replayed at the
+base build before any design; every row reproduced.
+
+## Z10.1 E1 — the family label was wrong for BOTH rows, two different ways
+
+The brief's caution ("the documented BP-side loci have zero attributed rows") was
+correct: neither row is the pinch/ThickFat/Facade locus.
+
+- **1500123/79 is Flash Fire POSITION** (the E6 locus, previously zero attributed rows).
+  Ninetales carried the FLASHFIRE volatile; gen3 hooks it on **ModifyDamagePhase1**
+  (data/mods/gen4/abilities.ts flashfire condition, inherited by gen3): fixed-point
+  floor BEFORE the +2/crit/STAB/type steps, chained with screens. The engine applied it
+  as a trailing float after the type steps. Row arithmetic: t4 81 -> Phase1
+  modify(81, 1.5) = 121 -> +2 -> STAB 184 -> Water resist 92 = sim max; trailing float
+  gives 93; observed 78 = floor(92*0.85), the sim's exact minimum roll. **Patch 41**
+  (`poke-engine-gen3-flashfire-phase1.patch`) moves the 1.5x into the stepwise pipeline
+  between burn and weather; screens keep the trailing caller position
+  (pool-unreachable per §U.4).
+- **1500251/56 is NOT an engine defect.** At the recorded state the engine's Surf max is
+  135 and the observed 116 is inside its legal roll set (`calculate_damage` verified
+  live). The c12 walk basis's "obs 116 not in m=130 roll set" was a mis-derivation: 130
+  was inferred from the branch value 120, which is the KILL-SPLIT non-lethal average,
+  not floor(0.925*max). The actual divergence is the engine world evolving on that
+  branch average so the toxic tick's HP cap diverges from the observed roll's chain —
+  the I1 cap-state shape. Instrument lane; predicted to stay, stayed.
+
+## Z10.2 E2/E3 — recoil exactness and weather-move targeting (patches 38, 37)
+
+- **Recoil** (row 1500207/27): the sim computes
+  `clampIntRange(floor(damageDealt * recoil[0]/recoil[1]), 1)` with Double-Edge at
+  [1, 3] (gen4 mod, inherited; gen3 scripts.ts carries the same calcRecoilDamage). The
+  engine truncated an f32 product (`0.33 * dealt`), one low whenever the dealt damage
+  is a multiple of 3 at or above 30 (floor(75/3) = 25 vs trunc(24.75) = 24 — the row's
+  exact shape), and dropped sub-1 recoil the sim clamps to 1. **Patch 38** maps the
+  stored fraction back to the exact rational at the single application site. Live
+  anchor: seed-4 of the probe run dealt 60 and recoiled 20 where the f32 path gives 19.
+- **Weather targeting** (row 1500124/58): `ability_modify_attack_against` HAS a
+  targeting guard whose own comment names Rain Dance — but `Choice::default()` gives
+  the four weather moves `target: Opponent`, so they sailed past it and Water Absorb
+  healed maxhp/4 off an opposing Rain Dance (Flash Fire would eat an opposing Sunny Day
+  identically). **Patch 37** sets `target: User` on RAINDANCE/SUNNYDAY/HAIL/SANDSTORM
+  in the MOVES table — the data the guard always assumed. Live probes: Rain Dance vs
+  Water Absorb emits weather and nothing else; Surf into Water Absorb still absorbs.
+
+## Z10.3 E4 — the fixed-damage path skipped the ENTIRE post-damage suite (patch 39)
+
+Bigger than the family said. The fixed/level/fraction-damage arms applied their damage
+directly inside `choice_special_effect`; `calculate_damage` returns the (0, 0)
+placeholder for zero-BP moves, and `check_move_hit_or_miss` **zeroes percent_hit on
+exactly that placeholder** — so the move never reached `run_move` at all: no
+`set_damage_dealt` (Counter after Seismic Toss returned nothing, row 1500192/91), no
+defender contact abilities (Rough Skin rows 1500103/76 and 1500274/15, Flame Body row
+1500287/76), no secondaries, no Destiny Bond, no Endure — and **Super Fang's 90%
+accuracy was never rolled** (its damage had already been applied before the miss
+check). Super Fang's amount was also `hp - hp/2` (a ceiling, one high on odd hp; zero
+at 1 hp) where the sim is `clampIntRange(floor(hp/2), 1)`.
+
+**Night Shade dealt no damage at all** (Appendix K.3's documented inertness,
+re-confirmed by the #966 depth-tactics probe: an EMPTY instruction list): it had no
+`choice_special_effect` arm AND the zeroed-percent path would have eaten it anyway. Why
+no differential ever flagged it: a sets.json scan shows Night Shade is in **zero gen3
+randbats movepools**, and zero of the 244 diverged-row payloads across the c10/c11
+full-retention artifacts mention it — unreachable in the measured format, reachable in
+scenario/customgame contexts, so it is pinned like Fake Out rather than left to be
+rediscovered. Sim probes: deals level (88 observed at L88), and answers `-immune`
+against a Normal-type (Ghost-typed damage, gen3 chart).
+
+**Patch 39**: `gen3_fixed_damage_amount` computes the sim's damageCallback value
+(Seismic Toss / Night Shade level with their immunity probes, Super Fang
+floor-with-min-1, Endeavor's difference, Counter / Mirror Coat 2x damage_dealt) and the
+move flows through the ordinary damage path — substitute, endure, damage_dealt, contact
+hooks, secondaries, Destiny Bond, accuracy — with no roll spread and no crit branch
+(fixed damage neither rolls nor crits). The direct-apply arms are gone. One crate-test
+expectation legitimately moved (`gen3_fixed_damage_fidelity`: Super Fang now carries
+its real 10% miss branch); the sim rolls it too — 2 misses in 12 probe seeds.
+
+## Z10.4 E5 — gen3 Counter/Mirror Coat treat Hidden Power as PHYSICAL (patch 40)
+
+WHY closed from the sim's own clauses (data/mods/gen3/moves.ts:163-183, 407-427):
+Counter's onDamage takes `category === 'Physical' || effect.id === 'hiddenpower'`;
+Mirror Coat's takes `category === 'Special' && effect.id !== 'hiddenpower'`. The engine
+recorded damage_dealt with Hidden Power's type-derived category, so a special-typed HP
+was Mirror Coat-bounceable (rows 1500155/22, 1500264/40 — the sim's Mirror Coat did
+nothing while the engine retaliated 2x) and invisible to Counter (the inverse defect,
+live-probed: sim Counter returns exactly 2x against HP Grass). **Patch 40** records
+Hidden Power as Physical in damage_dealt.
+
+## Z10.5 Pins, build chain, gates
+
+`tests/test_engine_fixed_damage_and_hooks_fidelity.py`: 10 divergence pins + 4
+controls, sim values transcribed from live gen3customgame probe runs. On a 36-patch
+wheel (throwaway venv, pristine tree): exactly the 10 divergence pins FAIL, each with
+the predicted unpatched value (Night Shade's empty branch among them); 14/14 on the
+41-patch build.
+
+| build | patches | fingerprint | gates |
+|---|---|---|---|
+| baseline (main@#964) | 36 | `bdb6ad30...` | probes 9/9; all ten backlog rows reproduce |
+| +batch E (37-41) | 41 | `3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce` | fuzz=0 through both builders; probes 9/9 (no expectation moved); pins 14/14 + statfloor 18/18 + guts/trace green; engine tree 17/17; pokezero-search 270/270 (one expectation updated, above) |
+
+## Z10.6 Prediction and the identity diff (registered FIRST, separate commit)
+
+`reports/c13_batch_e_prediction.json`, registered at the binding fingerprint BEFORE the
+run; every marker row (a payload scan of all 117 c11 rows) was single-seed-resolved
+before registration. Run: 300 games, seeds 1500000-1500299, strict,
+`--repros-per-game 40 --keep-repro 500`
+(`reports/c13_batch_e_differential.json`). **Both sides `repros_complete: true`**
+(117/117 baseline, 107/107 post).
+
+| | predicted | actual |
+|---|---|---|
+| will clear (12 named, single-seed verified) | 12 | **12/12** |
+| stays (11 named, incl. 1500251/56 and both walk marker rows) | 11 | **11/11** |
+| unpredicted clearances | 0 | **0** |
+| class changes | 0 | **0** |
+| capped-lethal walk rows (9 on the baseline) | 9 present | **9/9 present** |
+| new rows | 0 | **2 — MISSED, diagnosed below** |
+| population | 117 -> 105 | 117 -> **107** |
+
+On the c12 73-frame: 11 of the 12 clears are outside-limits rows there (the 12th,
+1500196/9, is `limit:`-labelled), so the decomposed residue moves **73 -> 62**
+(adjudicated frame; observed outside-limits = adjudicated + the 5 #965-relabeled rows
+the classifier still counts, per the Z9 bridge). **Cross-differential staleness note
+(post-#967 merge):** this appendix's prediction listed 1500248/78 as a stay — TRUE at
+this lane's pre-#967 build, where the world still lacked the traced ability, and STALE
+on merged main, where #967's seeding clears it (with 1500248/77, 1500243/79 and
+1500294/110). Both parents measured from the same c11 baseline with zero clearance
+overlap; the merged-tree integration re-baseline below (Z10.8) states both frames.
+
+**The two new rows** (1500129/46, 1500200/87) are the prediction's miss, and they are
+the same instrument shape, surfaced by the recoil change: both are Double-Edge
+boundaries at a faint edge (Swellow's toxic faint behind a Sludge Bomb; Kangaskhan at
+3 hp dying to sandstorm) where the engine world evolves on the branch-average roll and
+the recoil now derives EXACTLY from that average (floor(248/3) = 82) while the observed
+chain derives from the observed roll (floor(250/3) = 83). The observed recoil is inside
+the engine's per-roll legal set — the engine's recoil arithmetic is sim-exact, verified
+by pins — but the downstream capped-lethal remainders differ by the point that the old
+f32 truncation happened to align. They are I1 cap-state candidates (the family the c12
+brief already owns), not engine defects; the honest cost of making recoil exact is that
+this artifact can now express through recoil as it always could through heals and
+toxic ticks.
+
+## Z10.7 Coverage statement and artifacts
+
+- The documented BP-side one-point loci (pinch abilities, Thick Fat, Facade,
+  weakened-condition halving) now have **zero attributed rows and remain unfixed** —
+  E1's two rows both decomposed elsewhere (Z10.1).
+- 1500182/60 (Sleep-Talk-called Seismic Toss) kept its label: the marker is present but
+  the divergence is not the post-hook suite; verified unchanged single-seed.
+- Dragon Rage / SonicBoom remain unimplemented as fixed-damage arms (no MOVES wiring
+  attempted; not in any c-series row; Night Shade was included because K.3 documented
+  it and the helper covers it naturally).
+- Artifacts: `reports/c13_batch_e_prediction.json` (pre-registered, first commit),
+  `reports/c13_batch_e_differential.json` (binding run, 107/107),
+  `tests/test_engine_fixed_damage_and_hooks_fidelity.py`, patches
+  `poke-engine-gen3-{weather-move-targeting,recoil-rounding,fixed-damage-pipeline,counter-hiddenpower-category,flashfire-phase1}.patch` (37-41, fixture-refresh still last).
+
+## Z10.8 Cycle-13 integration re-baseline (merged tree: batch E + #967)
+
+Fresh 300-game strict run on the merged tree (engine fingerprint `3204c777...`
+unchanged — #967 is Python-only; probes 9/9), pre-registered in
+`reports/c13_rebaseline_prediction.json` (separate commit, before the run) and
+identity-diffed against BOTH parents, all three artifacts `repros_complete: true`
+(c13 batch E 107/107, c12 trace-toxic 113/113, this run 103/103).
+
+| | predicted | actual |
+|---|---|---|
+| diverged | 103 (= 117 - 12 - 4 + 2) | **103** |
+| identity | batch E's 107 minus #967's four clears, exactly | **exact match** |
+| vs batch-E parent | -4 (#967's rows), nothing else | **exactly those 4, 0 new** |
+| vs trace-toxic parent | -12 (batch E's rows), +2 (the I1 recoil rows) | **exactly those** |
+| outside-limits | 65 observed = 58 adjudicated + 5 relabeled + 2 new-I1 | **65 / 58 / 38 limit** |
+| class changes | 0 | **0** |
+| capped-lethal walk | 9/9 present | **9/9** |
+
+Zero clearance overlap between the parents held (the near-miss 1500248/78 is #967's
+clear and this lane's stale stay, per the Z10.6 bridge). The merged-main residue
+frame for the next cycle: **103 diverged = 58 adjudicated outside-limits + 5
+relabeled + 2 I1-candidate new rows + 38 limit.**

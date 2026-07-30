@@ -1,0 +1,335 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1145,6 +1145,97 @@
+         });
+         target_pkmn.hp += health_recovered;
+         incoming_instructions.instruction_list.push(ins);
++    }
++}
++
++// pokezero gen3 fidelity fix (fixed-damage moves flow through the damage
++// pipeline): the fixed/level/fraction-damage arms used to apply their damage
++// directly inside choice_special_effect, and because calculate_damage returns
++// Some((0, 0)) for a zero-base-power move, check_move_hit_or_miss zeroed
++// percent_hit and the whole post-damage suite in run_move never ran: no
++// set_damage_dealt (Counter after Seismic Toss returned nothing — row
++// 1500192/91), no ability_after_damage_hit / defender-contact secondaries
++// (Rough Skin and Flame Body never fired — rows 1500103/76, 1500274/15,
++// 1500287/76), no Destiny Bond, no Endure, and Super Fang's 90% accuracy was
++// never rolled (its damage applied before the miss check). Showdown treats
++// these as ordinary damaging moves with a damageCallback (sim/battle-actions
++// getDamage:1611), so every post-damage hook runs.
++//
++// This helper computes the sim's damageCallback value; the caller substitutes
++// it for the (0, 0) placeholder so the move takes the normal damage path. A
++// Some(0) means the move fails (immunity / no stored damage) and keeps the
++// old zeroed-percent behaviour.
++fn gen3_fixed_damage_amount(
++    state: &State,
++    choice: &Choice,
++    attacking_side_ref: &SideReference,
++) -> Option<i16> {
++    // Protect's remove_effects_for_protect() zeroes category to Status; the
++    // fixed damage must not fire through Protect (verified against the sim by
++    // the Protect-fidelity sweep, patch 29 lineage).
++    if choice.category == MoveCategory::Status {
++        return None;
++    }
++    let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
++    let attacker = attacking_side.get_active_immutable();
++    let defender = defending_side.get_active_immutable();
++    match choice.move_id {
++        // Seismic Toss is FIGHTING-typed, but the zero-effectiveness set of
++        // Normal and of Fighting is the same single type in gen3 — Ghost.
++        Choices::SEISMICTOSS => {
++            if type_effectiveness_modifier(&PokemonType::NORMAL, defender) == 0.0 {
++                Some(0)
++            } else {
++                Some(attacker.level as i16)
++            }
++        }
++        // Night Shade dealt no damage at all before this patch (Appendix K.3);
++        // GHOST probe: Normal-types are immune.
++        Choices::NIGHTSHADE => {
++            if type_effectiveness_modifier(&PokemonType::GHOST, defender) == 0.0 {
++                Some(0)
++            } else {
++                Some(attacker.level as i16)
++            }
++        }
++        // clampIntRange(floor(hp / 2), 1) — sim data/moves.ts damageCallback.
++        // The old arm dealt hp - hp/2 (a CEILING, one high on odd hp) and dealt
++        // nothing at 1 hp where the sim deals 1.
++        Choices::SUPERFANG => {
++            if type_effectiveness_modifier(&PokemonType::NORMAL, defender) == 0.0 {
++                Some(0)
++            } else {
++                Some(cmp::max(defender.hp / 2, 1))
++            }
++        }
++        Choices::ENDEAVOR => {
++            if type_effectiveness_modifier(&PokemonType::NORMAL, defender) == 0.0
++                || attacker.hp >= defender.hp
++            {
++                Some(0)
++            } else {
++                Some(defender.hp - attacker.hp)
++            }
++        }
++        Choices::COUNTER => {
++            if defending_side.damage_dealt.move_category == MoveCategory::Physical
++                && !defender.has_type(&PokemonType::GHOST)
++            {
++                Some(defending_side.damage_dealt.damage * 2)
++            } else {
++                Some(0)
++            }
++        }
++        Choices::MIRRORCOAT => {
++            if defending_side.damage_dealt.move_category == MoveCategory::Special
++                && !defender.has_type(&PokemonType::DARK)
++            {
++                Some(defending_side.damage_dealt.damage * 2)
++            } else {
++                Some(0)
++            }
++        }
++        _ => None,
+     }
+ }
+ 
+@@ -2500,7 +2591,13 @@
+         &attacking_side,
+         &mut incoming_instructions,
+     );
+-    let damage = calculate_damage(state, &attacking_side, &choice, DamageRolls::Max);
++    let mut damage = calculate_damage(state, &attacking_side, &choice, DamageRolls::Max);
++    let fixed_damage = gen3_fixed_damage_amount(state, &choice, &attacking_side);
++    if let Some(amount) = fixed_damage {
++        // A positive fixed amount takes the ordinary damage path (single
++        // deterministic "roll"); zero keeps the fail path below.
++        damage = Some((amount, amount));
++    }
+     check_move_hit_or_miss(
+         state,
+         &choice,
+@@ -2553,8 +2650,18 @@
+     let mut branch_instructions: Option<StateInstructions> = None;
+     if let Some((max_damage_dealt, max_crit_damage)) = damage {
+         does_damage = true;
+-        let avg_damage_dealt = (max_damage_dealt as f32 * 0.925) as i16;
+-        let min_damage_dealt = (max_damage_dealt as f32 * 0.85) as i16;
++        // Fixed damage has no 85-100 roll and cannot crit (sim: damageCallback
++        // moves bypass the randomizer and the crit path entirely).
++        let avg_damage_dealt = if fixed_damage.is_some() {
++            max_damage_dealt
++        } else {
++            (max_damage_dealt as f32 * 0.925) as i16
++        };
++        let min_damage_dealt = if fixed_damage.is_some() {
++            max_damage_dealt
++        } else {
++            (max_damage_dealt as f32 * 0.85) as i16
++        };
+         if branch_on_damage
+             && max_damage_dealt >= defender_active.hp
+             && min_damage_dealt < defender_active.hp
+@@ -2584,7 +2691,10 @@
+ 
+             incoming_instructions.update_percentage(1.0 - branch_chance);
+             regular_damage = average_non_kill_damage;
+-        } else if branch_on_damage && max_damage_dealt < defender_active.hp {
++        } else if branch_on_damage
++            && fixed_damage.is_none()
++            && max_damage_dealt < defender_active.hp
++        {
+             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
+                 || defender_active.ability == Abilities::SHELLARMOR
+             {
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -1,5 +1,4 @@
+ use super::abilities::{update_forecast, Abilities};
+-use super::damage_calc::type_effectiveness_modifier;
+ use super::generate_instructions::add_remove_status_instructions;
+ use super::items::{get_choice_move_disable_instructions, Items};
+ use super::state::{PokemonVolatileStatus, Weather, MOVE_INDICES};
+@@ -610,52 +609,11 @@
+ /// substitute simply breaks and the mon behind takes nothing. Verified against
+ /// the real sim: Seismic Toss (100) into a 65 HP Substitute answers
+ /// `-end <target> Substitute` with no `-damage` line on the Pokemon at all.
+-fn apply_fixed_damage(
+-    defending_side: &mut Side,
+-    target_side_ref: SideReference,
+-    damage_amount: i16,
+-    instructions: &mut StateInstructions,
+-) {
+-    if damage_amount <= 0 {
+-        return;
+-    }
+-    if defending_side
+-        .volatile_statuses
+-        .contains(&PokemonVolatileStatus::SUBSTITUTE)
+-    {
+-        let absorbed = cmp::min(damage_amount, defending_side.substitute_health);
+-        instructions
+-            .instruction_list
+-            .push(Instruction::DamageSubstitute(DamageInstruction {
+-                side_ref: target_side_ref,
+-                damage_amount: absorbed,
+-            }));
+-        defending_side.substitute_health -= absorbed;
+-        if defending_side.substitute_health == 0 {
+-            instructions
+-                .instruction_list
+-                .push(Instruction::RemoveVolatileStatus(
+-                    RemoveVolatileStatusInstruction {
+-                        side_ref: target_side_ref,
+-                        volatile_status: PokemonVolatileStatus::SUBSTITUTE,
+-                    },
+-                ));
+-            defending_side
+-                .volatile_statuses
+-                .remove(&PokemonVolatileStatus::SUBSTITUTE);
+-        }
+-        return;
+-    }
+-    let dealt = cmp::min(damage_amount, defending_side.get_active_immutable().hp);
+-    instructions
+-        .instruction_list
+-        .push(Instruction::Damage(DamageInstruction {
+-            side_ref: target_side_ref,
+-            damage_amount: dealt,
+-        }));
+-    defending_side.get_active().hp -= dealt;
+-}
++// (apply_fixed_damage removed: fixed damage flows through the ordinary
++// damage pipeline — gen3/generate_instructions.rs `gen3_fixed_damage_amount` —
++// which already handles Substitute absorption via generate_instructions_from_damage.)
+ 
++
+ pub fn choice_special_effect(
+     state: &mut State,
+     choice: &mut Choice,
+@@ -699,38 +657,14 @@
+                     }));
+                 attacker.hp -= attacker.maxhp / 2;
+                 attacking_side.attack_boost = 6;
+-            }
+-        }
+-        Choices::COUNTER => {
+-            if defending_side.damage_dealt.move_category == MoveCategory::Physical
+-                && !defending_side
+-                    .get_active_immutable()
+-                    .has_type(&PokemonType::GHOST)
+-            {
+-                let damage_amount = defending_side.damage_dealt.damage * 2;
+-                apply_fixed_damage(
+-                    defending_side,
+-                    attacking_side_ref.get_other_side(),
+-                    damage_amount,
+-                    instructions,
+-                );
+-            }
+-        }
+-        Choices::MIRRORCOAT => {
+-            if defending_side.damage_dealt.move_category == MoveCategory::Special
+-                && !defending_side
+-                    .get_active_immutable()
+-                    .has_type(&PokemonType::DARK)
+-            {
+-                let damage_amount = defending_side.damage_dealt.damage * 2;
+-                apply_fixed_damage(
+-                    defending_side,
+-                    attacking_side_ref.get_other_side(),
+-                    damage_amount,
+-                    instructions,
+-                );
+             }
+         }
++        // (Choices::COUNTER: fixed damage now flows through the
++        // ordinary damage pipeline — gen3/generate_instructions.rs
++        // `gen3_fixed_damage_amount` — so the post-damage suite runs.)
++        // (Choices::MIRRORCOAT: fixed damage now flows through the
++        // ordinary damage pipeline — gen3/generate_instructions.rs
++        // `gen3_fixed_damage_amount` — so the post-damage suite runs.)
+         Choices::WISH => {
+             if attacking_side.wish.0 == 0 {
+                 let previous_wish_amount = attacking_side.wish.1;
+@@ -846,67 +780,15 @@
+                 active_pkmn.rest_turns = 3;
+             }
+         }
+-        Choices::SUPERFANG => {
+-            let target_pkmn = defending_side.get_active();
+-            if target_pkmn.hp == 1 {
+-                return;
+-            }
+-            if choice.move_id == Choices::SUPERFANG
+-                && type_effectiveness_modifier(&PokemonType::NORMAL, &target_pkmn) == 0.0
+-            {
+-                return;
+-            }
+-            let damage_amount = target_pkmn.hp - target_pkmn.hp / 2;
+-            apply_fixed_damage(
+-                defending_side,
+-                attacking_side_ref.get_other_side(),
+-                damage_amount,
+-                instructions,
+-            );
+-        }
+-        Choices::SEISMICTOSS => {
+-            let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+-            let attacker_level = attacking_side.get_active_immutable().level;
+-            // Seismic Toss is FIGHTING-typed, but the zero-effectiveness set of
+-            // Normal and of Fighting is the same single type in gen3 — Ghost —
+-            // so this NORMAL probe returns the identical verdict. Verified
+-            // against the real sim: Seismic Toss into Gengar answers `-immune`.
+-            // (Kept as NORMAL to match the sibling fixed-damage arms rather than
+-            // implying a Fighting type chart lookup that would behave the same.)
+-            if type_effectiveness_modifier(
+-                &PokemonType::NORMAL,
+-                defending_side.get_active_immutable(),
+-            ) == 0.0
+-            {
+-                return;
+-            }
+-
+-            apply_fixed_damage(
+-                defending_side,
+-                attacking_side_ref.get_other_side(),
+-                attacker_level as i16,
+-                instructions,
+-            );
+-        }
+-        Choices::ENDEAVOR => {
+-            let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+-            let attacker = attacking_side.get_active();
+-            let defender = defending_side.get_active();
+-
+-            if type_effectiveness_modifier(&PokemonType::NORMAL, &defender) == 0.0
+-                || attacker.hp >= defender.hp
+-            {
+-                return;
+-            }
+-
+-            let damage_amount = defender.hp - attacker.hp;
+-            apply_fixed_damage(
+-                defending_side,
+-                attacking_side_ref.get_other_side(),
+-                damage_amount,
+-                instructions,
+-            );
+-        }
++        // (Choices::SUPERFANG: fixed damage now flows through the
++        // ordinary damage pipeline — gen3/generate_instructions.rs
++        // `gen3_fixed_damage_amount` — so the post-damage suite runs.)
++        // (Choices::SEISMICTOSS: fixed damage now flows through the
++        // ordinary damage pipeline — gen3/generate_instructions.rs
++        // `gen3_fixed_damage_amount` — so the post-damage suite runs.)
++        // (Choices::ENDEAVOR: fixed damage now flows through the
++        // ordinary damage pipeline — gen3/generate_instructions.rs
++        // `gen3_fixed_damage_amount` — so the post-damage suite runs.)
+         Choices::PAINSPLIT => {
+             // pokezero gen3 fidelity fix: the shared average is assigned through
+             // Showdown's `Pokemon#sethp`, which CLAMPS to each mon's OWN maxhp.

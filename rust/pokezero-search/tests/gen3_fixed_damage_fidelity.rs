@@ -30,13 +30,26 @@ fn generate(state: &mut State, attacker_move: &MoveChoice) -> Vec<Instruction> {
     let instructions =
         generate_instructions_from_move_pair(state, attacker_move, &MoveChoice::None, false);
     assert_eq!(before, format!("{:?}", state), "state was mutated");
-    assert_eq!(
-        instructions.len(),
-        1,
-        "expected a single deterministic branch, got {:?}",
+    // Since the fixed-damage-pipeline patch these moves take the ordinary
+    // damage path, so real accuracy is rolled: Super Fang (90%) carries a miss
+    // branch the old direct-apply arm never had (the sim rolls it too — probe
+    // 2026-07-29: 2 misses in 12 seeded games). Deterministic-accuracy moves
+    // still produce exactly one branch; assert on the HIT branch either way.
+    assert!(
+        instructions.len() <= 2,
+        "expected at most a hit and a miss branch, got {:?}",
         instructions
     );
-    let list = instructions.into_iter().next().unwrap().instruction_list;
+    let list = instructions
+        .into_iter()
+        .max_by(|a, b| {
+            a.instruction_list
+                .len()
+                .cmp(&b.instruction_list.len())
+                .then(a.percentage.partial_cmp(&b.percentage).unwrap())
+        })
+        .unwrap()
+        .instruction_list;
 
     let mut probe = state.clone();
     let snapshot = format!("{:?}", probe);

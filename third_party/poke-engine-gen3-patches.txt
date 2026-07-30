@@ -1011,5 +1011,74 @@ poke-engine-gen3-stat-modifier-flooring.patch
 # authored against the stat-modifier-flooring tree above.
 poke-engine-gen3-type-effectiveness-netting.patch
 
+# gen3 weather-move targeting. Rain Dance / Sunny Day / Hail / Sandstorm are
+# field moves: they never TryHit the opposing Pokemon, so the defender-side
+# ability interceptors must not see them. The engine's Choice::default gave
+# them target: Opponent, sailing them past ability_modify_attack_against's own
+# targeting guard (whose comment names Rain Dance as the case it exists to
+# stop) and into the absorb arms: Water Absorb healed maxhp/4 off an opposing
+# Rain Dance (repro row 1500124/58), and Flash Fire would eat an opposing
+# Sunny Day the same way. Sets target: MoveTarget::User on the four weather
+# moves in the shared MOVES table; authored against the
+# type-effectiveness-netting tree above.
+poke-engine-gen3-weather-move-targeting.patch
+
+# gen3 recoil rounding. The sim computes recoil as
+# clampIntRange(floor(damageDealt * recoil[0] / recoil[1]), 1) with Double-Edge
+# at [1,3] (gen4 mod, inherited); the engine multiplied by f32 0.33/0.25/0.5
+# and truncated, so a max-roll Double-Edge recoil was floor(0.33*75) = 24
+# where the sim deals floor(75/3) = 25 (repro row 1500207/27), and a recoil
+# that truncated to 0 was dropped instead of clamped to 1. Maps the stored
+# fraction back to the exact rational at the single application site in
+# gen3/generate_instructions.rs; authored against the weather-move-targeting
+# tree above.
+poke-engine-gen3-recoil-rounding.patch
+
+# gen3 fixed-damage pipeline. The fixed/level/fraction-damage arms applied
+# their damage directly inside choice_special_effect, and because
+# calculate_damage returns (0,0) for a zero-BP move, check_move_hit_or_miss
+# zeroed percent_hit and run_move's entire post-damage suite never ran for
+# them: no set_damage_dealt (Counter after Seismic Toss returned nothing, row
+# 1500192/91), no defender contact abilities (Rough Skin rows 1500103/76 and
+# 1500274/15, Flame Body row 1500287/76), no Destiny Bond, no Endure, and
+# Super Fang's 90% accuracy was never rolled. Showdown treats these as
+# ordinary damaging moves with a damageCallback (sim/battle-actions.ts
+# getDamage:1611). New gen3_fixed_damage_amount computes the callback value
+# (Seismic Toss/Night Shade level with the gen3 immunity probes, Super Fang
+# clampIntRange(floor(hp/2),1) - fixing upstream's ceiling and its deals-
+# nothing-at-1hp arm - Endeavor's difference, Counter/Mirror Coat 2x
+# damage_dealt) and the move flows through the normal damage path with no
+# roll spread and no crit branch. Night Shade dealt no damage at all before
+# this patch (ledger Appendix K.3). Touches gen3/generate_instructions.rs and
+# gen3/choice_effects.rs (direct-apply arms removed); authored against the
+# recoil-rounding tree above.
+poke-engine-gen3-fixed-damage-pipeline.patch
+
+# gen3 Counter/Mirror Coat Hidden Power semantics. gen3 Showdown counts a
+# Hidden Power hit as PHYSICAL for Counter and NEVER for Mirror Coat,
+# whatever its IV-derived elemental type - the clauses are explicit in
+# data/mods/gen3/moves.ts (counter onDamage: category === 'Physical' ||
+# effect.id === 'hiddenpower'; mirrorcoat: category === 'Special' &&
+# effect.id !== 'hiddenpower'). The engine recorded damage_dealt with the
+# choice's type-derived category, so a special-typed Hidden Power was Mirror
+# Coat-bounceable (repro rows 1500155/22 and 1500264/40: the sim's Mirror
+# Coat did nothing, the engine retaliated 2x) and invisible to Counter.
+# damage_dealt now records Hidden Power as Physical; authored against the
+# fixed-damage-pipeline tree above.
+poke-engine-gen3-counter-hiddenpower-category.patch
+
+# gen3 Flash Fire position. The boosted volatile is a ModifyDamagePhase1
+# handler in gen3 (data/mods/gen4/abilities.ts flashfire condition, inherited)
+# - it chains with screens and floors at 4096 scale BEFORE the +2/crit/STAB/
+# type steps. The engine applied it as a trailing float multiplier AFTER the
+# type steps, one point high on resisted boosted Fire moves: repro row
+# 1500123/79 (Flash-Fired Ninetales Fire Blast into Octillery: sim max 92,
+# engine 93, observed 78 = the sim's exact minimum roll). Moves the 1.5x into
+# the stepwise pipeline between burn and weather using the fixed-point
+# helpers; screens keep their trailing caller position (pool-unreachable per
+# the damage_calc brief). Touches gen3/damage_calc.rs only; authored against
+# the counter-hiddenpower-category tree above.
+poke-engine-gen3-flashfire-phase1.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
