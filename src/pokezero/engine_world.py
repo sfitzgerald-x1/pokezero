@@ -1323,6 +1323,15 @@ def _resolve_encored_move_index(
     return None
 
 
+def _resolved_ability(mon: Any, row: Mapping[str, Any] | None) -> str | None:
+    """The ability the world should carry: protocol-confirmed if there is one, else sampled."""
+    if row is not None:
+        revealed = row.get("revealedAbility")
+        if isinstance(revealed, str) and revealed.strip():
+            return normalize_id(revealed)
+    return normalize_id(mon.ability) if mon.ability else None
+
+
 def _build_pokemon_spec(
     mon: FixturePokemon,
     row: Mapping[str, Any] | None,
@@ -1410,7 +1419,20 @@ def _build_pokemon_spec(
         # (gen3/generate_instructions.rs), so a Rest sleep has no elapsed-turn count
         # to carry and inventing one would be read by nothing.
         rest_turns=rest_turns,
-        ability=normalize_id(mon.ability) if mon.ability else None,
+        # A protocol-CONFIRMED ability beats the sampled battle-start assignment, for the
+        # same reason the item does below: Trace publicly replaces the holder's ability
+        # mid-battle, and a world rebuilt from the sampled set hands the engine TRACE, which
+        # plays the mon without the copied ability entirely (damaging through a traced Flash
+        # Fire immunity, seed 1500248 steps 77-78).
+        #
+        # This also retires a claim in _SUPPORTED_VOLATILES above, which held that the
+        # boost-only `flashfire` volatile could be wrong only "if a sampled world lacked the
+        # ability, which cannot happen for the mono-ability Gen 3 randbats carriers". True of
+        # NATIVE carriers; a Trace user that ACQUIRED Flash Fire is exactly that case.
+        #
+        # Ability field only -- gen3 does not fire the copied ability's Start event on
+        # acquisition (#962 patch 32), so no activation is simulated here.
+        ability=_resolved_ability(mon, row),
         # The CURRENT public item state beats the sampled battle-start
         # assignment: a publicly-stripped/consumed item is gone
         # (item_removed), and a Trick-swapped mon holds exactly the item the
