@@ -626,6 +626,16 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         self.assertEqual(
             {
+                divergence_class: entry["expected_10k"]
+                for divergence_class, entry in contract[
+                    "predicted_class_rates_10k"
+                ].items()
+            },
+            calibration["raw_class_archive_counts"],
+        )
+        self.assertEqual(len(contract["predicted_class_rates_10k"]), 61)
+        self.assertEqual(
+            {
                 family: entry["wilson95"]
                 for family, entry in table["documented_families"].items()
             },
