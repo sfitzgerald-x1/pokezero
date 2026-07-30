@@ -1,0 +1,837 @@
+{
+ "cycle": 12,
+ "commit_sha": "d5389b17",
+ "fingerprint": "bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5",
+ "vendored_patches": 36,
+ "population": "the 78 outside-limits rows of reports/c11_statfloor_differential.json (identity-verified = c9's 108 minus the 30 fix-lane clearances; zero new; content byte-identical across all four fix boundaries)",
+ "relabels_applied": [
+  {
+   "seed": 1500050,
+   "step": 33,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=6.592% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]",
+   "adjudication": {
+    "relabel": "limit:roll_divergent_lethality",
+    "mass_pct_at_36_patches": 6.592,
+    "demonstrations": [
+     "reports/c9_capped_lethal_walk.json (33 patches)",
+     "reports/c12_walk_rederivation.json (36 patches, identical verdict and mass)"
+    ]
+   }
+  },
+  {
+   "seed": 1500168,
+   "step": 97,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=4.980% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]",
+   "adjudication": {
+    "relabel": "limit:roll_divergent_lethality",
+    "mass_pct_at_36_patches": 4.98,
+    "demonstrations": [
+     "reports/c9_capped_lethal_walk.json (33 patches)",
+     "reports/c12_walk_rederivation.json (36 patches, identical verdict and mass)"
+    ]
+   }
+  },
+  {
+   "seed": 1500219,
+   "step": 62,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=5.859% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]",
+   "adjudication": {
+    "relabel": "limit:roll_divergent_lethality",
+    "mass_pct_at_36_patches": 5.859,
+    "demonstrations": [
+     "reports/c9_capped_lethal_walk.json (33 patches)",
+     "reports/c12_walk_rederivation.json (36 patches, identical verdict and mass)"
+    ]
+   }
+  },
+  {
+   "seed": 1500242,
+   "step": 56,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=4.980% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]",
+   "adjudication": {
+    "relabel": "limit:roll_divergent_lethality",
+    "mass_pct_at_36_patches": 4.98,
+    "demonstrations": [
+     "reports/c9_capped_lethal_walk.json (33 patches)",
+     "reports/c12_walk_rederivation.json (36 patches, identical verdict and mass)"
+    ]
+   }
+  },
+  {
+   "seed": 1500255,
+   "step": 55,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "adjudicated_limit_roll_divergent_lethality",
+   "basis": "X-walk: limit:roll_divergent_lethality, mass=5.859% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]",
+   "adjudication": {
+    "relabel": "limit:roll_divergent_lethality",
+    "mass_pct_at_36_patches": 5.859,
+    "demonstrations": [
+     "reports/c9_capped_lethal_walk.json (33 patches)",
+     "reports/c12_walk_rederivation.json (36 patches, identical verdict and mass)"
+    ]
+   }
+  }
+ ],
+ "residue_after_relabels": 73,
+ "families_73": {
+  "matcher_heal_cap_structural": 10,
+  "matcher_accounting_best_branch": 9,
+  "roll_divergent_lethality_shape_compound": 7,
+  "sleeptalk_callee_union": 7,
+  "measurement_boundary_residual_truncation": 6,
+  "matcher_overreport_window": 6,
+  "limit_not_established_keeps_label": 3,
+  "attribution_heal_vs_leechseed_I2": 3,
+  "matcher_overreport_legal_roll": 3,
+  "fixed_damage_skips_contact_abilities": 3,
+  "counter_mirrorcoat_damage_dealt_semantics": 3,
+  "matcher_roll_inherited_painsplit": 3,
+  "damage_calc_one_point_family": 2,
+  "boundary_builder_traced_ability_drift": 2,
+  "confusion_fanout_roll": 1,
+  "engine_waterabsorb_fires_on_raindance": 1,
+  "recoil_rounding_candidate": 1,
+  "battle_end_residual_truncation_attribution": 1,
+  "boundary_builder_toxic_stage_stale": 1,
+  "matcher_roll_inherited_cap": 1
+ },
+ "lane_shape_73": {
+  "matcher_instrument_incl_sleeptalk": 49,
+  "limit_shape_candidates": 11,
+  "engine_followups": 10,
+  "world_drift": 3
+ },
+ "fix_backlog": {
+  "engine_side": [
+   {
+    "id": "E1",
+    "item": "BP-side one-point family: sim floors the BasePower-event result to an integer, engine carries f32 (documented Z7.6: pinch abilities, Thick Fat, Facade, weakened-condition halving)",
+    "rows": [
+     [
+      1500123,
+      79
+     ],
+     [
+      1500251,
+      56
+     ]
+    ],
+    "honesty": "NEITHER surviving row carries a pinch/ThickFat/Facade marker; both are 1-point max gaps with mechanism OPEN, filed as candidates for this locus. The documented BP-side loci currently have ZERO attributed rows",
+    "clearance_signature": "magnitude mechanism - rows clear in place, no scatter (Z6.4 rule)"
+   },
+   {
+    "id": "E2",
+    "item": "recoil rounding: engine trunc(0.33*dealt) vs sim round(dealt/3)",
+    "rows": [
+     [
+      1500207,
+      27
+     ]
+    ],
+    "clearance_signature": "magnitude - clears in place; signature = any recoil move max-roll boundary"
+   },
+   {
+    "id": "E3",
+    "item": "Water Absorb fires on Rain Dance (heal maxhp/4 after ChangeWeather RAIN)",
+    "rows": [
+     [
+      1500124,
+      58
+     ]
+    ],
+    "clearance_signature": "in-place; signature = weather move + WaterAbsorb-side boundary"
+   },
+   {
+    "id": "E4",
+    "item": "fixed-damage path skips post-damage hooks: apply_fixed_damage registers no damage_dealt and runs no contact-ability hook (grep-supported, gen3/choice_effects.rs; Appendix K lineage)",
+    "rows": [
+     [
+      1500103,
+      76
+     ],
+     [
+      1500274,
+      15
+     ],
+     [
+      1500287,
+      76
+     ],
+     [
+      1500192,
+      91
+     ]
+    ],
+    "clearance_signature": "STRUCTURAL - expect scatter and family under-count; predict by signature: any fixed-damage move boundary with a contact ability on the target or a subsequent Counter"
+   },
+   {
+    "id": "E5",
+    "item": "Counter/Mirror Coat semantics beyond E4: engine retaliated where Showdown did not (1500155/22 with ChangeDamageDealtMoveCatagory Physical->Special in-branch)",
+    "rows": [
+     [
+      1500155,
+      22
+     ],
+     [
+      1500264,
+      40
+     ]
+    ],
+    "honesty": "WHY open - needs mechanism work (sim-side gen3 Counter/MC category semantics) before a patch",
+    "clearance_signature": "structural"
+   },
+   {
+    "id": "E6",
+    "item": "Flash Fire volatile position: ModifyDamagePhase1 in gen3 (chains with screens, pre-+2); engine applies trailing float multiplier (documented Z7.6)",
+    "rows": [],
+    "clearance_signature": "no attributed row; magnitude if one appears"
+   }
+  ],
+  "world_parser_side": [
+   {
+    "id": "W1",
+    "item": "traced-ability materialization: -ability copy event never reaches the world's ability field (world ability=TRACE + FLASHFIRE volatile; engine damages through traced Flash Fire immunity). Third member of the Z6.1 class: a parser-visible public fact with no world consumer",
+    "rows": [
+     [
+      1500248,
+      77
+     ],
+     [
+      1500248,
+      78
+     ]
+    ],
+    "clearance_signature": "structural (immunity changes branch structure)"
+   },
+   {
+    "id": "W2",
+    "item": "toxic-stage staleness across a Rest cure: world carried toxic_count=4 into a fresh re-tox (engine tick stage 5 vs observed stage 1)",
+    "rows": [
+     [
+      1500243,
+      79
+     ]
+    ],
+    "clearance_signature": "magnitude (tick size); signature = re-status after an in-battle cure"
+   }
+  ],
+  "instrument_side": [
+   {
+    "id": "I1",
+    "item": "heal-cap structural: engine world evolves on the avg roll, cap state diverges, component shapes differ (_to_full vs plain)",
+    "rows_count": 10
+   },
+   {
+    "id": "I2",
+    "item": "matcher accounting: best-branch pairing/selection echoes + legal-set unavailability (overreport window/legal)",
+    "rows_count": 18
+   },
+   {
+    "id": "I3",
+    "item": "roll-inherited deterministic components compared exactly (Pain Split 3, leech-cap 1)",
+    "rows_count": 4
+   },
+   {
+    "id": "I4",
+    "item": "mapper attribution: heal-vs-leechseed I.2 family (3) + battle-end label tie (1)",
+    "rows_count": 4
+   },
+   {
+    "id": "I5",
+    "item": "measurement-boundary residual truncation at faint/switch boundaries (#876/U.3.2 family)",
+    "rows_count": 6
+   },
+   {
+    "id": "I6",
+    "item": "Sleep Talk callee-union rendering (documented mapper insufficiency)",
+    "rows_count": 7
+   }
+  ],
+  "adjudication_not_fixes": [
+   {
+    "id": "A1",
+    "item": "roll-divergent-lethality shapes in compound classes - candidates for a future X-standard cross-off",
+    "rows": [
+     [
+      1500054,
+      125
+     ],
+     [
+      1500055,
+      60
+     ],
+     [
+      1500108,
+      67
+     ],
+     [
+      1500112,
+      40
+     ],
+     [
+      1500182,
+      25
+     ],
+     [
+      1500200,
+      47
+     ],
+     [
+      1500217,
+      112
+     ]
+    ]
+   },
+   {
+    "id": "A2",
+    "item": "limit_not_established rows - terminal under the current standard (reachable, sub-1% mass)",
+    "rows": [
+     [
+      1500012,
+      24
+     ],
+     [
+      1500105,
+      111
+     ],
+     [
+      1500242,
+      60
+     ]
+    ]
+   },
+   {
+    "id": "A3",
+    "item": "confusion fan/self-hit roll shape",
+    "rows": [
+     [
+      1500050,
+      48
+     ]
+    ]
+   }
+  ]
+ },
+ "rows": [
+  {
+   "seed": 1500005,
+   "step": 67,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. the literal U.3.2 row [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500012,
+   "step": 24,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.343% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500014,
+   "step": 69,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500016,
+   "step": 87,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500017,
+   "step": 55,
+   "divergence_class": "component_mismatch:heal|itemleftovers,psn",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs heal +31 vs engine leechseed +31 - same magnitude, different label; #908/I.2 lineage (U.3.3 row) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500028,
+   "step": 44,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "re-filed from mechanism2 by Z7.3: engine max = sim max = 19 at the recorded state; divergence is the avg-roll Leftovers _to_full shape artifact; predicted to stay under #962, stayed"
+  },
+  {
+   "seed": 1500033,
+   "step": 227,
+   "divergence_class": "component_mismatch:heal|leechseed",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs heal +21 vs engine leechseed +21 [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500037,
+   "step": 28,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "triage: observed magnitude in engine legal roll set [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500040,
+   "step": 70,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "Z.1 documented (16=16) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500050,
+   "step": 48,
+   "divergence_class": "roll_scaled_component",
+   "family": "confusion_fanout_roll",
+   "basis": "confusion self-hit roll + hidden-counter fan; comparison-limit shape (WHAT recorded) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500053,
+   "step": 26,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500054,
+   "step": 21,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: obs Fire Punch -15 + leftovers _to_full +15 (245 cap) vs engine avg -16 + plain +15; shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500054,
+   "step": 125,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: engine sleep-talk Surf branch kills at avg (capped -318), observed legal roll -301 survives; limit-family shape, candidate for future cross-off [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500055,
+   "step": 60,
+   "divergence_class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: obs Return -91 survives tick at 6; engine avg -99 -> capped tick kill; obs roll legal [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500057,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "direct calculate_damage: obs 22 in legal set {22..26} of m=26; run-time legal-set path failed (Sleep Talk turn) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500062,
+   "step": 9,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500068,
+   "step": 79,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500072,
+   "step": 38,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500079,
+   "step": 17,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500080,
+   "step": 11,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500086,
+   "step": 66,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500099,
+   "step": 5,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500103,
+   "step": 76,
+   "divergence_class": "component_missing_in_engine:abilityroughskin",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: Rough Skin recoil from Seismic Toss absent (100% branch) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500105,
+   "step": 64,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500105,
+   "step": 111,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.343% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500105,
+   "step": 118,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. switch-only boundary, engine runs EOT block [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500108,
+   "step": 67,
+   "divergence_class": "component_missing_in_engine:itemleftovers,movewish",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: crit arm - obs crit -107 survives (Wish+leftovers follow); engine crit avg kills (capped -115) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500112,
+   "step": 40,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "replay: engine called-Surf branch kills Crobat at avg (capped -85), observed -80 survives; limit-family shape [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500118,
+   "step": 16,
+   "divergence_class": "component_extra_in_engine:itemleftovers,psn",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500123,
+   "step": 79,
+   "divergence_class": "roll_scaled_component",
+   "family": "damage_calc_one_point_family",
+   "basis": "0.91 ratio band, no stat-modifier marker; 1-2 pt family candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500124,
+   "step": 58,
+   "divergence_class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "engine_waterabsorb_fires_on_raindance",
+   "basis": "replay: Heal SideTwo 72 (= maxhp/4) immediately after ChangeWeather RAIN; NEW engine defect candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500125,
+   "step": 45,
+   "divergence_class": "component_missing_in_engine:abilityliquidooze",
+   "family": "attribution_heal_vs_leechseed_I2",
+   "basis": "majority: obs itemleftovers +21 vs engine leechseed +21; liquidooze label from 10% minority [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500130,
+   "step": 53,
+   "divergence_class": "component_extra_in_engine:itemleftovers",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500137,
+   "step": 132,
+   "divergence_class": "component_missing_in_engine:heal",
+   "family": "sleeptalk_callee_union",
+   "basis": "replay: LOSSY sleeptalk_called_unidentified; callee union renders generic residual [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500150,
+   "step": 10,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500150,
+   "step": 39,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500155,
+   "step": 22,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: INVERSE: Showdown Mirror Coat did not retaliate, engine fired 2x59=-118 (ChangeDamageDealtMoveCatagory Physical->Special evidence); WHY open [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500155,
+   "step": 145,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500162,
+   "step": 115,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_legal_roll",
+   "basis": "triage: observed magnitude in engine legal roll set [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500174,
+   "step": 43,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500174,
+   "step": 72,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500175,
+   "step": 67,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500182,
+   "step": 25,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500182,
+   "step": 60,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500189,
+   "step": 61,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500192,
+   "step": 91,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: engine emitted NO Counter damage after Seismic Toss; grep: apply_fixed_damage + SEISMICTOSS arm never register damage_dealt (choice_effects.rs) - fixed-damage-path candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500196,
+   "step": 35,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500200,
+   "step": 47,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500206,
+   "step": 45,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "Z.1 documented (13=13 magnitudes agree, shapes differ) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500207,
+   "step": 27,
+   "divergence_class": "roll_scaled_component",
+   "family": "recoil_rounding_candidate",
+   "basis": "replay: DE damage 75 legal (m=75); recoil obs 25 = round(75/3) vs engine trunc(0.33*75)=24; NEW rounding candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500208,
+   "step": 40,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108 [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500210,
+   "step": 32,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500211,
+   "step": 46,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500214,
+   "step": 36,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108 [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500214,
+   "step": 37,
+   "divergence_class": "component_magnitude:movepainsplit",
+   "family": "matcher_roll_inherited_painsplit",
+   "basis": "Pain Split value inherits same-turn damage roll; compared exactly (B.4/C.2 family); replay s1500214/37: obs split 72 from Surf -115 vs eng 75 from avg -108 [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500217,
+   "step": 112,
+   "divergence_class": "component_missing_in_engine:itemleftovers,sandstorm",
+   "family": "roll_divergent_lethality_shape_compound",
+   "basis": "compound sandstorm class; majority miss = small roll deltas with capped components; same faint-divergent shape (top-miss evidence) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500223,
+   "step": 70,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_overreport_window",
+   "basis": "triage: observed within [0.919,1.09] window of engine representative; run-time matcher rejected (legal-set path unavailable) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500226,
+   "step": 71,
+   "divergence_class": "component_extra_in_engine:itemleftovers,sandstorm",
+   "family": "measurement_boundary_residual_truncation",
+   "basis": "replay/protocol: Showdown slice ends before |upkeep| (faint or switch boundary), engine completes the turn; #876/U.3.2 family. switch-only boundary [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500226,
+   "step": 83,
+   "divergence_class": "component_mismatch:sandstorm|brn",
+   "family": "battle_end_residual_truncation_attribution",
+   "basis": "replay: battle ends (|win|) mid-residuals; obs sandstorm -16 vs engine brn -16, equal magnitude, label tie at faint-capped boundary [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500231,
+   "step": 109,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_accounting_best_branch",
+   "basis": "triage: best branch matches observed; divergence is pairing/branch-selection accounting [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500239,
+   "step": 60,
+   "divergence_class": "roll_scaled_component",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: observed leftovers capped _to_full vs engine plain (or vice versa); shapes differ, roll-inherited cap [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500242,
+   "step": 60,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "limit_not_established_keeps_label",
+   "basis": "X-walk: limit_not_established, mass=0.659% [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500243,
+   "step": 79,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "boundary_builder_toxic_stage_stale",
+   "basis": "replay: engine tick -75 (stage 5) vs observed fresh stage-1 -15 after Rest cure + re-tox; world carried stale toxic_count; instrument lane candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500248,
+   "step": 77,
+   "divergence_class": "roll_scaled_component",
+   "family": "boundary_builder_traced_ability_drift",
+   "basis": "replay+state: world ability=TRACE with FLASHFIRE volatile; engine damages through traced Flash Fire immunity; instrument lane, Kecleon-ownership class [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500248,
+   "step": 78,
+   "divergence_class": "roll_scaled_component",
+   "family": "boundary_builder_traced_ability_drift",
+   "basis": "replay+state: world ability=TRACE with FLASHFIRE volatile; engine damages through traced Flash Fire immunity; instrument lane, Kecleon-ownership class [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500251,
+   "step": 56,
+   "divergence_class": "component_missing_in_engine:itemleftovers",
+   "family": "damage_calc_one_point_family",
+   "basis": "X-walk: damage_calc, mass=0.000%; obs 116 not in m=130 roll set, 1-pt gap, no mechanism-2 marker (Wailord Leftovers/WaterVeil) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500253,
+   "step": 70,
+   "divergence_class": "component_magnitude:heal",
+   "family": "matcher_roll_inherited_cap",
+   "basis": "replay: leech sap capped by KO inherits move roll (obs 27 vs eng 28); magnitudes track the roll exactly [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500264,
+   "step": 40,
+   "divergence_class": "roll_scaled_component",
+   "family": "counter_mirrorcoat_damage_dealt_semantics",
+   "basis": "replay: same shape as s1500155/22; WHY open [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500274,
+   "step": 15,
+   "divergence_class": "roll_scaled_component",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: same, Togetic Seismic Toss into Rough Skin Sharpedo [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500287,
+   "step": 76,
+   "divergence_class": "component_missing_in_engine:brn",
+   "family": "fixed_damage_skips_contact_abilities",
+   "basis": "replay: Flame Body burn from Seismic Toss absent in engine branch (100%); Appendix K fixed-damage-path family; NEW candidate [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500290,
+   "step": 26,
+   "divergence_class": "component_missing_in_engine:heal",
+   "family": "matcher_heal_cap_structural",
+   "basis": "replay: engine world on avg roll caps Leftovers _to_full (+7) vs observed uncapped +17; Z.1 heal-cap mechanism verbatim [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500291,
+   "step": 83,
+   "divergence_class": "roll_scaled_component",
+   "family": "sleeptalk_callee_union",
+   "basis": "documented mapper insufficiency (callee-union path / no_usable_branch / LOSSY) [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  },
+  {
+   "seed": 1500294,
+   "step": 110,
+   "divergence_class": "component_missing_in_engine:psn",
+   "family": "sleeptalk_callee_union",
+   "basis": "replay: LOSSY sleeptalk_called_unidentified across 49 candidates; documented mapper insufficiency [c9 basis carries: row content (class + branch misses) verified byte-identical across #958/#959/#961/#962 identity diffs]"
+  }
+ ]
+}
