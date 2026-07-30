@@ -16,13 +16,21 @@ The protocol gives three relevant facts:
    Substitute was hit but does not publish the absorbed amount. Its remaining
    HP is therefore not reconstructable from public information.
 
-The patch will carry this three-way public state from the replay fold to
-`engine_world`. It will build a known-full Substitute exactly, represent a
-known-broken Substitute as absent with zero HP, and reject an active
-intermediate/unknown Substitute with the stable fail-closed reason
-`substitute_health_unknown`. The differential harness must record that reason
-as the existing `limit:*` comparison family, not silently rebuild the
-Substitute at full health.
+The patch will carry this three-way public state and its provenance from the
+replay fold to `engine_world`. It will build a known-full Substitute exactly,
+represent a known-broken Substitute as absent with zero HP, and accept the
+comparison limit `world_substitute_health_unknown` only for an active
+Substitute carrying the explicit, valid provenance value `unknown`. An absent,
+malformed, broken, or arbitrary health provenance while the volatile is active
+is a terminal instrumentation/provenance contradiction, not a comparison
+limit and not a reason to rebuild the Substitute at full health.
+
+Where chronology supplies a publicly deterministic Gen 3 fixed-damage hit,
+the fold will instead carry the exact remaining Substitute HP. The predicted
+supported cases are Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom;
+this is deliberately limited to hits whose exact public damage can be derived
+without private state. All other non-breaking Substitute damage remains
+explicitly unknown.
 
 ## Predicted Affected Certification Rows
 
@@ -45,9 +53,11 @@ population in `reports/c14_cert_sweep_readout.json`:
 | 2701047/47 | `CAND_recoil_vs_substitute_basis` | `limit:world_substitute_health_unknown` |
 
 Expected count: **12** reclassified from an unattributed world approximation
-to the named public-information comparison limit. This is not a claimed
-engine-fidelity clearance: it deliberately declines worlds whose Substitute
-HP cannot be known.
+to the named public-information comparison limit, provided each has explicit
+valid `unknown` health provenance. Rows with contradictory provenance must
+instead terminate as instrumentation/provenance failures. This is not a
+claimed engine-fidelity clearance: it deliberately declines worlds whose
+Substitute HP cannot be known.
 
 ## Predicted Controls
 
@@ -56,8 +66,15 @@ HP cannot be known.
 2. A public `-end Substitute` leaves no Substitute volatile and builds with
    zero Substitute HP.
 3. A live Substitute after a non-breaking public `-activate ... Substitute`
-   does not build, even when the old approximation flag is enabled.
-4. A payload carrying an active Substitute but no explicit public health state
-   does not inherit the old full-health approximation; it fails closed.
-5. Non-Substitute construction and the pre-existing `volatile_unsupported`
+   receives the accepted limit only when its health provenance is explicitly
+   and validly `unknown`.
+4. A payload carrying an active Substitute with missing, malformed, `broken`,
+   or arbitrary health provenance fails as a terminal contradiction and is not
+   counted in any `limit:*` bucket.
+5. A `|faint|` line clears Substitute and its health provenance before the
+   force-switch snapshot is built.
+6. Publicly deterministic Gen 3 fixed-damage chronology updates exact
+   remaining Substitute HP for Seismic Toss, Night Shade, Dragon Rage, and
+   Sonic Boom, while non-deterministic damage remains unknown.
+7. Non-Substitute construction and the pre-existing `volatile_unsupported`
    behavior when the opt-in flag is disabled remain unchanged.
