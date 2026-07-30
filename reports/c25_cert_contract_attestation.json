@@ -1,10 +1,10 @@
 {
   "schema_version": "pokezero.engine-cert-contract-attestation/v1",
-  "contract_source_commit": "e1ee668a57689375ff865293178e511fa12982ae",
+  "contract_source_commit": "914ef3aede63d87c86b456286b99c059463760eb",
   "contract_path": "reports/c15_resweep_spec.json",
-  "contract_sha256": "3e1af2af626f278af6b640f5c340665a6b8374f7fe7af3fefdb889de2c3fb80d",
-  "launch_source_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
-  "required_engine_fingerprint": "d6f514411bfe4e2cd665b0b7af6eb77a33676c25f66734ca4e33cb9a635b75aa",
+  "contract_sha256": "45bfc322e31c6112905c712457e20e62db8379a3be03a917502c31592d4ab0f3",
+  "launch_source_commit": "7c76899d23954b22dc2ab272b4ef07d576aa1ebc",
+  "required_engine_fingerprint": "51eda3177f324dcc11419ff2931417d530a4e6add351f6a0a1badbded4c88199",
   "registration": {
     "pull_request": 983,
     "fresh_sweep2_measurements_inspected": 0,
