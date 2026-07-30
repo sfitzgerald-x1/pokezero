@@ -27,15 +27,7 @@ tar xzf "$ARCHIVE" -C "$BUILD_DIR"
 SRC="$BUILD_DIR/poke_engine-$VERSION"
 
 echo "[2/3] apply gen3 patches"
-PATCH_LIST="$REPO/third_party/poke-engine-gen3-patches.txt"
-while IFS= read -r patch <&3; do
-  case "$patch" in ''|'#'*) continue ;; esac
-  if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 < "$REPO/third_party/$patch"); then
-    echo "ERROR: failed to apply $patch" >&2
-    exit 1
-  fi
-  echo "      $patch: applied"
-done 3< "$PATCH_LIST"
+"$PYTHON" "$REPO/scripts/apply_poke_engine_patches.py" "$SRC"
 
 # Installed from the sdist ROOT, never from poke-engine-py/. The root pyproject
 # sets `python-source = "python"` and `module-name = "poke_engine.poke_engine"`,
