@@ -1,0 +1,50 @@
+{
+  "registered_before": "the batch-E full differential run (300 games, seeds 1500000-1500299, strict, --repros-per-game 40 --keep-repro 500) at fingerprint 3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce (41 patch files: main's 36 + weather-move-targeting, recoil-rounding, fixed-damage-pipeline, counter-hiddenpower-category, flashfire-phase1; fixture-refresh last)",
+  "baseline": "reports/c11_statfloor_differential.json (117 rows, repro_retention.repros_complete=true; 78 outside-limits + 39 limit at the c11 frame; the c12 decomposition's 73-frame is the same population after the 5 walk relabels)",
+  "method": "replay-first per family, then a mechanism-signature scan of all 117 baseline row payloads (fixed-damage move lines, recoil lines, weather moves, FLASHFIRE volatile markers, Counter/MirrorCoat + Hidden Power pairings); every marker row individually resolved by single-seed regeneration at the binding build BEFORE this registration",
+  "family_verdicts": {
+    "E1_bp_side_one_point": "label WRONG for both rows, as the brief anticipated. 1500123/79 is the Flash Fire POSITION locus (E6, previously zero attributed rows): trailing float vs the sim's ModifyDamagePhase1 fixed-point floor pre-+2 (sim max 92, engine 93, observed 78 = sim's exact min roll) - fixed by flashfire-phase1. 1500251/56 is NOT an engine defect: the engine's Surf max is 135 and the observed 116 is inside its legal roll set; the divergence is the engine world evolving on the branch's kill-split average so the toxic tick's HP cap diverges (I1 cap-state shape); the c12 walk basis's m=130 was a mis-derivation from the kill-split branch value. The documented BP-side loci (pinch/ThickFat/Facade) still have ZERO attributed rows and remain unfixed.",
+    "E2_recoil": "confirmed: sim clampIntRange(floor(dealt*recoil[0]/recoil[1]),1) vs engine trunc(f32 0.33*dealt); Double-Edge is [1,3] via the gen4 mod",
+    "E3_waterabsorb_raindance": "confirmed, root cause is DATA not the guard: ability_modify_attack_against's targeting guard exists and names Rain Dance, but Choice::default() gives weather moves target Opponent so they sail past it; Flash Fire would eat an opposing Sunny Day the same way",
+    "E4_fixed_damage": "confirmed and BIGGER than documented: check_move_hit_or_miss zeroes percent_hit on the Some((0,0)) placeholder, so fixed-damage moves never reach run_move at all - no set_damage_dealt, no defender contact abilities, no secondaries, no Destiny Bond, no Endure, and Super Fang's 90% accuracy was never rolled; Super Fang's amount was also ceil(hp/2) (and 0 at 1hp) vs the sim's clampIntRange(floor(hp/2),1). Night Shade dealt NO damage at all (empty branch; Appendix K.3, coordinator-confirmed via the depth-tactics probe): it had no choice_special_effect arm AND the zeroed path. It is absent from every gen3 randbats movepool (sets.json scan: zero species), which is why 244 diverged-row payloads across c10/c11 never mention it - reachable in scenario/customgame contexts, pinned like Fake Out.",
+    "E5_counter_mirrorcoat": "WHY derived from the sim, explicit clauses: gen3 Counter bounces category Physical OR effect.id === 'hiddenpower'; Mirror Coat bounces category Special AND effect.id !== 'hiddenpower' (data/mods/gen3/moves.ts:163-183,407-427). The engine recorded Hidden Power's type-derived category in damage_dealt."
+  },
+  "will_clear": {
+    "comment": "every row verified by single-seed regeneration at fingerprint 3204c777 before this registration",
+    "rows": [
+      {"seed": 1500103, "step": 76, "mechanism": "E4 (Rough Skin on Seismic Toss)"},
+      {"seed": 1500274, "step": 15, "mechanism": "E4 (Rough Skin on Seismic Toss)"},
+      {"seed": 1500287, "step": 76, "mechanism": "E4 (Flame Body on Seismic Toss)"},
+      {"seed": 1500192, "step": 91, "mechanism": "E4 (Counter after Seismic Toss)"},
+      {"seed": 1500155, "step": 22, "mechanism": "E5 (Mirror Coat must not bounce Hidden Power)"},
+      {"seed": 1500264, "step": 40, "mechanism": "E5"},
+      {"seed": 1500080, "step": 11, "mechanism": "E5 (same shape, found by the marker scan)"},
+      {"seed": 1500207, "step": 27, "mechanism": "E2 (recoil floor of exact third)"},
+      {"seed": 1500214, "step": 36, "mechanism": "E2-adjacent (Double-Edge recoil in the residual chain)"},
+      {"seed": 1500124, "step": 58, "mechanism": "E3 (Rain Dance no longer absorbed)"},
+      {"seed": 1500123, "step": 79, "mechanism": "E6/Flash Fire position (was filed E1)"},
+      {"seed": 1500196, "step": 9, "mechanism": "E4 (Counter damage_dealt now registered; this one is a limit:roll_divergent_lethality-labelled row and its clearance is a mechanism clearance, not a limit adjudication change)"}
+    ]
+  },
+  "stays": {
+    "comment": "diagnosed non-engine or different-lane rows",
+    "rows": [
+      {"seed": 1500251, "step": 56, "reason": "instrument cap-state divergence (I1 shape); engine max 135 legal for the observed 116"},
+      {"seed": 1500248, "step": 78, "reason": "W1 traced-ability world drift (the FLASHFIRE marker there is the world bug itself)"},
+      {"seed": 1500182, "step": 60, "reason": "Seismic Toss marker present but the divergence is elsewhere (sleep-talk-called context); single-seed verified unchanged"},
+      {"seed": 1500239, "step": 60, "reason": "Flash Fire volatile present but no boosted Fire attack fired; verified unchanged"},
+      {"seed": 1500130, "step": 53, "reason": "recoil marker, divergence elsewhere; verified unchanged"},
+      {"seed": 1500255, "step": 55, "reason": "recoil marker, divergence elsewhere; verified unchanged (capped-lethal walk row)"},
+      {"seed": 1500006, "step": 24, "reason": "limit row, recoil marker; verified unchanged"},
+      {"seed": 1500085, "step": 61, "reason": "limit row, recoil marker; verified unchanged"},
+      {"seed": 1500220, "step": 77, "reason": "limit row, recoil marker; verified unchanged"},
+      {"seed": 1500209, "step": 21, "reason": "Sunny Day marker but defender has no Fire-absorbing ability; verified unchanged"},
+      {"seed": 1500182, "step": 25, "reason": "spurious volatile marker (benched mon); verified unchanged"}
+    ]
+  },
+  "prediction": {
+    "population": "117 -> 105 (12 clears above), zero new rows, zero class changes elsewhere",
+    "capped_lethal_walk": "the nine remaining walk rows all stay present (1500251/56 and 1500255/55 among them, both verified unchanged single-seed)",
+    "night_shade": "no clearances attributable to Night Shade (it cannot appear in gen3 randbats; the fix is pinned, not row-driven)"
+  }
+}
