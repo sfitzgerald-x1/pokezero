@@ -71,8 +71,13 @@ class AbilityMechanicsTests(unittest.TestCase):
         move: str | tuple[str, ...],
         *,
         types: tuple[str, str] = ("normal", "typeless"),
+        level: int = 80,
         hp: int = 300,
         maxhp: int = 300,
+        attack: int = 180,
+        defense: int = 180,
+        special_attack: int = 180,
+        special_defense: int = 180,
         speed: int = 100,
         status: str = "none",
         sleep_turns: int = 0,
@@ -82,7 +87,7 @@ class AbilityMechanicsTests(unittest.TestCase):
     ):
         return poke_engine.Pokemon(
             id=species,
-            level=80,
+            level=level,
             gender=gender,
             types=types,
             base_types=types,
@@ -90,10 +95,10 @@ class AbilityMechanicsTests(unittest.TestCase):
             maxhp=maxhp,
             ability=ability,
             item=item,
-            attack=180,
-            defense=180,
-            special_attack=180,
-            special_defense=180,
+            attack=attack,
+            defense=defense,
+            special_attack=special_attack,
+            special_defense=special_defense,
             speed=speed,
             status=status,
             sleep_turns=sleep_turns,
@@ -184,6 +189,171 @@ class AbilityMechanicsTests(unittest.TestCase):
             self.assertAlmostEqual(boosted / ordinary, 1.5, delta=0.03)
 
         self.assertEqual(opening_damage(100, "tackle"), opening_damage(101, "tackle"))
+
+    def test_flail_uses_the_hp_band_reached_by_the_first_move_roll(self) -> None:
+        """Retained c15 row 2201005/55: Crunch can leave Dodrio at 39/222."""
+        mightyena = self._mon(
+            "mightyena", "intimidate", "crunch", types=("dark", "typeless"),
+            level=92, hp=137, maxhp=278, attack=218, defense=180,
+            special_attack=162, special_defense=162, speed=180, item="leftovers",
+        )
+        dodrio = self._mon(
+            "dodrio", "earlybird", "flail", types=("normal", "flying"),
+            level=78, hp=147, maxhp=222, attack=217, defense=154,
+            special_attack=139, special_defense=139, speed=201,
+            status="paralyze", item="liechiberry",
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(mightyena, dodrio), "crunch", "flail"
+        )
+
+        # Showdown's retained line is Crunch 108 -> Dodrio 39/222 -> Flail 110.
+        # The engine represents Flail's own random damage as its average (111),
+        # but the preceding 108 roll must enter Flail's 100-BP HP band.
+        crossed_band = [branch for branch in branches if "Damage SideTwo: 108" in self._text(branch)]
+        self.assertTrue(crossed_band)
+        self.assertTrue(any("Damage SideOne: 111" in self._text(branch) for branch in crossed_band))
+
+    def test_dynamic_power_fanout_preserves_the_first_moves_hit_count(self) -> None:
+        attacker = self._mon(
+            "hitmonlee", "limber", "doublekick", types=("fighting", "typeless"),
+            hp=220, maxhp=220, attack=180, speed=200,
+        )
+        pending_flail = self._mon(
+            "dodrio", "earlybird", "flail", types=("normal", "flying"),
+            hp=180, maxhp=220, defense=180, speed=100,
+        )
+
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, pending_flail), "doublekick", "flail"
+        )
+
+        self.assertTrue(branches)
+        self.assertTrue(all(
+            sum(
+                instruction.startswith("Damage SideTwo:")
+                for instruction in self._text(branch).split(" | ")
+            ) == 2
+            for branch in branches
+        ))
+
+    def test_cloud_nine_entry_does_not_change_forecast_but_exit_restores_it(self) -> None:
+        """Retained c15 row 2400451/56: Cloud Nine suppresses, not changes, rain."""
+        castform_water = self._mon(
+            "castform", "forecast", "return102", types=("water", "typeless"),
+            hp=28, maxhp=272, speed=177,
+        )
+        magikarp = self._mon(
+            "magikarp", "swiftswim", "splash", types=("water", "typeless"), hp=1, maxhp=100,
+        )
+        golduck = self._mon(
+            "golduck", "cloudnine", "splash", types=("water", "typeless"),
+            hp=239, maxhp=262, speed=184,
+        )
+        entering = self._state(
+            castform_water, magikarp, weather="rain", weather_turns_remaining=-1,
+            defender_party=(golduck,),
+        )
+        entering_branches = poke_engine.generate_instructions(entering, "return102", "golduck")
+        self.assertTrue(entering_branches)
+        self.assertTrue(all("ChangeType SideOne" not in self._text(branch) for branch in entering_branches))
+        self.assertTrue(all(
+            tuple(str(value).upper() for value in entering.apply_instructions(branch).side_one.pokemon[0].types)
+            == ("WATER", "TYPELESS")
+            for branch in entering_branches
+        ))
+
+        castform_normal = self._mon(
+            "castform", "forecast", "return102", types=("normal", "typeless"),
+            hp=28, maxhp=272, speed=177,
+        )
+        leaving = self._state(
+            castform_normal, golduck, weather="rain", weather_turns_remaining=-1,
+            defender_party=(magikarp,),
+        )
+        leaving_branches = poke_engine.generate_instructions(leaving, "return102", "magikarp")
+        self.assertTrue(all("ChangeType SideOne" in self._text(branch) for branch in leaving_branches))
+        self.assertTrue(all(
+            tuple(str(value).upper() for value in leaving.apply_instructions(branch).side_one.pokemon[0].types)
+            == ("WATER", "TYPELESS")
+            for branch in leaving_branches
+        ))
+
+    def test_cloud_nine_handoff_exposes_weather_before_the_incoming_suppressor(self) -> None:
+        """Gen 3 runs Forecast on suppressor exit, but not suppressor entry."""
+        castform_normal = self._mon(
+            "castform", "forecast", "return102", types=("normal", "typeless"),
+            hp=272, maxhp=272, speed=177,
+        )
+        golduck = self._mon(
+            "golduck", "cloudnine", "splash", types=("water", "typeless"),
+            hp=239, maxhp=262, speed=184,
+        )
+        incoming = self._mon(
+            "shedinja", "cloudnine", "splash", types=("bug", "ghost"),
+            hp=1, maxhp=1, speed=120,
+        )
+        state = self._state(
+            castform_normal, golduck, weather="rain", weather_turns_remaining=-1,
+            defender_party=(incoming,),
+        )
+
+        branches = poke_engine.generate_instructions(state, "return102", "shedinja")
+        self.assertTrue(branches)
+        for branch in branches:
+            text = self._text(branch)
+            self.assertIn("ChangeType SideOne", text)
+            self.assertLess(text.index("ChangeType SideOne"), text.index("Switch SideTwo"))
+            applied = state.apply_instructions(branch)
+            self.assertEqual(
+                tuple(
+                    str(value).upper()
+                    for value in applied.side_one.pokemon[0].types
+                ),
+                ("WATER", "TYPELESS"),
+            )
+
+    def test_color_change_waits_until_after_ice_beam_freeze(self) -> None:
+        """Retained incap row 2700752/65: Kecleon freezes before becoming Ice."""
+        kecleon = self._mon(
+            "kecleon", "colorchange", "brickbreak", types=("normal", "typeless"),
+            level=92, hp=162, maxhp=260, attack=218, defense=181,
+            special_attack=163, special_defense=273, speed=126,
+        )
+        seaking = self._mon(
+            "seaking", "swiftswim", "icebeam", types=("water", "typeless"),
+            level=90, hp=179, maxhp=290, attack=172, defense=168,
+            special_attack=167, special_defense=195, speed=174,
+        )
+        branches = poke_engine.generate_instructions(
+            self._state(kecleon, seaking, weather="rain", weather_turns_remaining=4),
+            "brickbreak", "icebeam",
+        )
+        frozen = [branch for branch in branches if "NONE -> FREEZE" in self._text(branch)]
+        self.assertTrue(frozen)
+        self.assertAlmostEqual(self._mass(branches, "NONE -> FREEZE"), 10.0, places=4)
+        for branch in frozen:
+            text = self._text(branch)
+            self.assertLess(text.index("NONE -> FREEZE"), text.index("ChangeType SideOne"))
+            self.assertNotIn("Damage SideTwo", text)
+
+    def test_color_change_does_not_run_when_endure_reduces_actual_damage_to_zero(self) -> None:
+        kecleon = self._mon(
+            "kecleon", "colorchange", "endure", types=("normal", "typeless"),
+            hp=1, maxhp=260, speed=126,
+        )
+        seaking = self._mon(
+            "seaking", "swiftswim", "icebeam", types=("water", "typeless"),
+            hp=179, maxhp=290, special_attack=167, speed=174,
+        )
+
+        branches = poke_engine.generate_instructions(
+            self._state(kecleon, seaking), "endure", "icebeam"
+        )
+
+        self.assertTrue(branches)
+        self.assertTrue(any("Damage SideOne: 0" in self._text(branch) for branch in branches))
+        self.assertTrue(all("ChangeType SideOne" not in self._text(branch) for branch in branches))
 
     @staticmethod
     def _text(branch) -> str:

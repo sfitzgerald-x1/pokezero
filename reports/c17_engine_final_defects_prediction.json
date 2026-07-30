@@ -1,0 +1,83 @@
+{
+  "report": "c17_engine_final_defects_prediction",
+  "status": "pre_implementation",
+  "source_artifact": {
+    "path": "reports/c15_why_magnitude_statgap_results.json",
+    "selection": "adjudication.why_status == confirmed_engine_defect",
+    "confirmed_engine_defects": 22
+  },
+  "scope": {
+    "included": [
+      "fixed-point base-power rounding in Thick Fat and pinch abilities",
+      "Flail/Reversal base-power recomputation after earlier same-turn damage",
+      "Forecast type expiry after the final weather turn"
+    ],
+    "excluded": [
+      "differential matcher and readout changes",
+      "world construction changes",
+      "certification specification and ledger edits"
+    ]
+  },
+  "predictions": [
+    {
+      "id": "E46_fixed_point_base_power",
+      "retained_rows": [
+        "2001162/120", "2100482/83", "2200369/75", "2300154/80",
+        "2400140/9", "2400172/89", "2400342/78", "2401002/8",
+        "2401237/14", "2500151/116", "2500297/96", "2501061/96",
+        "2600510/111", "2600546/22", "2600546/25", "2600992/21",
+        "2601033/129", "2601196/25", "2700218/151", "2700355/37"
+      ],
+      "hypothesis": "The Rust engine carries 1.5x and 0.5x base-power multipliers as f32 values. Gen 3 Showdown uses fixed-point chain modifiers, flooring an odd base power before later damage stages. Thus 95 * 1.5 must be 142, and 95 / 2 must be 47, not 142.5 and 47.5.",
+      "loci": [
+        "src/gen3/abilities.rs::ability_modify_attack_being_used",
+        "src/gen3/abilities.rs::ability_modify_attack_against"
+      ],
+      "required_pins": [
+        "odd-base-power Thick Fat floors 95 to 47",
+        "odd-base-power Torrent/Blaze/Overgrow/Swarm floor 95 to 142",
+        "even base powers retain their exact multiplier result"
+      ],
+      "expected_unpatched_failure": "The native branch choice base_power remains fractional at the modifier boundary.",
+      "expected_patched_result": "All affected base-power values are integral and match the Gen 3 Showdown floor before damage calculation."
+    },
+    {
+      "id": "E47_dynamic_variable_bp_timing",
+      "retained_rows": ["2201005/55"],
+      "hypothesis": "Choice preprocessing computes Flail/Reversal base power before the faster opponent's damage instruction is applied. The slower user's move must price its base power from its HP at execution, after that damage.",
+      "loci": [
+        "src/gen3/generate_instructions.rs::before_move",
+        "src/gen3/choice_effects.rs::modify_choice"
+      ],
+      "required_pins": [
+        "a faster damaging move lowers the slower Flail user's HP across a ladder boundary",
+        "the slower Flail/Reversal branch uses post-hit HP",
+        "a slower user's unchanged-HP control keeps the original ladder value"
+      ],
+      "expected_unpatched_failure": "The generated slower-move branch retains the pre-turn variable base power.",
+      "expected_patched_result": "The variable base power is recomputed immediately before the slower move executes."
+    },
+    {
+      "id": "E48_forecast_weather_expiry_timing",
+      "retained_rows": ["2400451/56"],
+      "hypothesis": "On the final active weather turn, Showdown resolves both moves with Castform's weather form and only then clears weather and restores Forecast. The engine clears Forecast before same-turn damage.",
+      "loci": [
+        "src/gen3/generate_instructions.rs::add_end_of_turn_instructions",
+        "src/gen3/abilities.rs::update_forecast"
+      ],
+      "required_pins": [
+        "Castform remains Water during a final-Rain-turn attack",
+        "the same branch restores Castform to Normal after end-of-turn expiry",
+        "weather with more than one remaining turn does not restore Forecast"
+      ],
+      "expected_unpatched_failure": "The move-time damage branch observes Castform as Normal when weather expires at that turn's residual phase.",
+      "expected_patched_result": "Move-time typing remains weather-form typing; the Forecast restoration instruction follows the completed turn."
+    }
+  ],
+  "implementation_order": [
+    "Materialize the exact patched 0.0.47 source with both fuzz=0 builders.",
+    "Create pins that fail against the current source and transcribe live Gen 3 Showdown observations.",
+    "Patch the vendored source, regenerate a fuzz=0 patch, and append the patch list last.",
+    "Rebuild both native consumers and run source, Rust, Python, probe, fingerprint, and public-invariant gates."
+  ]
+}
