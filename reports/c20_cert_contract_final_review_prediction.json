@@ -22,10 +22,9 @@
       "required_regression": "Mid-file and final {}, 42, and [] records fail closed, while only an unparseable final torn write remains repairable."
     }
   ],
-  "acceptance": {
-    "focused_tests_pass": true,
-    "full_public_tests_pass": true,
-    "engine_fingerprint_unchanged": "646655e01eb986ee8cdfcae3f8b3705345ea4416d8f05972cda83c554824004e",
-    "fresh_independent_review": "PASS"
+  "verification_plan": {
+    "focused_tests": "Run the certification, checkpoint, matcher, provenance, build-stamp, and public-invariant suites.",
+    "engine_fingerprint": "Recompute after any build-input discovery change and require both native consumers to agree.",
+    "independent_review": "Require a fresh adversarial PASS after implementation."
   }
 }
