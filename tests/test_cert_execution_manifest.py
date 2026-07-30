@@ -22,6 +22,34 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _complete_family_rate_table() -> dict:
+    documented = {
+        family: {"wilson95_rate": [0.0, 1.0]}
+        for family in sorted(
+            manifest.EMITTABLE_DOCUMENTED_FAMILIES
+            | manifest.EMITTABLE_LIMIT_FAMILIES
+            - {"limit:world_substitute_health_unknown"}
+        )
+    }
+    documented["limit:world_substitute_health_unknown"] = {
+        "upper_full_round_rate": 0.001,
+        "upper_rate_basis": "pre_registered_risk_budget",
+        "risk_budget_rationale": "fixture risk budget",
+    }
+    return {
+        "calibration_boundaries": 1000,
+        "documented_families": documented,
+        "new_mechanisms_post_fix": {
+            counter: {
+                "predicted_next": 0,
+                "classifier_outcome": "UNATTRIBUTED",
+                "exclusion_counter": counter,
+            }
+            for counter in sorted(manifest.REGISTERED_ZERO_EXCLUSION_COUNTERS)
+        },
+    }
+
+
 class ExecutionManifestProducerTests(unittest.TestCase):
     def _source_commit(self) -> str:
         return subprocess.check_output(
@@ -137,6 +165,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     "certification_gates": {
                         "expected_shards": 1,
                         "expected_games": 1,
+                        "minimum_boundaries_full_round": 1,
                         "seed_blocks": [{"start": 1000, "games": 1}],
                         "minimum_coverage_measured_fraction": 0.97,
                         "required_build_check": "gated",
@@ -152,10 +181,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                             ROOT / "scripts" / "cert_execution_manifest.py"
                         ),
                     },
-                    "pre_registered_family_rate_table": {
-                        "documented_families": {},
-                        "new_mechanisms_post_fix": {},
-                    },
+                    "pre_registered_family_rate_table": _complete_family_rate_table(),
                     "predicted_class_rates_10k": {},
                 }
             ),
@@ -331,13 +357,13 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             )
 
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
-            contract["pre_registered_family_rate_table"]["documented_families"] = {
-                "limit:world_substitute_health_unknown": {
-                    "upper_full_round_rate": 0.0005,
-                    "upper_rate_basis": "pre_registered_risk_budget",
-                    "risk_budget_rationale": "One substitute-health ambiguity per "
-                    "two thousand full rounds is the pre-registered ceiling.",
-                }
+            contract["pre_registered_family_rate_table"]["documented_families"][
+                "limit:world_substitute_health_unknown"
+            ] = {
+                "upper_full_round_rate": 0.0005,
+                "upper_rate_basis": "pre_registered_risk_budget",
+                "risk_budget_rationale": "One substitute-health ambiguity per "
+                "two thousand full rounds is the pre-registered ceiling.",
             }
             paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
             contract_sha256 = _sha256(paths["contract"])
@@ -529,10 +555,33 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         documented = schema["properties"]["pre_registered_family_rate_table"]["properties"][
             "documented_families"
         ]
-        names = documented["propertyNames"]["anyOf"][0]["enum"]
-        self.assertEqual(set(names), manifest.EMITTABLE_DOCUMENTED_FAMILIES)
-        limit_names = documented["propertyNames"]["anyOf"][1]["enum"]
-        self.assertEqual(set(limit_names), manifest.EMITTABLE_LIMIT_FAMILIES)
+        self.assertEqual(
+            set(documented["properties"]),
+            manifest.EMITTABLE_DOCUMENTED_FAMILIES
+            | manifest.EMITTABLE_LIMIT_FAMILIES,
+        )
+        self.assertEqual(
+            set(documented["required"]),
+            manifest.EMITTABLE_DOCUMENTED_FAMILIES
+            | manifest.EMITTABLE_LIMIT_FAMILIES,
+        )
+        post_fix = schema["properties"]["pre_registered_family_rate_table"][
+            "properties"
+        ]["new_mechanisms_post_fix"]
+        self.assertEqual(
+            set(post_fix["required"]),
+            manifest.REGISTERED_ZERO_EXCLUSION_COUNTERS,
+        )
+        self.assertEqual(
+            set(post_fix["properties"]),
+            manifest.REGISTERED_ZERO_EXCLUSION_COUNTERS,
+        )
+        self.assertEqual(
+            documented["properties"]["limit:world_substitute_health_unknown"][
+                "$ref"
+            ],
+            "#/$defs/substituteFullRoundRiskBudget",
+        )
         prediction = schema["properties"]["predicted_class_rates_10k"]["additionalProperties"]
         self.assertEqual(prediction["required"], ["expected_10k", "wilson95_count_10k"])
         self.assertEqual(prediction["properties"]["expected_10k"]["minimum"], 0)
@@ -557,7 +606,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             )
         )
 
-    def test_final_contract_reserves_coverage_upper_rate_for_substitute_limit(
+    def test_final_contract_reserves_full_round_risk_budget_for_substitute_limit(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -567,14 +616,15 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
             contract["pre_registered_family_rate_table"]["documented_families"] = {
                 "I1_cap_state_shape": {
-                    "upper_rate": 0.031,
-                    "upper_rate_basis": "coverage_budget",
+                    "upper_full_round_rate": 0.001,
+                    "upper_rate_basis": "pre_registered_risk_budget",
+                    "risk_budget_rationale": "fixture",
                 }
             }
             errors = manifest.validate_final_contract_schema(contract)
         self.assertIn(
             "final contract documented family 'I1_cap_state_shape' cannot use a "
-            "coverage-budget upper_rate",
+            "full-round risk budget",
             errors,
         )
 
@@ -684,18 +734,9 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
             table = contract["pre_registered_family_rate_table"]
             table["calibration_boundaries"] = 100
-            table["documented_families"] = {
-                "I1_cap_state_shape": {
-                    "wilson95": [1, 3],
-                    "prediction_interval_rate": [0.0, 0.05],
-                }
-            }
-            table["new_mechanisms_post_fix"] = {
-                "recharge": {
-                    "predicted_next": 0,
-                    "classifier_outcome": "UNATTRIBUTED",
-                    "exclusion_counter": "recharge_turn_residual_gap",
-                }
+            table["documented_families"]["I1_cap_state_shape"] = {
+                "wilson95": [1, 3],
+                "prediction_interval_rate": [0.0, 0.05],
             }
         self.assertEqual(manifest.validate_final_contract_schema(contract), [])
 
@@ -707,7 +748,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
             table = contract["pre_registered_family_rate_table"]
             table["documented_families"] = {
-                "I1_cap_state_shape": {"wilson95": [1, 3]},
+                "I1_cap_state_shape": {"wilson95": [3, 1]},
                 "I2_matcher_accounting": {
                     "wilson95_rate": [0.01, 0.03],
                     "prediction_interval_rate": [0.8, 0.2],
@@ -756,11 +797,6 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        c15 = json.loads(
-            (ROOT / "reports" / "c15_instrument_coverage.json").read_text(
-                encoding="utf-8"
-            )
-        )
         c17 = json.loads(
             (ROOT / "reports" / "c17_substitute_retained_verification.json").read_text(
                 encoding="utf-8"
@@ -787,7 +823,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 entry["exclusion_counter"]
                 for entry in table["new_mechanisms_post_fix"].values()
             },
-            set(manifest.EMITTABLE_EXCLUSION_COUNTERS),
+            set(manifest.REGISTERED_ZERO_EXCLUSION_COUNTERS),
         )
         self.assertEqual(
             table["calibration_boundaries"],
@@ -796,6 +832,14 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         self.assertEqual(
             calibration["source_evidence"]["boundaries_measured"],
             c14["aggregate"]["boundaries_measured"],
+        )
+        self.assertEqual(
+            calibration["source_evidence"]["boundaries_full_round"],
+            c14["aggregate"]["boundaries_full_round"],
+        )
+        self.assertLess(
+            gates["minimum_boundaries_full_round"],
+            calibration["source_evidence"]["boundaries_full_round"],
         )
         self.assertEqual(
             calibration["source_evidence"]["coverage_measured_fraction"],
@@ -818,36 +862,9 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         self.assertEqual(calibration["raw_class_archive_counts"], c14_raw_counts)
         self.assertEqual(len(contract["predicted_class_rates_10k"]), 61)
-        source_counts = {
-            "limit:roll_divergent_lethality": c15["family_attribution"][
-                "limit:roll_divergent_lethality"
-            ],
-            "I1_cap_state_shape": c15["family_attribution"]["I1_cap_state_shape"],
-            "LS_capped_lethal_shape": c15["family_attribution"][
-                "LS_capped_lethal_shape"
-            ],
-            "limit:world_sample_drag_target": c15["family_attribution"][
-                "limit:world_sample_drag_target"
-            ],
-            "I3_roll_inherited": c15["family_attribution"]["I3_roll_inherited"],
-            "I6_sleeptalk_callee_union": c15["family_attribution"][
-                "I6_sleeptalk_callee_union"
-            ],
-            "I4_attribution_tie": c15["family_attribution"]["I4_attribution_tie"],
-            "I5_boundary_truncation": c15["family_attribution"][
-                "I5_boundary_truncation"
-            ],
-            "I2_matcher_accounting": c15["family_attribution"][
-                "I2_matcher_accounting"
-            ],
-            "LS_crit_arm_pairing_echo": c15["family_attribution"][
-                "LS_crit_arm_pairing_echo"
-            ],
-            "LS_confusion_fan": c15["family_attribution"]["LS_confusion_fan"],
-            "LS_structural_arm_echo": c15["unattributed_named_shapes"][
-                "structural component-count mismatch without a sibling engine"
-            ],
-        }
+        source_counts = calibration["current_classifier_archive_replay"][
+            "family_counts"
+        ]
         self.assertEqual(
             calibration["registered_family_source_counts"], source_counts
         )
@@ -884,9 +901,19 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         substitute_evidence = calibration["registered_non_empirical_upper_rates"][
             "limit:world_substitute_health_unknown"
         ]
-        self.assertEqual(substitute["upper_rate"], substitute_evidence["upper_rate"])
+        self.assertEqual(
+            substitute["upper_full_round_rate"],
+            substitute_evidence["upper_full_round_rate"],
+        )
         self.assertEqual(
             substitute["upper_rate_basis"], substitute_evidence["basis"]
+        )
+        self.assertEqual(
+            substitute_evidence["denominator"], "boundaries_full_round"
+        )
+        self.assertLess(
+            substitute["upper_full_round_rate"],
+            1.0 - gates["minimum_coverage_measured_fraction"],
         )
         self.assertEqual(c17["summary"]["identities"], 13)
         self.assertEqual(

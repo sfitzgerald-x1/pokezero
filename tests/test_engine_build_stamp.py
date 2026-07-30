@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import engine_build_fingerprint as fingerprint  # noqa: E402
+import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
 class EngineBuildStampTests(unittest.TestCase):
@@ -46,25 +48,32 @@ class EngineBuildStampTests(unittest.TestCase):
         self.assertTrue(any("does not attest both installed consumers" in problem for problem in problems))
         self.assertTrue(any("artifacts do not match" in problem for problem in problems))
 
-    def test_cargo_manifests_and_locks_change_native_build_fingerprint(self) -> None:
+    def test_fingerprint_is_reproducible_without_gitignored_vendor_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             patch_list = root / "third_party" / "poke-engine-gen3-patches.txt"
             patch_list.parent.mkdir(parents=True)
             patch_list.write_text("fixture.patch\n", encoding="utf-8")
             (root / "third_party" / "fixture.patch").write_text("patch\n", encoding="utf-8")
+            base_source = root / "third_party" / "poke-engine-base-source.json"
+            base_source.write_text(
+                json.dumps(
+                    {
+                        "schema": "pokezero-engine-upstream-source/1",
+                        "distribution": "poke-engine",
+                        "version": "0.0.47",
+                        "archive": "poke_engine-0.0.47.tar.gz",
+                        "sha256": "a" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
             crate = root / "rust" / "pokezero-search"
             vendored = root / "third_party" / "poke-engine-src"
             (crate / "src").mkdir(parents=True)
-            vendored.mkdir(parents=True)
             (crate / "src" / "lib.rs").write_text("fn x() {}\n", encoding="utf-8")
-            for directory in (crate, vendored):
-                (directory / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
-                (directory / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
-            py_crate = vendored / "poke-engine-py"
-            py_crate.mkdir()
-            py_manifest = py_crate / "Cargo.toml"
-            py_manifest.write_text("[package]\nname='poke-engine-py'\n", encoding="utf-8")
+            (crate / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
+            (crate / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
             crate_pyproject = crate / "pyproject.toml"
             crate_pyproject.write_text(
                 "[tool.maturin]\nfeatures=['pyo3/extension-module']\n",
@@ -78,17 +87,23 @@ class EngineBuildStampTests(unittest.TestCase):
             with (
                 patch.object(fingerprint, "REPO_ROOT", root),
                 patch.object(fingerprint, "PATCH_LIST", patch_list),
+                patch.object(fingerprint, "BASE_SOURCE", base_source),
                 patch.object(fingerprint, "VENDORED", vendored),
                 patch.object(fingerprint, "CRATE_ROOT", crate),
                 patch.object(fingerprint, "CRATE_SRC", crate / "src"),
             ):
                 before = fingerprint.compute_fingerprint()["fingerprint"]
-                (vendored / "Cargo.lock").write_text("version = 4\n# changed\n", encoding="utf-8")
-                after_vendored_lock = fingerprint.compute_fingerprint()["fingerprint"]
+                vendored.mkdir(parents=True)
+                (vendored / "Cargo.toml").write_text(
+                    "[package]\nname='derived'\n", encoding="utf-8"
+                )
+                after_vendoring = fingerprint.compute_fingerprint()["fingerprint"]
+                payload = json.loads(base_source.read_text(encoding="utf-8"))
+                payload["sha256"] = "b" * 64
+                base_source.write_text(json.dumps(payload), encoding="utf-8")
+                after_source_pin = fingerprint.compute_fingerprint()["fingerprint"]
                 (crate / "Cargo.toml").write_text("[package]\nname='changed'\n", encoding="utf-8")
                 after_crate_manifest = fingerprint.compute_fingerprint()["fingerprint"]
-                py_manifest.write_text("[package]\nname='changed-poke-engine-py'\n", encoding="utf-8")
-                after_nested_vendored_manifest = fingerprint.compute_fingerprint()["fingerprint"]
                 crate_pyproject.write_text(
                     "[tool.maturin]\nfeatures=['different-feature']\n",
                     encoding="utf-8",
@@ -101,12 +116,53 @@ class EngineBuildStampTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 after_target_output = fingerprint.compute_fingerprint()["fingerprint"]
-        self.assertNotEqual(before, after_vendored_lock)
-        self.assertNotEqual(after_vendored_lock, after_crate_manifest)
-        self.assertNotEqual(after_crate_manifest, after_nested_vendored_manifest)
-        self.assertNotEqual(after_nested_vendored_manifest, after_pyproject)
+        self.assertEqual(before, after_vendoring)
+        self.assertNotEqual(after_vendoring, after_source_pin)
+        self.assertNotEqual(after_source_pin, after_crate_manifest)
+        self.assertNotEqual(after_crate_manifest, after_pyproject)
         self.assertNotEqual(after_pyproject, after_build_script)
         self.assertEqual(after_build_script, after_target_output)
+
+    def test_upstream_source_pin_rejects_wrong_archive_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "poke_engine-0.0.47.tar.gz"
+            archive.write_bytes(b"upstream source")
+            pin = root / "poke-engine-base-source.json"
+            pin.write_text(
+                json.dumps(
+                    {
+                        "schema": "pokezero-engine-upstream-source/1",
+                        "distribution": "poke-engine",
+                        "version": "0.0.47",
+                        "archive": archive.name,
+                        "sha256": hashlib.sha256(b"different").hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(source_verifier, "SOURCE_PIN", pin):
+                with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                    source_verifier.verify(archive, expected_version="0.0.47")
+
+    def test_upstream_source_pin_rejects_non_hex_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pin = Path(tmp) / "poke-engine-base-source.json"
+            pin.write_text(
+                json.dumps(
+                    {
+                        "schema": "pokezero-engine-upstream-source/1",
+                        "distribution": "poke-engine",
+                        "version": "0.0.47",
+                        "archive": "poke_engine-0.0.47.tar.gz",
+                        "sha256": "z" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(source_verifier, "SOURCE_PIN", pin):
+                with self.assertRaisesRegex(ValueError, "malformed sha256"):
+                    source_verifier.source_pin()
 
 
 if __name__ == "__main__":

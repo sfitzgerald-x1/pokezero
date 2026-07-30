@@ -77,6 +77,9 @@ EMITTABLE_EXCLUSION_COUNTERS = frozenset({
     "truant_loaf_phase_drift",
     "unattributed_generic",
 })
+REGISTERED_ZERO_EXCLUSION_COUNTERS = (
+    EMITTABLE_EXCLUSION_COUNTERS - {"recoil_vs_substitute_basis"}
+)
 
 
 def _sha256(path: Path) -> str:
@@ -227,7 +230,11 @@ def validate_final_contract_schema(contract: object) -> list[str]:
         errors.append("final contract requires_execution_contract is not true")
     if not isinstance(gates, Mapping):
         return errors + ["final contract has no certification_gates object"]
-    for field in ("expected_shards", "expected_games"):
+    for field in (
+        "expected_shards",
+        "expected_games",
+        "minimum_boundaries_full_round",
+    ):
         value = _strict_int(gates.get(field))
         if value is None or value <= 0:
             errors.append(f"final contract {field} is not a positive integer")
@@ -290,6 +297,15 @@ def validate_final_contract_schema(contract: object) -> list[str]:
         documented = table.get("documented_families")
         calibration_boundaries = _strict_int(table.get("calibration_boundaries"))
         if isinstance(documented, Mapping):
+            required_families = (
+                EMITTABLE_DOCUMENTED_FAMILIES | EMITTABLE_LIMIT_FAMILIES
+            )
+            missing_families = required_families - set(documented)
+            if missing_families:
+                errors.append(
+                    "final contract documented families omit "
+                    + ", ".join(sorted(missing_families))
+                )
             for family, prediction in documented.items():
                 label = f"final contract documented family {family!r}"
                 if not isinstance(family, str) or not (
@@ -304,7 +320,7 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 direct_valid = _valid_rate_interval(direct)
                 count = prediction.get("wilson95")
                 count_valid = _valid_finite_interval(count)
-                upper_rate = prediction.get("upper_rate")
+                upper_rate = prediction.get("upper_full_round_rate")
                 upper_rate_valid = (
                     type(upper_rate) in (int, float)
                     and math.isfinite(float(upper_rate))
@@ -316,18 +332,40 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                     normalized_count_valid = _valid_rate_interval(normalized)
                 if upper_rate is not None:
                     if not upper_rate_valid:
-                        errors.append(f"{label} has an invalid upper_rate")
+                        errors.append(
+                            f"{label} has an invalid upper_full_round_rate"
+                        )
                     if family != "limit:world_substitute_health_unknown":
                         errors.append(
-                            f"{label} cannot use a coverage-budget upper_rate"
+                            f"{label} cannot use a full-round risk budget"
                         )
                     if direct is not None or count is not None:
                         errors.append(
-                            f"{label} mixes upper_rate with a Wilson interval"
+                            f"{label} mixes upper_full_round_rate with a Wilson interval"
                         )
-                    if prediction.get("upper_rate_basis") != "coverage_budget":
+                    if (
+                        prediction.get("upper_rate_basis")
+                        != "pre_registered_risk_budget"
+                    ):
                         errors.append(
-                            f"{label} upper_rate_basis is not coverage_budget"
+                            f"{label} upper_rate_basis is not "
+                            "pre_registered_risk_budget"
+                        )
+                    rationale = prediction.get("risk_budget_rationale")
+                    if not isinstance(rationale, str) or not rationale.strip():
+                        errors.append(f"{label} has no risk_budget_rationale")
+                    coverage_floor = gates.get(
+                        "minimum_coverage_measured_fraction"
+                    )
+                    if (
+                        upper_rate_valid
+                        and type(coverage_floor) in (int, float)
+                        and math.isfinite(float(coverage_floor))
+                        and float(upper_rate) >= 1.0 - float(coverage_floor)
+                    ):
+                        errors.append(
+                            f"{label} full-round risk budget is not stricter "
+                            "than the global uncovered-boundary budget"
                         )
                 elif direct is not None and not direct_valid:
                     errors.append(f"{label} has an invalid wilson95_rate interval")
@@ -335,15 +373,25 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                     errors.append(
                         f"{label} has neither a valid wilson95_rate nor a valid "
                         "wilson95 count interval with positive calibration_boundaries "
-                        "nor an explicit upper_rate"
+                        "nor an explicit upper_full_round_rate"
                     )
                 prediction_interval = prediction.get("prediction_interval_rate")
                 if prediction_interval is not None and not _valid_rate_interval(prediction_interval):
                     errors.append(f"{label} has an invalid prediction_interval_rate interval")
         predicted_zero = table.get("new_mechanisms_post_fix")
         if isinstance(predicted_zero, Mapping):
+            missing_mechanisms = REGISTERED_ZERO_EXCLUSION_COUNTERS - set(
+                predicted_zero
+            )
+            if missing_mechanisms:
+                errors.append(
+                    "final contract post-fix mechanisms omit "
+                    + ", ".join(sorted(missing_mechanisms))
+                )
             for mechanism, prediction in predicted_zero.items():
                 label = f"final contract post-fix mechanism {mechanism!r}"
+                if mechanism not in REGISTERED_ZERO_EXCLUSION_COUNTERS:
+                    errors.append(f"{label} is not a registered mechanism")
                 if not isinstance(prediction, Mapping):
                     errors.append(f"{label} has no prediction object")
                     continue
@@ -354,8 +402,12 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 counter = prediction.get("exclusion_counter")
                 if not isinstance(counter, str) or not counter:
                     errors.append(f"{label} exclusion_counter is not a non-empty string")
-                elif counter not in EMITTABLE_EXCLUSION_COUNTERS:
+                elif counter not in REGISTERED_ZERO_EXCLUSION_COUNTERS:
                     errors.append(f"{label} exclusion_counter cannot be emitted by the classifier")
+                elif counter != mechanism:
+                    errors.append(
+                        f"{label} exclusion_counter does not match its mechanism key"
+                    )
     for error in validate_predicted_class_rates(
         contract.get("predicted_class_rates_10k"), required=True
     ):

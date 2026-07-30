@@ -66,8 +66,8 @@ from engine_transition_differential import (  # noqa: E402
 )
 from cert_execution_manifest import (  # noqa: E402
     EMITTABLE_DOCUMENTED_FAMILIES,
-    EMITTABLE_EXCLUSION_COUNTERS,
     EMITTABLE_LIMIT_FAMILIES,
+    REGISTERED_ZERO_EXCLUSION_COUNTERS,
     validate_execution_manifest_schema,
     validate_final_contract_schema,
     validate_predicted_class_rates,
@@ -683,6 +683,7 @@ def _contract_gates(
 
     expected_shards = _strict_int(gates.get("expected_shards"))
     expected_games = _strict_int(gates.get("expected_games"))
+    minimum_full_rounds = _strict_int(gates.get("minimum_boundaries_full_round"))
     minimum_coverage = _finite_number(gates.get("minimum_coverage_measured_fraction"))
     if expected_shards is None or expected_shards <= 0:
         failures.append("expected_shards must be a positive integer")
@@ -690,6 +691,18 @@ def _contract_gates(
     if expected_games is None or expected_games <= 0:
         failures.append("expected_games must be a positive integer")
         expected_games = 0
+    if minimum_full_rounds is None or minimum_full_rounds <= 0:
+        failures.append("minimum_boundaries_full_round must be a positive integer")
+        minimum_full_rounds = 0
+    observed_full_rounds = _strict_int(aggregate.get("boundaries_full_round"))
+    if observed_full_rounds is None or observed_full_rounds < 0:
+        failures.append("aggregate boundaries_full_round must be a non-negative integer")
+        observed_full_rounds = 0
+    if observed_full_rounds < minimum_full_rounds:
+        failures.append(
+            f"full-round boundaries {observed_full_rounds} are below registered "
+            f"minimum {minimum_full_rounds}"
+        )
     if minimum_coverage is None or not 0.0 < minimum_coverage <= 1.0:
         failures.append("minimum_coverage_measured_fraction must be in (0, 1]")
         minimum_coverage = 1.0
@@ -843,6 +856,8 @@ def _contract_gates(
     evidence.update({
         "expected_shards": expected_shards,
         "expected_games": expected_games,
+        "minimum_boundaries_full_round": minimum_full_rounds,
+        "observed_boundaries_full_round": observed_full_rounds,
         "distinct_seed_total": distinct_seed_total,
         "seed_blocks": normalized_actual_blocks,
         "minimum_coverage_measured_fraction": minimum_coverage,
@@ -994,6 +1009,7 @@ def _family_rate_gates(
     contract: Mapping[str, Any],
     *,
     boundaries_measured: int,
+    boundaries_full_round: int | None = None,
     aggregate_counters: Mapping[str, int] | None = None,
     exclusion_counts: Mapping[str, int] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
@@ -1046,23 +1062,39 @@ def _family_rate_gates(
         if not isinstance(prediction, Mapping):
             failures.append(f"registered family {family!r} has no prediction object")
             continue
-        explicit_upper_rate = _finite_number(prediction.get("upper_rate"))
-        if prediction.get("upper_rate") is not None:
+        explicit_upper_rate = _finite_number(
+            prediction.get("upper_full_round_rate")
+        )
+        if prediction.get("upper_full_round_rate") is not None:
             if (
                 family != "limit:world_substitute_health_unknown"
                 or explicit_upper_rate is None
                 or not 0.0 <= explicit_upper_rate <= 1.0
-                or prediction.get("upper_rate_basis") != "coverage_budget"
+                or prediction.get("upper_rate_basis")
+                != "pre_registered_risk_budget"
+                or not isinstance(prediction.get("risk_budget_rationale"), str)
+                or not prediction["risk_budget_rationale"].strip()
                 or prediction.get("wilson95_rate") is not None
                 or prediction.get("wilson95") is not None
             ):
                 failures.append(
-                    f"registered family {family!r} has an invalid explicit upper rate"
+                    f"registered family {family!r} has an invalid full-round "
+                    "risk budget"
+                )
+                continue
+            if (
+                type(boundaries_full_round) is not int
+                or boundaries_full_round <= 0
+            ):
+                failures.append(
+                    f"registered family {family!r} requires positive "
+                    "boundaries_full_round"
                 )
                 continue
             rate_interval = None
             lower_rate, upper_rate = 0.0, explicit_upper_rate
-            upper_rate_basis = "coverage_budget"
+            upper_rate_basis = "pre_registered_risk_budget"
+            rate_denominator = "boundaries_full_round"
         else:
             rate_interval = prediction.get("wilson95_rate")
             if rate_interval is None:
@@ -1104,6 +1136,7 @@ def _family_rate_gates(
                 continue
             lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
             upper_rate_basis = "wilson95"
+            rate_denominator = "boundaries_measured"
         prediction_interval = prediction.get("prediction_interval_rate")
         has_prediction_interval = (
             isinstance(prediction_interval, list)
@@ -1123,12 +1156,18 @@ def _family_rate_gates(
             failures.append(f"family counter {family!r} has a malformed observed count")
             counter_count = 0
         count = row_count + counter_count
-        observed_rate = count / max(1, boundaries_measured)
+        denominator = (
+            boundaries_full_round
+            if rate_denominator == "boundaries_full_round"
+            else boundaries_measured
+        )
+        observed_rate = count / max(1, denominator)
         evidence["families"][family] = {
             "observed": int(count),
             "divergence_row_observed": int(row_count),
             "aggregate_counter_observed": int(counter_count),
-            "observed_rate_per_measured_boundary": observed_rate,
+            "observed_rate": observed_rate,
+            "observed_rate_denominator": rate_denominator,
             "registered_wilson95_rate": rate_interval,
             "lower_rate_advisory": lower_rate,
             "upper_rate_enforced": upper_rate,
@@ -1161,7 +1200,10 @@ def _family_rate_gates(
                 failures.append(f"post-fix mechanism {mechanism!r} is not registered at zero")
                 continue
             counter = prediction.get("exclusion_counter")
-            if prediction.get("classifier_outcome") != "UNATTRIBUTED" or counter not in EMITTABLE_EXCLUSION_COUNTERS:
+            if (
+                prediction.get("classifier_outcome") != "UNATTRIBUTED"
+                or counter not in REGISTERED_ZERO_EXCLUSION_COUNTERS
+            ):
                 failures.append(
                     f"post-fix mechanism {mechanism!r} has no emittable classifier exclusion counter"
                 )
@@ -1395,6 +1437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         fam_counts,
         pred,
         boundaries_measured=agg["boundaries_measured"],
+        boundaries_full_round=agg["boundaries_full_round"],
         aggregate_counters=aggregate_counters,
         exclusion_counts=exclusion_counts,
     )

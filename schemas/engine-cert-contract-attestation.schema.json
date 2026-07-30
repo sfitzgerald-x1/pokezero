@@ -27,7 +27,7 @@
         "purpose"
       ],
       "properties": {
-        "pull_request": {"const": 983},
+        "pull_request": {"type": "integer", "minimum": 1},
         "fresh_sweep2_measurements_inspected": {"const": 0},
         "purpose": {"type": "string", "minLength": 1}
       },
