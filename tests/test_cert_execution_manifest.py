@@ -296,6 +296,124 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         errors = manifest.validate_final_contract_schema(contract)
         self.assertIn("final contract predicted_class_rates_10k is not an object", errors)
 
+    def test_gates_bearing_contract_cannot_take_the_legacy_producer_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["registered_before_launch"] = False
+            contract["requires_execution_contract"] = False
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            errors = manifest.validate_final_contract_schema(contract)
+            self.assertIn("final contract registered_before_launch is not true", errors)
+            self.assertIn("final contract requires_execution_contract is not true", errors)
+            with self.assertRaisesRegex(ValueError, "registered_before_launch is not true"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
+    def test_final_contract_rejects_predicted_class_shapes_before_production(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["predicted_class_rates_10k"] = {
+                "scalar": 42,
+                "missing": {},
+                "unordered": {
+                    "expected_10k": 1.0,
+                    "wilson95_count_10k": [3.0, 1.0],
+                },
+                "negative": {
+                    "expected_10k": -1.0,
+                    "wilson95_count_10k": [0.0, 1.0],
+                },
+            }
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            errors = manifest.validate_final_contract_schema(contract)
+            self.assertTrue(any("predicted class 'scalar' is not an object" in error for error in errors))
+            self.assertTrue(any("predicted class 'missing' expected_10k" in error for error in errors))
+            self.assertTrue(any("predicted class 'unordered' wilson95_count_10k" in error for error in errors))
+            self.assertTrue(any("predicted class 'negative' expected_10k" in error for error in errors))
+            with self.assertRaisesRegex(ValueError, "predicted class 'scalar' is not an object"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
+    def test_legacy_producer_rejects_present_malformed_predicted_class_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            paths["contract"].write_text(
+                json.dumps({"predicted_class_rates_10k": {"scalar": 42}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "predicted class 'scalar' is not an object"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
+    def test_final_contract_schema_vocabulary_tracks_shared_validator(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas" / "engine-cert-final-contract.schema.json").read_text(encoding="utf-8")
+        )
+        documented = schema["properties"]["pre_registered_family_rate_table"]["properties"][
+            "documented_families"
+        ]
+        names = documented["propertyNames"]["anyOf"][0]["enum"]
+        self.assertEqual(set(names), manifest.EMITTABLE_DOCUMENTED_FAMILIES)
+        self.assertEqual(documented["propertyNames"]["anyOf"][1]["pattern"], "^limit:.+")
+        prediction = schema["properties"]["predicted_class_rates_10k"]["additionalProperties"]
+        self.assertEqual(prediction["required"], ["expected_10k", "wilson95_count_10k"])
+        self.assertEqual(prediction["properties"]["expected_10k"]["minimum"], 0)
+        self.assertEqual(
+            prediction["properties"]["wilson95_count_10k"]["items"]["minimum"], 0
+        )
+
+    def test_final_contract_rejects_schema_vocabulary_and_rate_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["pre_registered_family_rate_table"]["documented_families"] = {
+                "not-emittable": {"wilson95_rate": [0.0, 1.1]},
+            }
+            errors = manifest.validate_final_contract_schema(contract)
+        self.assertTrue(any("not-emittable" in error and "cannot be emitted" in error for error in errors))
+
     def test_final_contract_schema_rejects_consumer_required_gate_before_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

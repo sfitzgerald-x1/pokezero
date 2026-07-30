@@ -204,15 +204,22 @@ def validate_final_contract_schema(contract: object) -> list[str]:
 
     if not isinstance(contract, Mapping):
         return ["final contract root is not an object"]
-    final = contract.get("registered_before_launch") is True or contract.get("requires_execution_contract") is True
+    gates = contract.get("certification_gates")
+    final = (
+        contract.get("registered_before_launch") is True
+        or contract.get("requires_execution_contract") is True
+        or isinstance(gates, Mapping)
+    )
     if not final:
-        return []
+        return validate_predicted_class_rates(
+            contract.get("predicted_class_rates_10k"),
+            required="predicted_class_rates_10k" in contract,
+        )
     errors: list[str] = []
     if contract.get("registered_before_launch") is not True:
         errors.append("final contract registered_before_launch is not true")
     if contract.get("requires_execution_contract") is not True:
         errors.append("final contract requires_execution_contract is not true")
-    gates = contract.get("certification_gates")
     if not isinstance(gates, Mapping):
         return errors + ["final contract has no certification_gates object"]
     for field in ("expected_shards", "expected_games"):
@@ -320,8 +327,10 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                     errors.append(f"{label} exclusion_counter is not a non-empty string")
                 elif counter not in EMITTABLE_EXCLUSION_COUNTERS:
                     errors.append(f"{label} exclusion_counter cannot be emitted by the classifier")
-    if not isinstance(contract.get("predicted_class_rates_10k"), Mapping):
-        errors.append("final contract predicted_class_rates_10k is not an object")
+    for error in validate_predicted_class_rates(
+        contract.get("predicted_class_rates_10k"), required=True
+    ):
+        errors.append(f"final contract {error}")
     launch = contract.get("launch_registration")
     if not isinstance(launch, Mapping):
         errors.append("final contract has no launch_registration object")
@@ -349,6 +358,50 @@ def _valid_finite_interval(value: object) -> bool:
 
 def _valid_rate_interval(value: object) -> bool:
     return _valid_finite_interval(value) and 0.0 <= float(value[0]) <= float(value[1]) <= 1.0
+
+
+def _valid_nonnegative_finite_number(value: object) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(value)) and float(value) >= 0.0
+
+
+def _valid_nonnegative_finite_interval(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(_valid_nonnegative_finite_number(item) for item in value)
+        and float(value[0]) <= float(value[1])
+    )
+
+
+def validate_predicted_class_rates(value: object, *, required: bool = False) -> list[str]:
+    """Reject prediction entries the readout cannot faithfully present.
+
+    The final contract records these as descriptive per-class 10k rates, but a
+    malformed entry used to survive production and fail only after a sweep.
+    Keep this bounded validator public so the producer and readout cannot
+    silently drift on the shape they share.
+    """
+
+    if value is None and not required:
+        return []
+    if not isinstance(value, Mapping):
+        return ["predicted_class_rates_10k is not an object"]
+    errors: list[str] = []
+    for name, prediction in value.items():
+        label = f"predicted class {name!r}"
+        if not isinstance(name, str):
+            errors.append(f"{label} key is not a string")
+            continue
+        if not isinstance(prediction, Mapping):
+            errors.append(f"{label} is not an object")
+            continue
+        if not _valid_nonnegative_finite_number(prediction.get("expected_10k")):
+            errors.append(f"{label} expected_10k is not a finite non-negative number")
+        if not _valid_nonnegative_finite_interval(prediction.get("wilson95_count_10k")):
+            errors.append(
+                f"{label} wilson95_count_10k is not an ordered finite non-negative interval"
+            )
+    return errors
 
 
 def _file(path: Path) -> dict[str, str]:

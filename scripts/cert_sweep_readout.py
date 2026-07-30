@@ -68,6 +68,7 @@ from cert_execution_manifest import (  # noqa: E402
     EMITTABLE_EXCLUSION_COUNTERS,
     validate_execution_manifest_schema,
     validate_final_contract_schema,
+    validate_predicted_class_rates,
 )
 
 _PCT_RE = re.compile(r"pct=([\d.]+)")
@@ -1290,7 +1291,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_manifest = candidate
             else:
                 input_failures.append("execution manifest root is not an object")
-    pred_classes = pred.get("predicted_class_rates_10k") or {}
+    predicted_classes_value = pred.get("predicted_class_rates_10k")
+    for error in validate_predicted_class_rates(predicted_classes_value):
+        input_failures.append(error)
+    pred_classes = predicted_classes_value or {}
     if not isinstance(pred_classes, Mapping):
         input_failures.append("predicted_class_rates_10k is not an object")
         pred_classes = {}

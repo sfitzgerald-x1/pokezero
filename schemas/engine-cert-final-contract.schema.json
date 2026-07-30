@@ -45,6 +45,14 @@
         "calibration_boundaries": {"type": "integer", "minimum": 1},
         "documented_families": {
           "type": "object",
+          "propertyNames": {
+            "anyOf": [
+              {
+                "enum": ["I1_cap_state_shape", "I2_matcher_accounting", "I3_roll_inherited", "I4_attribution_tie", "I5_boundary_truncation", "I6_sleeptalk_callee_union", "LS_capped_lethal_shape", "LS_confusion_fan", "LS_crit_arm_pairing_echo", "LS_structural_arm_echo"]
+              },
+              {"pattern": "^limit:.+"}
+            ]
+          },
           "additionalProperties": {
             "type": "object",
             "anyOf": [
@@ -56,19 +64,19 @@
                 "type": "array",
                 "minItems": 2,
                 "maxItems": 2,
-                "items": {"type": "number"}
+                "items": {"type": "number", "minimum": 0, "maximum": 1}
               },
               "wilson95": {
                 "type": "array",
                 "minItems": 2,
                 "maxItems": 2,
-                "items": {"type": "number"}
+                "items": {"type": "number", "minimum": 0}
               },
               "prediction_interval_rate": {
                 "type": "array",
                 "minItems": 2,
                 "maxItems": 2,
-                "items": {"type": "number"}
+                "items": {"type": "number", "minimum": 0, "maximum": 1}
               }
             }
           }
@@ -91,7 +99,22 @@
         }
       }
     },
-    "predicted_class_rates_10k": {"type": "object"},
+    "predicted_class_rates_10k": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["expected_10k", "wilson95_count_10k"],
+        "properties": {
+          "expected_10k": {"type": "number", "minimum": 0},
+          "wilson95_count_10k": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
     "launch_registration": {
       "type": "object",
       "required": ["fresh_measurements_inspected_before_registration", "coordinator_go", "engine_patch_count"],

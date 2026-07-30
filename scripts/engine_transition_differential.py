@@ -2027,23 +2027,37 @@ def append_checkpoint(handle: Any, record: Mapping[str, Any]) -> None:
 
     handle.write(json.dumps(record, separators=(",", ":")) + "\n")
     handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _truncate_torn_checkpoint_tail(path: Path, valid_prefix_bytes: int) -> None:
+    """Persist a repaired JSONL prefix before the single writer resumes appending."""
+
+    with path.open("r+b") as handle:
+        handle.truncate(valid_prefix_bytes)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def load_checkpoint(path: Path) -> list[dict[str, Any]]:
-    """Read a checkpoint file, tolerating a truncated final line from a hard kill."""
+    """Read and, only for a torn tail, repair a single-writer JSONL checkpoint."""
 
     records: list[dict[str, Any]] = []
     if not path.exists():
         return records
-    raw = [line for line in path.read_text().splitlines()]
-    last_index = len(raw) - 1
-    for line_number, line in enumerate(raw):
-        line = line.strip()
+    raw = path.read_bytes()
+    lines = raw.splitlines(keepends=True)
+    last_index = len(lines) - 1
+    prefix_bytes = 0
+    for line_number, encoded_line in enumerate(lines):
+        next_prefix_bytes = prefix_bytes + len(encoded_line)
+        line = encoded_line.strip()
         if not line:
+            prefix_bytes = next_prefix_bytes
             continue
         try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
+            record = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             if line_number != last_index:
                 # Mid-file corruption would silently shrink the denominator of
                 # every rate computed from this shard, so it is fatal. Only the
@@ -2053,13 +2067,15 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
                     "final line may be a torn write; refusing to load a corrupt shard"
                 ) from None
             print(
-                f"warning: {path}: discarding torn final line {line_number + 1} "
-                "(interrupted run)",
+                f"warning: {path}: truncating torn final line {line_number + 1} "
+                "before resume (interrupted run)",
                 file=sys.stderr,
             )
-            continue
+            _truncate_torn_checkpoint_tail(path, prefix_bytes)
+            break
         if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
             records.append(dict(record))
+        prefix_bytes = next_prefix_bytes
     return records
 
 
