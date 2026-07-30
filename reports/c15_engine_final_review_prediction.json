@@ -1,0 +1,30 @@
+{
+  "purpose": "Pre-register corrections requested by the final independent engine review",
+  "registered_before_implementation": true,
+  "predictions": [
+    {
+      "finding": "retained-row reread errors can exit zero",
+      "expected_change": "any reread_error makes cert_sweep_reread exit nonzero regardless of --expect"
+    },
+    {
+      "finding": "aggregate count does not prove retained identity completeness",
+      "expected_change": "duplicate seed/step identities fail before reread and cannot satisfy the expected-row contract"
+    },
+    {
+      "finding": "focused Python count includes the public invariant without naming it",
+      "expected_change": "evidence reports 27 focused fidelity tests plus 1 public-invariant test"
+    },
+    {
+      "finding": "new unified patches trip git diff whitespace checks on blank context lines",
+      "expected_change": "equivalent hunks apply with fuzz=0 and contain no whitespace-only context lines"
+    }
+  ],
+  "acceptance": [
+    "new negative tests fail on the pre-correction reread instrument",
+    "both builders apply all patches with fuzz=0",
+    "engine fingerprint and behavioral probes remain valid after rebuild",
+    "git diff --check passes without excluding patch files",
+    "the full Rust release suite and focused Python tests pass"
+  ],
+  "scope_boundary": "These corrections harden evidence and patch packaging. The fresh 10k zero-unattributed sweep remains the binding certification result."
+}
