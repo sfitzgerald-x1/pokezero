@@ -5566,7 +5566,171 @@ here launches the sweep.
 
 ---
 
-# Appendix Z9 — Batch E (patches 37-41): five mechanisms, two family labels inverted, and the recoil exactness trade
+# Appendix Z9 — Traced ability and toxic staleness: the class closes its own backlog
+
+Branch `scott/engine-world-trace-toxic-seeding`. **No vendored patch** — parser +
+`engine_world` only. Engine 36 patches, fingerprint `bdb6ad30f2722540`, unchanged.
+Prediction pre-registered and committed BEFORE implementation (`b65bcd4`).
+
+## Z9.1 W1 — the traced ability, and a comment that was true of the wrong set
+
+`|-ability|<mon>|<Ability>|[from] ability: Trace` publicly replaces the holder's ability, and
+the belief engine has recorded it on every `-ability` line for as long as it has existed. The
+world kept rebuilding from the **sampled set**, so it handed the engine `TRACE` and played the
+mon without the copied ability at all.
+
+Replay, 1500248/77: Flareon's Flamethrower into Porygon2 is absorbed
+(`|-start|p1a: Porygon2|ability: Flash Fire`) and Showdown deals **no damage**. Every engine
+branch deals **-111**.
+
+This falsifies a claim written into `engine_world._SUPPORTED_VOLATILES`, which admitted
+`flashfire` as a public-seedable volatile on the grounds that it is boost-only and so
+
+> "never wrong, at worst incomplete if a sampled world lacked the ability, **which cannot
+> happen for the mono-ability Gen 3 randbats carriers** nor for the request-known self side"
+
+True of **native** Flash Fire carriers, and silently wrong about **acquired** ones: a Trace
+user that copied Flash Fire is exactly a world lacking the ability. The comment reasoned over
+the species list and the mechanism reasons over the battle. Fifth entry in this ledger's
+running tally of a partial truth positioned where a reader looks for the whole one — and the
+first where the partial truth was a *reachability* argument rather than a *provenance* one.
+
+Fix seeds the **ability field only**. gen3 does not fire the copied ability's Start event on
+acquisition (#962, patch 32), so nothing simulates an on-switch-in activation; the engine's
+own hooks handle the ability when it is used. Pinned as a shape assertion, because "seed the
+ability AND its activation" is the plausible over-implementation and in gen3 it is wrong.
+
+### Z9.1.1 The first version of this fix shipped a regression, and the differential caught it
+
+Worth recording in full, because the mistake is more instructive than the fix.
+
+The first implementation read `belief.revealed_ability` — the field the belief engine already
+populates on every `-ability` line. It cleared all three target rows, passed 13 pins, and the
+300-game differential then reported **2 newly divergent rows** (1500009 steps 34 and 68),
+against a prediction of zero.
+
+Both were **Spikes damage the engine no longer applied**. Instrumenting the stamp showed
+Gardevoir being handed `levitate`, `shellarmor` and `waterveil` — abilities belonging to the
+OPPONENT's team. Gardevoir has Trace, so across the battle it had traced each of them in turn,
+and `revealed_ability` is **persistent**: it holds the last ability the mon ever traced, not
+the one it holds now. `levitate` grants Spikes immunity, so the seeding silently made a mon
+immune to hazards it should have taken.
+
+**A traced ability is transient and I used a persistent field for it** — precisely the error
+class Z9.2 fixes on the other half of this same PR, where a toxic ramp survived a status it no
+longer belonged to. Two instances in one change, one caught by a census and one introduced by
+me while fixing the first.
+
+The corrected version tracks `traced_ability` in the parser, set only on the
+`[from] ability: Trace` discriminator and **cleared on switch-out** beside the
+`live_type_override` clear that already lives there. After the correction all three target
+seeds AND the regression seed return zero divergences.
+
+Two durable notes:
+
+1. **The persistent/transient distinction is the thing to check when seeding a world from a
+   parser field**, not whether the field exists. Both halves of this PR are the same bug in
+   opposite directions.
+2. **The regression was invisible to every check except the full identity diff.** Target rows
+   cleared, pins passed, targeted suites passed. Only "newly divergent: 2" against a
+   pre-registered "0" caught it — which is the entire argument for pre-registering that
+   number and for diffing identities rather than counts.
+
+## Z9.2 W2 — the stale half was the PARSER, not the world
+
+The backlog filed this as "world carried toxic_count=4". The world is innocent:
+`_materialization_toxic_stage` is a pure `max(0, stage - 1)` of the parser's value — the
+documented one-residual-ahead boundary idiom — so it can only report what it is given.
+
+`_update_toxic_stage` reset the ramp on `-curestatus` and `-cureteam` **only**. But
+`Pokemon.setStatus` replaces `statusState` wholesale (`sim/pokemon.ts:1733`:
+`this.statusState = this.battle.initEffectState(...)`), the toxic counter lives in
+`statusState.stage`, and Showdown emits **no cure line for the status it displaced**. So Rest
+putting a badly-poisoned mon to sleep left the ramp standing at a stage that no longer
+existed, and a later re-tox in the same stint was priced from it: a stage-5 tick of **-75**
+where Showdown ticked a fresh stage-1 **-15**.
+
+The world half is pinned **as unchanged**, deliberately: the offset was not the bug, and the
+symptom points straight at it. Without that pin the next reader chasing a wrong toxic tick has
+an inviting one-character "fix" available.
+
+## Z9.3 The one-consumer audit — and the discriminator that makes it work
+
+The parser-field-with-one-consumer heuristic predicted both previous finds, so it was run
+across every `ShowdownReplayState` field. **Raw counts are misleading**: most single-consumer
+fields resolve to `local_showdown.py`, which IS the world payload builder — one consumer there
+means the field *does* reach the world. That is health, not a gap.
+
+The real discriminator is **a single consumer that is not the world path**, or none at all.
+Under that lens the heuristic reproduces its own track record: before this PR
+`live_type_override`'s only consumer was `deep_line_audit.py` (the observation lane), and
+`last_used_move` did not exist.
+
+**Open candidates, listed not fixed.** Four counters are consumed exclusively inside
+`showdown.py`'s own observation encoder and have **no world consumer**:
+
+| field | why it is a candidate |
+| --- | --- |
+| `confusion_elapsed` | engine models confusion duration |
+| `encore_elapsed` | engine models Encore duration (patch 29's ladder) |
+| `wrap_trap_elapsed` | engine models partial-trap duration |
+| `meanlook_trap` | engine models move-trapping |
+
+What makes them more than a naming coincidence: `engine_world` carries
+`approximate_hidden_duration_volatiles` and `approximate_partial_trap_turns` flags — **the
+world APPROXIMATES exactly the durations the parser already derives from public protocol.**
+That is the `last_used_move` shape precisely: a derived public fact on one side, an
+approximation on the other, and no wire between them.
+
+Stated as candidates, not findings: each needs its own replay before anyone claims a
+divergence, and "the parser has a number the engine also has" is not yet evidence the two
+disagree. `weather_upkeeps` and `stall_move_pending` also show zero external consumers but are
+transient bookkeeping for other fields rather than world state.
+
+## Z9.4 Differential: 4 cleared, 0 new — after the first attempt scored 4 cleared and 2 new
+
+300 games, seeds 1500000-1500299, 36 patches, fingerprint unchanged. Baseline
+`reports/c11_statfloor_differential.json` (78 outside-limits). Both sides
+`repros_complete: true` (113/113 and 117/117), so the identity diff is over full populations.
+
+| | predicted | first attempt | corrected |
+| --- | --- | --- | --- |
+| W1 rows (1500248/77, /78) | >= 2 | 2 | **2** |
+| W2 rows (1500243/79) | exactly 1 | 1 | **2** |
+| newly divergent | **0** | **2** | **0** |
+| outside-limits | 78 -> 75 or better | 78 -> 75 | 78 -> **74** |
+
+Frame bridge: 78 and 74 are the DIFFERENTIAL-OBSERVED counts. On the adjudicated frame
+(Z8's 73, after #965's five ledger-level limit relabels, which do not overlap this batch's
+four clears), the residue is now **69** — verified at row level by the #967 execution gate
+(74 observed = 69 adjudicated + the 5 relabeled rows still counted by the classifier).
+
+**The extra W2 row is 1500294/110** — Suicune woken from Rest-sleep and freshly Toxic'd,
+ticking stage 1 (`-16` on a 270 HP mon). Same signature as the named row, same class
+(`component_missing_in_engine:psn`); the backlog had simply attributed one instance of it and
+not the other.
+
+**This is a partial miss on my own Z6.4 rule and the distinction matters.** The rule says
+magnitude mechanisms "clear in place, no scatter", and W2 was correctly typed as magnitude —
+the extra row did NOT scatter into a matcher-accounting class, it sat in the same class as the
+named row. What the rule does not do, and was never claimed to do, is predict how completely a
+*decomposition* attributed a signature. Scatter and under-attribution are different failures:
+
+* **scatter** (structural mechanisms) — rows land in classes that describe the matcher's
+  confusion, so the family is spread across labels;
+* **under-attribution** (any mechanism) — rows sit in the right class and simply were not
+  all traced to the same cause.
+
+The Z6.4 rule addresses the first. For the second, the defence is what caught it here:
+identity-diff the full frame and attribute every extra, rather than checking the count.
+
+## Z9.5 Artifacts
+
+- `reports/c12_trace_toxic_prediction.md` — pre-registered in its own commit, before any code
+- `reports/c12_trace_toxic_differential.json` — 113 rows, `repros_complete: true`
+- pins: `tests/test_world_trace_and_toxic_seeding.py` (17), including
+  `test_a_stale_trace_never_leaks_into_a_later_switch_in` for the self-inflicted regression
+# Appendix Z10 — Batch E (patches 37-41): five mechanisms, two family labels inverted, and the recoil exactness trade
 
 Fix-lane worktree, branch `scott/engine-gen3-damage-residue-wave`, based on main at #964
 (36 patches, fingerprint `bdb6ad30...`, probes 9/9); #965/#966 merged mid-work
@@ -5575,7 +5739,7 @@ this appendix's letter follow Z8. All ten backlog rows (E1-E5,
 `reports/c12_decomposition.json` fix_backlog) regenerated from seed and replayed at the
 base build before any design; every row reproduced.
 
-## Z9.1 E1 — the family label was wrong for BOTH rows, two different ways
+## Z10.1 E1 — the family label was wrong for BOTH rows, two different ways
 
 The brief's caution ("the documented BP-side loci have zero attributed rows") was
 correct: neither row is the pinch/ThickFat/Facade locus.
@@ -5598,7 +5762,7 @@ correct: neither row is the pinch/ThickFat/Facade locus.
   branch average so the toxic tick's HP cap diverges from the observed roll's chain —
   the I1 cap-state shape. Instrument lane; predicted to stay, stayed.
 
-## Z9.2 E2/E3 — recoil exactness and weather-move targeting (patches 38, 37)
+## Z10.2 E2/E3 — recoil exactness and weather-move targeting (patches 38, 37)
 
 - **Recoil** (row 1500207/27): the sim computes
   `clampIntRange(floor(damageDealt * recoil[0]/recoil[1]), 1)` with Double-Edge at
@@ -5616,7 +5780,7 @@ correct: neither row is the pinch/ThickFat/Facade locus.
   in the MOVES table — the data the guard always assumed. Live probes: Rain Dance vs
   Water Absorb emits weather and nothing else; Surf into Water Absorb still absorbs.
 
-## Z9.3 E4 — the fixed-damage path skipped the ENTIRE post-damage suite (patch 39)
+## Z10.3 E4 — the fixed-damage path skipped the ENTIRE post-damage suite (patch 39)
 
 Bigger than the family said. The fixed/level/fraction-damage arms applied their damage
 directly inside `choice_special_effect`; `calculate_damage` returns the (0, 0)
@@ -5648,7 +5812,7 @@ hooks, secondaries, Destiny Bond, accuracy — with no roll spread and no crit b
 expectation legitimately moved (`gen3_fixed_damage_fidelity`: Super Fang now carries
 its real 10% miss branch); the sim rolls it too — 2 misses in 12 probe seeds.
 
-## Z9.4 E5 — gen3 Counter/Mirror Coat treat Hidden Power as PHYSICAL (patch 40)
+## Z10.4 E5 — gen3 Counter/Mirror Coat treat Hidden Power as PHYSICAL (patch 40)
 
 WHY closed from the sim's own clauses (data/mods/gen3/moves.ts:163-183, 407-427):
 Counter's onDamage takes `category === 'Physical' || effect.id === 'hiddenpower'`;
@@ -5659,7 +5823,7 @@ nothing while the engine retaliated 2x) and invisible to Counter (the inverse de
 live-probed: sim Counter returns exactly 2x against HP Grass). **Patch 40** records
 Hidden Power as Physical in damage_dealt.
 
-## Z9.5 Pins, build chain, gates
+## Z10.5 Pins, build chain, gates
 
 `tests/test_engine_fixed_damage_and_hooks_fidelity.py`: 10 divergence pins + 4
 controls, sim values transcribed from live gen3customgame probe runs. On a 36-patch
@@ -5672,7 +5836,7 @@ the predicted unpatched value (Night Shade's empty branch among them); 14/14 on 
 | baseline (main@#964) | 36 | `bdb6ad30...` | probes 9/9; all ten backlog rows reproduce |
 | +batch E (37-41) | 41 | `3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce` | fuzz=0 through both builders; probes 9/9 (no expectation moved); pins 14/14 + statfloor 18/18 + guts/trace green; engine tree 17/17; pokezero-search 270/270 (one expectation updated, above) |
 
-## Z9.6 Prediction and the identity diff (registered FIRST, separate commit)
+## Z10.6 Prediction and the identity diff (registered FIRST, separate commit)
 
 `reports/c13_batch_e_prediction.json`, registered at the binding fingerprint BEFORE the
 run; every marker row (a payload scan of all 117 c11 rows) was single-seed-resolved
@@ -5692,7 +5856,14 @@ before registration. Run: 300 games, seeds 1500000-1500299, strict,
 | population | 117 -> 105 | 117 -> **107** |
 
 On the c12 73-frame: 11 of the 12 clears are outside-limits rows there (the 12th,
-1500196/9, is `limit:`-labelled), so the decomposed residue moves **73 -> 62**.
+1500196/9, is `limit:`-labelled), so the decomposed residue moves **73 -> 62**
+(adjudicated frame; observed outside-limits = adjudicated + the 5 #965-relabeled rows
+the classifier still counts, per the Z9 bridge). **Cross-differential staleness note
+(post-#967 merge):** this appendix's prediction listed 1500248/78 as a stay — TRUE at
+this lane's pre-#967 build, where the world still lacked the traced ability, and STALE
+on merged main, where #967's seeding clears it (with 1500248/77, 1500243/79 and
+1500294/110). Both parents measured from the same c11 baseline with zero clearance
+overlap; the merged-tree integration re-baseline below (Z10.8) states both frames.
 
 **The two new rows** (1500129/46, 1500200/87) are the prediction's miss, and they are
 the same instrument shape, surfaced by the recoil change: both are Double-Edge
@@ -5707,11 +5878,11 @@ brief already owns), not engine defects; the honest cost of making recoil exact 
 this artifact can now express through recoil as it always could through heals and
 toxic ticks.
 
-## Z9.7 Coverage statement and artifacts
+## Z10.7 Coverage statement and artifacts
 
 - The documented BP-side one-point loci (pinch abilities, Thick Fat, Facade,
   weakened-condition halving) now have **zero attributed rows and remain unfixed** —
-  E1's two rows both decomposed elsewhere (Z9.1).
+  E1's two rows both decomposed elsewhere (Z10.1).
 - 1500182/60 (Sleep-Talk-called Seismic Toss) kept its label: the marker is present but
   the divergence is not the post-hook suite; verified unchanged single-seed.
 - Dragon Rage / SonicBoom remain unimplemented as fixed-damage arms (no MOVES wiring

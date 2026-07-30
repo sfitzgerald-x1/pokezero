@@ -1004,6 +1004,15 @@ class ShowdownReplayState:
     # source (``"type:<T>"`` / ``"forme:<Forme>"``); None/absent means base type. Cleared on
     # switch-out/drag (both effects revert on leaving the field).
     live_type_override: Mapping[str, Optional[str]] = field(default_factory=dict)
+    # Ability the ACTIVE mon is currently borrowing via Trace, or absent.
+    #
+    # Deliberately NOT `belief.revealed_ability`, which is a persistent fact about a mon and
+    # is right for abilities a mon simply revealed. A TRACED ability is transient: Trace
+    # re-fires on every switch-in and the copy is dropped on switch-out, so the belief holds
+    # the LAST ability that mon ever traced, not the one it holds now. Seeding worlds from
+    # the belief stamped a historical trace -- observed handing a Gardevoir `levitate` from
+    # an earlier switch-in, which silently granted it Spikes immunity.
+    traced_ability: Mapping[str, Optional[str]] = field(default_factory=dict)
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1243,6 +1252,8 @@ class _ReplayParser:
         # Per-side live type override for the active mon (Castform Forecast / Kecleon Color
         # Change). Unresolved discriminated source ("type:<T>" / "forme:<Forme>"); None = base.
         self.live_type_override: dict[str, Optional[str]] = {"p1": None, "p2": None}
+        # See ShowdownReplayState.traced_ability: transient, cleared on switch-out.
+        self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
@@ -1309,6 +1320,9 @@ class _ReplayParser:
         parser.pending_baton_pass = set(snapshot.pending_baton_pass)
         parser.live_type_override = {
             slot: snapshot.live_type_override.get(slot) for slot in ("p1", "p2")
+        }
+        parser.traced_ability = {
+            slot: snapshot.traced_ability.get(slot) for slot in ("p1", "p2")
         }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
@@ -1447,6 +1461,10 @@ class _ReplayParser:
                 # Baton Pass brings in a DIFFERENT mon at base type, so clear it unconditionally so
                 # no stale override survives onto the replacement.
                 self.live_type_override[pokemon.showdown_slot] = None
+                # Trace drops its copy on switch-out and re-fires on the next
+                # switch-in, so the borrowed ability belongs to the mon that just
+                # left. Not clearing it is what let a stale trace leak.
+                self.traced_ability[pokemon.showdown_slot] = None
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
@@ -1506,6 +1524,7 @@ class _ReplayParser:
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
         self._update_live_type_override(parts)
+        self._update_traced_ability(parts, line)
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
@@ -1677,6 +1696,31 @@ class _ReplayParser:
             slot = _slot_from_ident(parts[2])
             if slot is not None:
                 self.wish_set_turns.pop(slot, None)
+
+    def _update_traced_ability(self, parts: Sequence[str], line: str) -> None:
+        """Track the ability the active mon is CURRENTLY borrowing via Trace.
+
+        Showdown announces the copy publicly::
+
+            |-ability|p1a: Gardevoir|Insomnia|Trace|[from] ability: Trace|[of] p2a: Noctowl
+
+        where the payload at index 3 is the ability being COPIED. The ``[from] ability: Trace``
+        tag is the discriminator: a bare ``|-ability|`` line is an ordinary reveal of a mon's
+        own ability, which is persistent and belongs in the belief engine, not here.
+
+        Cleared on switch-out (see the switch block) because the copy does not survive it.
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type != "-ability" or len(parts) < 4:
+            return
+        if "ability: Trace" not in line:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.traced_ability:
+            return
+        copied = parts[3].strip()
+        if copied:
+            self.traced_ability[slot] = _normalize_identifier(copied)
 
     def _update_live_type_override(self, parts: Sequence[str]) -> None:
         """Track the active mon's LIVE type for retypes the species token cannot express.
@@ -1924,6 +1968,7 @@ class _ReplayParser:
             pending_leech_seed_source_sides=dict(self._pending_leech_seed_source_sides),
             pending_baton_pass=tuple(sorted(self.pending_baton_pass)),
             live_type_override=dict(self.live_type_override),
+            traced_ability=dict(self.traced_ability),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
@@ -2907,6 +2952,18 @@ def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> No
         return
     if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
         toxic_stage[slot] = 1
+    elif event_type == "-status" and len(parts) >= 4:
+        # Any OTHER status replaces tox, and the ramp dies with it. `Pokemon.setStatus`
+        # does `this.statusState = this.battle.initEffectState(...)` (sim/pokemon.ts:1733),
+        # replacing the state object wholesale -- and the toxic counter lives in
+        # `statusState.stage`. Crucially Showdown emits NO `-curestatus` for the status it
+        # replaced, so the two reset arms below never see it.
+        #
+        # Rest is the reachable case and the one that bit: `|-status|<mon>|slp|[from] move:
+        # Rest` on an already-toxed mon left the ramp standing at its old value, so a LATER
+        # re-tox in the same stint was priced from a stage that no longer existed. Observed
+        # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
+        toxic_stage[slot] = 0
     elif event_type in {"-curestatus", "-cureteam"}:
         # ``-cureteam`` (Aromatherapy) ident is the active source, which is itself cured,
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
