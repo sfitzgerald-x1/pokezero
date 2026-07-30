@@ -1139,3 +1139,8 @@ poke-engine-gen3-public-noop-branches.patch
 
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
+
+# Final c15 retained engine families plus the c17 Color Change incap adjudication:
+# fixed-point pinch/Thick Fat base power, post-hit Flail/Reversal bands,
+# Cloud Nine/Forecast transitions, and Ice Beam's freeze-before-Color-Change order.
+poke-engine-gen3-final-defects.patch

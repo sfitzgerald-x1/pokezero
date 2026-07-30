@@ -1,0 +1,102 @@
+{
+  "artifact": "c17_engine_final_defects_evidence/v1",
+  "status": "complete",
+  "date": "2026-07-30",
+  "scope": {
+    "source_prediction": "reports/c17_engine_final_defects_prediction.json",
+    "color_change_prediction": "reports/c17_color_change_freeze_prediction.json",
+    "retained_c15_source": "reports/c15_why_magnitude_statgap_results.json",
+    "color_change_source": "commit adc08c5:reports/c17_incapacitated_action_adjudication.json",
+    "excluded": [
+      "scripts/cert_sweep_readout.py",
+      "scripts/engine_transition_differential.py",
+      "reports/c15_resweep_spec.json",
+      "documentation ledger"
+    ]
+  },
+  "rederived_inventory": {
+    "confirmed_engine_defects": 22,
+    "families": {
+      "fixed_point_base_power_rounding": {
+        "count": 20,
+        "retained_rows": [
+          "2001162/120", "2100482/83", "2200369/75", "2300154/80",
+          "2400140/9", "2400172/89", "2400342/78", "2401002/8",
+          "2401237/14", "2500151/116", "2500297/96", "2501061/96",
+          "2600510/111", "2600546/22", "2600546/25", "2600992/21",
+          "2601033/129", "2601196/25", "2700218/151", "2700355/37"
+        ],
+        "source_loci": [
+          "src/gen3/abilities.rs::ability_modify_attack_being_used",
+          "src/gen3/abilities.rs::ability_modify_attack_against"
+        ],
+        "root_cause": "Pinch abilities carried 1.5x and Thick Fat carried 0.5x as fractional f32 base power instead of Gen 3 Showdown fixed-point floor values."
+      },
+      "dynamic_flail_reversal": {
+        "count": 1,
+        "retained_row": "2201005/55",
+        "source_locus": "src/gen3/generate_instructions.rs::generate_instructions_from_move",
+        "showdown_transcript": "Mightyena Crunch deals 108 to Dodrio, leaving 39/222, then Dodrio Flail deals 110.",
+        "root_cause": "The engine retained only an average first-move damage roll, erasing reachable HP-band crossings before the second Flail/Reversal choice recomputed its base power."
+      },
+      "forecast_cloud_nine_transition": {
+        "count": 1,
+        "retained_row": "2400451/56",
+        "source_loci": [
+          "src/gen3/abilities.rs::ability_on_switch_in",
+          "src/gen3/choice_effects.rs::choice_special_effect",
+          "src/gen3/generate_instructions.rs::generate_instructions_from_switch"
+        ],
+        "prediction_correction": "E48's weather-expiry hypothesis was falsified by retained replay. The source row has permanent Rain and a Golduck with Cloud Nine switching in; it does not contain a final-weather-turn expiry.",
+        "showdown_transcript": "Golduck enters under Rain, Castform remains Water through Return, and Rain continues at upkeep.",
+        "root_cause": "The engine ran Forecast after every switch and every special-effect dispatch, treating Cloud Nine suppression as a weather transition."
+      },
+      "color_change_freeze_ordering": {
+        "count": 1,
+        "retained_row": "2700752/65",
+        "source_loci": [
+          "src/gen3/abilities.rs::ability_after_damage_hit",
+          "src/gen3/generate_instructions.rs::run_move",
+          "src/gen3/generate_instructions.rs::generate_instructions_from_move"
+        ],
+        "showdown_transcript": "Seaking Ice Beam damages Kecleon, freezes it, then Color Change makes it Ice; Kecleon emits cant|frz and does not use Brick Break.",
+        "root_cause": "Color Change ran before Ice Beam's freeze secondary, so Kecleon became Ice-type and falsely rejected freeze."
+      }
+    }
+  },
+  "baseline_failures": {
+    "stateful_pins": {
+      "command": "python -m unittest <Flail, Forecast, Color Change pins>",
+      "result": "3 failures of 3 against the untouched vendored snapshot",
+      "failures": [
+        "Flail replay did not preserve the Crunch 108 branch.",
+        "Cloud Nine ingress changed Castform from Water to Normal.",
+        "Color Change/Ice Beam produced no freeze branch."
+      ]
+    },
+    "fixed_point_pin": {
+      "command": "temporary Cargo program against untouched vendored snapshot",
+      "result": "failed as expected with left=142.5, right=142.0 for Torrent at 95 base power"
+    }
+  },
+  "implemented_patch": {
+    "path": "third_party/poke-engine-gen3-final-defects.patch",
+    "changes": [
+      "Floor every affected 1.5x and 0.5x base-power modifier before downstream damage calculation.",
+      "Expand the first move's sixteen damage rolls only when a pending second Flail/Reversal can read a different HP band.",
+      "Treat Cloud Nine/Air Lock ingress as suppression rather than a Forecast event; refresh Forecast when a suppressor exits or weather actually changes.",
+      "Defer Color Change until after damaging-move secondaries and stop a slower action freshly frozen by that first action."
+    ]
+  },
+  "focused_patched_results": {
+    "python": "tests.test_engine_gen3_abilities: 41 passed",
+    "rust": "gen3_variable_bp_fidelity: 8 passed",
+    "stateful_replay_pins": "Flail, Forecast, and Color Change: 3 passed after rebuilding the patched local wheel",
+    "both_fuzz_zero_builders": "scripts/vendor_poke_engine_src.sh and scripts/setup_poke_engine.sh each applied all 46 patches, including this patch, without fuzz",
+    "fingerprint": "3ed8a9498f8e95199c0bc9fdc8f81b8992fb77fafda624afa8d5ff7f540e12d0",
+    "behavioral_probes": "all standing behavioral probes passed",
+    "broader_python": "128 focused engine and public-invariant tests passed",
+    "broader_rust": "full rust/pokezero-search cargo test suite passed"
+  },
+  "remaining_required_verification": []
+}
