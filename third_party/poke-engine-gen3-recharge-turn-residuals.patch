@@ -1,0 +1,34 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -4282,6 +4282,31 @@
+     if state.side_one.force_switch || state.side_two.force_switch {
+         return true;
+     }
++    // pokezero gen3 fidelity fix (recharge-turn residuals): a Hyper Beam
++    // recharge turn is a FULL turn — the recharging side's only option is
++    // `None`, but Showdown runs the whole end-of-turn residual block on the
++    // `|cant|<mon>|recharge` boundary (sim probe: Leftovers heal and the toxic
++    // tick both fire on a (switch, recharge) turn; the certification sweep's
++    // 56-row family was exactly this shape at 100%). The bare-shape exclusion
++    // below exists for faint-replacement plies, whose residuals already ran or
++    // were deferred on the ply that caused the faint — but a VOLUNTARY switch
++    // beside a recharging Pokemon matched the same (Switch, None) shape and
++    // lost its residuals. Distinguisher: on a recharge turn the None side
++    // still carries MUSTRECHARGE at this point (its removal is an instruction
++    // inside the ply's branches, not yet applied here).
++    if (side_one_move == &MoveChoice::None
++        && state
++            .side_one
++            .volatile_statuses
++            .contains(&PokemonVolatileStatus::MUSTRECHARGE))
++        || (side_two_move == &MoveChoice::None
++            && state
++                .side_two
++                .volatile_statuses
++                .contains(&PokemonVolatileStatus::MUSTRECHARGE))
++    {
++        return true;
++    }
+     !(matches!(side_one_move, &MoveChoice::Switch(_)) && side_two_move == &MoveChoice::None)
+         && !(side_one_move == &MoveChoice::None && matches!(side_two_move, &MoveChoice::Switch(_)))
+ }

@@ -1080,5 +1080,36 @@ poke-engine-gen3-counter-hiddenpower-category.patch
 # the counter-hiddenpower-category tree above.
 poke-engine-gen3-flashfire-phase1.patch
 
+# gen3 recharge-turn residuals. A Hyper Beam recharge turn is a FULL turn:
+# the recharging side's only option is None, but Showdown runs the whole
+# end-of-turn residual block on the |cant|<mon>|recharge boundary (sim probe:
+# Leftovers heal + toxic tick both fire on a (switch, recharge) turn).
+# end_of_turn_triggered's bare (Switch, None) exclusion - correct for
+# faint-replacement plies, whose residuals already ran or were deferred on
+# the ply that caused the faint - also swallowed VOLUNTARY switches beside a
+# recharging Pokemon, dropping every residual (the certification sweep's
+# 56-row family, all exactly this shape at 100% branch; e.g. 2000204/51:
+# Leech Seed, Leftovers and psn all observed-only). Distinguisher: on a
+# recharge turn the None side still carries MUSTRECHARGE when the trigger is
+# evaluated. Touches end_of_turn_triggered in gen3/generate_instructions.rs
+# only; authored against the flashfire-phase1 tree above.
+poke-engine-gen3-recharge-turn-residuals.patch
+
+# gen3 absorb abilities vs Protect and accuracy. The sim reaches an absorb
+# ability's onTryHit only AFTER Protect has blocked the move and the accuracy
+# roll has passed (sim probes: protecting Vaporeon answers -activate with no
+# absorb; missed Hydro Pump answers -miss with no absorb). The engine's
+# Water/Volt Absorb (and Dry Skin) arms call remove_all_effects(), which
+# clears flags.protect and forces accuracy to 100 (VOLTABSORB re-forced 100
+# explicitly), so the converted quarter-heal pierced Protect (before_move's
+# Protect gate never saw the flag) and healed on the sim's miss rolls - the
+# sweep's 39-row absorb family (23 protect-shape + 16 miss-shape; e.g.
+# 2000214/12 protected, 2000628/72 missed Hydro Pump). Preserves the original
+# accuracy and protect flag through the conversion; the existing Protect
+# stripping then clears the heal, and the accuracy split leaves the heal off
+# the miss branch. Touches the three arms in gen3/abilities.rs only; authored
+# against the recharge-turn-residuals tree above.
+poke-engine-gen3-absorb-protect-accuracy.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch
