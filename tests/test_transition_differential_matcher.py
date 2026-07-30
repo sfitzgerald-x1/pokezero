@@ -8,6 +8,7 @@ the failure mode that looks like success.
 
 from __future__ import annotations
 
+from collections import Counter
 import sys
 import unittest
 from pathlib import Path
@@ -19,9 +20,59 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from engine_transition_differential import (  # noqa: E402
     _split_components,
     classify_divergence,
+    count_world_construction_limit,
     damage_components,
     roll_components_agree,
+    world_construction_limit,
 )
+from pokezero.engine_world import EngineWorldUnsupported  # noqa: E402
+
+
+class WorldConstructionLimits(unittest.TestCase):
+    def test_unknown_substitute_health_is_a_named_limit(self):
+        error = EngineWorldUnsupported("substitute_health_unknown", "public hit without amount")
+        self.assertEqual(
+            world_construction_limit(error),
+            "limit:world_substitute_health_unknown",
+        )
+
+    def test_other_world_errors_remain_non_limit_skips(self):
+        error = EngineWorldUnsupported("payload_malformed", "bad payload")
+        self.assertIsNone(world_construction_limit(error))
+
+    def test_named_limit_accounting_is_reusable_across_constructor_passes(self):
+        counts = Counter()
+        error = EngineWorldUnsupported("substitute_health_unknown", "public hit without amount")
+        self.assertTrue(count_world_construction_limit(counts, error))
+        self.assertTrue(count_world_construction_limit(counts, error))
+        self.assertEqual(counts["limit:world_substitute_health_unknown"], 2)
+        self.assertNotIn("skip:world_unsupported:substitute_health_unknown", counts)
+
+    def test_non_limit_is_not_counted_by_limit_accounting(self):
+        counts = Counter()
+        error = EngineWorldUnsupported("payload_malformed", "bad payload")
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
+    def test_substitute_provenance_contradiction_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_health_provenance_contradiction",
+            "active Substitute has missing provenance",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
+    def test_substitute_sample_incompatibility_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_depletion_world_incompatible",
+            "sampled Substitute could not have survived exact depletion",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
 
 
 class HealToFullTolerance(unittest.TestCase):

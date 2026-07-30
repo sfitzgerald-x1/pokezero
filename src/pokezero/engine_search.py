@@ -244,8 +244,9 @@ class EngineMctsConfig:
     # Belief sampling is stochastic; failed draws are retried up to
     # worlds * sample_retry_factor total attempts (mirrors the W1 retry fix).
     sample_retry_factor: int = 4
-    # Documented approximation: a public Substitute is modeled at fresh
-    # (maxhp/4) health, since remaining sub HP is not tracked publicly.
+    # Permit a public Substitute only when the replay proves it is freshly
+    # created at floor(maxhp/4). A surviving hit makes its remaining HP
+    # unknowable, so engine_world fails closed instead of approximating it.
     approximate_substitute_health: bool = True
     # Documented approximation: a public partial trap (Wrap and kin) is modeled
     # with the engine's own no-duration shape, which holds the trap until the

@@ -384,6 +384,13 @@ def battle_spec_from_payload(
     the item). A species named by BOTH signals is contradictory belief state
     and fails closed. Raises :class:`EngineWorldUnsupported` whenever the
     position holds public state this construction cannot express exactly.
+
+    ``substituteHealthState`` is the replay's public Substitute provenance:
+    ``"full"`` and an exact ``"exact"`` + ``substituteDepletion`` pair can
+    build an active Substitute. Exact depletion is subtracted from this
+    sampled world's initial Substitute HP; it is not replay-scale remaining HP.
+    ``"unknown"`` is the sole public-information limit; missing or invalid
+    active provenance is an instrumentation contradiction.
     """
 
     _reject_unsupported_globals(payload)
@@ -1110,10 +1117,77 @@ def _build_side_spec(
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
     substitute_health = 0
+    raw_substitute_health_state = side_payload.get("substituteHealthState")
+    substitute_health_state = (
+        raw_substitute_health_state
+        if isinstance(raw_substitute_health_state, str)
+        else None
+    )
+    raw_substitute_depletion = side_payload.get("substituteDepletion")
     if "substitute" in volatiles:
-        # Public info does not carry the sub's remaining HP; a fresh sub costs
-        # maxhp/4, so that is the documented upper-bound approximation.
-        substitute_health = party[active_index].maxhp // 4
+        # A freshly-created Substitute is public-exact at floor(maxhp / 4).
+        # Only canonical ``unknown`` provenance is a named public-information
+        # limit. Validate the state/value PAIR before construction or limit
+        # accounting so a malformed companion cannot hide behind a valid name.
+        initial_substitute_health = party[active_index].maxhp // 4
+        if substitute_health_state in {"full", "unknown"} and not (
+            raw_substitute_depletion is None
+            or (
+                not isinstance(raw_substitute_depletion, bool)
+                and isinstance(raw_substitute_depletion, int)
+                and raw_substitute_depletion == 0
+            )
+        ):
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} Substitute state {substitute_health_state!r} "
+                f"cannot carry depletion {raw_substitute_depletion!r}",
+            )
+        if substitute_health_state == "full":
+            substitute_health = initial_substitute_health
+        elif substitute_health_state == "exact":
+            if (
+                isinstance(raw_substitute_depletion, bool)
+                or not isinstance(raw_substitute_depletion, int)
+                or raw_substitute_depletion <= 0
+            ):
+                raise EngineWorldUnsupported(
+                    "substitute_health_provenance_contradiction",
+                    f"side {slot!r} has invalid exact Substitute depletion "
+                    f"{raw_substitute_depletion!r}",
+                )
+            substitute_health = initial_substitute_health - raw_substitute_depletion
+            if substitute_health <= 0:
+                raise EngineWorldUnsupported(
+                    "substitute_depletion_world_incompatible",
+                    f"side {slot!r} sampled max HP {party[active_index].maxhp} gives "
+                    f"initial Substitute HP {initial_substitute_health}, which could not "
+                    f"survive exact public depletion {raw_substitute_depletion}",
+                )
+        elif substitute_health_state == "unknown":
+            raise EngineWorldUnsupported(
+                "substitute_health_unknown",
+                f"side {slot!r} has explicit unknown Substitute health provenance",
+            )
+        else:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has active Substitute with invalid public state "
+                f"{raw_substitute_health_state!r}",
+            )
+    else:
+        if raw_substitute_depletion is not None:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has no Substitute volatile but carries depletion "
+                f"{raw_substitute_depletion!r}",
+            )
+        if substitute_health_state not in {None, "", "absent", "broken"}:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has no Substitute volatile but health state "
+                f"{raw_substitute_health_state!r}",
+            )
 
     boosts: dict[str, int] = {}
     for key, value in (side_payload.get("boosts") or {}).items():

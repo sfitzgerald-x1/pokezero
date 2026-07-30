@@ -665,6 +665,25 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             public_payload = json.dumps(materialization_payload, sort_keys=True)
             self.assertNotIn("withdraw", public_payload.lower())
 
+            exact_replay = replace(
+                materialization.replay,
+                volatiles={**materialization.replay.volatiles, "p2": ("substitute",)},
+                substitute_health_state={
+                    **materialization.replay.substitute_health_state,
+                    "p2": "exact",
+                },
+                substitute_depletion={
+                    **materialization.replay.substitute_depletion,
+                    "p2": 50,
+                },
+            )
+            exact_payload = _public_materialization_payload(
+                replace(materialization, replay=exact_replay)
+            )
+            self.assertEqual(exact_payload["sides"]["p2"]["substituteHealthState"], "exact")
+            self.assertEqual(exact_payload["sides"]["p2"]["substituteDepletion"], 50)
+            self.assertNotIn("substituteHealth", exact_payload["sides"]["p2"])
+
             # A separate belief-sampled search world may retain a bridge
             # snapshot. This test invokes it only after direct materialization;
             # the companion live-environment test covers the start-override
