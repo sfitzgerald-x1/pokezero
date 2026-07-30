@@ -208,7 +208,7 @@ def validate_final_contract_schema(contract: object) -> list[str]:
     final = (
         contract.get("registered_before_launch") is True
         or contract.get("requires_execution_contract") is True
-        or isinstance(gates, Mapping)
+        or "certification_gates" in contract
     )
     if not final:
         return validate_predicted_class_rates(

@@ -323,6 +323,31 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     engine_stamp=paths["stamp"],
                 )
 
+    def test_malformed_certification_gates_cannot_take_the_legacy_producer_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            contract = {"certification_gates": []}
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            errors = manifest.validate_final_contract_schema(contract)
+            self.assertIn("final contract registered_before_launch is not true", errors)
+            self.assertIn("final contract requires_execution_contract is not true", errors)
+            self.assertIn("final contract has no certification_gates object", errors)
+            with self.assertRaisesRegex(ValueError, "has no certification_gates object"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
     def test_final_contract_rejects_predicted_class_shapes_before_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
