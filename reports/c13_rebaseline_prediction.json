@@ -1,0 +1,24 @@
+{
+  "registered_before": "the cycle-13 integration re-baseline: a fresh 300-game strict differential (seeds 1500000-1500299, --repros-per-game 40 --keep-repro 500) on the MERGED tree - batch E engine patches 37-41 (fingerprint 3204c777dec347aa, unchanged by the merge: #967 is Python-only) plus #967's world seeding (traced ability + toxic stage)",
+  "parents": {
+    "batch_e": "reports/c13_batch_e_differential.json - 107 rows, repros_complete true, measured pre-#967",
+    "trace_toxic": "reports/c12_trace_toxic_differential.json - 113 rows, repros_complete true, measured pre-batch-E",
+    "shared_baseline": "both parents diffed against reports/c11_statfloor_differential.json (117, complete)"
+  },
+  "derivation": {
+    "batch_e_clears": 12,
+    "trace_toxic_clears": "4 (1500243/79, 1500248/77, 1500248/78, 1500294/110 - identity-verified against the committed artifact)",
+    "clearance_overlap": "ZERO - verified by identity: none of #967's four is among batch E's twelve. The near-miss is 1500248/78, which batch E's prediction listed as a STAY (true at the pre-#967 build; #967's world seeding clears it - the cross-differential staleness the review flagged, bridged in Z10.6)",
+    "batch_e_new_rows": "2 (1500129/46, 1500200/87 - recoil-coupled I1 cap-state, diagnosed in Z10.6); #967's world changes do not touch faint-edge recoil chains, so both are expected to persist",
+    "expected_rows": "identity: (batch E's 107) minus #967's four clears = my 107 \\ {1500243/79, 1500248/77, 1500248/78, 1500294/110}"
+  },
+  "prediction": {
+    "diverged": "103 (= 117 - 12 - 4 + 2)",
+    "outside_limits_observed": "65 (= 103 - 38 limit rows; the classifier still counts the 5 #965-relabeled rows)",
+    "adjudicated_frame": "58 (= 73 - 11 batch-E in-frame clears - 4 #967 clears; observed 65 = 58 adjudicated + 5 relabeled + 2 new-I1)",
+    "limit_rows": "38 (= 39 - 1500196/9, cleared by batch E)",
+    "capped_lethal_walk": "9/9 of the remaining walk rows present",
+    "new_rows": 0,
+    "class_changes": 0
+  }
+}
