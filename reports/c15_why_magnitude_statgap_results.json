@@ -1,0 +1,3068 @@
+{
+  "schema": "c15-why-adjudication/1",
+  "registered_before_measurement": true,
+  "sample_count": 16,
+  "family_counts": {
+    "CAND_unresolved_magnitude": 11,
+    "CAND_same_turn_stat_event_gap": 5
+  },
+  "prediction_score": {
+    "scored_rows": 16,
+    "confirmed": [
+      "2201005/55",
+      "2300040/84",
+      "2300552/117",
+      "2400451/56",
+      "2600362/82"
+    ],
+    "partial": [
+      "2000298/23",
+      "2000431/32",
+      "2000561/67",
+      "2400156/29",
+      "2401127/54",
+      "2500576/7",
+      "2601196/46"
+    ],
+    "refuted": [
+      "2000261/31",
+      "2100079/7",
+      "2500120/60",
+      "2600657/49"
+    ]
+  },
+  "rows": [
+    {
+      "seed": 2000261,
+      "step": 31,
+      "family": "CAND_same_turn_stat_event_gap",
+      "choices": {
+        "p1": "calmmind",
+        "p2": "icebeam"
+      },
+      "engine_choices": {
+        "side_one": "calmmind",
+        "side_two": "icebeam"
+      },
+      "protocol_events": [
+        "|move|p1a: Grumpig|Calm Mind|p1a: Grumpig",
+        "|-boost|p1a: Grumpig|spa|1",
+        "|-boost|p1a: Grumpig|spd|1",
+        "|move|p2a: Omastar|Ice Beam|p1a: Grumpig",
+        "|-damage|p1a: Grumpig|198/268",
+        "|-heal|p1a: Grumpig|214/268|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -20
+          ]
+        ],
+        "p2": []
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              36,
+              72
+            ],
+            "critical": [
+              0,
+              0,
+              36,
+              72
+            ]
+          },
+          "values": [
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 84.375,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 23, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 23, ChangeStatus SideOne-P5: NONE -> FREEZE, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 5.625,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 66, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 0.625,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 66, ChangeStatus SideOne-P5: NONE -> FREEZE, Heal SideOne: 16]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.87:move",
+        "findings": [
+          "p1:20vs23:unexplained_ratio_0.87:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "GRUMPIG",
+            "types": [
+              "PSYCHIC",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "218/268",
+            "atk": 82,
+            "def": 156,
+            "spa": 197,
+            "spd": 230,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "OMASTAR",
+            "types": [
+              "ROCK",
+              "WATER"
+            ],
+            "item": "PETAYABERRY",
+            "ability": "SWIFTSWIM",
+            "status": "NONE",
+            "hp": "217/255",
+            "atk": 107,
+            "def": 258,
+            "spa": 241,
+            "spd": 166,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": {
+        "branch": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 23, Heal SideOne: 16]",
+        "post_boosts": {
+          "side_one_special_defense": 1,
+          "side_two_special_defense": 0
+        },
+        "post_event_legal_rolls": {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              25,
+              72
+            ],
+            "critical": [
+              0,
+              0,
+              25,
+              72
+            ]
+          },
+          "values": [
+            21,
+            22,
+            23,
+            24,
+            25,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72
+          ]
+        }
+      },
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level engine base-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "Calm Mind is applied before the hit, but the observed 20 remains below the post-boost legal 21..25 set. The pre-state-stat hypothesis is refuted.",
+        "prediction": "refuted H-D2"
+      }
+    },
+    {
+      "seed": 2000298,
+      "step": 23,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "dewgong",
+        "p2": "icebeam"
+      },
+      "engine_choices": {
+        "side_one": "dewgong",
+        "side_two": "icebeam"
+      },
+      "protocol_events": [
+        "|switch|p1a: Dewgong|Dewgong, L87, M|242/298",
+        "|move|p2a: Cloyster|Ice Beam|p1a: Dewgong",
+        "|-damage|p1a: Dewgong|234/298",
+        "|-heal|p1a: Dewgong|252/298|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -8
+          ]
+        ],
+        "p2": []
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              176,
+              354
+            ],
+            "critical": [
+              0,
+              0,
+              176,
+              354
+            ]
+          },
+          "values": [
+            149,
+            151,
+            153,
+            154,
+            156,
+            158,
+            160,
+            161,
+            163,
+            165,
+            167,
+            168,
+            170,
+            172,
+            174,
+            176,
+            300,
+            304,
+            307,
+            311,
+            315,
+            318,
+            322,
+            325,
+            329,
+            332,
+            336,
+            339,
+            343,
+            346,
+            350,
+            354
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 93.75,
+          "instructions": "[Switch SideOne: P4 -> P1, SetLastUsedMove SideOne: Move(M0) -> Switch(P1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M2), Damage SideOne: 10, Heal SideOne: 18]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[Switch SideOne: P4 -> P1, SetLastUsedMove SideOne: Move(M0) -> Switch(P1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M2), Damage SideOne: 20, Heal SideOne: 18]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.80:move",
+        "findings": [
+          "p1:8vs10:unexplained_ratio_0.80:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "PARASECT",
+            "types": [
+              "BUG",
+              "GRASS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "EFFECTSPORE",
+            "status": "NONE",
+            "hp": "267/276",
+            "atk": 241,
+            "def": 211,
+            "spa": 173,
+            "spd": 211,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "CLOYSTER",
+            "types": [
+              "WATER",
+              "ICE"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "SHELLARMOR",
+            "status": "NONE",
+            "hp": "216/216",
+            "atk": 160,
+            "def": 342,
+            "spa": 187,
+            "spd": 121,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "switch-choice matcher limitation",
+        "lane": "instrument; underlying magnitude remains WHAT-level",
+        "why": "The joint action switches Dewgong in before Ice Beam. calculate_damage reports the outgoing-state range (149..354), unrelated to the branch's Damage 10, so its legal-set rejection cannot adjudicate the observed 8.",
+        "prediction": "partial H-A"
+      }
+    },
+    {
+      "seed": 2000431,
+      "step": 32,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "surf",
+        "p2": "icebeam"
+      },
+      "engine_choices": {
+        "side_one": "surf",
+        "side_two": "icebeam"
+      },
+      "protocol_events": [
+        "|move|p2a: Poliwrath|Ice Beam|p1a: Walrein",
+        "|-damage|p1a: Walrein|267/307",
+        "|move|p1a: Walrein|Surf|p2a: Poliwrath",
+        "|-heal|p2a: Poliwrath|283/292|[from] ability: Water Absorb|[of] p1a: Walrein",
+        "|-heal|p2a: Poliwrath|292/292|[from] item: Leftovers",
+        "|-heal|p1a: Walrein|286/307|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -5
+          ]
+        ],
+        "p2": [
+          [
+            "itemleftovers_to_full",
+            9
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              8,
+              16
+            ],
+            "critical": [
+              0,
+              0,
+              8,
+              16
+            ]
+          },
+          "values": [
+            6,
+            7,
+            8,
+            13,
+            14,
+            15,
+            16
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 93.75,
+          "instructions": "[SetLastUsedMove SideTwo: Move(M1) -> Move(M2), Damage SideOne: 7, ChangeDamageDealtDamage SideTwo: 7, ChangeDamageDealtMoveCatagory SideTwo: Physical -> Special, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Heal SideTwo: 73, Heal SideTwo: 9, Heal SideOne: 19]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[SetLastUsedMove SideTwo: Move(M1) -> Move(M2), Damage SideOne: 14, ChangeDamageDealtDamage SideTwo: 14, ChangeDamageDealtMoveCatagory SideTwo: Physical -> Special, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Heal SideTwo: 73, Heal SideTwo: 9, Heal SideOne: 19]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:two-thirds:move",
+        "findings": [
+          "p1:5vs7:two-thirds:move"
+        ],
+        "observed_in_legal_set": [
+          false,
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "WALREIN",
+            "types": [
+              "ICE",
+              "WATER"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "272/307",
+            "atk": 133,
+            "def": 190,
+            "spa": 198,
+            "spd": 190,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "POLIWRATH",
+            "types": [
+              "WATER",
+              "FIGHTING"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "WATERABSORB",
+            "status": "NONE",
+            "hp": "210/292",
+            "atk": 193,
+            "def": 210,
+            "spa": 168,
+            "spd": 202,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "Pre-registered overlap check found zero (seed, step) matches against patches 42-44, the recoil/substitute set, the incapacitation set, and world-lane rows. Seed 2000431 has a separate absorb row at step 19; this sample is step 32."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level direct-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "The observed Ice Beam damage 5 is outside the engine's 6..16 roll set; no same-turn event or patch-42/43/44 signature is present.",
+        "prediction": "partial H-B"
+      }
+    },
+    {
+      "seed": 2000561,
+      "step": 67,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "firepunch",
+        "p2": "dewgong"
+      },
+      "engine_choices": {
+        "side_one": "firepunch",
+        "side_two": "dewgong"
+      },
+      "protocol_events": [
+        "|switch|p2a: Dewgong|Dewgong, L87, F|184/298",
+        "|move|p1a: Hypno|Fire Punch|p2a: Dewgong",
+        "|-damage|p2a: Dewgong|164/298",
+        "|-heal|p2a: Dewgong|182/298|[from] item: Leftovers",
+        "|-heal|p1a: Hypno|129/293 par|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -20
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              66,
+              132,
+              0,
+              0
+            ],
+            "critical": [
+              66,
+              132,
+              0,
+              0
+            ]
+          },
+          "values": [
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            112,
+            113,
+            114,
+            116,
+            117,
+            118,
+            120,
+            121,
+            122,
+            124,
+            125,
+            126,
+            128,
+            129,
+            130,
+            132
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 25.0,
+          "instructions": "[Switch SideTwo: P4 -> P1, SetLastUsedMove SideTwo: Move(M2) -> Switch(P1), Heal SideTwo: 18, Heal SideOne: 18]"
+        },
+        {
+          "percentage": 63.28125,
+          "instructions": "[Switch SideTwo: P4 -> P1, SetLastUsedMove SideTwo: Move(M2) -> Switch(P1), SetLastUsedMove SideOne: Switch(P0) -> Move(M2), Damage SideTwo: 23, Heal SideTwo: 18, Heal SideOne: 18]"
+        },
+        {
+          "percentage": 7.03125,
+          "instructions": "[Switch SideTwo: P4 -> P1, SetLastUsedMove SideTwo: Move(M2) -> Switch(P1), SetLastUsedMove SideOne: Switch(P0) -> Move(M2), Damage SideTwo: 23, ChangeStatus SideTwo-P1: NONE -> BURN, Heal SideTwo: 18, Damage SideTwo: 37, Heal SideOne: 18]"
+        },
+        {
+          "percentage": 4.21875,
+          "instructions": "[Switch SideTwo: P4 -> P1, SetLastUsedMove SideTwo: Move(M2) -> Switch(P1), SetLastUsedMove SideOne: Switch(P0) -> Move(M2), Damage SideTwo: 46, Heal SideTwo: 18, Heal SideOne: 18]"
+        },
+        {
+          "percentage": 0.46875,
+          "instructions": "[Switch SideTwo: P4 -> P1, SetLastUsedMove SideTwo: Move(M2) -> Switch(P1), SetLastUsedMove SideOne: Switch(P0) -> Move(M2), Damage SideTwo: 46, ChangeStatus SideTwo-P1: NONE -> BURN, Heal SideTwo: 18, Damage SideTwo: 37, Heal SideOne: 18]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.87:move",
+        "findings": [
+          "p2:20vs23:unexplained_ratio_0.87:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "HYPNO",
+            "types": [
+              "PSYCHIC",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "INSOMNIA",
+            "status": "PARALYZE",
+            "hp": "111/293",
+            "atk": 133,
+            "def": 173,
+            "spa": 179,
+            "spd": 253,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "STANTLER",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "INTIMIDATE",
+            "status": "NONE",
+            "hp": "254/254",
+            "atk": 203,
+            "def": 149,
+            "spa": 187,
+            "spd": 154,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "switch-choice matcher limitation",
+        "lane": "instrument; underlying magnitude remains WHAT-level",
+        "why": "The defender switches before Fire Punch. The direct-damage API prices the pre-switch state while the retained branch prices the incoming Dewgong, so the reported legal set is not evidence about the observed 20.",
+        "prediction": "partial H-A"
+      }
+    },
+    {
+      "seed": 2100079,
+      "step": 7,
+      "family": "CAND_same_turn_stat_event_gap",
+      "choices": {
+        "p1": "calmmind",
+        "p2": "icebeam"
+      },
+      "engine_choices": {
+        "side_one": "calmmind",
+        "side_two": "icebeam"
+      },
+      "protocol_events": [
+        "|move|p1a: Grumpig|Calm Mind|p1a: Grumpig",
+        "|-boost|p1a: Grumpig|spa|1",
+        "|-boost|p1a: Grumpig|spd|1",
+        "|move|p2a: Porygon2|Ice Beam|p1a: Grumpig",
+        "|-damage|p1a: Grumpig|251/268",
+        "|-heal|p1a: Grumpig|267/268|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -17
+          ]
+        ],
+        "p2": []
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              32,
+              64
+            ],
+            "critical": [
+              0,
+              0,
+              32,
+              64
+            ]
+          },
+          "values": [
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 84.375,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 20, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 20, ChangeStatus SideOne-P1: NONE -> FREEZE, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 5.625,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 59, Heal SideOne: 16]"
+        },
+        {
+          "percentage": 0.625,
+          "instructions": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 59, ChangeStatus SideOne-P1: NONE -> FREEZE, Heal SideOne: 16]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.85:move",
+        "findings": [
+          "p1:17vs20:unexplained_ratio_0.85:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "GRUMPIG",
+            "types": [
+              "PSYCHIC",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "268/268",
+            "atk": 82,
+            "def": 156,
+            "spa": 197,
+            "spd": 230,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "PORYGON2",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "267/267",
+            "atk": 174,
+            "def": 190,
+            "spa": 214,
+            "spd": 198,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": {
+        "branch": "[Boost SideOne SpecialAttack: 1, Boost SideOne SpecialDefense: 1, Damage SideOne: 20, Heal SideOne: 16]",
+        "post_boosts": {
+          "side_one_special_defense": 1,
+          "side_two_special_defense": 0
+        },
+        "post_event_legal_rolls": {
+          "bases": {
+            "noncritical": [
+              0,
+              0,
+              22,
+              64
+            ],
+            "critical": [
+              0,
+              0,
+              22,
+              64
+            ]
+          },
+          "values": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64
+          ]
+        }
+      },
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level engine base-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "Calm Mind is applied before Ice Beam, but observed 17 is below the post-boost legal 18..22 set. This is not a pre-state-stat phase failure.",
+        "prediction": "refuted H-D2"
+      }
+    },
+    {
+      "seed": 2201005,
+      "step": 55,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "crunch",
+        "p2": "flail"
+      },
+      "engine_choices": {
+        "side_one": "crunch",
+        "side_two": "flail"
+      },
+      "protocol_events": [
+        "|move|p1a: Mightyena|Crunch|p2a: Dodrio",
+        "|-damage|p2a: Dodrio|39/222 par",
+        "|move|p2a: Dodrio|Flail|p1a: Mightyena",
+        "|-damage|p1a: Mightyena|27/278",
+        "|-heal|p1a: Mightyena|44/278|[from] item: Leftovers",
+        "|-boost|p2a: Dodrio|atk|1|[from] item: Liechi Berry"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -110
+          ]
+        ],
+        "p2": [
+          [
+            "",
+            -108
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              108,
+              216,
+              49,
+              99
+            ],
+            "critical": [
+              108,
+              216,
+              49,
+              99
+            ]
+          },
+          "values": [
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            108,
+            183,
+            185,
+            187,
+            190,
+            192,
+            194,
+            196,
+            198,
+            200,
+            203,
+            205,
+            207,
+            209,
+            211,
+            213,
+            216
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 18.75,
+          "instructions": "[Damage SideTwo: 99, Heal SideOne: 17, Boost SideTwo Attack: 1, ChangeItem SideTwo: LIECHIBERRY -> NONE]"
+        },
+        {
+          "percentage": 52.734375,
+          "instructions": "[Damage SideTwo: 99, Damage SideOne: 89, Heal SideOne: 17, Boost SideTwo Attack: 1, ChangeItem SideTwo: LIECHIBERRY -> NONE]"
+        },
+        {
+          "percentage": 3.515625,
+          "instructions": "[Damage SideTwo: 99, Damage SideOne: 137, ToggleSideOneForceSwitch]"
+        },
+        {
+          "percentage": 4.6875,
+          "instructions": "[Damage SideTwo: 99, Boost SideTwo SpecialDefense: -1, Heal SideOne: 17, Boost SideTwo Attack: 1, ChangeItem SideTwo: LIECHIBERRY -> NONE]"
+        },
+        {
+          "percentage": 13.18359375,
+          "instructions": "[Damage SideTwo: 99, Boost SideTwo SpecialDefense: -1, Damage SideOne: 89, Heal SideOne: 17, Boost SideTwo Attack: 1, ChangeItem SideTwo: LIECHIBERRY -> NONE]"
+        },
+        {
+          "percentage": 0.87890625,
+          "instructions": "[Damage SideTwo: 99, Boost SideTwo SpecialDefense: -1, Damage SideOne: 137, ToggleSideOneForceSwitch]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[Damage SideTwo: 147, ToggleSideTwoForceSwitch]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_1.09:move",
+        "findings": [
+          "p2:108vs99:unexplained_ratio_1.09:move"
+        ],
+        "observed_in_legal_set": [
+          false,
+          true
+        ],
+        "context": {
+          "p1": {
+            "species": "MIGHTYENA",
+            "types": [
+              "DARK",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "INTIMIDATE",
+            "status": "NONE",
+            "hp": "137/278",
+            "atk": 218,
+            "def": 180,
+            "spa": 162,
+            "spd": 162,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "DODRIO",
+            "types": [
+              "NORMAL",
+              "FLYING"
+            ],
+            "item": "LIECHIBERRY",
+            "ability": "EARLYBIRD",
+            "status": "PARALYZE",
+            "hp": "147/222",
+            "atk": 217,
+            "def": 154,
+            "spa": 139,
+            "spd": 139,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": {
+        "label": "Flail after the recorded Crunch damage",
+        "before": {
+          "bases": {
+            "noncritical": [
+              108,
+              216,
+              49,
+              99
+            ],
+            "critical": [
+              108,
+              216,
+              49,
+              99
+            ]
+          },
+          "values": [
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            108,
+            183,
+            185,
+            187,
+            190,
+            192,
+            194,
+            196,
+            198,
+            200,
+            203,
+            205,
+            207,
+            209,
+            211,
+            213,
+            216
+          ]
+        },
+        "after": {
+          "bases": {
+            "noncritical": [
+              108,
+              216,
+              121,
+              243
+            ],
+            "critical": [
+              108,
+              216,
+              121,
+              243
+            ]
+          },
+          "values": [
+            91,
+            92,
+            93,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            110,
+            111,
+            112,
+            113,
+            114,
+            116,
+            117,
+            118,
+            119,
+            121,
+            183,
+            185,
+            187,
+            190,
+            192,
+            194,
+            196,
+            198,
+            200,
+            203,
+            205,
+            206,
+            207,
+            208,
+            209,
+            211,
+            213,
+            216,
+            218,
+            221,
+            223,
+            225,
+            228,
+            230,
+            233,
+            235,
+            238,
+            240,
+            243
+          ]
+        }
+      },
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "engine dynamic-HP timing defect",
+        "lane": "engine",
+        "why": "Crunch lowers Dodrio from 147 to 39 before Flail. The engine branch prices Flail from 147 HP (max 99); the controlled 39-HP state yields max 121 and admits the observed 110.",
+        "prediction": "confirmed H-B"
+      }
+    },
+    {
+      "seed": 2300040,
+      "step": 84,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "icepunch",
+        "p2": "hiddenpowerground70"
+      },
+      "engine_choices": {
+        "side_one": "icepunch",
+        "side_two": "hiddenpowerground70"
+      },
+      "protocol_events": [
+        "|move|p1a: Gengar|Ice Punch|p2a: Swalot",
+        "|-damage|p2a: Swalot|5/316",
+        "|move|p2a: Swalot|Hidden Power|p1a: Gengar",
+        "|-immune|p1a: Gengar",
+        "|-heal|p1a: Gengar|70/211|[from] item: Leftovers",
+        "|-heal|p2a: Swalot|24/316|[from] item: Leftovers",
+        "|-damage|p2a: Swalot|0 fnt|[from] Leech Seed|[of] p1a: Gengar",
+        "|-damage|p1a: Gengar|46/211|[from] ability: Liquid Ooze|[of] p2a: Swalot"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -58
+          ],
+          [
+            "capped_lethal",
+            -24
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              58,
+              116,
+              0,
+              0
+            ],
+            "critical": [
+              58,
+              116,
+              0,
+              0
+            ]
+          },
+          "values": [
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            98,
+            99,
+            100,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            116
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 84.375,
+          "instructions": "[Damage SideTwo: 53, ChangeDamageDealtDamage SideOne: 53, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideOne: 13, Heal SideTwo: 19, Damage SideTwo: 29, Heal SideOne: -29]"
+        },
+        {
+          "percentage": 7.5,
+          "instructions": "[Damage SideTwo: 53, ChangeDamageDealtDamage SideOne: 53, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeStatus SideTwo-P1: NONE -> FREEZE, Heal SideOne: 13, Heal SideTwo: 19, Damage SideTwo: 29, Heal SideOne: -29]"
+        },
+        {
+          "percentage": 1.875,
+          "instructions": "[Damage SideTwo: 53, ChangeDamageDealtDamage SideOne: 53, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeStatus SideTwo-P1: NONE -> FREEZE, ChangeStatus SideTwo-P1: FREEZE -> NONE, Heal SideOne: 13, Heal SideTwo: 19, Damage SideTwo: 29, Heal SideOne: -29]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[Damage SideTwo: 63, ChangeDamageDealtDamage SideOne: 63, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ToggleSideTwoForceSwitch]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.83:capped_lethal;unexplained_ratio_1.09:move",
+        "findings": [
+          "p2:58vs53:unexplained_ratio_1.09:move",
+          "p2:24vs29:unexplained_ratio_0.83:capped_lethal"
+        ],
+        "observed_in_legal_set": [
+          true,
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "GENGAR",
+            "types": [
+              "GHOST",
+              "POISON"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "LEVITATE",
+            "status": "NONE",
+            "hp": "57/211",
+            "atk": 101,
+            "def": 132,
+            "spa": 235,
+            "spd": 154,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "SWALOT",
+            "types": [
+              "POISON",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "LIQUIDOOZE",
+            "status": "NONE",
+            "hp": "63/316",
+            "atk": 177,
+            "def": 194,
+            "spa": 176,
+            "spd": 193,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "roll-inherited capped residual",
+        "lane": "instrument / documented comparison limit",
+        "why": "Ice Punch's observed 58 is in the engine legal roll set. The subsequent Leftovers and Leech Seed/Liquid Ooze amounts cap from that preceding roll, so the apparent component mismatch is inherited pricing rather than a new engine mechanism.",
+        "prediction": "confirmed H-C"
+      }
+    },
+    {
+      "seed": 2300552,
+      "step": 117,
+      "family": "CAND_same_turn_stat_event_gap",
+      "choices": {
+        "p1": "fireblast",
+        "p2": "calmmind"
+      },
+      "engine_choices": {
+        "side_one": "fireblast",
+        "side_two": "calmmind"
+      },
+      "protocol_events": [
+        "|move|p2a: Clefable|Calm Mind|p2a: Clefable",
+        "|-boost|p2a: Clefable|spa|1",
+        "|-boost|p2a: Clefable|spd|1",
+        "|move|p1a: Clefable|Fire Blast|p2a: Clefable",
+        "|-damage|p2a: Clefable|279/300 par",
+        "|-heal|p2a: Clefable|297/300 par|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -21
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              29,
+              168,
+              0,
+              0
+            ],
+            "critical": [
+              29,
+              168,
+              0,
+              0
+            ]
+          },
+          "values": [
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            142,
+            144,
+            146,
+            147,
+            149,
+            151,
+            152,
+            154,
+            156,
+            157,
+            159,
+            161,
+            162,
+            164,
+            166,
+            168
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 3.125,
+          "instructions": "[]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1]"
+        },
+        {
+          "percentage": 1.406249761581421,
+          "instructions": "[DecrementPP SideOne: M1 1]"
+        },
+        {
+          "percentage": 4.218749046325684,
+          "instructions": "[DecrementPP SideOne: M1 1, Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1]"
+        },
+        {
+          "percentage": 7.470703125,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 26, ChangeDamageDealtDamage SideOne: 26, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 22.412109375,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 26, ChangeDamageDealtDamage SideOne: 26, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 0.498046875,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 155, ChangeDamageDealtDamage SideOne: 155, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 1.494140625,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 155, ChangeDamageDealtDamage SideOne: 155, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 3.125,
+          "instructions": "[]"
+        },
+        {
+          "percentage": 1.406249761581421,
+          "instructions": "[DecrementPP SideOne: M1 1]"
+        },
+        {
+          "percentage": 7.470703125,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 26, ChangeDamageDealtDamage SideOne: 26, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 0.498046875,
+          "instructions": "[DecrementPP SideOne: M1 1, Damage SideTwo: 155, ChangeDamageDealtDamage SideOne: 155, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1]"
+        },
+        {
+          "percentage": 4.218749523162842,
+          "instructions": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, DecrementPP SideOne: M1 1]"
+        },
+        {
+          "percentage": 22.412109375,
+          "instructions": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, DecrementPP SideOne: M1 1, Damage SideTwo: 23, ChangeDamageDealtDamage SideOne: 23, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        },
+        {
+          "percentage": 1.494140625,
+          "instructions": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, DecrementPP SideOne: M1 1, Damage SideTwo: 155, ChangeDamageDealtDamage SideOne: 155, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.81:move",
+        "findings": [
+          "p2:21vs26:unexplained_ratio_0.81:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "CLEFABLE",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "CUTECHARM",
+            "status": "PARALYZE",
+            "hp": "300/300",
+            "atk": 168,
+            "def": 173,
+            "spa": 193,
+            "spd": 202,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "CLEFABLE",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "CUTECHARM",
+            "status": "PARALYZE",
+            "hp": "300/300",
+            "atk": 124,
+            "def": 173,
+            "spa": 193,
+            "spd": 202,
+            "boosts": {
+              "special_attack": 4,
+              "special_defense": 4
+            },
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": {
+        "branch": "[Boost SideTwo SpecialAttack: 1, Boost SideTwo SpecialDefense: 1, DecrementPP SideOne: M1 1, Damage SideTwo: 23, ChangeDamageDealtDamage SideOne: 23, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideTwo: 18]",
+        "post_boosts": {
+          "side_one_special_defense": 0,
+          "side_two_special_defense": 5
+        },
+        "post_event_legal_rolls": {
+          "bases": {
+            "noncritical": [
+              25,
+              168,
+              0,
+              0
+            ],
+            "critical": [
+              25,
+              168,
+              0,
+              0
+            ]
+          },
+          "values": [
+            21,
+            22,
+            23,
+            24,
+            25,
+            142,
+            144,
+            146,
+            147,
+            149,
+            151,
+            152,
+            154,
+            156,
+            157,
+            159,
+            161,
+            162,
+            164,
+            166,
+            168
+          ]
+        }
+      },
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "event-aware legal-set omission",
+        "lane": "instrument",
+        "why": "The branch applies Clefable's Calm Mind before Fire Blast. Recomputing after that boost gives legal 21..25, which includes the observed 21; the pre-state matcher range was 24..29.",
+        "prediction": "confirmed H-D1"
+      }
+    },
+    {
+      "seed": 2400156,
+      "step": 29,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "rockslide",
+        "p2": "flamethrower"
+      },
+      "engine_choices": {
+        "side_one": "rockslide",
+        "side_two": "flamethrower"
+      },
+      "protocol_events": [
+        "|move|p2a: Mew|Flamethrower|p1a: Hariyama",
+        "|-damage|p1a: Hariyama|344/375",
+        "|move|p1a: Hariyama|Rock Slide|p2a: Mew",
+        "|-damage|p2a: Mew|199/263",
+        "|-weather|Sandstorm|[upkeep]",
+        "|-damage|p2a: Mew|183/263|[from] Sandstorm",
+        "|-damage|p1a: Hariyama|321/375|[from] Sandstorm",
+        "|-heal|p2a: Mew|199/263|[from] item: Leftovers",
+        "|-heal|p1a: Hariyama|344/375|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -31
+          ]
+        ],
+        "p2": [
+          [
+            "",
+            -64
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              71,
+              142,
+              38,
+              76
+            ],
+            "critical": [
+              71,
+              142,
+              38,
+              76
+            ]
+          },
+          "values": [
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            120,
+            122,
+            123,
+            124,
+            126,
+            127,
+            129,
+            130,
+            132,
+            133,
+            134,
+            136,
+            137,
+            139,
+            140,
+            142
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 8.437501907348633,
+          "instructions": "[Damage SideOne: 35, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 71.19140625,
+          "instructions": "[Damage SideOne: 35, Damage SideTwo: 65, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 4.74609375,
+          "instructions": "[Damage SideOne: 35, Damage SideTwo: 131, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 0.9375002384185791,
+          "instructions": "[Damage SideOne: 35, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        },
+        {
+          "percentage": 7.91015625,
+          "instructions": "[Damage SideOne: 35, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 33, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        },
+        {
+          "percentage": 0.52734375,
+          "instructions": "[Damage SideOne: 35, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 66, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        },
+        {
+          "percentage": 0.5625001192092896,
+          "instructions": "[Damage SideOne: 70, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 4.74609375,
+          "instructions": "[Damage SideOne: 70, Damage SideTwo: 65, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 0.31640625,
+          "instructions": "[Damage SideOne: 70, Damage SideTwo: 131, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23]"
+        },
+        {
+          "percentage": 0.0625000149011612,
+          "instructions": "[Damage SideOne: 70, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        },
+        {
+          "percentage": 0.52734375,
+          "instructions": "[Damage SideOne: 70, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 33, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        },
+        {
+          "percentage": 0.03515625,
+          "instructions": "[Damage SideOne: 70, ChangeStatus SideOne-P4: NONE -> BURN, Damage SideTwo: 66, Damage SideTwo: 16, Damage SideOne: 23, Heal SideTwo: 16, Heal SideOne: 23, Damage SideOne: 46]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+        "findings": [
+          "p1:31vs35:unexplained_ratio_0.89:move",
+          "p2:64vs65:within_roll_window:move"
+        ],
+        "observed_in_legal_set": [
+          false,
+          true
+        ],
+        "context": {
+          "p1": {
+            "species": "HARIYAMA",
+            "types": [
+              "FIGHTING",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "375/375",
+            "atk": 247,
+            "def": 147,
+            "spa": 114,
+            "spd": 147,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "MEW",
+            "types": [
+              "PSYCHIC",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "SYNCHRONIZE",
+            "status": "NONE",
+            "hp": "263/263",
+            "atk": 186,
+            "def": 186,
+            "spa": 186,
+            "spd": 186,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "SAND"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level direct-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "Flamethrower's observed 31 is below the engine legal 32..38 range. No same-turn stat or known patch signature explains the one-point base gap.",
+        "prediction": "partial H-B"
+      }
+    },
+    {
+      "seed": 2400451,
+      "step": 56,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "return",
+        "p2": "golduck"
+      },
+      "engine_choices": {
+        "side_one": "return",
+        "side_two": "golduck"
+      },
+      "protocol_events": [
+        "|switch|p2a: Golduck|Golduck, L81, F|239/262",
+        "|move|p1a: Castform|Return|p2a: Golduck",
+        "|-damage|p2a: Golduck|163/262",
+        "|-weather|RainDance|[upkeep]",
+        "|-heal|p2a: Golduck|179/262|[from] item: Leftovers",
+        "|-heal|p1a: Castform|45/272|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -76
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              73,
+              146,
+              0,
+              0
+            ],
+            "critical": [
+              73,
+              146,
+              0,
+              0
+            ]
+          },
+          "values": [
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            124,
+            125,
+            127,
+            128,
+            129,
+            131,
+            132,
+            134,
+            135,
+            137,
+            138,
+            140,
+            141,
+            143,
+            144,
+            146
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 93.75,
+          "instructions": "[Switch SideTwo: P3 -> P2, ChangeType SideOne: (WATER, TYPELESS) -> (NORMAL, TYPELESS), Damage SideTwo: 111, Heal SideTwo: 16, Heal SideOne: 17]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[Switch SideTwo: P3 -> P2, ChangeType SideOne: (WATER, TYPELESS) -> (NORMAL, TYPELESS), Damage SideTwo: 224, Heal SideTwo: 16, Heal SideOne: 17]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:two-thirds:move",
+        "findings": [
+          "p2:76vs111:two-thirds:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "CASTFORM",
+            "types": [
+              "WATER",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "FORECAST",
+            "status": "NONE",
+            "hp": "28/272",
+            "atk": 177,
+            "def": 177,
+            "spa": 177,
+            "spd": 177,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "CELEBI",
+            "types": [
+              "PSYCHIC",
+              "GRASS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "NATURALCURE",
+            "status": "NONE",
+            "hp": "205/270",
+            "atk": 153,
+            "def": 191,
+            "spa": 191,
+            "spd": 191,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "RAIN"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": {
+        "label": "Return after a hypothetical pre-move Forecast expiry",
+        "before": {
+          "bases": {
+            "noncritical": [
+              73,
+              146,
+              0,
+              0
+            ],
+            "critical": [
+              73,
+              146,
+              0,
+              0
+            ]
+          },
+          "values": [
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            124,
+            125,
+            127,
+            128,
+            129,
+            131,
+            132,
+            134,
+            135,
+            137,
+            138,
+            140,
+            141,
+            143,
+            144,
+            146
+          ]
+        },
+        "after": {
+          "bases": {
+            "noncritical": [
+              109,
+              219,
+              0,
+              0
+            ],
+            "critical": [
+              109,
+              219,
+              0,
+              0
+            ]
+          },
+          "values": [
+            92,
+            93,
+            94,
+            95,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            109,
+            186,
+            188,
+            190,
+            192,
+            194,
+            197,
+            199,
+            201,
+            203,
+            205,
+            208,
+            210,
+            212,
+            214,
+            216,
+            219
+          ]
+        }
+      },
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "engine Forecast weather-expiry timing defect",
+        "lane": "engine",
+        "why": "Showdown uses Return while Castform is still Water, then ends Rain at upkeep. The engine branch changes Castform to Normal before Damage, raising Return from the Water-state max 73 to the Normal-state max 109.",
+        "prediction": "confirmed H-B"
+      }
+    },
+    {
+      "seed": 2401127,
+      "step": 54,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "fireblast",
+        "p2": "return"
+      },
+      "engine_choices": {
+        "side_one": "fireblast",
+        "side_two": "return"
+      },
+      "protocol_events": [
+        "|move|p1a: Clefable|Fire Blast|p2a: Kecleon",
+        "|-damage|p2a: Kecleon|95/260",
+        "|-status|p2a: Kecleon|brn",
+        "|-start|p2a: Kecleon|typechange|Fire|[from] ability: Color Change",
+        "|move|p2a: Kecleon|Return|p1a: Clefable",
+        "|-damage|p1a: Clefable|255/300",
+        "|-weather|Sandstorm|[upkeep]",
+        "|-damage|p1a: Clefable|237/300|[from] Sandstorm",
+        "|-damage|p2a: Kecleon|79/260 brn|[from] Sandstorm",
+        "|-heal|p1a: Clefable|255/300|[from] item: Leftovers",
+        "|-heal|p2a: Kecleon|95/260 brn|[from] item: Leftovers",
+        "|-damage|p2a: Kecleon|63/260 brn|[from] brn"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -45
+          ]
+        ],
+        "p2": [
+          [
+            "",
+            -61
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              63,
+              126,
+              148,
+              297
+            ],
+            "critical": [
+              63,
+              126,
+              148,
+              297
+            ]
+          },
+          "values": [
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            107,
+            108,
+            109,
+            110,
+            112,
+            113,
+            114,
+            115,
+            117,
+            118,
+            119,
+            120,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127,
+            128,
+            130,
+            131,
+            133,
+            134,
+            136,
+            137,
+            139,
+            140,
+            142,
+            143,
+            145,
+            146,
+            148,
+            252,
+            255,
+            258,
+            261,
+            264,
+            267,
+            270,
+            273,
+            276,
+            279,
+            282,
+            285,
+            288,
+            291,
+            294,
+            297
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 9.374999046325684,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 136, ChangeDamageDealtDamage SideTwo: 136, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 4.687499046325684,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 136, ChangeDamageDealtDamage SideTwo: 136, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 0.6249999403953552,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 274, ChangeDamageDealtDamage SideTwo: 274, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 0.3124999403953552,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 274, ChangeDamageDealtDamage SideTwo: 274, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 49.8046875,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 58, ChangeDamageDealtDamage SideOne: 58, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 91, ChangeDamageDealtDamage SideTwo: 91, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 24.902341842651367,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 58, ChangeDamageDealtDamage SideOne: 58, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 91, ChangeDamageDealtDamage SideTwo: 91, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 3.3203125,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 58, ChangeDamageDealtDamage SideOne: 58, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 183, ChangeDamageDealtDamage SideTwo: 183, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 1.6601561307907104,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 58, ChangeDamageDealtDamage SideOne: 58, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 183, ChangeDamageDealtDamage SideTwo: 183, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 3.3203125,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 116, ChangeDamageDealtDamage SideOne: 116, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 91, ChangeDamageDealtDamage SideTwo: 91, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 1.6601561307907104,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 116, ChangeDamageDealtDamage SideOne: 116, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 91, ChangeDamageDealtDamage SideTwo: 91, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 0.2213541716337204,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 116, ChangeDamageDealtDamage SideOne: 116, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 183, ChangeDamageDealtDamage SideTwo: 183, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 0.1106770783662796,
+          "instructions": "[DecrementPP SideOne: M1 1, SetLastUsedMove SideOne: Move(M0) -> Move(M1), Damage SideTwo: 116, ChangeDamageDealtDamage SideOne: 116, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeType SideTwo: (NORMAL, TYPELESS) -> (FIRE, TYPELESS), SetLastUsedMove SideTwo: Switch(P0) -> Move(M1), Damage SideOne: 183, ChangeDamageDealtDamage SideTwo: 183, ApplyVolatileStatus SideTwo: ATTRACT, Damage SideOne: 18, Damage SideTwo: 16, Heal SideOne: 18, Heal SideTwo: 16]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move;within_roll_window:move",
+        "findings": [
+          "p1:45vs91:half (screen: Reflect/Light Screen, or type 1/2x):move",
+          "p2:61vs58:within_roll_window:move"
+        ],
+        "observed_in_legal_set": [
+          false,
+          true
+        ],
+        "context": {
+          "p1": {
+            "species": "CLEFABLE",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "CUTECHARM",
+            "status": "NONE",
+            "hp": "300/300",
+            "atk": 168,
+            "def": 173,
+            "spa": 193,
+            "spd": 202,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "KECLEON",
+            "types": [
+              "NORMAL",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "COLORCHANGE",
+            "status": "NONE",
+            "hp": "156/260",
+            "atk": 218,
+            "def": 181,
+            "spa": 163,
+            "spd": 273,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "SAND"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level dynamic type-effect candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "The retained branch emits Color Change before Return, but the observed 45 remains outside the branch's damage support. The evidence rejects a simple event-order narration without identifying the remaining type-effect calculation locus.",
+        "prediction": "partial H-B"
+      }
+    },
+    {
+      "seed": 2500120,
+      "step": 60,
+      "family": "CAND_same_turn_stat_event_gap",
+      "choices": {
+        "p1": "flamethrower",
+        "p2": "grumpig"
+      },
+      "engine_choices": {
+        "side_one": "flamethrower",
+        "side_two": "grumpig"
+      },
+      "protocol_events": [
+        "|switch|p2a: Grumpig|Grumpig, L83, M|233/268",
+        "|move|p1a: Entei|Flamethrower|p2a: Grumpig",
+        "|-damage|p2a: Grumpig|200/268",
+        "|-status|p2a: Grumpig|brn",
+        "|-heal|p1a: Entei|240/307|[from] item: Leftovers",
+        "|-heal|p2a: Grumpig|216/268 brn|[from] item: Leftovers",
+        "|-damage|p2a: Grumpig|183/268 brn|[from] brn"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -33
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              105,
+              210,
+              0,
+              0
+            ],
+            "critical": [
+              105,
+              210,
+              0,
+              0
+            ]
+          },
+          "values": [
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            105,
+            178,
+            180,
+            182,
+            184,
+            186,
+            189,
+            191,
+            193,
+            195,
+            197,
+            199,
+            201,
+            203,
+            205,
+            207,
+            210
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 84.375,
+          "instructions": "[Switch SideTwo: P4 -> P5, Damage SideTwo: 37, ChangeDamageDealtDamage SideOne: 37, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideOne: 19, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Switch SideTwo: P4 -> P5, Damage SideTwo: 37, ChangeDamageDealtDamage SideOne: 37, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeStatus SideTwo-P5: NONE -> BURN, Heal SideOne: 19, Heal SideTwo: 16, Damage SideTwo: 33]"
+        },
+        {
+          "percentage": 5.625,
+          "instructions": "[Switch SideTwo: P4 -> P5, Damage SideTwo: 74, ChangeDamageDealtDamage SideOne: 74, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, Heal SideOne: 19, Heal SideTwo: 16]"
+        },
+        {
+          "percentage": 0.625,
+          "instructions": "[Switch SideTwo: P4 -> P5, Damage SideTwo: 74, ChangeDamageDealtDamage SideOne: 74, ChangeDamageDealtMoveCatagory SideOne: Physical -> Special, ChangeStatus SideTwo-P5: NONE -> BURN, Heal SideOne: 19, Heal SideTwo: 16, Damage SideTwo: 33]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.89:move",
+        "findings": [
+          "p2:33vs37:unexplained_ratio_0.89:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "ENTEI",
+            "types": [
+              "FIRE",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "PRESSURE",
+            "status": "NONE",
+            "hp": "221/307",
+            "atk": 184,
+            "def": 178,
+            "spa": 185,
+            "spd": 162,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "CROBAT",
+            "types": [
+              "POISON",
+              "FLYING"
+            ],
+            "item": "CHOICEBAND",
+            "ability": "INNERFOCUS",
+            "status": "NONE",
+            "hp": "99/261",
+            "atk": 185,
+            "def": 170,
+            "spa": 153,
+            "spd": 169,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "misbucketed switch-in magnitude",
+        "lane": "instrument classification; underlying magnitude remains WHAT-level",
+        "why": "Grumpig switches in before Flamethrower; the only status event is a possible burn after damage. This row does not contain a pre-hit boost/status event and cannot support the stat-gap WHY.",
+        "prediction": "refuted H-D2"
+      }
+    },
+    {
+      "seed": 2500576,
+      "step": 7,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "icepunch",
+        "p2": "crosschop"
+      },
+      "engine_choices": {
+        "side_one": "icepunch",
+        "side_two": "crosschop"
+      },
+      "protocol_events": [
+        "|move|p1a: Gengar|Ice Punch|p2a: Hariyama",
+        "|-damage|p2a: Hariyama|281/375 par",
+        "|move|p2a: Hariyama|Cross Chop|p1a: Gengar",
+        "|-immune|p1a: Gengar",
+        "|-heal|p1a: Gengar|133/211|[from] item: Leftovers",
+        "|-heal|p2a: Hariyama|304/375 par|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -32
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              39,
+              78,
+              0,
+              0
+            ],
+            "critical": [
+              39,
+              78,
+              0,
+              0
+            ]
+          },
+          "values": [
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 23.4375,
+          "instructions": "[Damage SideTwo: 36, Heal SideOne: 13, Heal SideTwo: 23]"
+        },
+        {
+          "percentage": 70.3125,
+          "instructions": "[Damage SideTwo: 36, DecrementPP SideTwo: M2 1, Heal SideOne: 13, Heal SideTwo: 23]"
+        },
+        {
+          "percentage": 1.5625,
+          "instructions": "[Damage SideTwo: 72, Heal SideOne: 13, Heal SideTwo: 23]"
+        },
+        {
+          "percentage": 4.6875,
+          "instructions": "[Damage SideTwo: 72, DecrementPP SideTwo: M2 1, Heal SideOne: 13, Heal SideTwo: 23]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.89:move",
+        "findings": [
+          "p2:32vs36:unexplained_ratio_0.89:move"
+        ],
+        "observed_in_legal_set": [
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "GENGAR",
+            "types": [
+              "GHOST",
+              "POISON"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "LEVITATE",
+            "status": "NONE",
+            "hp": "120/211",
+            "atk": 101,
+            "def": 132,
+            "spa": 235,
+            "spd": 154,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "HARIYAMA",
+            "types": [
+              "FIGHTING",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "PARALYZE",
+            "hp": "313/375",
+            "atk": 247,
+            "def": 147,
+            "spa": 114,
+            "spd": 147,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level direct-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "Ice Punch's observed 32 is below the engine legal 33..39 range in a no-switch, no-event state. The sample supports a magnitude discrepancy but not a specific pipeline step.",
+        "prediction": "partial H-B"
+      }
+    },
+    {
+      "seed": 2600362,
+      "step": 82,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "knockoff",
+        "p2": "lanturn"
+      },
+      "engine_choices": {
+        "side_one": "knockoff",
+        "side_two": "lanturn"
+      },
+      "protocol_events": [
+        "|switch|p2a: Lanturn|Lanturn, L82, M|143/339 tox",
+        "|move|p1a: Sableye|Knock Off|p2a: Lanturn",
+        "|-damage|p2a: Lanturn|122/339 tox",
+        "|-damage|p2a: Lanturn|101/339 tox|[from] psn",
+        "|-heal|p1a: Sableye|141/239 tox|[from] item: Leftovers",
+        "|-damage|p1a: Sableye|15/239 tox|[from] psn"
+      ],
+      "observed_roll_components": {
+        "p1": [],
+        "p2": [
+          [
+            "",
+            -21
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              12,
+              24,
+              0,
+              0
+            ],
+            "critical": [
+              12,
+              24,
+              0,
+              0
+            ]
+          },
+          "values": [
+            10,
+            11,
+            12,
+            20,
+            21,
+            22,
+            23,
+            24
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 93.75,
+          "instructions": "[Switch SideTwo: P5 -> P4, Damage SideTwo: 23, ChangeItem SideTwo: LEFTOVERS -> NONE, Damage SideTwo: 21, ChangeSideCondition SideTwo ToxicCount: 1, Heal SideOne: 14, Damage SideOne: 112, ChangeSideCondition SideOne ToxicCount: 1]"
+        },
+        {
+          "percentage": 6.25,
+          "instructions": "[Switch SideTwo: P5 -> P4, Damage SideTwo: 47, ChangeItem SideTwo: LEFTOVERS -> NONE, Damage SideTwo: 21, ChangeSideCondition SideTwo ToxicCount: 1, Heal SideOne: 14, Damage SideOne: 112, ChangeSideCondition SideOne ToxicCount: 1]"
+        }
+      ],
+      "triage": {
+        "bucket": "legitimate_roll_in_legal_set",
+        "findings": [
+          "p2:21vs23:unexplained_ratio_0.91:move"
+        ],
+        "observed_in_legal_set": [
+          true
+        ],
+        "context": {
+          "p1": {
+            "species": "SABLEYE",
+            "types": [
+              "DARK",
+              "GHOST"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "KEENEYE",
+            "status": "TOXIC",
+            "hp": "127/239",
+            "atk": 141,
+            "def": 188,
+            "spa": 170,
+            "spd": 170,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "SCIZOR",
+            "types": [
+              "BUG",
+              "STEEL"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "SWARM",
+            "status": "FREEZE",
+            "hp": "72/249",
+            "atk": 260,
+            "def": 211,
+            "spa": 137,
+            "spd": 178,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "legal-roll matcher accounting",
+        "lane": "instrument",
+        "why": "Observed Knock Off damage 21 is in the engine's enumerated 20..24 legal set. The divergence is matcher accounting, not an engine damage error.",
+        "prediction": "confirmed H-A"
+      }
+    },
+    {
+      "seed": 2600657,
+      "step": 49,
+      "family": "CAND_same_turn_stat_event_gap",
+      "choices": {
+        "p1": "dragonclaw",
+        "p2": "flamethrower"
+      },
+      "engine_choices": {
+        "side_one": "dragonclaw",
+        "side_two": "flamethrower"
+      },
+      "protocol_events": [
+        "|move|p2a: Typhlosion|Flamethrower|p1a: Latias",
+        "|-damage|p1a: Latias|63/215",
+        "|-status|p1a: Latias|brn",
+        "|move|p1a: Latias|Dragon Claw|p2a: Typhlosion",
+        "|-damage|p2a: Typhlosion|0 fnt"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -41
+          ]
+        ],
+        "p2": [
+          [
+            "capped_lethal",
+            -45
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              105,
+              210,
+              50,
+              100
+            ],
+            "critical": [
+              105,
+              210,
+              50,
+              100
+            ]
+          },
+          "values": [
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            105,
+            178,
+            180,
+            182,
+            184,
+            186,
+            189,
+            191,
+            193,
+            195,
+            197,
+            199,
+            201,
+            203,
+            205,
+            207,
+            210
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 84.375,
+          "instructions": "[Damage SideOne: 46, Damage SideTwo: 45, ToggleSideTwoForceSwitch]"
+        },
+        {
+          "percentage": 9.375,
+          "instructions": "[Damage SideOne: 46, ChangeStatus SideOne-P0: NONE -> BURN, Damage SideTwo: 45, ToggleSideTwoForceSwitch]"
+        },
+        {
+          "percentage": 5.625,
+          "instructions": "[Damage SideOne: 92, Damage SideTwo: 45, ToggleSideTwoForceSwitch]"
+        },
+        {
+          "percentage": 0.625,
+          "instructions": "[Damage SideOne: 92, ChangeStatus SideOne-P0: NONE -> BURN, Damage SideTwo: 45, ToggleSideTwoForceSwitch]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.89:move",
+        "findings": [
+          "p1:41vs46:unexplained_ratio_0.89:move"
+        ],
+        "observed_in_legal_set": [
+          false,
+          true
+        ],
+        "context": {
+          "p1": {
+            "species": "LATIAS",
+            "types": [
+              "DRAGON",
+              "PSYCHIC"
+            ],
+            "item": "SOULDEW",
+            "ability": "LEVITATE",
+            "status": "NONE",
+            "hp": "104/215",
+            "atk": 110,
+            "def": 158,
+            "spa": 184,
+            "spd": 210,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "TYPHLOSION",
+            "types": [
+              "FIRE",
+              "TYPELESS"
+            ],
+            "item": "NONE",
+            "ability": "BLAZE",
+            "status": "NONE",
+            "hp": "45/252",
+            "atk": 139,
+            "def": 168,
+            "spa": 218,
+            "spd": 180,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "misbucketed static magnitude",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "The protocol has Flamethrower followed by Dragon Claw with no boost, status, switch, or type event before the observed damage 41. It cannot support the stat-event hypothesis.",
+        "prediction": "refuted H-D2"
+      }
+    },
+    {
+      "seed": 2601196,
+      "step": 46,
+      "family": "CAND_unresolved_magnitude",
+      "choices": {
+        "p1": "icebeam",
+        "p2": "surf"
+      },
+      "engine_choices": {
+        "side_one": "icebeam",
+        "side_two": "surf"
+      },
+      "protocol_events": [
+        "|move|p1a: Golduck|Ice Beam|p2a: Walrein",
+        "|-damage|p2a: Walrein|217/307",
+        "|move|p2a: Walrein|Surf|p1a: Golduck",
+        "|-damage|p1a: Golduck|142/262 tox",
+        "|-heal|p1a: Golduck|158/262 tox|[from] item: Leftovers",
+        "|-damage|p1a: Golduck|126/262 tox|[from] psn",
+        "|-heal|p2a: Walrein|236/307|[from] item: Leftovers"
+      ],
+      "observed_roll_components": {
+        "p1": [
+          [
+            "",
+            -53
+          ]
+        ],
+        "p2": [
+          [
+            "",
+            -6
+          ]
+        ]
+      },
+      "pre_state_legal_rolls": [
+        {
+          "bases": {
+            "noncritical": [
+              9,
+              18,
+              55,
+              111
+            ],
+            "critical": [
+              9,
+              18,
+              55,
+              111
+            ]
+          },
+          "values": [
+            7,
+            8,
+            9,
+            15,
+            16,
+            17,
+            18,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            111
+          ]
+        }
+      ],
+      "engine_branches": [
+        {
+          "percentage": 87.890625,
+          "instructions": "[SetLastUsedMove SideOne: Switch(P0) -> Move(M3), Damage SideTwo: 8, SetLastUsedMove SideTwo: Switch(P0) -> Move(M3), Damage SideOne: 50, Heal SideOne: 16, Damage SideOne: 32, ChangeSideCondition SideOne ToxicCount: 1, Heal SideTwo: 19]"
+        },
+        {
+          "percentage": 5.859375,
+          "instructions": "[SetLastUsedMove SideOne: Switch(P0) -> Move(M3), Damage SideTwo: 8, SetLastUsedMove SideTwo: Switch(P0) -> Move(M3), Damage SideOne: 102, Heal SideOne: 16, Damage SideOne: 32, ChangeSideCondition SideOne ToxicCount: 1, Heal SideTwo: 19]"
+        },
+        {
+          "percentage": 5.859375,
+          "instructions": "[SetLastUsedMove SideOne: Switch(P0) -> Move(M3), Damage SideTwo: 16, SetLastUsedMove SideTwo: Switch(P0) -> Move(M3), Damage SideOne: 50, Heal SideOne: 16, Damage SideOne: 32, ChangeSideCondition SideOne ToxicCount: 1, Heal SideTwo: 19]"
+        },
+        {
+          "percentage": 0.390625,
+          "instructions": "[SetLastUsedMove SideOne: Switch(P0) -> Move(M3), Damage SideTwo: 16, SetLastUsedMove SideTwo: Switch(P0) -> Move(M3), Damage SideOne: 102, Heal SideOne: 16, Damage SideOne: 32, ChangeSideCondition SideOne ToxicCount: 1, Heal SideTwo: 19]"
+        }
+      ],
+      "triage": {
+        "bucket": "damage_calc:unexplained_ratio_0.75:move;within_roll_window:move",
+        "findings": [
+          "p1:53vs50:within_roll_window:move",
+          "p2:6vs8:unexplained_ratio_0.75:move"
+        ],
+        "observed_in_legal_set": [
+          true,
+          false
+        ],
+        "context": {
+          "p1": {
+            "species": "GOLDUCK",
+            "types": [
+              "WATER",
+              "TYPELESS"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "CLOUDNINE",
+            "status": "TOXIC",
+            "hp": "195/262",
+            "atk": 137,
+            "def": 173,
+            "spa": 201,
+            "spd": 176,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "p2": {
+            "species": "WALREIN",
+            "types": [
+              "ICE",
+              "WATER"
+            ],
+            "item": "LEFTOVERS",
+            "ability": "THICKFAT",
+            "status": "NONE",
+            "hp": "223/307",
+            "atk": 133,
+            "def": 190,
+            "spa": 198,
+            "spd": 190,
+            "boosts": {},
+            "reflect": 0,
+            "light_screen": 0
+          },
+          "weather": "NONE"
+        }
+      },
+      "controlled_boost_replay": null,
+      "controlled_state_counterfactual": null,
+      "overlap": {
+        "patches_42_44_or_world_row_overlap": false,
+        "note": "No row-level overlap with patches 42-44 or the current world lanes."
+      },
+      "adjudication": {
+        "verdict": "WHAT-level direct-damage candidate",
+        "lane": "engine candidate; no patch locus licensed",
+        "why": "Walrein's observed 6 from Ice Beam is outside the engine's 7..18 set, while the opposite Surf damage is legal. The sample is a localized magnitude candidate, not a family-wide WHY.",
+        "prediction": "partial H-B"
+      }
+    }
+  ]
+}
