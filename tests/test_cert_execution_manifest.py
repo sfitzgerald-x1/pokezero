@@ -285,6 +285,114 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 )
         self.assertEqual(payload["source"]["commit"], self._source_commit())
 
+    def test_produced_manifest_reaches_readout_and_only_substitute_risk_gate_fails(
+        self,
+    ) -> None:
+        """Exercise the producer/readout seam with file-backed final-contract evidence."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+
+            counters = {
+                "boundaries_full_round": 1000,
+                "boundaries_measured": 1000,
+                "engine_error": 0,
+                "limit:world_substitute_health_unknown": 1,
+                "transition:diverged": 0,
+                "transition:matched": 1000,
+            }
+            report = json.loads(paths["report"].read_text(encoding="utf-8"))
+            report.update(
+                {
+                    "boundaries_full_round": 1000,
+                    "boundaries_measured": 1000,
+                    "counters": counters,
+                    "engine_errors": 0,
+                    "matcher": "strict",
+                    "repro_retention": {
+                        "keep_repro": 40,
+                        "repros_complete": True,
+                        "repros_retained": 0,
+                        "repros_per_game": 40,
+                        "transitions_diverged": 0,
+                    },
+                    "transitions_diverged": 0,
+                    "transitions_matched": 1000,
+                }
+            )
+            paths["report"].write_text(json.dumps(report), encoding="utf-8")
+
+            checkpoint = json.loads(paths["checkpoint"].read_text(encoding="utf-8"))
+            checkpoint["counters"] = counters
+            paths["checkpoint"].write_text(
+                json.dumps(checkpoint) + "\n", encoding="utf-8"
+            )
+
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["pre_registered_family_rate_table"]["documented_families"] = {
+                "limit:world_substitute_health_unknown": {
+                    "upper_full_round_rate": 0.0005,
+                    "upper_rate_basis": "pre_registered_risk_budget",
+                    "risk_budget_rationale": "One substitute-health ambiguity per "
+                    "two thousand full rounds is the pre-registered ceiling.",
+                }
+            }
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            contract_sha256 = _sha256(paths["contract"])
+
+            execution_manifest = root / "manifest.json"
+            emitted = manifest.produce_manifest(
+                contract=paths["contract"],
+                readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                output=execution_manifest,
+                reports=[paths["report"]],
+                checkpoints=[paths["checkpoint"]],
+                completion_markers=[paths["marker"]],
+                behavioral_logs=[paths["behavior"]],
+                branch_logs=[paths["branch"]],
+                aggregate_behavioral_log=paths["behavior"],
+                aggregate_branch_log=paths["branch"],
+                engine_stamp=paths["stamp"],
+            )
+            output = root / "readout.json"
+            exit_code = readout.main(
+                [
+                    "--shards",
+                    str(paths["report"]),
+                    "--prediction",
+                    str(paths["contract"]),
+                    "--execution-manifest",
+                    str(execution_manifest),
+                    "--json",
+                    str(output),
+                ]
+            )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(emitted["source"]["commit"], self._source_commit())
+        self.assertEqual(emitted["contract_blob"]["sha256"], contract_sha256)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertEqual(payload["enforcement_status"], "enforced")
+        self.assertEqual(
+            payload["contract_evidence"]["runtime_source_commit"], self._source_commit()
+        )
+        self.assertEqual(
+            payload["family_rate_evidence"]["families"][
+                "limit:world_substitute_health_unknown"
+            ]["observed_rate_denominator"],
+            "boundaries_full_round",
+        )
+        self.assertEqual(
+            payload["gate_failures"],
+            [
+                "registered family 'limit:world_substitute_health_unknown' rate "
+                "0.001 exceeds registered upper rate 0.0005"
+            ],
+        )
+
     def test_no_git_producer_fails_closed_without_injected_public_commit(self) -> None:
         with patch.object(manifest, "public_repo_commit", return_value=None):
             with self.assertRaisesRegex(ValueError, "cannot resolve public source commit"):
@@ -467,6 +575,28 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         self.assertIn(
             "final contract documented family 'I1_cap_state_shape' cannot use a "
             "coverage-budget upper_rate",
+            errors,
+        )
+
+    def test_final_contract_rejects_substitute_risk_budget_not_stricter_than_coverage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["pre_registered_family_rate_table"]["documented_families"] = {
+                "limit:world_substitute_health_unknown": {
+                    "upper_full_round_rate": 0.031,
+                    "upper_rate_basis": "pre_registered_risk_budget",
+                    "risk_budget_rationale": "fixture",
+                }
+            }
+            errors = manifest.validate_final_contract_schema(contract)
+        self.assertIn(
+            "final contract documented family 'limit:world_substitute_health_unknown' "
+            "full-round risk budget is not stricter than the global uncovered-boundary budget",
             errors,
         )
 
