@@ -13,7 +13,7 @@ Attribution is by MECHANISM SIGNATURE, not row identity (fresh seeds):
   Sleep Talk callee union              -> I6 (LOSSY flag / [from] Sleep Talk + fan)
   cap-state / _to_full shape           -> I1 (avg-roll world evolution; Z7.3/Z10.1)
   capped-lethal roll-divergence shape  -> documented limit-shape family (X-walk class)
-  equal-magnitude label tie            -> I4 (mapper attribution, #908/I.2 lineage)
+  majority-arm equal-magnitude tie     -> I4 (mapper attribution, #908/I.2 lineage)
   slice ends pre-upkeep / battle end   -> I5 (measurement-boundary truncation, #876)
   Pain Split / drain-cap inheritance   -> I3 (roll-inherited exact components)
   observed roll in engine's legal set  -> I2 (matcher accounting / legal-set gap)
@@ -56,6 +56,7 @@ from engine_transition_differential import (  # noqa: E402
 
 _PCT_RE = re.compile(r"pct=([\d.]+)")
 _PAIR_RE = re.compile(r"\('([^']*)',\s*(-?\d+)\)")
+_MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components differ")
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -82,6 +83,33 @@ def _miss_pairs(miss: str) -> tuple[list[tuple[str, int]], list[tuple[str, int]]
     return obs, eng
 
 
+def _sibling_arm_carries_observed_components(
+    misses: Sequence[str], majority: str, observed: Sequence[tuple[str, int]]
+) -> bool:
+    """Whether a non-majority engine arm exactly reproduces the observed components.
+
+    A count mismatch alone says nothing about why the majority arm differs.  The
+    structural-echo family is valid only when another engine arm actually
+    carries the full observed component multiset.  Empty observations are not
+    evidence of a carried shape.
+    """
+
+    observed_components = Counter(observed)
+    majority_side = _MISS_SIDE_RE.search(majority)
+    if not observed_components or majority_side is None:
+        return False
+    for miss in misses:
+        if miss == majority:
+            continue
+        sibling_side = _MISS_SIDE_RE.search(miss)
+        if sibling_side is None or sibling_side.group(1) != majority_side.group(1):
+            continue
+        _, sibling_engine_components = _miss_pairs(miss)
+        if Counter(sibling_engine_components) == observed_components:
+            return True
+    return False
+
+
 def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     """Return (family, basis) for a divergent row, or ("UNATTRIBUTED", why)."""
 
@@ -94,6 +122,50 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     misses = row.get("branch_misses") or []
     majority = _majority_miss(misses)
     obs_c, eng_c = _miss_pairs(majority)
+
+    # ------------------------------------------------------------------
+    # NEW-MECHANISM AND CANDIDATE EXCLUSIONS, ordered AHEAD of every
+    # broader family rule. The collision discipline is the absorb lesson
+    # (Z12.6): a narrow mechanism shape must be tested before any rule wide
+    # enough to swallow it, and each rule cites a validation row FROM THE
+    # SWEEP data — the c13 validation set cannot contain these shapes, so
+    # a rule only proven there is unproven where it matters.
+    # These return UNATTRIBUTED deliberately: post-fix they predict ZERO,
+    # and any appearance in a future sweep must surface, not be absorbed.
+    # ------------------------------------------------------------------
+    choices = row.get("choices") or {}
+    # Recharge-turn residual gap (validation: s2000583/23 — |cant|recharge,
+    # engine branch emits no EOT residuals). Wide count-mismatch rules below
+    # would eat this shape.
+    if ("|recharge" in proto or "none" in (choices.get("p1", ""), choices.get("p2", ""))):
+        return ("UNATTRIBUTED",
+                "recharge-turn boundary: engine branch drops end-of-turn "
+                "residuals (sweep NEW mechanism; predicts zero post-fix)")
+    # Truant loaf-phase drift (validation: s2000059/11 — Slaking attacks in
+    # the sim, engine's branch loafed; also the inverse s2000054/49). The
+    # structural-arm echo rule below would eat both directions.
+    if ("Slaking" in proto or "Slakoth" in proto or "Truant" in proto) and (
+            (not obs_c and eng_c) or (obs_c and not eng_c)):
+        return ("UNATTRIBUTED",
+                "Truant boundary with one-sided damage components: loaf-phase "
+                "drift (sweep NEW mechanism; predicts zero post-#970)")
+    # Recoil basis on a Substitute-breaking hit (validation: s2000031/60 —
+    # obs recoil -10 vs engine -21 after |-end|Substitute). WHAT-level
+    # candidate; the magnitude rules below would misfile it as accounting.
+    if "Substitute" in proto and any(
+            s == "recoil" for s, _ in obs_c + eng_c):
+        return ("UNATTRIBUTED",
+                "recoil magnitude on a Substitute-breaking hit (WHAT-level "
+                "candidate: damage-basis question, WHY open)")
+    # Incapacitated-arm pricing (validation: s2000131/47 — observed
+    # |cant|frz outcome, engine majority arm attacks). The crit/structural
+    # echo rules below would swallow the engine-only-damage shape.
+    if cls == "roll_scaled_component" and not obs_c and eng_c \
+            and "|cant|" in proto and (
+            "|frz" in proto or ("slp" in proto and "|-status|" in proto)):
+        return ("UNATTRIBUTED",
+                "observed |cant| frz/fresh-slp outcome is not the engine "
+                "majority arm (WHAT-level candidate: arm pricing, WHY open)")
 
     # Best-branch echo: when the missing MASS is a small minority, the
     # engine's majority branch reproduced the observed transition and the
@@ -144,11 +216,12 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     if "_to_full" in majority:
         return "I1_cap_state_shape", "capped-heal component shape in the majority miss (avg-roll world evolution)"
 
-    # I4: equal-magnitude label tie in majority miss
-    if obs_c and eng_c and len(obs_c) == len(eng_c):
-        if sorted(v for _, v in obs_c) == sorted(v for _, v in eng_c) \
-                and sorted(s for s, _ in obs_c) != sorted(s for s, _ in eng_c):
-            return "I4_attribution_tie", "identical magnitudes, different source labels (mapper attribution)"
+    # I4: equal-magnitude label tie in the majority arm only. A tie confined
+    # to a minority arm cannot explain the majority-arm complaint.
+    if obs_c and eng_c and len(obs_c) == len(eng_c) \
+            and sorted(abs(v) for _, v in obs_c) == sorted(abs(v) for _, v in eng_c) \
+            and sorted(s for s, _ in obs_c) != sorted(s for s, _ in eng_c):
+        return "I4_attribution_tie", "identical magnitudes, different source labels in the majority arm (mapper attribution)"
 
     # I5: measurement boundary — slice ends before upkeep, or battle ends
     engine_only_residuals = (not obs_c) and eng_c and all(
@@ -201,12 +274,54 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
             return "I2_matcher_accounting", f"triage: {bucket}"
         if bucket == "no_usable_branch":
             return "I6_sleeptalk_callee_union", "triage: no usable branch (callee-union path)"
-        if bucket:
-            return "UNATTRIBUTED", f"triage bucket: {bucket}"
+        # other buckets (structural counts, ratio findings) fall THROUGH to
+        # the echo rules below instead of dead-ending — the v3 coverage run
+        # showed a catch-all here starved the sweep-scale rules entirely.
 
     # magnitude-only heal differences with drain/leech context -> I3
     if cls.startswith("component_magnitude:heal") and ("Leech Seed" in proto or "[silent]" in proto):
         return "I3_roll_inherited", "drain/leech heal capped by a roll-dependent HP (leech-cap family)"
+
+    # Crit-arm pairing echo (sweep-scale rule; validation: s2000705/102 —
+    # observed crit recoil -81 paired against the non-crit arm's -44; and
+    # s2001179/136, crit KO ends the turn while survive-arms complain).
+    # c13 could not validate this: its crit shapes were all majority-arm.
+    ratio = None
+    if len(obs_c) == 1 and len(eng_c) == 1 and eng_c[0][1] != 0:
+        ratio = abs(obs_c[0][1]) / max(1, abs(eng_c[0][1]))
+    if "|-crit|" in proto and (
+            (ratio is not None and 1.5 <= ratio <= 2.2)
+            or (not obs_c and eng_c and "faint" in proto)):
+        return ("LS_crit_arm_pairing_echo",
+                "observed crit outcome paired against the non-crit majority "
+                "arm (branch-set accounting; the crit arm carries the shape)")
+
+    # Same-turn stat/status boundary with a sub-window magnitude ratio —
+    # WHAT-level candidate, surfaced not absorbed (validation: s2000261/31,
+    # ratio 0.87 after a same-turn Calm Mind).
+    if ratio is not None and 0.70 <= ratio <= 0.96 and (
+            "|-boost|" in proto or "|-unboost|" in proto or "|-status|" in proto):
+        return ("UNATTRIBUTED",
+                f"majority magnitude ratio {ratio:.2f} on a same-turn "
+                "boost/status boundary (WHAT-level candidate, WHY open)")
+
+    # Structural-arm echo — deliberately LAST before the fallback: the
+    # broadest rule, safe only because every narrower mechanism above has
+    # already had its chance (the absorb-ordering lesson). A component-count
+    # mismatch is only an echo when an actual sibling engine arm carries the
+    # full observed component multiset. The prior s2000561/67 citation was
+    # stale: its sibling arms do not carry the observed hit. The c14 archive
+    # re-run therefore treats unsupported structural shapes as named WHAT
+    # candidates rather than allowing this rule to absorb them.
+    if obs_c is not None and eng_c is not None and len(obs_c) != len(eng_c) \
+            and cls == "roll_scaled_component":
+        if _sibling_arm_carries_observed_components(misses, majority, obs_c):
+            return ("LS_structural_arm_echo",
+                    "component count differs against the majority arm, but a sibling "
+                    "engine arm exactly carries the observed components (branch-set accounting)")
+        return ("UNATTRIBUTED",
+                "structural component-count mismatch without a sibling engine arm "
+                "carrying the observed components (WHAT-level candidate, WHY open)")
 
     return "UNATTRIBUTED", f"no documented signature matched (class {cls}; majority: {majority[:120]})"
 

@@ -6412,31 +6412,61 @@ component whose output you are only INFERRING.** Reading Showdown's chain to pre
 behaviour is half a derivation; the other half is opening the engine's own recorded output.
 The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
 artifact said 65.
+---
+
+# Appendix Z15 — Certification instrument correction before the second sweep
+
+Review of the re-sweep preparation found two attribution rules that were too broad to support
+the zero-unattributed gate. Both corrections are intentionally conservative: a row returns to a
+named WHAT-level candidate unless its documented comparison basis is present in the same row.
+
+* **I4 mapper ties:** an equal-magnitude, different-label tie now attributes only when it is in
+  the majority arm. A minority-arm tie cannot explain an unexplained majority-arm mismatch.
+* **LS structural-arm echoes:** a component-count mismatch now attributes only when a same-side
+  sibling engine arm exactly carries the full observed nonempty component multiset. The former
+  `s2000561/67` citation was stale: its sibling arms do not carry the observed hit. Unsupported
+  count mismatches remain named-unattributed instead of being treated as branch-set accounting.
+
+The associated re-sweep specification also records the corrected #972 map without treating the
+adjudication as completed implementation: recoil-versus-Substitute requires the public
+depletion/knowledge-limit world lane; the incapacitated-arm family requires the engine typed-HP
+thaw exclusion, world bench-Rest provenance, and adjudication of the eight rows not sampled by
+#972. Every remaining WHAT-level candidate pool must close to a fix, documented follow-up, or
+proven comparison limit before launch.
+
+The immutable c14 archive was hash-verified (17/17) and regenerated twice under the amended
+instrument with byte-identical output. The c13 regression population remains **103/103 PASS**.
+The honest c14 accounting is **324/3821 unattributed** (was 277): I4 drops 176 -> 166,
+structural echoes drop 41 -> 0 because no archived row satisfies the new sibling proof, and six
+minority-only I4 rows fall back to the generic pool. This changes generic fallback rows 54 ->
+60 and named coverage **98.59% -> 98.43%**. The zero-unattributed certification gate is
+unchanged; the returned rows are the required WHY-adjudication work, not a pass condition.
 
 ---
 
-# Appendix Z15 — Engine patches 42-44: final rebuild and identity-diff evidence
+# Appendix Z16 — Engine patches 42-45: rebuild and identity-diff evidence
 
-Three engine defects identified by the certification sweep were repaired behind separate
-prediction commits:
+Four engine corrections identified by the certification sweep and independent review were
+repaired behind separate prediction commits:
 
 | patch | mechanism |
 | --- | --- |
 | 42 | A voluntary switch beside a recharge `cant` incorrectly skipped the full end-of-turn residual block. |
 | 43 | Water/Volt Absorb conversion erased Protect and accuracy, so heals fired through Protect and on missed moves. |
 | 44 | Typed Hidden Power variants bypassed the Gen 3 no-thaw exclusion and unconditionally thawed a frozen target. |
+| 45 | Protect and full-HP absorb outcomes with identical state deltas collapsed distinct public histories; the Rust end-of-turn mirror also omitted the engine's force-switch condition. |
 
-Both engine consumers rebuilt all **44 patches with fuzz=0** at fingerprint
-`07185542f8d418888eaf09d551457a5d35de33774bcb0e3dae18c827193c7af3`;
-the fixture refresh remains last and no `.orig` files were produced. Behavioral probes passed
-9/9, focused Python pins passed 12/12, and the Rust release suite passed. On the 43-patch
-ablation wheel, exactly the three typed-Hidden-Power divergence pins failed while both controls
-passed.
+The patch-44 retained-population evidence remains the completed identity-diff instrument.
+Both engine consumers then rebuilt all **45 patches with fuzz=0** at fingerprint
+`7376b4dcd9c30d373baa7305d3d7237bbdcf17a7e5887c64af4ad7d9612fcf99`;
+the fixture refresh remains last. The builders clean their temporary trees, so `.orig` artifacts
+are not retained. Behavioral probes passed 9/9, focused Python tests passed 28/28, and the Rust
+release suite passed 289/289.
 
-## Z15.1 Full retained-population re-read
+## Z16.1 Full retained-population re-read through patch 44
 
-All 3,821 retained sweep rows were re-read through both the 43-patch ablation and the final
-44-patch build:
+All 3,821 retained sweep rows were re-read through both the 43-patch ablation and the patch-44
+build:
 
 | build | matched | still divergent |
 | --- | ---: | ---: |
@@ -6453,14 +6483,21 @@ divergence but changed class after the spurious absorb arm disappeared. Those mi
 reported rather than pocketed; the exact identities live in
 `reports/c15_engine_patch_verification.json`.
 
-## Z15.2 Fresh census regression bound
+Patch 45 closes composed edge cases found in review. A 64-seed live Showdown probe produced
+57 Protect/ability activations and 7 misses in both Hydro Pump scenarios. The corrected native
+mapper now preserves the exact 80/20 public-history split for Hydro Pump into Protect and into
+a full-HP Water Absorb target, with zero lossy markers. Its detailed evidence is in
+`reports/c15_engine_review_results.json`. The final fresh sweep, rather than the patch-44
+archive, is the regression instrument for this correction.
 
-A fresh strict 300-game census over seeds 1,500,000-1,500,299 measured 23,335 boundaries,
-retained all 103 divergences, and produced zero engine errors. Against the c13 re-baseline,
-the divergence identity set, class mapping, counters, and measured-boundary count are all
-identical; the canonical identity/class hash is
+## Z16.2 Fresh census regression bound
+
+A strict 300-game census over seeds 1,500,000-1,500,299 on patch 44 measured 23,335
+boundaries, retained all 103 divergences, and produced zero engine errors. Against the c13
+re-baseline, the divergence identity set, class mapping, counters, and measured-boundary count
+were identical; the canonical identity/class hash is
 `f7f1c580146100d6b11531cd06fa158af1d7e2b10852a1285f35fe1d4f1b9d60`.
 
-This closes the patches' regression requirement, not the certification program. The remaining
-3,663 retained rows still require their documented limit/follow-up dispositions, and the
+This closes the patches' targeted regression requirement, not the certification program. The
+remaining retained rows still require their documented limit/follow-up dispositions, and the
 binding gate remains a fresh 10,000-game re-sweep with zero unattributed rows.
