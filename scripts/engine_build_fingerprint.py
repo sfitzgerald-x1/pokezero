@@ -15,10 +15,11 @@ possible shape for a measurement that gates an acceptance criterion.
 Two independent checks, because they catch different halves:
 
   FINGERPRINT (content).  A sha256 over the shared patch list, every patch file
-  it names, crate Rust sources, and Cargo.toml/Cargo.lock files for both the
-  vendored engine and pokezero-search — i.e. all the build inputs. The builders
-  stamp it into the venv at build time; a mismatch means the installed artifacts
-  were built from different inputs than the ones checked out.
+  it names, crate Rust sources, Cargo.toml/Cargo.lock files, build.rs scripts,
+  and pyproject.toml feature configuration for both native trees — i.e. the
+  checked build inputs, excluding generated target output. The builders stamp
+  it into the venv at build time; a mismatch means the installed artifacts were
+  built from different inputs than the ones checked out.
   Exact, and independent of timestamps.
 
   The stamp must be written at the END of a FULL rebuild (wheel AND crate), which
@@ -93,19 +94,41 @@ def crate_sources() -> list[Path]:
 def cargo_inputs() -> list[Path]:
     """Every Cargo manifest/lock compiled by either native consumer tree."""
 
+    return _checked_tree_inputs({"Cargo.toml", "Cargo.lock"})
+
+
+def build_metadata_inputs() -> list[Path]:
+    """Checked build scripts and Python/maturin feature configuration."""
+
+    return _checked_tree_inputs({"build.rs", "pyproject.toml"})
+
+
+def _checked_tree_inputs(names: set[str]) -> list[Path]:
+    """Find checked build inputs while excluding generated and repository metadata."""
+
     paths: set[Path] = set()
     for root in (VENDORED, CRATE_ROOT):
         if not root.exists():
             continue
-        for name in ("Cargo.toml", "Cargo.lock"):
-            paths.update(path for path in root.rglob(name) if path.is_file())
+        for path in root.rglob("*"):
+            if (
+                path.is_file()
+                and path.name in names
+                and not {".git", "target"}.intersection(path.relative_to(root).parts)
+            ):
+                paths.add(path)
     return sorted(paths)
 
 
 def build_inputs() -> list[Path]:
     """All checked source inputs that can change either installed consumer."""
 
-    return list(patch_files()) + crate_sources() + cargo_inputs()
+    return (
+        list(patch_files())
+        + crate_sources()
+        + cargo_inputs()
+        + build_metadata_inputs()
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -133,8 +156,9 @@ def compute_fingerprint() -> dict[str, Any]:
     # the actual engine source tree it compiled.
     crate = crate_sources()
     cargo = cargo_inputs()
+    build_metadata = build_metadata_inputs()
     digest.update(b"--native-inputs--")
-    for path in crate + cargo:
+    for path in crate + cargo + build_metadata:
         digest.update(str(path.relative_to(REPO_ROOT)).encode())
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return {
@@ -143,6 +167,9 @@ def compute_fingerprint() -> dict[str, Any]:
         "count": len(entries),
         "crate_sources": len(crate),
         "cargo_inputs": [str(path.relative_to(REPO_ROOT)) for path in cargo],
+        "build_metadata_inputs": [
+            str(path.relative_to(REPO_ROOT)) for path in build_metadata
+        ],
     }
 
 

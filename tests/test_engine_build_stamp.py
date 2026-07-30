@@ -65,6 +65,16 @@ class EngineBuildStampTests(unittest.TestCase):
             py_crate.mkdir()
             py_manifest = py_crate / "Cargo.toml"
             py_manifest.write_text("[package]\nname='poke-engine-py'\n", encoding="utf-8")
+            crate_pyproject = crate / "pyproject.toml"
+            crate_pyproject.write_text(
+                "[tool.maturin]\nfeatures=['pyo3/extension-module']\n",
+                encoding="utf-8",
+            )
+            crate_build = crate / "build.rs"
+            crate_build.write_text("fn main() {}\n", encoding="utf-8")
+            target_manifest = crate / "target" / "package" / "fixture" / "Cargo.toml"
+            target_manifest.parent.mkdir(parents=True)
+            target_manifest.write_text("[package]\nname='generated'\n", encoding="utf-8")
             with (
                 patch.object(fingerprint, "REPO_ROOT", root),
                 patch.object(fingerprint, "PATCH_LIST", patch_list),
@@ -79,9 +89,24 @@ class EngineBuildStampTests(unittest.TestCase):
                 after_crate_manifest = fingerprint.compute_fingerprint()["fingerprint"]
                 py_manifest.write_text("[package]\nname='changed-poke-engine-py'\n", encoding="utf-8")
                 after_nested_vendored_manifest = fingerprint.compute_fingerprint()["fingerprint"]
+                crate_pyproject.write_text(
+                    "[tool.maturin]\nfeatures=['different-feature']\n",
+                    encoding="utf-8",
+                )
+                after_pyproject = fingerprint.compute_fingerprint()["fingerprint"]
+                crate_build.write_text("fn main() { println!(\"changed\"); }\n", encoding="utf-8")
+                after_build_script = fingerprint.compute_fingerprint()["fingerprint"]
+                target_manifest.write_text(
+                    "[package]\nname='generated-change'\n",
+                    encoding="utf-8",
+                )
+                after_target_output = fingerprint.compute_fingerprint()["fingerprint"]
         self.assertNotEqual(before, after_vendored_lock)
         self.assertNotEqual(after_vendored_lock, after_crate_manifest)
         self.assertNotEqual(after_crate_manifest, after_nested_vendored_manifest)
+        self.assertNotEqual(after_nested_vendored_manifest, after_pyproject)
+        self.assertNotEqual(after_pyproject, after_build_script)
+        self.assertEqual(after_build_script, after_target_output)
 
 
 if __name__ == "__main__":

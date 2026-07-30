@@ -57,6 +57,7 @@ import poke_engine  # noqa: E402
 from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 
 from engine_transition_differential import (  # noqa: E402
+    CHECKPOINT_SCHEMA,
     checkpoint_report_binding_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
@@ -591,6 +592,11 @@ def _checkpoint_provenance(
         if not isinstance(record, Mapping):
             failures.append(f"{label} has a non-object record {number}")
             continue
+        if record.get("schema") != CHECKPOINT_SCHEMA:
+            failures.append(
+                f"{label} record {number} does not use checkpoint schema {CHECKPOINT_SCHEMA}"
+            )
+            continue
         checkpoint_rows.append(record)
         seed = _strict_int(record.get("seed"))
         if seed is None or not expected_seed_range[0] <= seed <= expected_seed_range[1]:
@@ -995,7 +1001,12 @@ def _family_rate_gates(
     """
 
     if not isinstance(contract.get("certification_gates"), Mapping):
-        return [], {"enforced": False, "enforcement_status": "legacy-opt-out"}
+        status = (
+            "refused-final-contract"
+            if "certification_gates" in contract
+            else "legacy-opt-out"
+        )
+        return [], {"enforced": False, "enforcement_status": status}
     table = contract.get("pre_registered_family_rate_table")
     failures: list[str] = []
     evidence: dict[str, Any] = {"enforced": True, "families": {}}
@@ -1024,11 +1035,7 @@ def _family_rate_gates(
             failures.append(f"registered family {family!r} has no prediction object")
             continue
         rate_interval = prediction.get("wilson95_rate")
-        if not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
+        if rate_interval is None:
             count_interval = prediction.get("wilson95")
             if (
                 isinstance(count_interval, list)
@@ -1040,6 +1047,15 @@ def _family_rate_gates(
                     float(count_interval[0]) / calibration_boundaries,
                     float(count_interval[1]) / calibration_boundaries,
                 ]
+        elif not (
+            isinstance(rate_interval, list)
+            and len(rate_interval) == 2
+            and all(_finite_number(value) is not None for value in rate_interval)
+        ):
+            failures.append(
+                f"registered family {family!r} has an invalid wilson95_rate interval"
+            )
+            continue
         if not (
             isinstance(rate_interval, list)
             and len(rate_interval) == 2

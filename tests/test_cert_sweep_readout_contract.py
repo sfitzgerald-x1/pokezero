@@ -418,6 +418,28 @@ class CertificationContractTests(unittest.TestCase):
             evidence["families"]["I1_cap_state_shape"]["registered_wilson95_rate"], [0.01, 0.03]
         )
 
+    def test_present_invalid_wilson_rate_does_not_use_count_fallback(self) -> None:
+        contract = self._contract()
+        contract["pre_registered_family_rate_table"] = {
+            "calibration_boundaries": 100,
+            "documented_families": {
+                "I1_cap_state_shape": {
+                    "wilson95_rate": [0.5, 2.0],
+                    "wilson95": [1, 2],
+                }
+            },
+            "new_mechanisms_post_fix": {},
+        }
+        failures, _ = readout._family_rate_gates(
+            {}, contract, boundaries_measured=100
+        )
+        self.assertEqual(
+            failures,
+            [
+                "registered family 'I1_cap_state_shape' has an invalid Wilson rate interval"
+            ],
+        )
+
     def test_pre_registered_prediction_lower_bound_is_binding(self) -> None:
         contract = self._contract()
         contract["pre_registered_family_rate_table"]["documented_families"] = {
@@ -504,6 +526,43 @@ class CertificationContractTests(unittest.TestCase):
             payload = self._run(root, contract=contract, manifest=manifest)
         self.assertEqual(payload["verdict"], "FAIL")
         self.assertTrue(any("checkpoint aggregate" in failure for failure in payload["gate_failures"]))
+
+    def test_readout_binds_checkpoint_schema_and_build_gate(self) -> None:
+        for mutation in ("skipped-build", "wrong-schema"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = [root / "shard-0.json", root / "shard-1.json"]
+                self._shard(paths[0], 1000)
+                self._shard(paths[1], 2000)
+                contract = self._contract()
+                contract_path = root / "contract.json"
+                contract_path.write_text(json.dumps(contract), encoding="utf-8")
+                manifest = self._manifest(paths, contract_path)
+                checkpoint_evidence = manifest["shards"][0]["checkpoint"]
+                checkpoint_path = Path(checkpoint_evidence["path"])
+                record = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                if mutation == "skipped-build":
+                    record["build_check"] = "skipped"
+                else:
+                    record["schema"] = "wrong-checkpoint-schema/1"
+                checkpoint_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+                checkpoint_evidence["sha256"] = readout._sha256(checkpoint_path)
+                payload = self._run(root, contract=contract, manifest=manifest)
+            self.assertEqual(payload["verdict"], "FAIL")
+            if mutation == "skipped-build":
+                self.assertTrue(
+                    any(
+                        "report build_check does not match" in failure
+                        for failure in payload["gate_failures"]
+                    )
+                )
+            else:
+                self.assertTrue(
+                    any(
+                        "does not use checkpoint schema" in failure
+                        for failure in payload["gate_failures"]
+                    )
+                )
 
     def test_overlapping_registered_seed_blocks_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

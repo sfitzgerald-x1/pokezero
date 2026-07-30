@@ -39,8 +39,10 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             root / "shard.json",
             json.dumps(
                 {
+                    "acceptance_eligible": True,
                     "boundaries_full_round": 1,
                     "boundaries_measured": 1,
+                    "build_check": "gated",
                     "counters": {
                         "boundaries_full_round": 1,
                         "boundaries_measured": 1,
@@ -439,6 +441,29 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             }
             errors = manifest.validate_final_contract_schema(contract)
         self.assertTrue(any("not-emittable" in error and "cannot be emitted" in error for error in errors))
+
+    def test_final_contract_rejects_invalid_direct_rate_despite_count_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["pre_registered_family_rate_table"] = {
+                "calibration_boundaries": 100,
+                "documented_families": {
+                    "I1_cap_state_shape": {
+                        "wilson95_rate": [0.5, 2.0],
+                        "wilson95": [1, 2],
+                    }
+                },
+                "new_mechanisms_post_fix": {},
+            }
+            errors = manifest.validate_final_contract_schema(contract)
+        self.assertIn(
+            "final contract documented family 'I1_cap_state_shape' has an invalid "
+            "wilson95_rate interval",
+            errors,
+        )
 
     def test_final_contract_schema_rejects_consumer_required_gate_before_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

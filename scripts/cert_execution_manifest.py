@@ -303,7 +303,9 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 if count_valid and calibration_boundaries is not None and calibration_boundaries > 0:
                     normalized = [float(count[0]) / calibration_boundaries, float(count[1]) / calibration_boundaries]
                     normalized_count_valid = _valid_rate_interval(normalized)
-                if not direct_valid and not normalized_count_valid:
+                if direct is not None and not direct_valid:
+                    errors.append(f"{label} has an invalid wilson95_rate interval")
+                elif direct is None and not normalized_count_valid:
                     errors.append(
                         f"{label} has neither a valid wilson95_rate nor a valid "
                         "wilson95 count interval with positive calibration_boundaries"

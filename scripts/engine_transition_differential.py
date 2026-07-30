@@ -1953,7 +1953,9 @@ def checkpoint_report_aggregate(
 
     totals: Counter = Counter()
     repros: list[dict[str, Any]] = []
+    build_checks: set[str] = set()
     for record in records:
+        build_checks.add(str(record.get("build_check", "unknown")))
         counters = record.get("counters")
         if not isinstance(counters, Mapping):
             raise ValueError("checkpoint record has no counters object")
@@ -1977,7 +1979,14 @@ def checkpoint_report_aggregate(
     engine_errors = totals["engine_error"]
     matched = totals["transition:matched"]
     full_rounds = totals["boundaries_full_round"]
+    gated = bool(build_checks) and build_checks <= {"gated"}
     return {
+        "build_check": (
+            "gated"
+            if gated
+            else "NOT-GATED: " + ",".join(sorted(build_checks or {"unknown"}))
+        ),
+        "acceptance_eligible": gated,
         "counters": dict(sorted(totals.items())),
         "divergence_classes": {
             key.split(":", 1)[1]: value
@@ -2010,6 +2019,8 @@ def checkpoint_report_binding_failures(
         return [str(error)]
     failures: list[str] = []
     for field in (
+        "build_check",
+        "acceptance_eligible",
         "counters",
         "divergence_classes",
         "transitions_diverged",
@@ -2055,8 +2066,10 @@ def _terminate_checkpoint_record(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
-def load_checkpoint(path: Path) -> list[dict[str, Any]]:
-    """Read and, only for a torn tail, repair a single-writer JSONL checkpoint."""
+def load_checkpoint(
+    path: Path, *, repair_torn_tail: bool = False
+) -> list[dict[str, Any]]:
+    """Read a checkpoint, repairing bytes only for an explicit writer resume."""
 
     records: list[dict[str, Any]] = []
     if not path.exists():
@@ -2082,6 +2095,11 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
                     f"{path}: unparseable line {line_number + 1} of {len(raw)} — only the "
                     "final line may be a torn write; refusing to load a corrupt shard"
                 ) from None
+            if not repair_torn_tail:
+                raise ValueError(
+                    f"{path}: unparseable final line {line_number + 1}; "
+                    "refusing to repair checkpoint evidence outside writer resume"
+                ) from None
             print(
                 f"warning: {path}: truncating torn final line {line_number + 1} "
                 "before resume (interrupted run)",
@@ -2095,7 +2113,11 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
                 f"expected an object with schema {CHECKPOINT_SCHEMA!r}"
             )
         records.append(dict(record))
-        if line_number == last_index and not raw.endswith(b"\n"):
+        if (
+            repair_torn_tail
+            and line_number == last_index
+            and not raw.endswith(b"\n")
+        ):
             # A hard kill may lose only the newline after an otherwise complete
             # JSON record. Restore that delimiter before ``open('a')`` can join
             # the next record to it.
@@ -2132,10 +2154,8 @@ def build_report(
     repros: list[dict[str, Any]] = list(aggregate["repros"])
     seeds: list[int] = []
     total_seconds = 0.0
-    build_checks: set[str] = set()
     provenance_rows: list[Mapping[str, Any]] = []
     for record in records:
-        build_checks.add(str(record.get("build_check", "unknown")))
         seeds.append(int(record.get("seed", -1)))
         total_seconds += float(record.get("seconds") or 0.0)
         provenance = record.get("provenance")
@@ -2146,16 +2166,9 @@ def build_report(
     measured = totals["boundaries_measured"]
     diverged = totals["transition:diverged"] + totals["engine_error"]
     wall = elapsed if elapsed is not None else total_seconds
-    # A report from an ungated run must never read as a gated one — same
-    # label-the-output rule as --allow-partial. "unknown" covers pre-field
-    # checkpoints, which are equally not-proven-gated.
-    gated = build_checks <= {"gated"} and build_checks
     report: dict[str, Any] = {
-        "build_check": (
-            "gated" if gated
-            else "NOT-GATED: " + ",".join(sorted(build_checks or {"unknown"}))
-        ),
-        "acceptance_eligible": bool(gated),
+        "build_check": aggregate["build_check"],
+        "acceptance_eligible": aggregate["acceptance_eligible"],
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
@@ -2287,7 +2300,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.merge_from:
         records: list[dict[str, Any]] = []
         for path in args.merge_from:
-            loaded = load_checkpoint(path)
+            try:
+                loaded = load_checkpoint(path)
+            except ValueError as error:
+                raise SystemExit(f"cannot merge checkpoint evidence: {error}") from None
             print(f"{path}: {len(loaded)} games", flush=True)
             records.extend(loaded)
         seen: set[int] = set()
@@ -2331,7 +2347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_records: list[dict[str, Any]] = []
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
-        done_records = load_checkpoint(args.checkpoint)
+        done_records = load_checkpoint(args.checkpoint, repair_torn_tail=True)
         resume_failures = _resume_provenance_failures(done_records, provenance)
         if resume_failures:
             raise SystemExit(

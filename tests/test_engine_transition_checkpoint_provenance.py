@@ -58,7 +58,10 @@ class CheckpointProvenanceTests(unittest.TestCase):
             checkpoint.write_bytes(
                 json.dumps(first, separators=(",", ":")).encode("utf-8") + b"\n" + b'{"schema":'
             )
-            self.assertEqual(runner.load_checkpoint(checkpoint), [first])
+            self.assertEqual(
+                runner.load_checkpoint(checkpoint, repair_torn_tail=True),
+                [first],
+            )
             self.assertEqual(
                 checkpoint.read_bytes(),
                 json.dumps(first, separators=(",", ":")).encode("utf-8") + b"\n",
@@ -74,7 +77,10 @@ class CheckpointProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint = Path(tmp) / "checkpoint.jsonl"
             checkpoint.write_bytes(first_bytes)
-            self.assertEqual(runner.load_checkpoint(checkpoint), [first])
+            self.assertEqual(
+                runner.load_checkpoint(checkpoint, repair_torn_tail=True),
+                [first],
+            )
             self.assertEqual(checkpoint.read_bytes(), first_bytes + b"\n")
             with checkpoint.open("a", encoding="utf-8") as handle:
                 runner.append_checkpoint(handle, second)
@@ -128,8 +134,32 @@ class CheckpointProvenanceTests(unittest.TestCase):
                 runner.load_checkpoint(checkpoint)
             self.assertEqual(checkpoint.read_bytes(), original)
 
+    def test_read_only_load_preserves_complete_record_without_newline(self) -> None:
+        record = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
+        original = json.dumps(record, separators=(",", ":")).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            checkpoint.write_bytes(original)
+            self.assertEqual(runner.load_checkpoint(checkpoint), [record])
+            self.assertEqual(checkpoint.read_bytes(), original)
+
+    def test_read_only_load_rejects_torn_tail_without_rewriting(self) -> None:
+        record = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
+        original = (
+            json.dumps(record, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+            + b'{"schema":'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            checkpoint.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "refusing to repair checkpoint evidence"):
+                runner.load_checkpoint(checkpoint)
+            self.assertEqual(checkpoint.read_bytes(), original)
+
     def test_checkpoint_binding_includes_divergence_classes(self) -> None:
         record = {
+            "build_check": "gated",
             "counters": {
                 "boundaries_full_round": 1,
                 "boundaries_measured": 1,
@@ -152,6 +182,24 @@ class CheckpointProvenanceTests(unittest.TestCase):
         self.assertIn(
             "report divergence_classes does not match the checkpoint aggregate",
             runner.checkpoint_report_binding_failures([record], report),
+        )
+        report = runner.build_report(
+            [record],
+            elapsed=1.0,
+            approximate_sleep=False,
+            matcher="strict",
+            keep_repro=0,
+        )
+        report["build_check"] = "NOT-GATED: skipped"
+        report["acceptance_eligible"] = False
+        failures = runner.checkpoint_report_binding_failures([record], report)
+        self.assertIn(
+            "report build_check does not match the checkpoint aggregate",
+            failures,
+        )
+        self.assertIn(
+            "report acceptance_eligible does not match the checkpoint aggregate",
+            failures,
         )
 
 
