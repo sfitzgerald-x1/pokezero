@@ -1,0 +1,156 @@
+{
+  "schema": "c17-substitute-retained-verification/1",
+  "source_commit": "7f323515de379c2fed864edbb144a01ce21b57ff",
+  "engine_fingerprint": "0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10",
+  "scope": "Post-#977 replay of the complete retained Substitute comparison-limit population.",
+  "method": {
+    "runs": 26,
+    "per_identity": "Run one deterministic game twice, ending at step-1 and step, under the strict matcher and a build-gated current engine.",
+    "required_cutoff_delta": 1,
+    "required_transition_divergences_before": 0,
+    "required_transition_divergences_at": 0,
+    "required_engine_errors": 0,
+    "showdown": "Pinned local Gen 3 Showdown checkout; no private deployment identifiers are recorded."
+  },
+  "summary": {
+    "identities": 13,
+    "cutoff_delta_passed": 13,
+    "zero_divergences_before": 13,
+    "zero_divergences_at": 13,
+    "zero_engine_errors": 13,
+    "verdict": "PASS"
+  },
+  "identities": [
+    {
+      "seed": 2000031,
+      "step": 60,
+      "before_limit": 2,
+      "at_limit": 3,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2000140,
+      "step": 48,
+      "before_limit": 0,
+      "at_limit": 1,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2100227,
+      "step": 35,
+      "before_limit": 3,
+      "at_limit": 4,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2100568,
+      "step": 48,
+      "before_limit": 0,
+      "at_limit": 1,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2101125,
+      "step": 47,
+      "before_limit": 1,
+      "at_limit": 2,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2200232,
+      "step": 51,
+      "before_limit": 3,
+      "at_limit": 4,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2400009,
+      "step": 83,
+      "before_limit": 4,
+      "at_limit": 5,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2400484,
+      "step": 36,
+      "before_limit": 2,
+      "at_limit": 3,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2400719,
+      "step": 68,
+      "before_limit": 0,
+      "at_limit": 1,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2401166,
+      "step": 75,
+      "before_limit": 2,
+      "at_limit": 3,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2600222,
+      "step": 44,
+      "before_limit": 0,
+      "at_limit": 1,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2601023,
+      "step": 51,
+      "before_limit": 1,
+      "at_limit": 2,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    },
+    {
+      "seed": 2701047,
+      "step": 47,
+      "before_limit": 1,
+      "at_limit": 2,
+      "limit_delta": 1,
+      "before_diverged": 0,
+      "at_diverged": 0,
+      "at_engine_errors": 0
+    }
+  ],
+  "conclusion": "The current post-#977 classifier preserves every retained explicit unknown-health boundary as a named comparison limit while the corresponding transitions are no longer divergent. This verifies the retained population only; the fresh 10k sweep remains the global regression bound."
+}
