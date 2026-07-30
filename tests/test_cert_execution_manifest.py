@@ -319,6 +319,72 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     engine_stamp=paths["stamp"],
                 )
 
+    def test_final_contract_accepts_count_interval_with_calibration_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            table = contract["pre_registered_family_rate_table"]
+            table["calibration_boundaries"] = 100
+            table["documented_families"] = {
+                "I1_cap_state_shape": {
+                    "wilson95": [1, 3],
+                    "prediction_interval_rate": [0.0, 0.05],
+                }
+            }
+            table["new_mechanisms_post_fix"] = {
+                "recharge": {
+                    "predicted_next": 0,
+                    "classifier_outcome": "UNATTRIBUTED",
+                    "exclusion_counter": "recharge_turn_residual_gap",
+                }
+            }
+        self.assertEqual(manifest.validate_final_contract_schema(contract), [])
+
+    def test_final_contract_rejects_family_rate_shapes_the_readout_cannot_honor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            table = contract["pre_registered_family_rate_table"]
+            table["documented_families"] = {
+                "I1_cap_state_shape": {"wilson95": [1, 3]},
+                "I2_matcher_accounting": {
+                    "wilson95_rate": [0.01, 0.03],
+                    "prediction_interval_rate": [0.8, 0.2],
+                },
+            }
+            table["new_mechanisms_post_fix"] = {
+                "bad-zero": {
+                    "predicted_next": 1,
+                    "classifier_outcome": "ATTRIBUTED",
+                    "exclusion_counter": "not-a-classifier-counter",
+                }
+            }
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            errors = manifest.validate_final_contract_schema(contract)
+            self.assertTrue(any("I1_cap_state_shape" in error and "wilson95" in error for error in errors))
+            self.assertTrue(any("I2_matcher_accounting" in error and "prediction_interval_rate" in error for error in errors))
+            self.assertTrue(any("bad-zero" in error and "not registered at zero" in error for error in errors))
+            self.assertTrue(any("bad-zero" in error and "classifier_outcome" in error for error in errors))
+            self.assertTrue(any("bad-zero" in error and "exclusion_counter" in error for error in errors))
+            with self.assertRaisesRegex(ValueError, "final contract schema validation failed"):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=root / "manifest.json",
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -64,6 +64,8 @@ from engine_transition_differential import (  # noqa: E402
     _split_components,
 )
 from cert_execution_manifest import (  # noqa: E402
+    EMITTABLE_DOCUMENTED_FAMILIES,
+    EMITTABLE_EXCLUSION_COUNTERS,
     validate_execution_manifest_schema,
     validate_final_contract_schema,
 )
@@ -73,33 +75,6 @@ _PAIR_RE = re.compile(r"\('([^']*)',\s*(-?\d+)\)")
 _MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components differ")
 _PROBE_PASS_RE = re.compile(r"^\[[^]]+\] PASS\b", re.MULTILINE)
 _PROBE_FAIL_RE = re.compile(r"^\[[^]]+\] FAIL\b", re.MULTILINE)
-
-# These are the only named, non-limit outcomes the classifier can emit.  A
-# final rate table may register a concrete ``limit:*`` outcome too, but may not
-# invent an unreachable label and then call its observed count zero.
-EMITTABLE_DOCUMENTED_FAMILIES = frozenset({
-    "I1_cap_state_shape",
-    "I2_matcher_accounting",
-    "I3_roll_inherited",
-    "I4_attribution_tie",
-    "I5_boundary_truncation",
-    "I6_sleeptalk_callee_union",
-    "LS_capped_lethal_shape",
-    "LS_confusion_fan",
-    "LS_crit_arm_pairing_echo",
-    "LS_structural_arm_echo",
-})
-EMITTABLE_EXCLUSION_COUNTERS = frozenset({
-    "absorb_through_protect_or_miss",
-    "incapacitated_arm_pricing",
-    "recharge_turn_residual_gap",
-    "recoil_vs_substitute_basis",
-    "same_turn_stat_event_gap",
-    "structural_component_count_without_supported_sibling",
-    "truant_loaf_phase_drift",
-    "unattributed_generic",
-})
-
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:

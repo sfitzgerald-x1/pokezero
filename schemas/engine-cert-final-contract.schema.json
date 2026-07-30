@@ -42,8 +42,53 @@
       "type": "object",
       "required": ["documented_families", "new_mechanisms_post_fix"],
       "properties": {
-        "documented_families": {"type": "object"},
-        "new_mechanisms_post_fix": {"type": "object"}
+        "calibration_boundaries": {"type": "integer", "minimum": 1},
+        "documented_families": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "anyOf": [
+              {"required": ["wilson95_rate"]},
+              {"required": ["wilson95"]}
+            ],
+            "properties": {
+              "wilson95_rate": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number"}
+              },
+              "wilson95": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number"}
+              },
+              "prediction_interval_rate": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number"}
+              }
+            }
+          }
+        },
+        "new_mechanisms_post_fix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+            "properties": {
+              "predicted_next": {"const": 0},
+              "classifier_outcome": {"const": "UNATTRIBUTED"},
+              "exclusion_counter": {
+                "type": "string",
+                "minLength": 1,
+                "enum": ["absorb_through_protect_or_miss", "incapacitated_arm_pricing", "recharge_turn_residual_gap", "recoil_vs_substitute_basis", "same_turn_stat_event_gap", "structural_component_count_without_supported_sibling", "truant_loaf_phase_drift", "unattributed_generic"]
+              }
+            }
+          }
+        }
       }
     },
     "predicted_class_rates_10k": {"type": "object"},

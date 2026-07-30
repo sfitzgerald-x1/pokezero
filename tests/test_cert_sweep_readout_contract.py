@@ -350,6 +350,19 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(evidence["families"]["I1_cap_state_shape"]["observed"], 0)
         self.assertEqual(evidence["families"]["I1_cap_state_shape"]["lower_rate_advisory"], 0.01)
 
+    def test_count_wilson_interval_remains_supported_with_calibration_boundaries(self) -> None:
+        contract = self._contract()
+        contract["pre_registered_family_rate_table"] = {
+            "calibration_boundaries": 100,
+            "documented_families": {"I1_cap_state_shape": {"wilson95": [1, 3]}},
+            "new_mechanisms_post_fix": {},
+        }
+        failures, evidence = readout._family_rate_gates({}, contract, boundaries_measured=100)
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            evidence["families"]["I1_cap_state_shape"]["registered_wilson95_rate"], [0.01, 0.03]
+        )
+
     def test_pre_registered_prediction_lower_bound_is_binding(self) -> None:
         contract = self._contract()
         contract["pre_registered_family_rate_table"]["documented_families"] = {

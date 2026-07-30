@@ -48,6 +48,31 @@ _GIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 _PROBE_PASS_RE = re.compile(r"^\[[^]]+\] PASS\b", re.MULTILINE)
 _PROBE_FAIL_RE = re.compile(r"^\[[^]]+\] FAIL\b", re.MULTILINE)
 
+# Final-contract vocabulary is shared with the readout. Keeping it here lets
+# the manifest producer reject a contract that the readout could never honor.
+EMITTABLE_DOCUMENTED_FAMILIES = frozenset({
+    "I1_cap_state_shape",
+    "I2_matcher_accounting",
+    "I3_roll_inherited",
+    "I4_attribution_tie",
+    "I5_boundary_truncation",
+    "I6_sleeptalk_callee_union",
+    "LS_capped_lethal_shape",
+    "LS_confusion_fan",
+    "LS_crit_arm_pairing_echo",
+    "LS_structural_arm_echo",
+})
+EMITTABLE_EXCLUSION_COUNTERS = frozenset({
+    "absorb_through_protect_or_miss",
+    "incapacitated_arm_pricing",
+    "recharge_turn_residual_gap",
+    "recoil_vs_substitute_basis",
+    "same_turn_stat_event_gap",
+    "structural_component_count_without_supported_sibling",
+    "truant_loaf_phase_drift",
+    "unattributed_generic",
+})
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -250,6 +275,51 @@ def validate_final_contract_schema(contract: object) -> list[str]:
         for field in ("documented_families", "new_mechanisms_post_fix"):
             if not isinstance(table.get(field), Mapping):
                 errors.append(f"final contract pre_registered_family_rate_table.{field} is not an object")
+        documented = table.get("documented_families")
+        calibration_boundaries = _strict_int(table.get("calibration_boundaries"))
+        if isinstance(documented, Mapping):
+            for family, prediction in documented.items():
+                label = f"final contract documented family {family!r}"
+                if not isinstance(family, str) or not (
+                        family in EMITTABLE_DOCUMENTED_FAMILIES
+                        or (family.startswith("limit:") and len(family) > len("limit:"))):
+                    errors.append(f"{label} cannot be emitted by the classifier")
+                    continue
+                if not isinstance(prediction, Mapping):
+                    errors.append(f"{label} has no prediction object")
+                    continue
+                direct = prediction.get("wilson95_rate")
+                direct_valid = _valid_rate_interval(direct)
+                count = prediction.get("wilson95")
+                count_valid = _valid_finite_interval(count)
+                normalized_count_valid = False
+                if count_valid and calibration_boundaries is not None and calibration_boundaries > 0:
+                    normalized = [float(count[0]) / calibration_boundaries, float(count[1]) / calibration_boundaries]
+                    normalized_count_valid = _valid_rate_interval(normalized)
+                if not direct_valid and not normalized_count_valid:
+                    errors.append(
+                        f"{label} has neither a valid wilson95_rate nor a valid "
+                        "wilson95 count interval with positive calibration_boundaries"
+                    )
+                prediction_interval = prediction.get("prediction_interval_rate")
+                if prediction_interval is not None and not _valid_rate_interval(prediction_interval):
+                    errors.append(f"{label} has an invalid prediction_interval_rate interval")
+        predicted_zero = table.get("new_mechanisms_post_fix")
+        if isinstance(predicted_zero, Mapping):
+            for mechanism, prediction in predicted_zero.items():
+                label = f"final contract post-fix mechanism {mechanism!r}"
+                if not isinstance(prediction, Mapping):
+                    errors.append(f"{label} has no prediction object")
+                    continue
+                if prediction.get("predicted_next") != 0:
+                    errors.append(f"{label} is not registered at zero")
+                if prediction.get("classifier_outcome") != "UNATTRIBUTED":
+                    errors.append(f"{label} classifier_outcome is not UNATTRIBUTED")
+                counter = prediction.get("exclusion_counter")
+                if not isinstance(counter, str) or not counter:
+                    errors.append(f"{label} exclusion_counter is not a non-empty string")
+                elif counter not in EMITTABLE_EXCLUSION_COUNTERS:
+                    errors.append(f"{label} exclusion_counter cannot be emitted by the classifier")
     if not isinstance(contract.get("predicted_class_rates_10k"), Mapping):
         errors.append("final contract predicted_class_rates_10k is not an object")
     launch = contract.get("launch_registration")
@@ -266,6 +336,19 @@ def validate_final_contract_schema(contract: object) -> list[str]:
         if patch_count is None or patch_count <= 0:
             errors.append("final contract launch_registration.engine_patch_count is not positive")
     return errors
+
+
+def _valid_finite_interval(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(type(item) in (int, float) and math.isfinite(float(item)) for item in value)
+        and float(value[0]) <= float(value[1])
+    )
+
+
+def _valid_rate_interval(value: object) -> bool:
+    return _valid_finite_interval(value) and 0.0 <= float(value[0]) <= float(value[1]) <= 1.0
 
 
 def _file(path: Path) -> dict[str, str]:
