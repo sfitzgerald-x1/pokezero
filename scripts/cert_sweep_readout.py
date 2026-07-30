@@ -543,10 +543,22 @@ def _contract_gates(
     launch_registration = contract.get("launch_registration")
     if not isinstance(launch_registration, Mapping):
         failures.append("contract has no launch_registration provenance")
-    elif launch_registration.get("fresh_measurements_inspected_before_registration") != 0:
-        failures.append(
-            "contract does not prove zero fresh measurements inspected before registration"
-        )
+    else:
+        if launch_registration.get("fresh_measurements_inspected_before_registration") != 0:
+            failures.append(
+                "contract does not prove zero fresh measurements inspected before registration"
+            )
+        for field, required in (
+            ("public_source_parent_commit", required_source),
+            ("engine_fingerprint", required_fingerprint),
+            ("readout_sha256", required_readout_sha),
+        ):
+            if launch_registration.get(field) != required:
+                failures.append(
+                    f"launch_registration {field} does not match certification_gates"
+                )
+        if int(launch_registration.get("engine_patch_count", -1)) <= 0:
+            failures.append("launch_registration engine_patch_count must be positive")
     evidence.update(
         {
             "expected_shards": expected_shards,

@@ -49,10 +49,15 @@ class CertificationContractTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
 
     def _contract(self, *, minimum_coverage: float = 0.97) -> dict:
+        readout_sha = readout._sha256(Path(readout.__file__))
         return {
             "registered_before_launch": True,
             "launch_registration": {
                 "fresh_measurements_inspected_before_registration": 0,
+                "public_source_parent_commit": self.source_commit,
+                "engine_patch_count": 1,
+                "engine_fingerprint": self.engine_fingerprint,
+                "readout_sha256": readout_sha,
             },
             "certification_gates": {
                 "expected_shards": 2,
@@ -69,7 +74,7 @@ class CertificationContractTests(unittest.TestCase):
                 "required_behavioral_probe_passes": 9,
                 "required_source_commit": self.source_commit,
                 "required_engine_fingerprint": self.engine_fingerprint,
-                "required_readout_sha256": readout._sha256(Path(readout.__file__)),
+                "required_readout_sha256": readout_sha,
             },
             "pre_registered_family_rate_table": {
                 "documented_families": {},
