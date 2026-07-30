@@ -1,0 +1,50 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1145,6 +1145,16 @@
+         });
+         target_pkmn.hp += health_recovered;
+         incoming_instructions.instruction_list.push(ins);
++    } else if heal.target == MoveTarget::Opponent && heal.amount > 0.0 {
++        // A full-HP absorb activation and an accuracy miss have identical state
++        // deltas. Preserve the successful activation as a reversible no-op so
++        // event consumers can keep the public histories distinct.
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::Heal(HealInstruction {
++                side_ref: target_side_ref,
++                heal_amount: 0,
++            }));
+     }
+ }
+ 
+@@ -1821,7 +1831,11 @@
+         .contains(&PokemonVolatileStatus::PROTECT)
+         && choice.flags.protect
+     {
++        let original_accuracy = choice.accuracy;
+         choice.remove_effects_for_protect();
++        // Showdown rolls accuracy before the Protect TryHit gate. Keeping the
++        // original value preserves distinct miss and blocked-hit branches.
++        choice.accuracy = original_accuracy;
+         blocked_by_protect = true;
+         if choice.crash.is_some() {
+             choice.accuracy = 0.0;
+@@ -2633,6 +2647,18 @@
+         &mut incoming_instructions,
+         &mut final_instructions,
+     );
++
++    if blocked_by_protect && incoming_instructions.percentage != 0.0 {
++        // The hit and miss branches are otherwise state-identical after Protect
++        // strips the move. Mark only the successful accuracy branch so protocol
++        // rendering can emit Protect instead of collapsing both outcomes.
++        incoming_instructions
++            .instruction_list
++            .push(Instruction::Heal(HealInstruction {
++                side_ref: attacking_side.get_other_side(),
++                heal_amount: 0,
++            }));
++    }
+ 
+     if incoming_instructions.percentage == 0.0 {
+         state.reverse_instructions(&incoming_instructions.instruction_list);

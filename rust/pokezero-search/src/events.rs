@@ -309,6 +309,9 @@ fn move_order(state: &State, c1: &Choice, c2: &Choice) -> Order {
 /// removal and the residual instructions failed the grammar as
 /// `segmentation_failed`).
 fn end_of_turn_triggered(state: &State, s1: &MoveChoice, s2: &MoveChoice) -> bool {
+    if state.side_one.force_switch || state.side_two.force_switch {
+        return true;
+    }
     if (s1 == &MoveChoice::None
         && state
             .side_one
@@ -1501,7 +1504,6 @@ fn render_move_phase(
         && !non_ghost_curse
         && ability_immune.is_none()
         && !deals_damage_to_defender
-        && !defender_protected
         && effectiveness > 0.0
         && choice.accuracy < 100.0
     {
@@ -1826,6 +1828,19 @@ fn render_move_phase(
                 }
             }
             Instruction::Heal(heal) => {
+                if heal.heal_amount == 0 && heal.side_ref == defender {
+                    if defender_protected {
+                        out.lines
+                            .push(format!("|-activate|{defender_ident}|Protect"));
+                    } else if let Some(ability) = absorb {
+                        out.lines.push(format!(
+                            "|-immune|{defender_ident}|[from] ability: {ability}"
+                        ));
+                    } else {
+                        out.lossy.push("unattributed_noop_heal_marker".to_string());
+                    }
+                    continue;
+                }
                 sim.apply(ins);
                 let target_ident = ctx.active_ident(sim.state, heal.side_ref);
                 let condition = sim.hp_condition(heal.side_ref);
@@ -2721,6 +2736,17 @@ mod tests {
             turn: 4,
             hp_percent: [false, false],
         }
+    }
+
+    #[test]
+    fn force_switch_keeps_end_of_turn_open() {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        state.side_one.force_switch = true;
+        assert!(end_of_turn_triggered(
+            &state,
+            &MoveChoice::Switch(PokemonIndex::P1),
+            &MoveChoice::None,
+        ));
     }
 
     #[test]

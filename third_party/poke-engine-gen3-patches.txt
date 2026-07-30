@@ -1128,5 +1128,14 @@ poke-engine-gen3-absorb-protect-accuracy.patch
 # gen3/generate_instructions.rs; authored against the absorb tree above.
 poke-engine-gen3-typed-hiddenpower-thaw.patch
 
+# Public no-op branch identity. Accuracy is rolled before Protect in Showdown,
+# but remove_effects_for_protect forced it to 100 and then duplicate-state
+# folding erased the miss-vs-Protect distinction. Full-HP absorb hits had the
+# same empty-delta collision with misses. Preserve accuracy and attach a
+# reversible zero-heal marker only to successful Protect/absorb hit branches;
+# the Rust protocol mapper consumes that marker into the correct public event.
+# Authored against the typed-hiddenpower-thaw tree above.
+poke-engine-gen3-public-noop-branches.patch
+
 # Each updated expectation carries a one-line rationale in the fixture itself.
 poke-engine-gen3-upstream-fixture-refresh.patch

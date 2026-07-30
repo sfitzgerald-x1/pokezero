@@ -174,6 +174,23 @@ class AbsorbGateTests(unittest.TestCase):
         self.assertFalse(any(i.startswith("Heal SideTwo:") and ": 92" in i for i in flat),
                          f"absorb quarter-heal pierced Protect: {flat}")
         # 371/4 = 92: no heal of that size; leftovers (23) may still tick at EOT.
+
+    def test_inaccurate_absorb_move_keeps_miss_and_protect_branches(self) -> None:
+        state = self._absorb_state("hydropump", defender_vols={"protect"})
+        branches = _branches(state, "hydropump", "none")
+        marker_pcts = [
+            pct
+            for pct, instrs in branches
+            if any(i.startswith("Heal SideTwo: 0") for i in instrs)
+        ]
+        miss_pcts = [
+            pct
+            for pct, instrs in branches
+            if not any(i.startswith("Heal SideTwo: 0") for i in instrs)
+        ]
+        self.assertTrue(marker_pcts and abs(sum(marker_pcts) - 80.0) < 0.6, branches)
+        self.assertTrue(miss_pcts and abs(sum(miss_pcts) - 20.0) < 0.6, branches)
+
     def test_missed_water_move_does_not_heal(self) -> None:
         """Sim probe (Hydro Pump 80%% at Water Absorb Politoed, 12 seeds):
         misses on 2 seeds show -miss and NO heal. Patched: the converted heal
@@ -197,6 +214,22 @@ class AbsorbGateTests(unittest.TestCase):
         flat = _flat(_branches(state, "surf", "none"))
         self.assertTrue(any(i.startswith("Heal SideTwo: 92") for i in flat))
         self.assertFalse(any(i.startswith("Damage SideTwo:") for i in flat))
+
+    def test_full_hp_absorb_keeps_hit_and_miss_branches(self) -> None:
+        state = self._absorb_state("hydropump", defender_hp=371)
+        branches = _branches(state, "hydropump", "none")
+        marker_pcts = [
+            pct
+            for pct, instrs in branches
+            if any(i.startswith("Heal SideTwo: 0") for i in instrs)
+        ]
+        miss_pcts = [
+            pct
+            for pct, instrs in branches
+            if not any(i.startswith("Heal SideTwo: 0") for i in instrs)
+        ]
+        self.assertTrue(marker_pcts and abs(sum(marker_pcts) - 80.0) < 0.6, branches)
+        self.assertTrue(miss_pcts and abs(sum(miss_pcts) - 20.0) < 0.6, branches)
 
 
 if __name__ == "__main__":  # pragma: no cover
