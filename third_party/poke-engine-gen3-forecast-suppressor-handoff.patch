@@ -1,0 +1,46 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -422,6 +422,29 @@
+         Abilities::AIRLOCK | Abilities::CLOUDNINE
+     );
+     ability_on_switch_out(state, &switching_side_ref, incoming_instructions);
++
++    // Gen 3 Air Lock / Cloud Nine fire Forecast's WeatherChange handler when
++    // the holder LEAVES, while an incoming suppressor does not fire it on
++    // entry. Evaluate that departure while the outgoing Pokemon is still the
++    // active slot, but temporarily exclude only its ending ability. This keeps
++    // a suppressor-to-suppressor handoff faithful: Castform observes the
++    // underlying weather before the replacement becomes active and stays in
++    // that form after the incoming suppressor arrives.
++    if outgoing_suppressed_weather {
++        let outgoing_ability = state
++            .get_side_immutable(&switching_side_ref)
++            .get_active_immutable()
++            .ability;
++        state
++            .get_side(&switching_side_ref)
++            .get_active()
++            .ability = Abilities::NONE;
++        update_forecast(state, incoming_instructions);
++        state
++            .get_side(&switching_side_ref)
++            .get_active()
++            .ability = outgoing_ability;
++    }
+ 
+     let switch_instruction = Instruction::Switch(SwitchInstruction {
+         side_ref: switching_side_ref,
+@@ -434,13 +457,6 @@
+         .instruction_list
+         .push(switch_instruction);
+ 
+-    // A departing Air Lock / Cloud Nine holder re-enables the stored weather
+-    // before the replacement's entry event. Forecast observes that transition;
+-    // a suppressor entering does not itself fire Forecast's handler.
+-    if outgoing_suppressed_weather {
+-        update_forecast(state, incoming_instructions);
+-    }
+-
+     if should_last_used_move {
+         let side = state.get_side(&switching_side_ref);
+         set_last_used_move_as_switch(

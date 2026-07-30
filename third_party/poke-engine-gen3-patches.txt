@@ -1144,3 +1144,15 @@ poke-engine-gen3-upstream-fixture-refresh.patch
 # fixed-point pinch/Thick Fat base power, post-hit Flail/Reversal bands,
 # Cloud Nine/Forecast transitions, and Ice Beam's freeze-before-Color-Change order.
 poke-engine-gen3-final-defects.patch
+
+# Gen 3 departure ordering for weather suppressors. Air Lock / Cloud Nine run
+# Forecast when the holder leaves, but not when a replacement suppressor enters,
+# so a direct suppressor-to-suppressor handoff exposes the underlying weather
+# before the switch line and keeps that form afterward.
+poke-engine-gen3-forecast-suppressor-handoff.patch
+
+# Independent-review composition fixes for the final-defects fan-out. Preserve
+# the first move's normal multi-hit count while retaining exact damage rolls
+# needed by pending Flail/Reversal, and pass actual post-cap direct damage to
+# deferred Color Change so zero-damage Endure branches never retype.
+poke-engine-gen3-review-compositions.patch

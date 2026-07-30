@@ -1,0 +1,110 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2712,6 +2712,25 @@
+         &mut incoming_instructions,
+         &mut final_instructions,
+     );
++
++    let hit_count = match choice.multi_hit() {
++        MultiHitMove::None => 1,
++        MultiHitMove::DoubleHit => 2,
++        MultiHitMove::TripleHit => 3,
++        MultiHitMove::TwoToFiveHits => {
++            // The engine's standing approximation uses the rounded 3.2-hit
++            // expectation instead of branching the full hit-count tree.
++            3
++        }
++        MultiHitMove::PopulationBomb => {
++            if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
++                9
++            } else {
++                6
++            }
++        }
++        MultiHitMove::TripleAxel => 3,
++    };
+ 
+     // A first-move hit can move a pending Flail/Reversal user across one of its
+     // HP-based base-power bands. The ordinary branch normally keeps only an
+@@ -2744,7 +2763,7 @@
+                         state,
+                         attacking_side,
+                         roll_instructions,
+-                        1,
++                        hit_count,
+                         true,
+                         blocked_by_protect,
+                         roll_damage,
+@@ -2774,37 +2793,6 @@
+     if incoming_instructions.percentage == 0.0 {
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         return;
+-    }
+-
+-    // start multi-hit
+-    let hit_count;
+-    match choice.multi_hit() {
+-        MultiHitMove::None => {
+-            hit_count = 1;
+-        }
+-        MultiHitMove::DoubleHit => {
+-            hit_count = 2;
+-        }
+-        MultiHitMove::TripleHit => {
+-            hit_count = 3;
+-        }
+-        MultiHitMove::TwoToFiveHits => {
+-            // too lazy to implement branching here. Average is 3.2 so this is a fine approximation
+-            hit_count = 3;
+-        }
+-        MultiHitMove::PopulationBomb => {
+-            // population bomb checks accuracy each time but lets approximate
+-            hit_count = if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
+-                9
+-            } else {
+-                6
+-            };
+-        }
+-        MultiHitMove::TripleAxel => {
+-            // triple axel checks accuracy each time but until multi-accuracy is implemented this
+-            // is the best we can do
+-            hit_count = 3
+-        }
+     }
+ 
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+@@ -4470,8 +4458,13 @@
+     final_instructions: &mut Vec<StateInstructions>,
+ ) {
+     let mut hit_sub = false;
++    let mut actual_damage_dealt = 0;
+     for _ in 0..hit_count {
+         if does_damage {
++            let defender_hp_before = state
++                .get_side_immutable(&attacking_side.get_other_side())
++                .get_active_immutable()
++                .hp;
+             hit_sub = generate_instructions_from_damage(
+                 state,
+                 choice,
+@@ -4479,6 +4472,11 @@
+                 &attacking_side,
+                 &mut instructions,
+             );
++            let defender_hp_after = state
++                .get_side_immutable(&attacking_side.get_other_side())
++                .get_active_immutable()
++                .hp;
++            actual_damage_dealt += cmp::max(defender_hp_before - defender_hp_after, 0);
+         }
+         if let Some(side_condition) = &choice.side_condition {
+             generate_instructions_from_side_conditions(
+@@ -4644,7 +4642,7 @@
+                     state,
+                     choice,
+                     &attacking_side,
+-                    damage_amount,
++                    actual_damage_dealt,
+                     branch,
+                 );
+                 state.reverse_instructions(&branch.instruction_list);

@@ -214,6 +214,29 @@ class AbilityMechanicsTests(unittest.TestCase):
         self.assertTrue(crossed_band)
         self.assertTrue(any("Damage SideOne: 111" in self._text(branch) for branch in crossed_band))
 
+    def test_dynamic_power_fanout_preserves_the_first_moves_hit_count(self) -> None:
+        attacker = self._mon(
+            "hitmonlee", "limber", "doublekick", types=("fighting", "typeless"),
+            hp=220, maxhp=220, attack=180, speed=200,
+        )
+        pending_flail = self._mon(
+            "dodrio", "earlybird", "flail", types=("normal", "flying"),
+            hp=180, maxhp=220, defense=180, speed=100,
+        )
+
+        branches = poke_engine.generate_instructions(
+            self._state(attacker, pending_flail), "doublekick", "flail"
+        )
+
+        self.assertTrue(branches)
+        self.assertTrue(all(
+            sum(
+                instruction.startswith("Damage SideTwo:")
+                for instruction in self._text(branch).split(" | ")
+            ) == 2
+            for branch in branches
+        ))
+
     def test_cloud_nine_entry_does_not_change_forecast_but_exit_restores_it(self) -> None:
         """Retained c15 row 2400451/56: Cloud Nine suppresses, not changes, rain."""
         castform_water = self._mon(
@@ -256,6 +279,40 @@ class AbilityMechanicsTests(unittest.TestCase):
             for branch in leaving_branches
         ))
 
+    def test_cloud_nine_handoff_exposes_weather_before_the_incoming_suppressor(self) -> None:
+        """Gen 3 runs Forecast on suppressor exit, but not suppressor entry."""
+        castform_normal = self._mon(
+            "castform", "forecast", "return102", types=("normal", "typeless"),
+            hp=272, maxhp=272, speed=177,
+        )
+        golduck = self._mon(
+            "golduck", "cloudnine", "splash", types=("water", "typeless"),
+            hp=239, maxhp=262, speed=184,
+        )
+        incoming = self._mon(
+            "shedinja", "cloudnine", "splash", types=("bug", "ghost"),
+            hp=1, maxhp=1, speed=120,
+        )
+        state = self._state(
+            castform_normal, golduck, weather="rain", weather_turns_remaining=-1,
+            defender_party=(incoming,),
+        )
+
+        branches = poke_engine.generate_instructions(state, "return102", "shedinja")
+        self.assertTrue(branches)
+        for branch in branches:
+            text = self._text(branch)
+            self.assertIn("ChangeType SideOne", text)
+            self.assertLess(text.index("ChangeType SideOne"), text.index("Switch SideTwo"))
+            applied = state.apply_instructions(branch)
+            self.assertEqual(
+                tuple(
+                    str(value).upper()
+                    for value in applied.side_one.pokemon[0].types
+                ),
+                ("WATER", "TYPELESS"),
+            )
+
     def test_color_change_waits_until_after_ice_beam_freeze(self) -> None:
         """Retained incap row 2700752/65: Kecleon freezes before becoming Ice."""
         kecleon = self._mon(
@@ -279,6 +336,24 @@ class AbilityMechanicsTests(unittest.TestCase):
             text = self._text(branch)
             self.assertLess(text.index("NONE -> FREEZE"), text.index("ChangeType SideOne"))
             self.assertNotIn("Damage SideTwo", text)
+
+    def test_color_change_does_not_run_when_endure_reduces_actual_damage_to_zero(self) -> None:
+        kecleon = self._mon(
+            "kecleon", "colorchange", "endure", types=("normal", "typeless"),
+            hp=1, maxhp=260, speed=126,
+        )
+        seaking = self._mon(
+            "seaking", "swiftswim", "icebeam", types=("water", "typeless"),
+            hp=179, maxhp=290, special_attack=167, speed=174,
+        )
+
+        branches = poke_engine.generate_instructions(
+            self._state(kecleon, seaking), "endure", "icebeam"
+        )
+
+        self.assertTrue(branches)
+        self.assertTrue(any("Damage SideOne: 0" in self._text(branch) for branch in branches))
+        self.assertTrue(all("ChangeType SideOne" not in self._text(branch) for branch in branches))
 
     @staticmethod
     def _text(branch) -> str:
