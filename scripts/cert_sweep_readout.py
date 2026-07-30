@@ -791,12 +791,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         key: value for key, value in sorted(aggregate_counters.items())
         if key.startswith("skip:")
     }
+    full_rounds = max(1, agg["boundaries_full_round"])
+    skip_counter_rates = {
+        key: value / full_rounds for key, value in skip_counters.items()
+    }
     out = {
         "verdict": verdict,
         "aggregate": agg,
         "coverage_measured_fraction": round(coverage, 4),
         "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
         "skip_counters": skip_counters,
+        "skip_counter_rates_per_full_round": skip_counter_rates,
         "repros_complete_all_shards": retention_ok,
         "rows_retained": len(rows),
         "family_attribution": dict(fam_counts.most_common()),

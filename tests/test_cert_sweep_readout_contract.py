@@ -28,6 +28,7 @@ class CertificationContractTests(unittest.TestCase):
             "counters": {
                 "boundaries_full_round": 100,
                 "boundaries_measured": measured,
+                "skip:world_unsupported:test_fixture": 2,
             },
             "divergence_classes": {},
             "engine_errors": 0,
@@ -147,6 +148,15 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(payload["verdict"], "PASS")
         self.assertEqual(payload["gate_failures"], [])
         self.assertEqual(payload["contract_evidence"]["distinct_seed_total"], 2)
+        self.assertEqual(
+            payload["skip_counters"]["skip:world_unsupported:test_fixture"], 4
+        )
+        self.assertEqual(
+            payload["skip_counter_rates_per_full_round"][
+                "skip:world_unsupported:test_fixture"
+            ],
+            0.02,
+        )
 
     def test_missing_completion_marker_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
