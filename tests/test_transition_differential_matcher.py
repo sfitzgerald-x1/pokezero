@@ -12,13 +12,16 @@ from collections import Counter
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import engine_transition_differential as differential  # noqa: E402
 from engine_transition_differential import (  # noqa: E402
     _split_components,
+    branch_event_legal_rolls,
     classify_divergence,
     count_world_construction_limit,
     damage_components,
@@ -258,6 +261,84 @@ class LengthMismatch(unittest.TestCase):
     def test_differing_component_counts_never_agree(self):
         self.assertFalse(roll_components_agree([("", -50)], [], None))
         self.assertFalse(roll_components_agree([], [("", -50)], None))
+
+
+class EventAwareBranchLegality(unittest.TestCase):
+    """Legal roll support must follow state changes that precede a hit."""
+
+    def setUp(self):
+        self._original_poke_engine = differential.poke_engine
+        self.loaded_states: list[str] = []
+
+        def from_string(value: str) -> str:
+            self.loaded_states.append(value)
+            return value
+
+        def calculate_damage(state: str, _side_one: str, _side_two: str, _critical: bool):
+            # 25 has the Gen 3 85..100% support 21..25. The retained Calm Mind
+            # row needs 21 after the boost; the stale pre-state range was 24..29.
+            self.assertIn(state, {"post-boost", "post-switch"})
+            return [25], []
+
+        differential.poke_engine = SimpleNamespace(
+            State=SimpleNamespace(from_string=from_string),
+            calculate_damage=calculate_damage,
+        )
+
+    def tearDown(self):
+        differential.poke_engine = self._original_poke_engine
+
+    def test_uses_post_state_after_a_same_turn_stat_boost(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p2a: Clefable|Calm Mind|p2a: Clefable",
+                    "|-boost|p2a: Clefable|spd|1",
+                    "|move|p1a: Clefable|Fire Blast|p2a: Clefable",
+                    "|-damage|p2a: Clefable|279/300 par",
+                ],
+                "post_state": "post-boost",
+            },
+            side_one_choice="fireblast",
+            side_two_choice="calmmind",
+        )
+
+        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["post-boost"])
+
+    def test_uses_post_state_after_a_same_turn_switch(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|switch|p2a: Lanturn|Lanturn, L82, M|143/339 tox",
+                    "|move|p1a: Sableye|knockoff|p2a: Lanturn",
+                    "|-damage|p2a: Lanturn|122/339 tox",
+                ],
+                "post_state": "post-switch",
+            },
+            side_one_choice="knockoff",
+            side_two_choice="lanturn",
+        )
+
+        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(self.loaded_states, ["post-switch"])
+
+    def test_ignores_state_changes_that_follow_direct_damage(self):
+        legal = branch_event_legal_rolls(
+            {
+                "events": [
+                    "|move|p1a: A|Flamethrower|p2a: B",
+                    "|-damage|p2a: B|100/200",
+                    "|-boost|p1a: A|spa|1",
+                ],
+                "post_state": "must-not-load",
+            },
+            side_one_choice="flamethrower",
+            side_two_choice="splash",
+        )
+
+        self.assertIsNone(legal)
+        self.assertEqual(self.loaded_states, [])
 
 
 if __name__ == "__main__":

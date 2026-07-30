@@ -285,14 +285,13 @@ def engine_choice_for_action(
 #      returns the base for non-crit and crit, so the set is enumerable, OR
 #   3. within +/-9 % of the engine's representative roll.
 #
-# Rung 3 is a band, and saying otherwise would be an over-claim: the legal set is
-# computed from the PRE-state with an assumed move order, so it is unreliable
-# whenever the turn reorders or a same-turn stat change moves the base, and it
-# therefore never VETOES — it can only accept. The honest description of the
-# predicate is "equal, or in the enumerated legal set, or within +/-9 % of the
-# engine's representative roll". What is genuinely gone is the NET-HP band: every
-# tolerance here is scoped to a single roll-scaled component, and no deterministic
-# component gets any tolerance at all.
+# Rung 3 is a band, and saying otherwise would be an over-claim. The baseline
+# legal set is computed from the PRE-state, but a mapper branch that switches or
+# changes a stat before direct damage is repriced from its branch-local post-state
+# below. The honest description of the predicate is "equal, or in the enumerated
+# legal set, or within +/-9 % of the engine's representative roll". What is
+# genuinely gone is the NET-HP band: every tolerance here is scoped to a single
+# roll-scaled component, and no deterministic component gets any tolerance at all.
 # ---------------------------------------------------------------------------------------------
 
 # Components that scale with the damage roll; everything else must be exact.
@@ -522,6 +521,67 @@ def legal_roll_damages(base_rolls: Sequence[int]) -> set[int]:
         for roll in range(85, 101):
             values.add(base * roll // 100)
     return values
+
+
+class BranchLegalRollError(ValueError):
+    """A state-changing branch could not supply its required local support."""
+
+
+def branch_event_legal_rolls(
+    branch: Mapping[str, Any],
+    *,
+    side_one_choice: str,
+    side_two_choice: str,
+) -> set[int] | None:
+    """Return support repriced after a pre-damage switch or stat event.
+
+    ``calculate_damage`` on the boundary pre-state prices the wrong target when
+    a switch resolves first, and the wrong stages when Boost/Unboost resolves
+    first. The event mapper already emits a serialized state for every concrete
+    branch, so only those branches are repriced. A post-damage state change is
+    deliberately excluded: it cannot affect the hit already being compared.
+    """
+
+    events = branch.get("events")
+    if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+        raise BranchLegalRollError("branch events are missing or malformed")
+
+    direct_damage_index = next(
+        (
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, str)
+            and event.startswith("|-damage|")
+            and "[from]" not in event
+        ),
+        None,
+    )
+    if direct_damage_index is None:
+        return None
+
+    state_changed_before_damage = any(
+        isinstance(event, str)
+        and event.startswith(("|switch|", "|-boost|", "|-unboost|"))
+        for event in events[:direct_damage_index]
+    )
+    if not state_changed_before_damage:
+        return None
+
+    post_state = branch.get("post_state")
+    if not isinstance(post_state, str) or not post_state:
+        raise BranchLegalRollError("state-changing branch omitted post_state")
+    try:
+        state = poke_engine.State.from_string(post_state)
+        side_one_rolls, side_two_rolls = poke_engine.calculate_damage(
+            state, side_one_choice, side_two_choice, True
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as error:  # noqa: BLE001
+        raise BranchLegalRollError(
+            f"could not calculate branch-local legal rolls: {type(error).__name__}"
+        ) from error
+    return legal_roll_damages(list(side_one_rolls) + list(side_two_rolls))
 
 
 def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
@@ -1066,14 +1126,16 @@ def evaluate_boundary_strict(
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
-        # Legal damage set for this pre-state; unavailable when the engine
-        # refuses the pair (recorded, then the proportional window is used).
-        legal: set[int] | None = None
+        # Baseline legal damage set for this pre-state; unavailable when the
+        # engine refuses the pair (recorded, then the proportional window is
+        # used). State-changing branches below replace this with their local
+        # support rather than silently reusing a stale target or stat stage.
+        pre_legal: set[int] | None = None
         try:
             s1_rolls, s2_rolls = poke_engine.calculate_damage(
                 state, side_one_choice, side_two_choice, True
             )
-            legal = legal_roll_damages(list(s1_rolls) + list(s2_rolls))
+            pre_legal = legal_roll_damages(list(s1_rolls) + list(s2_rolls))
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:  # noqa: BLE001
@@ -1093,6 +1155,17 @@ def evaluate_boundary_strict(
                 continue
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
+            try:
+                legal = branch_event_legal_rolls(
+                    branch,
+                    side_one_choice=side_one_choice,
+                    side_two_choice=side_two_choice,
+                )
+            except BranchLegalRollError as error:
+                counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
+                continue
+            if legal is None:
+                legal = pre_legal
             usable_branches += 1
             engine_components = damage_components(
                 branch.get("events") or [],
