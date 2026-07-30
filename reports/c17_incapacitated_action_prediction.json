@@ -1,0 +1,56 @@
+{
+  "artifact": "c17_incapacitated_action_prediction/v1",
+  "status": "pre-adjudication prediction",
+  "scope": {
+    "archive": "<local-evidence-archive>/cert-sweep-20260730",
+    "readout": "reports/c14_cert_sweep_readout.json",
+    "prior_adjudication": "reports/c15_hiddenpower_thaw_prediction.json",
+    "rows": [
+      [2200051, 80],
+      [2500224, 70],
+      [2600627, 47],
+      [2700702, 38],
+      [2701204, 52],
+      [2700752, 65]
+    ]
+  },
+  "observed_shape": {
+    "sleep": {
+      "rows": [[2200051, 80], [2500224, 70], [2600627, 47], [2700702, 38], [2701204, 52]],
+      "protocol": "A successful same-turn Sleep Powder or Hypnosis is followed by |cant| for the newly sleeping target; the target's selected move does not execute."
+    },
+    "freeze": {
+      "rows": [[2700752, 65]],
+      "protocol": "Ice Beam both freezes the target and is followed by |cant| for the newly frozen target; the target's selected move does not execute."
+    }
+  },
+  "predictions": [
+    {
+      "id": "H1_fresh_incapacitation_action_order",
+      "prediction": "For each row, the archived engine branch that receives the fresh incapacitating status will still contain a Damage instruction from the newly incapacitated side. The recorded Showdown protocol instead has |cant| and no such move damage.",
+      "candidate_locus": "Rust Gen 3 instruction generation/action-order handling; this artifact does not license a patch.",
+      "falsifier": "If any matching engine branch suppresses the newly incapacitated side's move and matches the protocol components, that row is not evidence for this scheduler hypothesis."
+    },
+    {
+      "id": "H2_no_typed_hiddenpower_thaw_conflation",
+      "prediction": "None of these six rows is the typed-Hidden-Power thaw defect adjudicated in c15: five induce sleep, and the freeze row uses Ice Beam rather than Hidden Power Fire.",
+      "falsifier": "A retained branch or protocol line showing typed Hidden Power Fire thawing the target would invalidate this exclusion."
+    },
+    {
+      "id": "H3_no_rest_provenance_conflation",
+      "prediction": "The fresh status is inflicted by the recorded opposing move on the same boundary, so the mismatch does not depend on a benched Rest sleeper's hidden sleep counter.",
+      "falsifier": "A replay showing that the observed |cant| is instead controlled by a pre-existing Rest counter would route that row to the Rest-provenance lane."
+    }
+  ],
+  "required_evidence": [
+    "The exact protocol slice, including status/cant ordering.",
+    "Every archived candidate state's branch instructions and event components.",
+    "The selected-action speed/order context for both sides.",
+    "A per-row verdict of engine fix, documented follow-up, or proven comparison limit; no family-wide conclusion without row evidence."
+  ],
+  "guardrails": [
+    "Evidence only: do not edit production code, matcher code, engine patches, certification spec, or the living divergence ledger.",
+    "Do not count a nonmatching branch as a fix; establish whether any legal branch reproduces the observed status and action suppression.",
+    "Unresolved rows remain explicitly unresolved."
+  ]
+}
