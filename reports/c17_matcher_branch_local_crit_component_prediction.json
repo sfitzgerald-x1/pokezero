@@ -1,0 +1,42 @@
+{
+  "schema": "pokezero.c17.matcher-branch-local-crit-component-prediction.v1",
+  "source": "Independent adversarial review of the strict transition matcher.",
+  "scope": "Matcher-only support attribution. No engine, world construction, branch rendering, or acceptance denominator behavior may change.",
+  "review_failures": [
+    {
+      "id": "crit_pooling",
+      "problem": "The branch-local support pool unions the selected actor's normal and critical bases without conditioning on the selected branch's |-crit| marker. This can accept a Showdown critical damage against a noncritical engine branch, or the inverse.",
+      "corpus_signal": {
+        "retained_rows_changed": 173,
+        "crit_marker_disagreements": 168,
+        "example": {
+          "seed": 2000050,
+          "step": 26,
+          "observed": "critical -200",
+          "incorrect_engine_match": "noncritical -106"
+        }
+      },
+      "required_fix": "Record criticality for the selected direct-damage protocol event and derive legal support from only its normal or critical base.",
+      "controls": [
+        "An observed critical component cannot match a noncritical engine event.",
+        "An observed noncritical component cannot match a critical engine event.",
+        "A critical marker for another hit cannot select support for the chosen direct event."
+      ]
+    },
+    {
+      "id": "component_scope_leak",
+      "problem": "Target-side support applies the selected direct-hit range to every rolled component on that side, allowing the selected hit's range to legalize confusion, recoil, drain, or another same-side HP event.",
+      "required_fix": "Carry the selected direct-damage protocol event identity and apply rebuilt support only to that exact component; every other component keeps its pre-state range.",
+      "controls": [
+        "A confusion self-hit cannot borrow direct-hit support.",
+        "Recoil, drain, and other tagged same-side components cannot borrow direct-hit support.",
+        "The existing switch, stat-event, Spikes, and Substitute HP-cost controls remain unchanged."
+      ]
+    }
+  ],
+  "success_criteria": [
+    "The matcher fails closed when it cannot identify the selected direct event or its criticality.",
+    "Corpus reread reports retained-row identity changes and critical-marker consistency, not only aggregate match counts.",
+    "No final artifact contains host-local absolute paths."
+  ]
+}

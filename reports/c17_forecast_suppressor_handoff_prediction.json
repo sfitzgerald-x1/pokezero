@@ -1,0 +1,30 @@
+{
+  "artifact": "c17_forecast_suppressor_handoff_prediction/v1",
+  "status": "pre-fix prediction",
+  "date": "2026-07-30",
+  "scope": {
+    "production_patch": "third_party/poke-engine-gen3-final-defects.patch",
+    "source": "third_party/poke-engine-src/src/gen3/generate_instructions.rs",
+    "test": "tests/test_engine_gen3_abilities.py"
+  },
+  "showdown_oracle": {
+    "format": "gen3customgame",
+    "seed": 77,
+    "setup": "Rain is stored while p2 Golduck/Cloud Nine is active; p2 switches directly to Shedinja/Cloud Nine.",
+    "observed_order": [
+      "|-formechange|p1a: Castform|Castform-Rainy|[msg]|[from] ability: Forecast",
+      "|switch|p2a: Shedinja|Shedinja|1/1"
+    ],
+    "mechanism": "The departing suppressor's End event runs Forecast's WeatherChange before the replacement becomes active. In Gen 3, the incoming Air Lock or Cloud Nine Start event does not run Forecast again."
+  },
+  "prediction": {
+    "before_fix": "The Rust branch emits no ChangeType for Castform because it switches the active index first and then evaluates Forecast while the incoming Cloud Nine still suppresses rain.",
+    "after_fix": "The Rust branch emits Castform NORMAL->WATER before the Switch instruction even when the replacement also has Cloud Nine.",
+    "control": "If the opposite active Pokemon independently suppresses weather, the departing holder must not retype Castform."
+  },
+  "guardrails": [
+    "Do not model incoming Air Lock or Cloud Nine as a Forecast trigger; Gen 3 intentionally omits that Start event.",
+    "Do not disable an independent suppressor on the opposite side.",
+    "The temporary departure-state calculation must leave the source battle state reversible."
+  ]
+}

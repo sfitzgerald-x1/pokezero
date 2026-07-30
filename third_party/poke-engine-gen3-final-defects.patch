@@ -1,0 +1,403 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -184,19 +184,11 @@
+     let attacking_pkmn = attacking_side.get_active();
+     let defending_pkmn = defending_side.get_active();
+     match defending_pkmn.ability {
+-        Abilities::COLORCHANGE => {
+-            if damage_dealt > 0
+-                && defending_pkmn.hp != 0
+-                && !defending_pkmn.has_type(&choice.move_type)
+-            {
+-                let change_type_instruction = Instruction::ChangeType(ChangeType {
+-                    side_ref: side_ref.get_other_side(),
+-                    new_types: (choice.move_type, PokemonType::TYPELESS),
+-                    old_types: defending_pkmn.types,
+-                });
+-                defending_pkmn.types = (choice.move_type, PokemonType::TYPELESS);
+-                instructions.instruction_list.push(change_type_instruction);
+-            }
++        // Move secondaries resolve before Color Change in Gen 3. A move without
++        // secondaries can still apply it immediately; the deferred path below
++        // handles the branch-local ordering for moves such as Ice Beam.
++        Abilities::COLORCHANGE if choice.secondaries.is_none() => {
++            apply_color_change(state, choice, side_ref, damage_dealt, instructions);
+         }
+         Abilities::ROUGHSKIN => {
+             if damage_dealt > 0 && choice.flags.contact {
+@@ -214,6 +206,41 @@
+     }
+ }
+-
++
++fn apply_color_change(
++    state: &mut State,
++    choice: &Choice,
++    side_ref: &SideReference,
++    damage_dealt: i16,
++    instructions: &mut StateInstructions,
++) {
++    let defending_pkmn = state
++        .get_side(&side_ref.get_other_side())
++        .get_active();
++    if damage_dealt > 0
++        && defending_pkmn.ability == Abilities::COLORCHANGE
++        && defending_pkmn.hp != 0
++        && !defending_pkmn.has_type(&choice.move_type)
++    {
++        let change_type_instruction = Instruction::ChangeType(ChangeType {
++            side_ref: side_ref.get_other_side(),
++            new_types: (choice.move_type, PokemonType::TYPELESS),
++            old_types: defending_pkmn.types,
++        });
++        defending_pkmn.types = (choice.move_type, PokemonType::TYPELESS);
++        instructions.instruction_list.push(change_type_instruction);
++    }
++}
++
++pub fn ability_after_move_secondaries(
++    state: &mut State,
++    choice: &Choice,
++    side_ref: &SideReference,
++    damage_dealt: i16,
++    instructions: &mut StateInstructions,
++) {
++    apply_color_change(state, choice, side_ref, damage_dealt, instructions);
++}
++
+ pub fn ability_on_switch_out(
+     state: &mut State,
+     side_ref: &SideReference,
+@@ -433,6 +460,7 @@
+         }
+     }
+-
++
++    let mut weather_changed = false;
+     match active_ability {
+         // gen3: an ability gained through Trace does not run its switch-in
+         // activation (see the trace comment above; sim/pokemon.ts gates the
+@@ -452,6 +480,7 @@
+                     }));
+                 state.weather.weather_type = Weather::SUN;
+                 state.weather.turns_remaining = WEATHER_ABILITY_TURNS;
++                weather_changed = true;
+             }
+         }
+         Abilities::SANDSTREAM => {
+@@ -468,6 +497,7 @@
+                     }));
+                 state.weather.weather_type = Weather::SAND;
+                 state.weather.turns_remaining = WEATHER_ABILITY_TURNS;
++                weather_changed = true;
+             }
+         }
+         Abilities::INTIMIDATE => {
+@@ -501,13 +531,18 @@
+                     }));
+                 state.weather.weather_type = Weather::RAIN;
+                 state.weather.turns_remaining = WEATHER_ABILITY_TURNS;
++                weather_changed = true;
+             }
+         }
+         _ => {}
+     }
+-
++
+-    // Entry weather, suppressor switches, and Castform switches all converge here.
+-    update_forecast(state, instructions);
++    // Forecast only re-runs when the switch actually changes weather or when
++    // Castform itself arrives. Air Lock / Cloud Nine suppress weather effects
++    // without firing Forecast's weather-change handler on entry.
++    if active_ability == Abilities::FORECAST || weather_changed {
++        update_forecast(state, instructions);
++    }
+ }
+-
++
+ pub fn ability_modify_attack_being_used(
+@@ -532,7 +567,7 @@
+             if attacker_choice.move_type == PokemonType::WATER
+                 && attacking_pkmn.hp <= attacking_pkmn.maxhp / 3
+             {
+-                attacker_choice.base_power *= 1.5;
++                attacker_choice.base_power = (attacker_choice.base_power * 3.0 / 2.0).floor();
+             }
+         }
+         Abilities::SERENEGRACE => {
+@@ -568,21 +603,21 @@
+             if attacker_choice.move_type == PokemonType::BUG
+                 && attacking_pkmn.hp <= attacking_pkmn.maxhp / 3
+             {
+-                attacker_choice.base_power *= 1.5;
++                attacker_choice.base_power = (attacker_choice.base_power * 3.0 / 2.0).floor();
+             }
+         }
+         Abilities::BLAZE => {
+             if attacker_choice.move_type == PokemonType::FIRE
+                 && attacking_pkmn.hp <= attacking_pkmn.maxhp / 3
+             {
+-                attacker_choice.base_power *= 1.5;
++                attacker_choice.base_power = (attacker_choice.base_power * 3.0 / 2.0).floor();
+             }
+         }
+         Abilities::OVERGROW => {
+             if attacker_choice.move_type == PokemonType::GRASS
+                 && attacking_pkmn.hp <= attacking_pkmn.maxhp / 3
+             {
+-                attacker_choice.base_power *= 1.5;
++                attacker_choice.base_power = (attacker_choice.base_power * 3.0 / 2.0).floor();
+             }
+         }
+         Abilities::HUSTLE => {
+@@ -759,7 +794,7 @@
+             if attacker_choice.move_type == PokemonType::FIRE
+                 || attacker_choice.move_type == PokemonType::ICE
+             {
+-                attacker_choice.base_power /= 2.0;
++                attacker_choice.base_power = (attacker_choice.base_power / 2.0).floor();
+             }
+         }
+         Abilities::SANDVEIL => {
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -637,6 +637,7 @@
+         return;
+     }
+     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
++    let mut weather_changed = false;
+     match choice.move_id {
+         Choices::BELLYDRUM => {
+             let boost_amount = 6 - attacking_side.attack_boost;
+@@ -1259,6 +1260,7 @@
+                     }));
+                 state.weather.weather_type = Weather::SUN;
+                 state.weather.turns_remaining = 5;
++                weather_changed = true;
+             }
+         }
+         Choices::RAINDANCE => {
+@@ -1273,6 +1275,7 @@
+                     }));
+                 state.weather.weather_type = Weather::RAIN;
+                 state.weather.turns_remaining = 5;
++                weather_changed = true;
+             }
+         }
+         Choices::SANDSTORM => {
+@@ -1287,6 +1290,7 @@
+                     }));
+                 state.weather.weather_type = Weather::SAND;
+                 state.weather.turns_remaining = 5;
++                weather_changed = true;
+             }
+         }
+         Choices::HAIL => {
+@@ -1301,11 +1305,14 @@
+                     }));
+                 state.weather.weather_type = Weather::HAIL;
+                 state.weather.turns_remaining = 5;
++                weather_changed = true;
+             }
+         }
+         _ => {}
+     }
+-    update_forecast(state, instructions);
++    if weather_changed {
++        update_forecast(state, instructions);
++    }
+ }
+-
++
+ pub fn charge_choice_to_volatile(choice: &Choices) -> PokemonVolatileStatus {
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1,7 +1,7 @@
+ use super::abilities::{
+     ability_after_damage_hit, ability_end_of_turn, ability_modify_attack_against,
+-    ability_modify_attack_being_used, ability_on_switch_in, ability_on_switch_out,
+-    update_forecast, Abilities,
++    ability_after_move_secondaries, ability_modify_attack_being_used, ability_on_switch_in,
++    ability_on_switch_out, update_forecast, Abilities,
+ };
+ use super::choice_effects::{
+     charge_choice_to_volatile, choice_after_damage_hit, choice_before_move, choice_hazard_clear,
+@@ -417,6 +417,10 @@
+         );
+     }
+-
++
++    let outgoing_suppressed_weather = matches!(
++        state.get_side_immutable(&switching_side_ref).get_active_immutable().ability,
++        Abilities::AIRLOCK | Abilities::CLOUDNINE
++    );
+     ability_on_switch_out(state, &switching_side_ref, incoming_instructions);
+-
++
+     let switch_instruction = Instruction::Switch(SwitchInstruction {
+@@ -425,13 +429,20 @@
+         next_index: new_pokemon_index,
+     });
+-
++
+-    let side = state.get_side(&switching_side_ref);
+-    side.active_index = new_pokemon_index;
++    state.get_side(&switching_side_ref).active_index = new_pokemon_index;
+     incoming_instructions
+         .instruction_list
+         .push(switch_instruction);
+-
++
++    // A departing Air Lock / Cloud Nine holder re-enables the stored weather
++    // before the replacement's entry event. Forecast observes that transition;
++    // a suppressor entering does not itself fire Forecast's handler.
++    if outgoing_suppressed_weather {
++        update_forecast(state, incoming_instructions);
++    }
++
+     if should_last_used_move {
++        let side = state.get_side(&switching_side_ref);
+         set_last_used_move_as_switch(
+             side,
+             new_pokemon_index,
+@@ -1291,8 +1302,24 @@
+         frozen_instructions.push(move_missed_instruction);
+     }
+     incoming_instructions.update_percentage(percent_hit);
++}
++
++fn pending_dynamic_base_power(choice: &Choice) -> bool {
++    matches!(choice.move_id, Choices::FLAIL | Choices::REVERSAL)
+ }
+-
++
++fn critical_hit_chance(choice: &Choice, defender_ability: Abilities) -> f32 {
++    if matches!(defender_ability, Abilities::BATTLEARMOR | Abilities::SHELLARMOR) {
++        0.0
++    } else if choice.move_id.guaranteed_crit() {
++        1.0
++    } else if choice.move_id.increased_crit_ratio() {
++        1.0 / 8.0
++    } else {
++        BASE_CRIT_CHANCE
++    }
++}
++
+ fn get_instructions_from_drag(
+     state: &mut State,
+     attacking_side_reference: &SideReference,
+@@ -2318,6 +2345,28 @@
+-
++
+     state.apply_instructions(&incoming_instructions.instruction_list);
+-
++
++    // A freeze inflicted by the first action has already passed its secondary
++    // roll. Gen 3 does not give the newly frozen, slower Pokemon a second thaw
++    // roll before its queued action; it simply loses that action. The ordinary
++    // frozen-status gate below is for a status that existed at turn start.
++    let active_index = state.get_side_immutable(&attacking_side).active_index;
++    let frozen_this_turn = incoming_instructions.instruction_list.iter().any(|instruction| {
++        matches!(
++            instruction,
++            Instruction::ChangeStatus(ChangeStatusInstruction {
++                side_ref,
++                pokemon_index,
++                old_status: PokemonStatus::NONE,
++                new_status: PokemonStatus::FREEZE,
++            }) if *side_ref == attacking_side && *pokemon_index == active_index
++        )
++    });
++    if frozen_this_turn {
++        state.reverse_instructions(&incoming_instructions.instruction_list);
++        final_instructions.push(incoming_instructions);
++        return;
++    }
++
+     let side = state.get_side(&attacking_side);
+     if side
+         .volatile_statuses
+@@ -2647,6 +2696,52 @@
+         &mut incoming_instructions,
+         &mut final_instructions,
+     );
++
++    // A first-move hit can move a pending Flail/Reversal user across one of its
++    // HP-based base-power bands. The ordinary branch normally keeps only an
++    // average damage roll, which erases those reachable positions before the
++    // second move reads HP. Preserve the sixteen Gen 3 random rolls here only
++    // when that second-move dependency exists.
++    if branch_on_damage
++        && choice.first_move
++        && pending_dynamic_base_power(defender_choice)
++        && fixed_damage.is_none()
++    {
++        if let Some((max_damage, max_crit_damage)) = damage {
++            let defender_ability = state
++                .get_side_immutable(&attacking_side.get_other_side())
++                .get_active_immutable()
++                .ability;
++            let crit_chance = critical_hit_chance(&choice, defender_ability);
++            for (raw_damage, chance) in [
++                (max_damage, 1.0 - crit_chance),
++                (max_crit_damage, crit_chance),
++            ] {
++                if chance == 0.0 {
++                    continue;
++                }
++                for random in 85..=100 {
++                    let mut roll_instructions = incoming_instructions.clone();
++                    roll_instructions.update_percentage(chance / 16.0);
++                    let roll_damage = (raw_damage as i32 * random / 100) as i16;
++                    run_move(
++                        state,
++                        attacking_side,
++                        roll_instructions,
++                        1,
++                        true,
++                        blocked_by_protect,
++                        roll_damage,
++                        choice,
++                        defender_choice,
++                        &mut final_instructions,
++                    );
++                }
++            }
++            combine_duplicate_instructions(&mut final_instructions);
++            return;
++        }
++    }
+-
++
+     if blocked_by_protect && incoming_instructions.percentage != 0.0 {
+         // The hit and miss branches are otherwise state-identical after Protect
+@@ -4518,7 +4613,7 @@
+-
++
+     if let Some(secondaries_vec) = &choice.secondaries {
+         state.reverse_instructions(&instructions.instruction_list);
+-        let instructions_vec_after_secondaries = get_instructions_from_secondaries(
++        let mut instructions_vec_after_secondaries = get_instructions_from_secondaries(
+             state,
+             &choice,
+             secondaries_vec,
+@@ -4526,6 +4621,19 @@
+             instructions,
+             hit_sub,
+         );
++        if does_damage && !hit_sub {
++            for branch in instructions_vec_after_secondaries.iter_mut() {
++                state.apply_instructions(&branch.instruction_list);
++                ability_after_move_secondaries(
++                    state,
++                    choice,
++                    &attacking_side,
++                    damage_amount,
++                    branch,
++                );
++                state.reverse_instructions(&branch.instruction_list);
++            }
++        }
+         final_instructions.extend(instructions_vec_after_secondaries);
+     } else {
+         state.reverse_instructions(&instructions.instruction_list);

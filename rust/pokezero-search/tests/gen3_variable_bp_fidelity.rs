@@ -21,10 +21,14 @@
 //!   sits on an EXACT boundary HP, one on each side, because that is the only
 //!   place the two spellings disagree.
 
+use poke_engine::choices::MOVES;
 use poke_engine::choices::{Choices, MoveCategory};
+use poke_engine::engine::abilities::{
+    ability_modify_attack_against, ability_modify_attack_being_used, Abilities,
+};
 use poke_engine::engine::choice_effects::modify_choice;
 use poke_engine::engine::state::MoveChoice;
-use poke_engine::state::{PokemonMoveIndex, SideReference, State};
+use poke_engine::state::{PokemonMoveIndex, PokemonType, SideReference, State};
 
 /// Base power the engine assigns to `move_id` with the attacker at `hp`/`maxhp`.
 fn base_power_at(move_id: Choices, hp: i16, maxhp: i16) -> f32 {
@@ -215,6 +219,52 @@ fn the_four_percentages_where_gen3_and_gen4_disagree_follow_gen3() {
                 move_id, percent
             );
         }
+    }
+}
+
+/// Showdown uses fixed-point `chainModify`, which rounds a 1.5x or 0.5x
+/// modifier down. The retained c15 rows include every member of these two
+/// families; 95 is the odd base power that distinguishes the old float behavior
+/// (142.5 / 47.5) from the integer value damage calculation must receive.
+#[test]
+fn gen3_base_power_modifiers_round_odd_products_down() {
+    let defender_choice = MOVES[&Choices::TACKLE].clone();
+    for (ability, move_type) in [
+        (Abilities::TORRENT, PokemonType::WATER),
+        (Abilities::BLAZE, PokemonType::FIRE),
+        (Abilities::OVERGROW, PokemonType::GRASS),
+        (Abilities::SWARM, PokemonType::BUG),
+    ] {
+        let mut state = State::default();
+        let attacker = state.side_one.get_active();
+        attacker.ability = ability;
+        attacker.hp = 100;
+        attacker.maxhp = 300;
+        let mut choice = MOVES[&Choices::TACKLE].clone();
+        choice.base_power = 95.0;
+        choice.move_type = move_type;
+        ability_modify_attack_being_used(
+            &state,
+            &mut choice,
+            &defender_choice,
+            &SideReference::SideOne,
+        );
+        assert_eq!(choice.base_power, 142.0, "{:?}", ability);
+    }
+
+    let mut state = State::default();
+    state.side_two.get_active().ability = Abilities::THICKFAT;
+    for move_type in [PokemonType::FIRE, PokemonType::ICE] {
+        let mut choice = MOVES[&Choices::TACKLE].clone();
+        choice.base_power = 95.0;
+        choice.move_type = move_type;
+        ability_modify_attack_against(
+            &state,
+            &mut choice,
+            &defender_choice,
+            &SideReference::SideOne,
+        );
+        assert_eq!(choice.base_power, 47.0, "{:?}", move_type);
     }
 }
 

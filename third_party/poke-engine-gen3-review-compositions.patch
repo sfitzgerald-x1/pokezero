@@ -1,0 +1,73 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2714,0 +2715,19 @@
++
++    let hit_count = match choice.multi_hit() {
++        MultiHitMove::None => 1,
++        MultiHitMove::DoubleHit => 2,
++        MultiHitMove::TripleHit => 3,
++        MultiHitMove::TwoToFiveHits => {
++            // The engine's standing approximation uses the rounded 3.2-hit
++            // expectation instead of branching the full hit-count tree.
++            3
++        }
++        MultiHitMove::PopulationBomb => {
++            if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
++                9
++            } else {
++                6
++            }
++        }
++        MultiHitMove::TripleAxel => 3,
++    };
+@@ -2747 +2766 @@
+-                        1,
++                        hit_count,
+@@ -2777,31 +2795,0 @@
+-    }
+-
+-    // start multi-hit
+-    let hit_count;
+-    match choice.multi_hit() {
+-        MultiHitMove::None => {
+-            hit_count = 1;
+-        }
+-        MultiHitMove::DoubleHit => {
+-            hit_count = 2;
+-        }
+-        MultiHitMove::TripleHit => {
+-            hit_count = 3;
+-        }
+-        MultiHitMove::TwoToFiveHits => {
+-            // too lazy to implement branching here. Average is 3.2 so this is a fine approximation
+-            hit_count = 3;
+-        }
+-        MultiHitMove::PopulationBomb => {
+-            // population bomb checks accuracy each time but lets approximate
+-            hit_count = if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
+-                9
+-            } else {
+-                6
+-            };
+-        }
+-        MultiHitMove::TripleAxel => {
+-            // triple axel checks accuracy each time but until multi-accuracy is implemented this
+-            // is the best we can do
+-            hit_count = 3
+-        }
+@@ -4472,0 +4461 @@
++    let mut actual_damage_dealt = 0;
+@@ -4474,0 +4464,4 @@
++            let defender_hp_before = state
++                .get_side_immutable(&attacking_side.get_other_side())
++                .get_active_immutable()
++                .hp;
+@@ -4481,0 +4475,5 @@
++            let defender_hp_after = state
++                .get_side_immutable(&attacking_side.get_other_side())
++                .get_active_immutable()
++                .hp;
++            actual_damage_dealt += cmp::max(defender_hp_before - defender_hp_after, 0);
+@@ -4647 +4645 @@
+-                    damage_amount,
++                    actual_damage_dealt,

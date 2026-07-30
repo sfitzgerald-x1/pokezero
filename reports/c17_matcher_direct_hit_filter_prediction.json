@@ -1,0 +1,16 @@
+{
+  "schema": "pokezero.c17.matcher-direct-hit-filter-prediction.v1",
+  "source": "Fresh independent Codex review of the prefix-state correction.",
+  "problem": "The Python matcher identifies any bare |-damage| line after an earlier switch/boost as a direct defender hit. A self HP cost such as Substitute is bare damage but is not a damage roll against the acting move's opponent, so the mapper intentionally emits no legal_roll_state and strict matching incorrectly skips the branch.",
+  "required_mechanism": [
+    "Track the acting side from the most recent |move| line.",
+    "Treat a bare |-damage| line as a repricing target only when its target side differs from that acting side.",
+    "Keep same-side bare HP costs on the ordinary pre-state path; do not synthesize a snapshot and do not change component attribution."
+  ],
+  "regression_prediction": "Calm Mind followed by the opponent's Substitute must not load a branch-local state or raise BranchLegalRollError merely because the Substitute HP cost follows the boost.",
+  "containment": [
+    "Do not change the Rust prefix snapshot mechanism.",
+    "Do not widen accepted damage supports, attribution, residual handling, or divergence classes.",
+    "Continue to fail closed whenever an actual opponent-hit branch requires but lacks legal_roll_state."
+  ]
+}

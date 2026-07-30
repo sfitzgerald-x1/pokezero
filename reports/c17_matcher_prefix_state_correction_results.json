@@ -1,0 +1,56 @@
+{
+  "schema": "pokezero.c17.matcher-prefix-state-correction-results.v1",
+  "prediction_commit": "cf319a6",
+  "implementation_commit": "e17d333",
+  "implementation_after_prediction": true,
+  "supersedes": "All implementation and retained-reread claims in reports/c17_matcher_final_results.json. That file remains a historical record of the completed-post-state attempt; this file is the authoritative evidence for the prefix-state correction. The retained row identities remain the evidence population.",
+  "scope": "Strict differential legal-roll support only. No engine behavior, attribution, component comparison, or divergence routing changed.",
+  "mechanism": {
+    "mapper": "rust/pokezero-search/src/events.rs emits legal_roll_state only for the exact raw-instruction prefix before the first defender Damage/DamageSubstitute in a segmented action phase, and only when that prefix contains Switch or Boost.",
+    "matcher": "scripts/engine_transition_differential.py uses legal_roll_state for rendered pre-damage switch/boost/unboost branches and rejects a state-changing branch that lacks it. Completed post_state is never used for legal-roll support."
+  },
+  "verification": {
+    "pre_correction_regression": {
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_rejects_completed_post_state_without_a_prefix_snapshot",
+      "exit_code": 1,
+      "result": "Expected failure: the earlier implementation loaded the completed post_state."
+    },
+    "post_correction_tests": [
+      {
+        "command": "cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib events::tests",
+        "result": "pass, 21 tests; includes switch-before-hit and boost-before-hit prefix snapshots plus source-state restoration"
+      },
+      {
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "result": "pass, 51 tests"
+      }
+    ]
+  },
+  "retained_row_rereads": [
+    {
+      "identity": {
+        "seed": 2300552,
+        "step": 117
+      },
+      "recorded_shape": "Calm Mind's +1 special stages precede Fire Blast's observed direct damage 21 in the retained Showdown protocol.",
+      "current_engine_reread": "diverged; the current engine branch enumeration takes the opposite tie order for its damaging branches, so it does not expose a boost-before-hit branch to repricing.",
+      "readout": "The mapper regression constructs the recorded ordering and proves the prefix has the +1 stages while excluding the Fire Blast hit. This is a mechanism proof, not a claim that the tie-order mismatch has cleared."
+    },
+    {
+      "identity": {
+        "seed": 2600362,
+        "step": 82
+      },
+      "recorded_shape": "Lanturn switches in before Knock Off's observed direct damage 21.",
+      "current_engine_reread": "diverged only on exact poison residual magnitude: observed -126 versus engine -112 on both chance branches.",
+      "branch_local_support": {
+        "prefix_snapshot_branches": 2,
+        "contains_observed_direct_damage": true,
+        "noncritical_damage": [21, 22, 23, 24, 25],
+        "critical_damage": [43, 44, 45, 46, 47, 48, 49, 50, 51]
+      },
+      "readout": "The switched-in defender now prices the direct hit. The poison disagreement remains divergent and is intentionally not reclassified."
+    }
+  ],
+  "residual_risk": "A retained row is repriced only when the segmented mapper can prove a pre-hit Switch/Boost prefix. A malformed or unavailable prefix makes that branch unusable for strict matching rather than falling back to stale support. Other mismatch classes, including the retained tie-order and poison-residual rows, are outside this narrow fix."
+}

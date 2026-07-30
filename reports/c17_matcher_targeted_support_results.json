@@ -1,0 +1,46 @@
+{
+  "schema": "pokezero.c17.matcher-targeted-support-results.v1",
+  "prediction_commit": "64d29da",
+  "implementation_commit": "d75c292",
+  "implementation_after_prediction": true,
+  "scope": "Strict matcher support scoping only. No engine behavior, mapper snapshot generation, attribution, residual comparison, divergence classes, or acceptance rules changed.",
+  "verification": {
+    "pre_implementation_regression": {
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality",
+      "exit_code": 1,
+      "result": "Expected failure: branch_event_legal_rolls returned an unscoped set, so tests requiring target_side raised AttributeError."
+    },
+    "post_implementation_tests": [
+      {
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "result": "pass, 55 tests"
+      },
+      {
+        "command": "cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib events::tests",
+        "result": "pass, 21 tests"
+      },
+      {
+        "command": "git diff --check",
+        "result": "pass"
+      }
+    ]
+  },
+  "retained_row_rereads": [
+    {
+      "identity": {"seed": 2300552, "step": 117},
+      "observed_order": "Calm Mind's nonzero Special Defense boost precedes Fire Blast in the retained Showdown protocol.",
+      "current_native_order": "The current mapper's viable damage branches place Fire Blast before Calm Mind and therefore carry no legal_roll_state.",
+      "current_verdict": "diverged",
+      "readout": "No clearance is claimed. The focused regression proves target-side scoping for the same-turn boost mechanism; the retained replay remains divergent because its current engine branch order differs."
+    },
+    {
+      "identity": {"seed": 2600362, "step": 82},
+      "observed_order": "Lanturn switches in before Sableye's Knock Off.",
+      "current_native_support": "The two current damage branches expose legal_roll_state before Knock Off and the target-specific direct-hit support contains the observed 21 damage.",
+      "current_verdict": "diverged",
+      "remaining_miss": "exact poison residual: observed -126 versus engine -112",
+      "readout": "The switch legality mechanism is rebuilt at the correct target; the independent poison mismatch remains divergent and was not reclassified."
+    }
+  ],
+  "residual_risk": "Only the selected, state-affected defender hit receives rebuilt support. Other same-turn components retain existing pre-state support. A retained row whose engine branch order differs from Showdown remains divergent rather than being accepted by this matcher correction."
+}

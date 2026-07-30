@@ -1,0 +1,29 @@
+{
+  "artifact": "c17_engine_review_regression_prediction/v1",
+  "status": "pre-fix prediction",
+  "date": "2026-07-30",
+  "scope": {
+    "production_patch": "third_party/poke-engine-gen3-final-defects.patch",
+    "tests": "tests/test_engine_gen3_abilities.py",
+    "origin": "independent adversarial review of PR #980"
+  },
+  "predictions": [
+    {
+      "id": "H1_dynamic_power_keeps_first_move_hit_count",
+      "before_fix": "When the first mover uses Double Kick and the second mover has pending Flail or Reversal, the exact-roll fan-out calls run_move with hit_count=1 and emits only one defender Damage instruction.",
+      "after_fix": "The exact-roll fan-out preserves the move's ordinary hit count. Double Kick emits two defender Damage instructions in every damaging branch; the ordinary no-Flail control remains unchanged.",
+      "boundary": "This preserves the engine's existing correlated/average multi-hit approximation; it does not claim independent random rolls for every hit of two-to-five-hit moves."
+    },
+    {
+      "id": "H2_color_change_requires_actual_positive_damage",
+      "before_fix": "A secondary-bearing attack passes the pre-cap damage roll into deferred Color Change. Ice Beam into a 1-HP Kecleon protected by Endure can emit Damage 0 followed by NORMAL->ICE.",
+      "after_fix": "Deferred Color Change receives the actual direct damage dealt to the target. A zero-damage Endure branch never changes type, while positive-damage Ice Beam keeps freeze-before-Color-Change ordering.",
+      "showdown_basis": "Gen 3 inherits Color Change's onDamagingHit guard `if (!damage || !target.hp) return`; the callback receives actual damage."
+    }
+  ],
+  "required_controls": [
+    "A first mover without a pending Flail/Reversal defender keeps the ordinary multi-hit path.",
+    "Positive direct damage still triggers Color Change after move secondaries.",
+    "Substitute hits do not trigger Color Change."
+  ]
+}
