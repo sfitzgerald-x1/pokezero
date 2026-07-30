@@ -3,7 +3,7 @@
   "prediction_commit": "cf319a6",
   "implementation_commit": "e17d333",
   "implementation_after_prediction": true,
-  "supersedes": "The completed-post-state mechanism and residual-risk statement in reports/c17_matcher_final_results.json. The retained row identities remain the evidence population.",
+  "supersedes": "All implementation and retained-reread claims in reports/c17_matcher_final_results.json. That file remains a historical record of the completed-post-state attempt; this file is the authoritative evidence for the prefix-state correction. The retained row identities remain the evidence population.",
   "scope": "Strict differential legal-roll support only. No engine behavior, attribution, component comparison, or divergence routing changed.",
   "mechanism": {
     "mapper": "rust/pokezero-search/src/events.rs emits legal_roll_state only for the exact raw-instruction prefix before the first defender Damage/DamageSubstitute in a segmented action phase, and only when that prefix contains Switch or Boost.",
