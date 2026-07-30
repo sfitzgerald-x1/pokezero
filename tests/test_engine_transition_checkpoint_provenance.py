@@ -67,6 +67,19 @@ class CheckpointProvenanceTests(unittest.TestCase):
                 runner.append_checkpoint(handle, second)
             self.assertEqual(runner.load_checkpoint(checkpoint), [first, second])
 
+    def test_resume_terminates_complete_final_record_before_appending(self) -> None:
+        first = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
+        second = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1001}
+        first_bytes = json.dumps(first, separators=(",", ":")).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            checkpoint.write_bytes(first_bytes)
+            self.assertEqual(runner.load_checkpoint(checkpoint), [first])
+            self.assertEqual(checkpoint.read_bytes(), first_bytes + b"\n")
+            with checkpoint.open("a", encoding="utf-8") as handle:
+                runner.append_checkpoint(handle, second)
+            self.assertEqual(runner.load_checkpoint(checkpoint), [first, second])
+
     def test_resume_rejects_mid_file_corruption_without_truncating(self) -> None:
         first = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1000}
         second = {"schema": runner.CHECKPOINT_SCHEMA, "seed": 1001}

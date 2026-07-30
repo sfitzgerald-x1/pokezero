@@ -2039,6 +2039,16 @@ def _truncate_torn_checkpoint_tail(path: Path, valid_prefix_bytes: int) -> None:
         os.fsync(handle.fileno())
 
 
+def _terminate_checkpoint_record(path: Path) -> None:
+    """Durably restore the JSONL delimiter after a complete torn final record."""
+
+    with path.open("r+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        handle.write(b"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def load_checkpoint(path: Path) -> list[dict[str, Any]]:
     """Read and, only for a torn tail, repair a single-writer JSONL checkpoint."""
 
@@ -2075,6 +2085,11 @@ def load_checkpoint(path: Path) -> list[dict[str, Any]]:
             break
         if isinstance(record, Mapping) and record.get("schema") == CHECKPOINT_SCHEMA:
             records.append(dict(record))
+        if line_number == last_index and not raw.endswith(b"\n"):
+            # A hard kill may lose only the newline after an otherwise complete
+            # JSON record. Restore that delimiter before ``open('a')`` can join
+            # the next record to it.
+            _terminate_checkpoint_record(path)
         prefix_bytes = next_prefix_bytes
     return records
 
