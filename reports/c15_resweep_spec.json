@@ -17,7 +17,7 @@
     "BLOCKED: repair the confirmed fixed-point base-power rounding, dynamic Flail/Reversal HP timing, and Forecast weather-expiry engine defects",
     "BLOCKED: repair the event-aware same-turn legal-set and post-switch branch-legality matcher defects",
     "BLOCKED: adjudicate the six retained incapacitated-action rows not closed by #974",
-    "BLOCKED: re-verify Substitute classification over the retained population at the post-#977 source",
+    "SATISFIED: post-#977 Substitute classification re-verified over all 13 retained identities in reports/c17_substitute_retained_verification.json",
     "SATISFIED: unsupported structural-count rows remain fail-closed UNATTRIBUTED unless a sibling arm actually carries the observed components",
     "BLOCKED: regenerate the family-rate table with the final classifier and freeze all predicted-zero mechanisms before launch",
     "BLOCKED: pin the final source commit, engine fingerprint, readout hash, seed contract, coverage floor, and immutable execution-manifest schema",
