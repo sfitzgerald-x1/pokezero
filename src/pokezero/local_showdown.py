@@ -2356,13 +2356,23 @@ def _apply_rest_sleep_provenance(
     """Attach the public Rest attempt count to each Rest-asleep mon's direct-world row.
 
     ``ShowdownReplayState.rest_sleep_counts`` records, per sleeping mon, that the sleep
-    came from its OWN Rest and how many move attempts have already burned off it (k,
-    0..2 — see that field for why it counts ATTEMPTS and not elapsed turns). Until this
-    the only sleep provenance crossing into world construction was the pair of aggregate
-    booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``), which say
-    a side HAS a clause-engaging sleeper but never which mon — so a Rest-asleep mon
-    arrived at the constructor indistinguishable from an opponent-induced one, and gen3's
-    Sleep Clause Mod exempts exactly the first kind.
+    came from its OWN Rest and how many public move attempts have occurred. A trailing
+    Sleep Talk/Snore run is held separately as ``rest_sleep_skipped_turns`` because Gen 3
+    refunds it on switch-in. ``rest_sleep_refunded_turns`` retains refunds already applied
+    by an earlier switch-in. All three values cross to the row: construction combines them
+    with the resolved world's ability, because Early Bird burns two timer units per attempt
+    while each skippedTime refund restores one.
+
+    An ACTIVE sleeper with a nonzero skipped run, or an attempt whose direct outcome is absent
+    in a truncated protocol prefix, cannot be represented by the Rust world (which has no
+    ``skippedTime`` field). Its row carries an explicit pending-refund marker so the downstream
+    constructor fails closed before approximate sleep handling can invent a generic timer.
+
+    Until this the only sleep provenance crossing into world construction was the pair of
+    aggregate booleans (``self_sleep_clause_blocks`` / ``opponent_sleep_clause_blocks``),
+    which say a side HAS a clause-engaging sleeper but never which mon — so a Rest-asleep
+    mon arrived at the constructor indistinguishable from an opponent-induced one, and
+    gen3's Sleep Clause Mod exempts exactly the first kind.
 
     KEY RECONSTRUCTION — the same trap family as the Heal Bell benched-cure caution.
     The tracker keys on the ident NAME (``_induced_sleep_victim_key``), because the lines
@@ -2383,6 +2393,9 @@ def _apply_rest_sleep_provenance(
     """
 
     counts = replay.rest_sleep_counts
+    refunded_turns = replay.rest_sleep_refunded_turns
+    skipped_turns = replay.rest_sleep_skipped_turns
+    pending_attempts = replay.rest_sleep_pending_attempt
     if not counts:
         return
     # ``induced_sleep_victims`` is keyed by the INDUCING side; this player's victims are
@@ -2396,7 +2409,37 @@ def _apply_rest_sleep_provenance(
         count = counts.get(key)
         if count is None or key in induced:
             continue
-        row["restSleepAttempts"] = int(count)
+        if pending_attempts.get(key, False):
+            row["restSleepRefundPending"] = True
+            continue
+        skipped = skipped_turns.get(key, 0)
+        refunded = refunded_turns.get(key, 0)
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or isinstance(refunded, bool)
+            or not isinstance(refunded, int)
+            or isinstance(skipped, bool)
+            or not isinstance(skipped, int)
+            or refunded < 0
+            or skipped < 0
+        ):
+            continue
+        if skipped:
+            if bool(row.get("active")):
+                # The simulator will apply skippedTime only on a future switch-in. The
+                # direct world has no place to preserve that pending refund for an active mon.
+                row["restSleepRefundPending"] = True
+                continue
+        if count < 0 or refunded + skipped > count:
+            # A malformed or incomplete public stream must not be coerced into a plausible
+            # Rest counter. Leave the row unannotated so construction follows its fail-closed path.
+            continue
+        row["restSleepAttempts"] = count
+        if refunded:
+            row["restSleepRefundedTime"] = refunded
+        if skipped:
+            row["restSleepSkippedTime"] = skipped
 
 
 def _materialization_identifier(value: str) -> str:

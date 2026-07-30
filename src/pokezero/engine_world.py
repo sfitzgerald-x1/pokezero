@@ -1475,6 +1475,7 @@ def _build_pokemon_spec(
         for stat in ("atk", "def", "spa", "spd", "spe")
     }
 
+    resolved_ability = _resolved_ability(mon, row)
     hp, status, rest_turns = _hp_and_status(
         row,
         maxhp=maxhp,
@@ -1482,6 +1483,7 @@ def _build_pokemon_spec(
         species=mon.species,
         is_self=is_self,
         approximate_sleep_turns=approximate_sleep_turns,
+        rest_sleep_early_bird=resolved_ability == "earlybird",
     )
     if rest_turns:
         # Gated on the wheel actually preserving the counter, for the same reason the
@@ -1533,7 +1535,7 @@ def _build_pokemon_spec(
         #
         # Ability field only -- gen3 does not fire the copied ability's Start event on
         # acquisition (#962 patch 32), so no activation is simulated here.
-        ability=_resolved_ability(mon, row),
+        ability=resolved_ability,
         # The CURRENT public item state beats the sampled battle-start
         # assignment: a publicly-stripped/consumed item is gone
         # (item_removed), and a Trick-swapped mon holds exactly the item the
@@ -1566,6 +1568,7 @@ def _hp_and_status(
     species: str,
     is_self: bool,
     approximate_sleep_turns: bool = False,
+    rest_sleep_early_bird: bool = False,
 ) -> tuple[int, str, int]:
     """Return ``(hp, engine status, rest_turns)`` for one public row.
 
@@ -1610,16 +1613,28 @@ def _hp_and_status(
     status = _STATUS_CODES.get(status_code)
     if status is None:
         if status_code == _SLEEP_STATUS_CODE:
-            rest_turns = _rest_turns_from_row(row)
-            if rest_turns is not None:
-                # EXACT, not approximated: the public attempt count reconstructs the
-                # engine's own Rest counter with nothing left to guess.
-                return hp, "sleep", rest_turns
+            if bool(row.get("restSleepRefundPending")):
+                raise EngineWorldUnsupported(
+                    "rest_sleep_skipped_time_pending",
+                    f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
+                )
+            if "restSleepAttempts" in row:
+                rest_turns = _rest_turns_from_row(row, early_bird=rest_sleep_early_bird)
+                if rest_turns is not None:
+                    # EXACT, not approximated: the public attempt count reconstructs the
+                    # engine's own Rest counter with nothing left to guess.
+                    return hp, "sleep", rest_turns
+                # A present annotation is positive Rest provenance, even when its
+                # counter is invalid. Never reinterpret it as induced sleep: that
+                # would zero rest_turns and re-arm Sleep Clause.
+                raise EngineWorldUnsupported(
+                    "rest_sleep_provenance_unrepresentable",
+                    f"{slot}: {species!r} has unrepresentable public Rest provenance",
+                )
             if approximate_sleep_turns:
-                # Documented approximation, and now only for an INDUCED sleep — a Rest
-                # sleep took the exact branch above. Model the mon as freshly asleep
-                # (sleep_turns=0); biases wake-up odds late in a sleep. The exact fix
-                # is public sleep-counter tracking in the replay state.
+                # Documented approximation only for an unannotated, induced sleep.
+                # Model the mon as freshly asleep (sleep_turns=0); this biases wake-up
+                # odds late in a sleep. The exact fix is public sleep-counter tracking.
                 return hp, "sleep", 0
         raise EngineWorldUnsupported(
             "status_unsupported",
@@ -1628,7 +1643,7 @@ def _hp_and_status(
     return hp, status, 0
 
 
-def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
+def _rest_turns_from_row(row: Mapping[str, Any], *, early_bird: bool = False) -> int | None:
     """Rebuild the engine's Rest counter from the row's public attempt count.
 
     ``restSleepAttempts`` (k) is written by ``local_showdown._apply_rest_sleep_provenance``
@@ -1640,23 +1655,24 @@ def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
     clock. The engine sets ``rest_turns = 3`` on Rest and decrements it once per move
     ATTEMPT, waking the mon when it reaches 1 (gen3/generate_instructions.rs); k counts
     those same attempts off the public ``|cant|SLOT|slp`` lines, which gen3 emits on
-    precisely the attempts that tick and on no others. So k attempts already spent leave
-    ``3 - k`` on the counter — 3, 2 or 1, never 0, since the attempt that would take it
-    to 0 is the one that wakes the mon and clears the tracker entry instead.
+    precisely the attempts that tick and on no others. Early Bird consumes two timer units
+    per attempt. ``restSleepSkippedTime`` is the trailing public Sleep Talk/Snore refund that
+    the next switch-in will restore; ``restSleepRefundedTime`` records prior switch-in refunds.
+    Each restores one unit. The exact remaining counter is therefore
+    ``3 - k * (2 if Early Bird else 1) + refunded + skipped``.
 
-    IT IS ``3 - k``, NOT ``4 - k``. This has been "corrected" once; do not do it again
-    without re-reading this paragraph. The off-by-one argument goes: the engine wakes at
-    ``rest_turns == 1`` while Showdown wakes at ``time == 0``, so the engine must run one
-    ahead. That compares Showdown's counter AFTER its decrement against the engine's
-    BEFORE its own. Both decrement on the attempt, and both wake on the attempt whose
-    PRE-decrement counter is 1::
+    For a non-Early-Bird world with no refund this is ``3 - k``, NOT ``4 - k``. The
+    off-by-one argument goes: the engine wakes at ``rest_turns == 1`` while Showdown wakes
+    at ``time == 0``, so the engine must run one ahead. That compares Showdown's counter
+    AFTER its decrement against the engine's BEFORE its own. Both decrement on the attempt,
+    and both wake on the attempt whose PRE-decrement counter is 1::
 
         showdown  data/mods/gen3/conditions.ts:  time--;  if (time <= 0) cure and move
         engine    gen3/generate_instructions.rs: match rest_turns { 1 => wake, 2|3 => stay }
 
-    Measured rather than argued — a Rest (``time``/``rest_turns`` = 3) costs three
-    attempts on both sides, of which exactly the first two are the non-acting ones that
-    emit ``|cant|``:
+    Measured rather than argued — an ordinary Rest (``time``/``rest_turns`` = 3) costs
+    three attempts on both sides, of which exactly the first two are the non-acting ones
+    that emit ``|cant|``:
 
         k=0  ->  rest_turns 3  ->  2 more cants, then it acts
         k=1  ->  rest_turns 2  ->  1 more cant,  then it acts
@@ -1666,21 +1682,18 @@ def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
     the real sim; ``gen3_rest_sleep_clause.rs`` walks the engine's and asserts the table
     above row by row.
 
-    ``4 - k`` gets EVERY row wrong, k=0 included. NOTHING CLAMPS IT — not here (the range
-    check below is on the INPUT k, never on the returned counter) and not in the adapter
-    (which validates only non-negativity). What differs between the rows is how the
-    wrongness surfaces: k=0 would build ``rest_turns = 4``, a value the engine has no
-    match arm for and panics on (``Invalid rest_turns value: 4``, pinned by
+    ``4 - k`` gets every ordinary row wrong, k=0 included. NOTHING CLAMPS IT — not here
+    (the range check below is on the INPUT k, never on the returned counter) and not in
+    the adapter (which validates only non-negativity). What differs between the rows is
+    how the wrongness surfaces: k=0 would build ``rest_turns = 4``, a value the engine has
+    no match arm for and panics on (``Invalid rest_turns value: 4``, pinned by
     ``a_rest_counter_of_four_is_not_a_representable_state``), while k=1 and k=2 build 3
     and 2 — legal counters, silently one attempt late.
 
-    So a k=0 check WOULD have caught ``4 - k``, loudly. The reason every row is pinned is
-    REACHABILITY, not detectability: a fresh, un-attempted Rest dominates the corpus, so a
-    mapping error confined to k=1/k=2 can ride along in production data for a long time
-    without ever being exercised. (An earlier version of this comment claimed ``4``
-    "clamps back to 3" and that a k=0 check therefore could not catch it. Both halves were
-    false; the correction is recorded here because guard-rail comments are only worth what
-    their reasoning is worth.)
+    A k=0 check WOULD have caught ``4 - k``, loudly. Every ordinary row is pinned for
+    REACHABILITY: a fresh, un-attempted Rest dominates the corpus, so an error confined to
+    k=1/k=2 can ride along in production data. Early Bird and skippedTime remain separate
+    pinned cases because their arithmetic is not the ordinary ``3 - k`` table.
 
     Why this matters beyond the wake timer: gen3's Sleep Clause Mod exempts a Rest sleep
     (``rulesets.ts`` skips a sleeper whose ``statusState.source`` is its own ally), and
@@ -1691,15 +1704,39 @@ def _rest_turns_from_row(row: Mapping[str, Any]) -> int | None:
     """
 
     attempts = row.get("restSleepAttempts")
+    refunded = row.get("restSleepRefundedTime", 0)
+    skipped = row.get("restSleepSkippedTime", 0)
     # Bools are ints in Python; an accidental True must not read as one attempt.
-    if isinstance(attempts, bool) or not isinstance(attempts, int):
+    if (
+        isinstance(attempts, bool)
+        or not isinstance(attempts, int)
+        or isinstance(refunded, bool)
+        or not isinstance(refunded, int)
+        or isinstance(skipped, bool)
+        or not isinstance(skipped, int)
+    ):
         return None
-    if not 0 <= attempts < _REST_SLEEP_TURNS:
-        # k is 0..2 by construction. Anything else means the tracker and this
-        # arithmetic have drifted apart, which is exactly the silent wrongness the
-        # constructor fails closed on rather than clamping into.
+    if (
+        attempts < 0
+        or refunded < 0
+        or skipped < 0
+        or refunded + skipped > attempts
+    ):
+        # Refunds cannot outnumber public attempts. Anything else means the tracker
+        # and this arithmetic have drifted apart, which is exactly the silent
+        # wrongness the constructor fails closed on rather than clamping into.
         return None
-    return _REST_SLEEP_TURNS - attempts
+    if early_bird and attempts > 1:
+        # A Rest starts at three units, so the second Early Bird attempt wakes before it
+        # can emit another sleep cant. Treat a larger public count as inconsistent.
+        return None
+    rest_turns = (
+        _REST_SLEEP_TURNS
+        - attempts * (2 if early_bird else 1)
+        + refunded
+        + skipped
+    )
+    return rest_turns if 1 <= rest_turns <= _REST_SLEEP_TURNS else None
 
 
 def _move_specs(

@@ -1,0 +1,26 @@
+{
+  "registered_before": "patch 45 implementation, native rebuild, and correction probes",
+  "review_context": {
+    "source": "independent Codex fallback review after the required Opus review timed out",
+    "blocking_findings": [
+      "Protect stripping resets accuracy to 100 after the absorb conversion preserved it",
+      "a full-HP absorb hit and a miss can collapse to the same empty engine delta and be rendered as a 100% miss",
+      "the Rust end-of-turn replica omits the engine's force-switch short circuit"
+    ]
+  },
+  "live_showdown_probe": {
+    "format": "gen3customgame",
+    "seeds": [1, 64],
+    "scenario": "Hydro Pump into Protect on a Water Absorb Vaporeon",
+    "protect_activations": 57,
+    "misses": 7,
+    "conclusion": "accuracy remains live before the Protect block; the engine must retain the original accuracy through remove_effects_for_protect"
+  },
+  "prediction": {
+    "protect_accuracy": "Hydro Pump into Protect becomes two engine outcomes: approximately 80% blocked by Protect and 20% miss, with no absorb heal in either outcome",
+    "full_hp_absorb": "Hydro Pump into a full-HP Water Absorb target renders approximately 80% ability immunity and 20% miss rather than one 100% miss-shaped branch",
+    "force_switch_eot": "the Rust event mapper reports end_of_turn=true whenever either side has force_switch, matching the patched engine and preventing segmentation drift",
+    "existing_absorb_clearances": "the retained patch-43 absorb clearances remain cleared; patch 45 changes composed edge semantics and mapper attribution, not the original heal-through-Protect or heal-on-miss fixes",
+    "fresh_census": "no new unattributed mechanism is expected; any identity or class changes must be explained by the three registered corrections above"
+  }
+}

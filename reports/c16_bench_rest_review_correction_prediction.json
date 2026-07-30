@@ -1,0 +1,32 @@
+{
+  "prediction_id": "c16-rest-provenance-review-correction-2026-07-30",
+  "scope": "Independent-review corrections for Rest provenance after commits cd4a6ad..8a86df2.",
+  "predictions": [
+    {
+      "case": "Sleep Talk or Snore interrupted after the Gen 3 sleep handler",
+      "expected": "A later same-actor flinch, Truant, confusion, or Attract protocol event proves that sleepUsable passed and increments the pending skippedTime refund even without a direct move line."
+    },
+    {
+      "case": "active Rest sleeper with pending skippedTime",
+      "expected": "Row annotation records an explicit pending-refund marker; world construction raises rest_sleep_skipped_time_pending before approximate_sleep_turns can map it as generic sleep."
+    },
+    {
+      "case": "Early Bird Rest",
+      "expected": "World construction consumes two timer units per public attempt and restores one unit per skippedTime refund, using the resolved world ability. A one-attempt Sleep Talk followed by a switch therefore builds rest_turns=2, not 3."
+    },
+    {
+      "case": "snapshot and cleanup",
+      "expected": "Counts, skippedTime, and pending-attempt maps survive snapshots and all are retired through Natural Cure, team cure, and faint paths."
+    },
+    {
+      "case": "explicit but unrepresentable Rest provenance",
+      "expected": "When restSleepAttempts is present but malformed, non-integer, out of range, or inconsistent with Early Bird, world construction raises rest_sleep_provenance_unrepresentable even with approximate_sleep_turns=True. Approximation remains available only when the row has no Rest provenance annotation."
+    }
+  ],
+  "acceptance": [
+    "Focused Rest provenance tests cover each correction.",
+    "Local Showdown tests remain green.",
+    "Explicit unrepresentable Rest provenance never falls through to generic induced sleep approximation.",
+    "No untracked _review_* helper is staged or removed."
+  ]
+}
