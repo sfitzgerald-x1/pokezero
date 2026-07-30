@@ -5447,3 +5447,119 @@ limit census unchanged. Binding run: 300 games, seeds 1500000-1500299, strict,
   pre-run on the 88-frame (`postmerge_restatement`), both scored in Z7.5
 - `reports/c11_statfloor_differential.json` — the binding post-merge run
   (`repros_complete: true`, 117/117)
+
+---
+
+# Appendix Z8 — Cycle twelve: the walk relabels applied (78 -> 73), the 73 decomposed, and the final-wave backlog
+
+Commit `d5389b1` (main at #962), fingerprint
+`bdb6ad30f2722540c7b8e4fe1c63dde96627f890f1001c95d2677240a32eebb5`, 36 patches.
+Fresh worktree/venv; standing probes **9/9** before any row was read. The 300-game
+verification was NOT re-run: the binding measurement is #962's identity-exact
+differential (`reports/c11_statfloor_differential.json`, `repros_complete: true`,
+117/117), cited per the assignment. Predictions were committed SEPARATELY AND
+FIRST (`reports/c12_predictions.json`, its own commit, per the #961 carry), derived
+exclusively from committed artifacts — the c11 row data was not opened until the
+prediction commit existed.
+
+## Z8.1 Predictions, scored
+
+| | predicted | actual |
+|---|---|---|
+| P1: the 78 = c9's 108 minus the 30 fix-lane rows, at IDENTITY level | exact set | **exact** — zero predicted-but-absent, zero present-but-unpredicted |
+| P2: the 9 surviving walk rows present, classes unchanged | 9/9 | **9/9** |
+| P3: re-walk at 36 patches reproduces c9 verdicts | 5 limit / 3 lne / 1 dc | **5/3/1 — and every MASS reproduced to the third decimal, including both Z7.6 marker rows** |
+| P4: family table of the 73 | table | **holds by construction + content check** (below) |
+| P5: clearance signatures for the backlog | — | future-scored |
+
+Content integrity, checked not assumed: all 78 surviving rows are **byte-identical
+in class and branch-miss content** between `c10_kecleon_differential.json` (88-frame
+baseline) and the binding c11 run — #962 touched nothing it did not claim. The c9
+family attributions therefore carry, and Z7.6's stale-in-detail caveat on
+1500012/24 and 1500242/60 is **discharged by re-derivation** rather than argued:
+`reports/c12_walk_rederivation.json` re-walks all nine rows against the c11 report
+at this build. Same exits, same masses.
+
+## Z8.2 RELABELS APPLIED: five rows move to `limit:roll_divergent_lethality` (78 -> 73)
+
+The X-standard's sanctioned manual path, exercised for the first time. Each row
+moves with TWO demonstrations attached — the c9 walk (33 patches) and this cycle's
+re-derivation (36 patches), identical verdict and mass:
+
+| row | mass | reproducing shape |
+|---|---|---|
+| 1500050/33 | 6.59% | tbolt m=63, two rolls hit -56; capped tick kills |
+| 1500168/97 | 4.98% | Return roll 88% = -259; Blissey survives at 3 as observed |
+| 1500219/62 | 5.86% | tbolt roll 100% = -28; tox tick + Perish kill reconstruct |
+| 1500242/56 | 4.98% | HP Fire 87% = -71; capped tick -38 |
+| 1500255/55 | 5.86% | DE roll 100% = -146, recoil re-scales, tick kills at 28 |
+
+The three `limit_not_established` rows (1500012/24, 1500105/111, 1500242/60:
+0.34/0.34/0.66%) STAY outside limits — reachable but sub-floor, exactly as X.3.3
+prices them. 1500251/56 stays `damage_calc` (obs 116 still outside m=130's roll
+set at 36 patches). The classifier is still deliberately not taught any of this;
+the adjudicated census lives in `reports/c12_decomposition.json`.
+
+**Adjudicated outside-limits residue: 73.**
+
+## Z8.3 The 73, decomposed (identities per family in `reports/c12_decomposition.json`)
+
+| lane | rows | families |
+|---|---|---|
+| matcher/instrument | **49** | heal-cap structural 10 (incl. 1500028/44 per Z7.3), accounting 9, boundary truncation 6, overreport window 6, overreport legal 3, I.2 attribution 3, Pain Split roll-inheritance 3, leech-cap 1, battle-end tie 1, Sleep Talk union 7 |
+| limit-shape candidates | **11** | compound RDL shapes 7, limit_not_established 3, confusion fan 1 |
+| engine follow-ups | **10** | fixed-damage post-hooks 4 (incl. Counter member), Counter/MC semantics 2, one-point family 2, recoil rounding 1, WaterAbsorb-on-RainDance 1 |
+| world-construction drift | **3** | traced-ability 2, toxic-stage staleness 1 |
+
+## Z8.4 The final-wave fix backlog
+
+Full row identities and clearance-signature predictions in
+`reports/c12_decomposition.json` `fix_backlog`; summary:
+
+**Engine-side** — E1 BP-side one-point locus (2 rows; honesty: NEITHER carries a
+pinch/ThickFat/Facade marker — the documented BP-side loci currently have ZERO
+attributed rows, these two are 1-point gaps with mechanism OPEN filed as
+candidates); E2 recoil rounding (1: trunc(0.33·d) vs round(d/3)); E3 Water Absorb
+on Rain Dance (1); E4 fixed-damage post-hooks (4: no `damage_dealt` registration,
+no contact hooks — structural, WILL scatter, predict by signature not by family);
+E5 Counter/Mirror Coat beyond E4 (2, WHY open — mechanism work before any patch);
+E6 Flash Fire Phase1 position (0 rows, documented).
+
+**World/parser-side** — W1 traced-ability materialization (2; third member of the
+Z6.1 "parser-visible fact with no world consumer" class); W2 toxic-stage
+staleness across a Rest cure (1).
+
+**Instrument-side** — I1 heal-cap shape relaxation (10), I2 matcher accounting +
+legal-set availability (18), I3 roll-inherited exact components (4), I4 mapper
+attribution (4), I5 boundary-truncation handling (6), I6 Sleep Talk callee union
+(7): 49 rows that need matcher/mapper work or a formal limit-class adjudication —
+they are measurement artifacts, not engine errors, and fixing the engine will
+never clear them.
+
+**Adjudication, not fixes** — A1 the 7 compound RDL shapes (walkable under the X
+standard next), A2 the 3 sub-floor rows (terminal under the current standard),
+A3 confusion fan (1).
+
+## Z8.5 SWEEP-GATE STATEMENT on the 73
+
+Attribution completeness: **every one of the 73 rows carries a named family, a
+row-level basis, and a lane owner** — the gate condition (non-damage_calc,
+non-documented-follow-up residue fully attributed) REMAINS MET, now against the
+73. WHAT-level candidates are again foregrounded rather than buried: E1's two
+rows and E5's two rows have open mechanisms; A1–A3's eleven are adjudication
+candidates, not attributions of error.
+
+For **"all currently known divergences fixed"** to hold, exactly this must land:
+E1–E5 (10 rows, engine), W1–W2 (3 rows, world/parser), and for the 49
+instrument rows either matcher/mapper fixes or a reviewed limit-class
+adjudication per family (I1–I6) — plus the A1 walks if the residue definition
+is to price those 7 rows honestly rather than leave them as shapes. E6 is
+documented with zero attributed rows and does not block. Until then the sweep
+gate stands on attribution, and the eighth-hold discipline continues: nothing
+here launches the sweep.
+
+## Z8.6 Artifacts
+
+- `reports/c12_predictions.json` — pre-registered, SEPARATE FIRST COMMIT
+- `reports/c12_walk_rederivation.json` — 9-row re-walk at 36 patches
+- `reports/c12_decomposition.json` — relabels applied, the 73 with identities, the backlog
