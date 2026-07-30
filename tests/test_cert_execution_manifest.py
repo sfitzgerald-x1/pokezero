@@ -784,6 +784,40 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 )
 
     def test_checked_in_final_contract_matches_current_launch_vocabulary(self) -> None:
+        lifecycle_path = (
+            ROOT / "reports" / "certification_contract_lifecycle.json"
+        )
+        if lifecycle_path.is_file():
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                lifecycle["schema_version"],
+                "pokezero.engine-cert-contract-lifecycle/v1",
+            )
+            self.assertEqual(lifecycle["stage"], "build_source")
+            self.assertIs(lifecycle["launchable"], False)
+            for relative in lifecycle["required_absent_artifacts"]:
+                self.assertFalse((ROOT / relative).exists(), relative)
+            identity = lifecycle["source_code_identity"]
+            self.assertEqual(
+                identity["readout_sha256"],
+                _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
+            )
+            self.assertEqual(
+                identity["execution_manifest_producer_sha256"],
+                _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
+            )
+            fingerprint = json.loads(
+                subprocess.check_output(
+                    [sys.executable, "scripts/engine_build_fingerprint.py", "--print"],
+                    cwd=ROOT,
+                    text=True,
+                )
+            )
+            self.assertEqual(
+                identity["engine_fingerprint"], fingerprint["fingerprint"]
+            )
+            return
+
         contract = json.loads(
             (ROOT / "reports" / "c15_resweep_spec.json").read_text(encoding="utf-8")
         )
@@ -938,6 +972,17 @@ class ExecutionManifestProducerTests(unittest.TestCase):
     def test_checked_in_contract_attestation_binds_tracked_contract_blob(
         self,
     ) -> None:
+        lifecycle_path = (
+            ROOT / "reports" / "certification_contract_lifecycle.json"
+        )
+        if lifecycle_path.is_file():
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            self.assertEqual(lifecycle["stage"], "build_source")
+            self.assertFalse(
+                (ROOT / "reports" / "c25_cert_contract_attestation.json").exists()
+            )
+            return
+
         attestation_path = ROOT / "reports" / "c25_cert_contract_attestation.json"
         attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
         self.assertEqual(
