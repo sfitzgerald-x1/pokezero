@@ -2,7 +2,7 @@
   "artifact": "c17_incapacitated_action_prediction/v1",
   "status": "pre-adjudication prediction",
   "scope": {
-    "archive": "/Users/scott/workspace/agents/pokezero-agent/cert-sweep-20260730",
+    "archive": "<local-evidence-archive>/cert-sweep-20260730",
     "readout": "reports/c14_cert_sweep_readout.json",
     "prior_adjudication": "reports/c15_hiddenpower_thaw_prediction.json",
     "rows": [
