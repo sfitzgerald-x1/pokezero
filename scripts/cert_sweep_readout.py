@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import math
 import re
@@ -378,26 +379,301 @@ def _attribute_roll_row(row, majority, obs_c, eng_c):
     return None
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _contract_gates(
+    *,
+    paths: Sequence[Path],
+    shards: Sequence[Mapping[str, Any]],
+    contract: Mapping[str, Any],
+    execution_manifest: Mapping[str, Any] | None,
+    coverage: float,
+    aggregate: Mapping[str, int],
+) -> tuple[list[str], dict[str, Any]]:
+    """Validate the immutable execution/provenance contract, fail closed."""
+
+    gates = contract.get("certification_gates")
+    if not isinstance(gates, Mapping):
+        return [], {"enforced": False}
+
+    failures: list[str] = []
+    evidence: dict[str, Any] = {"enforced": True}
+    if contract.get("registered_before_launch") is not True:
+        failures.append("contract was not registered before launch")
+
+    expected_shards = int(gates.get("expected_shards", -1))
+    expected_games = int(gates.get("expected_games", -1))
+    minimum_coverage = float(gates.get("minimum_coverage_measured_fraction", 1.0))
+    expected_blocks = gates.get("seed_blocks")
+    if not isinstance(expected_blocks, list) or not expected_blocks:
+        failures.append("contract has no explicit seed_blocks")
+        expected_blocks = []
+
+    if len(paths) != expected_shards:
+        failures.append(f"expected {expected_shards} shard reports, found {len(paths)}")
+    if aggregate.get("games") != expected_games:
+        failures.append(
+            f"expected {expected_games} aggregate games, found {aggregate.get('games')}"
+        )
+    if coverage < minimum_coverage:
+        failures.append(
+            f"coverage {coverage:.6f} is below registered floor {minimum_coverage:.6f}"
+        )
+
+    required_build = gates.get("required_build_check")
+    required_matcher = gates.get("required_matcher")
+    required_repros_per_game = int(gates.get("required_repros_per_game", -1))
+    required_keep_repro = int(gates.get("required_keep_repro", -1))
+
+    actual_blocks: list[dict[str, int]] = []
+    distinct_seed_total = 0
+    for path, shard in zip(paths, shards):
+        seeds = shard.get("seeds")
+        if not isinstance(seeds, Mapping):
+            failures.append(f"{path.name}: missing seed summary")
+            continue
+        block = {
+            "start": int(seeds.get("min", -1)),
+            "games": int(shard.get("games", -1)),
+            "max": int(seeds.get("max", -1)),
+            "distinct": int(seeds.get("distinct", -1)),
+        }
+        actual_blocks.append(block)
+        distinct_seed_total += max(0, block["distinct"])
+        if block["games"] <= 0:
+            failures.append(f"{path.name}: non-positive game count")
+        expected_max = block["start"] + block["games"] - 1
+        if block["max"] != expected_max or block["distinct"] != block["games"]:
+            failures.append(
+                f"{path.name}: seed population is not the complete contiguous range "
+                f"{block['start']}..{expected_max}"
+            )
+        if shard.get("build_check") != required_build:
+            failures.append(
+                f"{path.name}: build_check={shard.get('build_check')!r}, "
+                f"expected {required_build!r}"
+            )
+        if shard.get("matcher") != required_matcher:
+            failures.append(
+                f"{path.name}: matcher={shard.get('matcher')!r}, "
+                f"expected {required_matcher!r}"
+            )
+        if shard.get("acceptance_eligible") is not True:
+            failures.append(f"{path.name}: shard is not acceptance_eligible")
+        retention = shard.get("repro_retention")
+        if not isinstance(retention, Mapping):
+            failures.append(f"{path.name}: missing repro_retention")
+        else:
+            if int(retention.get("repros_per_game", -1)) != required_repros_per_game:
+                failures.append(f"{path.name}: repros_per_game does not match contract")
+            if int(retention.get("keep_repro", -1)) != required_keep_repro:
+                failures.append(f"{path.name}: keep_repro does not match contract")
+            if retention.get("repros_complete") is not True:
+                failures.append(f"{path.name}: repro population is incomplete")
+
+    normalized_expected_blocks = sorted(
+        (
+            {
+                "start": int(block.get("start", -1)),
+                "games": int(block.get("games", -1)),
+            }
+            for block in expected_blocks
+            if isinstance(block, Mapping)
+        ),
+        key=lambda block: block["start"],
+    )
+    normalized_actual_blocks = sorted(
+        ({"start": block["start"], "games": block["games"]} for block in actual_blocks),
+        key=lambda block: block["start"],
+    )
+    if normalized_actual_blocks != normalized_expected_blocks:
+        failures.append("observed seed blocks do not exactly match the registered blocks")
+    if distinct_seed_total != expected_games:
+        failures.append(
+            f"expected {expected_games} distinct seeds, found {distinct_seed_total}"
+        )
+
+    required_source = gates.get("required_source_commit")
+    required_fingerprint = gates.get("required_engine_fingerprint")
+    required_readout_sha = gates.get("required_readout_sha256")
+    required_probe_passes = int(gates.get("required_behavioral_probe_passes", -1))
+    actual_readout_sha = _sha256(Path(__file__).resolve())
+    evidence.update(
+        {
+            "expected_shards": expected_shards,
+            "expected_games": expected_games,
+            "distinct_seed_total": distinct_seed_total,
+            "seed_blocks": normalized_actual_blocks,
+            "minimum_coverage_measured_fraction": minimum_coverage,
+            "source_commit": required_source,
+            "engine_fingerprint": required_fingerprint,
+            "readout_sha256": actual_readout_sha,
+        }
+    )
+    if actual_readout_sha != required_readout_sha:
+        failures.append("executed readout hash does not match the registered hash")
+
+    if not isinstance(execution_manifest, Mapping):
+        failures.append("certification contract requires an execution manifest")
+        return failures, evidence
+    if execution_manifest.get("schema") != "engine-cert-execution-manifest/1":
+        failures.append("execution manifest schema is not engine-cert-execution-manifest/1")
+    for field, required in (
+        ("source_commit", required_source),
+        ("engine_fingerprint", required_fingerprint),
+        ("readout_sha256", required_readout_sha),
+    ):
+        if execution_manifest.get(field) != required:
+            failures.append(f"execution manifest {field} does not match contract")
+
+    manifest_shards = execution_manifest.get("shards")
+    if not isinstance(manifest_shards, list):
+        failures.append("execution manifest has no shard list")
+        manifest_shards = []
+    manifest_by_report: dict[str, Mapping[str, Any]] = {}
+    for entry in manifest_shards:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("report"), str):
+            failures.append("execution manifest contains an invalid shard entry")
+            continue
+        report = entry["report"]
+        if report in manifest_by_report:
+            failures.append(f"execution manifest repeats shard report {report}")
+        manifest_by_report[report] = entry
+    if len(manifest_by_report) != expected_shards:
+        failures.append(
+            f"execution manifest contains {len(manifest_by_report)} unique shard entries, "
+            f"expected {expected_shards}"
+        )
+
+    report_names = {path.name for path in paths}
+    if set(manifest_by_report) != report_names:
+        failures.append("execution manifest report set does not match supplied shard reports")
+    for path in paths:
+        entry = manifest_by_report.get(path.name)
+        if entry is None:
+            continue
+        if entry.get("report_sha256") != _sha256(path):
+            failures.append(f"{path.name}: report hash does not match execution manifest")
+        if entry.get("complete_marker") is not True:
+            failures.append(f"{path.name}: durable completion marker is absent")
+        probes = entry.get("behavioral_probes")
+        if not isinstance(probes, Mapping):
+            failures.append(f"{path.name}: behavioral probe evidence is absent")
+        elif (
+            int(probes.get("passed", -1)) != required_probe_passes
+            or int(probes.get("total", -1)) != required_probe_passes
+        ):
+            failures.append(
+                f"{path.name}: behavioral probes are not "
+                f"{required_probe_passes}/{required_probe_passes}"
+            )
+        if entry.get("source_commit") != required_source:
+            failures.append(f"{path.name}: source commit does not match contract")
+        if entry.get("engine_fingerprint") != required_fingerprint:
+            failures.append(f"{path.name}: engine fingerprint does not match contract")
+
+    return failures, evidence
+
+
+def _family_rate_gates(
+    family_counts: Mapping[str, int], contract: Mapping[str, Any]
+) -> tuple[list[str], dict[str, Any]]:
+    """Reject unregistered or unexpectedly broad attribution families."""
+
+    if not isinstance(contract.get("certification_gates"), Mapping):
+        return [], {"enforced": False}
+    table = contract.get("pre_registered_family_rate_table")
+    failures: list[str] = []
+    evidence: dict[str, Any] = {"enforced": True, "families": {}}
+    if not isinstance(table, Mapping):
+        return ["missing pre_registered_family_rate_table"], evidence
+    registered = table.get("documented_families")
+    if not isinstance(registered, Mapping):
+        return ["pre_registered_family_rate_table has no documented_families"], evidence
+
+    for family, count in family_counts.items():
+        if family == "UNATTRIBUTED":
+            continue
+        prediction = registered.get(family)
+        if not isinstance(prediction, Mapping):
+            failures.append(f"attributed family {family!r} was not pre-registered")
+            continue
+        interval = prediction.get("wilson95")
+        if not (
+            isinstance(interval, list)
+            and len(interval) == 2
+            and all(isinstance(value, (int, float)) for value in interval)
+        ):
+            failures.append(f"attributed family {family!r} has no registered Wilson interval")
+            continue
+        upper = float(interval[1])
+        evidence["families"][family] = {
+            "observed": int(count),
+            "registered_wilson95": interval,
+            "upper_bound_enforced": upper,
+        }
+        if count > upper:
+            failures.append(
+                f"attributed family {family!r} count {count} exceeds "
+                f"registered upper bound {upper:g}"
+            )
+
+    predicted_zero = table.get("new_mechanisms_post_fix")
+    if not isinstance(predicted_zero, Mapping):
+        failures.append("pre_registered_family_rate_table has no new_mechanisms_post_fix")
+    else:
+        for family, prediction in predicted_zero.items():
+            if not isinstance(prediction, Mapping) or prediction.get("predicted_next") != 0:
+                failures.append(f"post-fix mechanism {family!r} is not registered at zero")
+            observed = int(family_counts.get(family, 0))
+            evidence["families"][family] = {
+                "observed": observed,
+                "registered_expected": 0,
+            }
+            if observed:
+                failures.append(
+                    f"predicted-zero post-fix mechanism {family!r} observed {observed} times"
+                )
+    return failures, evidence
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--shards", nargs="+", required=True)
     ap.add_argument("--prediction", type=Path, required=True)
+    ap.add_argument("--execution-manifest", type=Path, default=None)
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
 
     paths = []
     for pattern in args.shards:
         paths.extend(sorted(glob.glob(pattern)))
+    if not paths:
+        ap.error("--shards matched no files")
+    resolved_paths = [Path(path).resolve() for path in paths]
+    if len(set(resolved_paths)) != len(resolved_paths):
+        ap.error("--shards contains duplicate report paths")
+
     agg = {"boundaries_measured": 0, "boundaries_full_round": 0,
            "transitions_matched": 0, "transitions_diverged": 0,
            "engine_errors": 0, "games": 0}
+    aggregate_counters: Counter = Counter()
     classes: Counter = Counter()
     rows = []
+    shards = []
     retention_ok = True
     for p in paths:
         shard = json.loads(Path(p).read_text())
+        shards.append(shard)
         for k in agg:
             agg[k] += int(shard.get(k, 0))
+        aggregate_counters.update(shard.get("counters") or {})
         for c, n in (shard.get("divergence_classes") or {}).items():
             classes[c] += n
         rows.extend(shard.get("repros") or [])
@@ -419,6 +695,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             unattributed.append(entry)
 
     pred = json.loads(args.prediction.read_text())
+    execution_manifest = (
+        json.loads(args.execution_manifest.read_text())
+        if args.execution_manifest is not None
+        else None
+    )
     pred_classes = pred.get("predicted_class_rates_10k") or {}
     per_class = {}
     n = agg["boundaries_measured"]
@@ -432,17 +713,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             "predicted_wilson95_count": (pred_classes.get(cls) or {}).get("wilson95_count_10k"),
         }
 
-    verdict = "PASS" if (not unattributed and agg["engine_errors"] == 0
-                         and retention_ok and len(rows) == agg["transitions_diverged"]) else "FAIL"
+    contract_failures, contract_evidence = _contract_gates(
+        paths=[Path(path) for path in paths],
+        shards=shards,
+        contract=pred,
+        execution_manifest=execution_manifest,
+        coverage=coverage,
+        aggregate=agg,
+    )
+    family_failures, family_evidence = _family_rate_gates(fam_counts, pred)
+    gate_failures = contract_failures + family_failures
+    verdict = "PASS" if (
+        not unattributed
+        and agg["engine_errors"] == 0
+        and retention_ok
+        and len(rows) == agg["transitions_diverged"]
+        and not gate_failures
+    ) else "FAIL"
+    skip_counters = {
+        key: value for key, value in sorted(aggregate_counters.items())
+        if key.startswith("skip:")
+    }
     out = {
         "verdict": verdict,
         "aggregate": agg,
         "coverage_measured_fraction": round(coverage, 4),
+        "unmeasured_full_round_fraction": round(max(0.0, 1.0 - coverage), 4),
+        "skip_counters": skip_counters,
         "repros_complete_all_shards": retention_ok,
         "rows_retained": len(rows),
         "family_attribution": dict(fam_counts.most_common()),
         "unattributed_rows": unattributed,
         "per_class_observed_vs_predicted": per_class,
+        "contract_evidence": contract_evidence,
+        "family_rate_evidence": family_evidence,
+        "gate_failures": gate_failures,
     }
     print(f"VERDICT: {verdict}")
     print(f"games={agg['games']} boundaries={agg['boundaries_measured']} "
@@ -452,6 +757,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  {k:5d}  {fam}")
     if unattributed:
         print(f"UNATTRIBUTED: {len(unattributed)} rows (sweep FAILURE pending replay-first triage)")
+    for failure in gate_failures:
+        print(f"GATE FAILURE: {failure}")
     if args.json:
         args.json.write_text(json.dumps(out, indent=1))
         print(f"wrote {args.json}")
