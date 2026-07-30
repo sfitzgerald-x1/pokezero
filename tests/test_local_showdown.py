@@ -734,7 +734,10 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             row for row in payload["sides"]["p1"]["pokemon"] if row.get("species") == "Entei"
         )
         self.assertFalse(row["active"])
-        self.assertEqual(row["restSleepAttempts"], 0)
+        # Preserve the raw public attempt and its one-unit skippedTime refund separately.
+        # The constructed world then applies the sampled ability's decrement multiplier.
+        self.assertEqual(row["restSleepAttempts"], 1)
+        self.assertEqual(row["restSleepSkippedTime"], 1)
 
     def test_public_materialization_preserves_a_switched_active_pokemon(self) -> None:
         config = integration_config()

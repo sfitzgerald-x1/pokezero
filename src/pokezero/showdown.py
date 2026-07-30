@@ -1040,11 +1040,11 @@ class ShowdownReplayState:
     # ``-curestatus … slp`` and faint; switch-out does NOT clear (sleep persists and is public
     # on revealed mons). Derived ONLY from public protocol lines — no engine-side hidden state.
     induced_sleep_victims: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    # Rest-sleep provenance, per mon: victim key -> k, the number of move attempts this mon
-    # has ALREADY burned off its Rest since falling asleep. Same ``<slot>:<normalized ident
+    # Rest-sleep provenance, per mon: victim key -> k, the raw number of public move attempts
+    # observed since this Rest began. Same ``<slot>:<normalized ident
     # name>`` key as ``induced_sleep_victims`` (see ``_induced_sleep_victim_key`` for why the
-    # ident NAME and not the species). Membership answers "is this slp Rest-inflicted"; k
-    # answers "how far through it".
+    # ident NAME and not the species). Membership answers "is this slp Rest-inflicted"; k is
+    # an ATTEMPT count, not elapsed timer units, because Early Bird burns two units per attempt.
     #
     # WHY AN ATTEMPT COUNT AND NOT ELAPSED TURNS — do not "simplify" this back. gen3's sleep
     # timer decrements ONLY inside ``slp.onBeforeMove`` (data/mods/gen3/conditions.ts:24-28),
@@ -1058,16 +1058,20 @@ class ShowdownReplayState:
     # records the trailing Sleep Talk/Snore run that Gen 3 will refund on re-entry, so a
     # benched Rest sleeper can still be reconstructed exactly rather than discarded.
     rest_sleep_counts: Mapping[str, int] = field(default_factory=dict)
+    # Per Rest sleeper, skippedTime refunds already applied by a public switch-in. Keep this
+    # history separate from attempts: after the switch the live Showdown field is zero, but an
+    # Early Bird world still needs the one-unit refund to reconstruct its timer exactly.
+    rest_sleep_refunded_turns: Mapping[str, int] = field(default_factory=dict)
     # Per Rest sleeper, the trailing run of public Sleep Talk/Snore attempts currently stored
     # in Showdown's hidden ``statusState.skippedTime``. It is public because every relevant
-    # attempt emits ``|cant|...|slp`` followed by the direct move line. The Rust world has no
-    # skippedTime field, so an ACTIVE sleeper with a nonzero value remains fail-closed; a
-    # benched sleeper can use ``rest_sleep_counts - rest_sleep_skipped_turns`` because its next
-    # switch-in refunds precisely that amount before its next move attempt.
+    # attempt emits ``|cant|...|slp`` followed by the direct move line or a later blocking
+    # event. The Rust world has no skippedTime field, so an ACTIVE sleeper with a nonzero value
+    # remains fail-closed; a benched sleeper carries the count separately for exact rebuilding.
     rest_sleep_skipped_turns: Mapping[str, int] = field(default_factory=dict)
-    # ``|cant|...|slp`` is observed before the direct Sleep Talk/Snore move line. This transient
-    # lets the parser distinguish a trailing sleepUsable run from an ordinary failed sleep turn;
-    # it is included in snapshots so snapshot restore preserves the same public state.
+    # ``|cant|...|slp`` is observed before the direct Sleep Talk/Snore move line. A later
+    # flinch/Truant/confusion/Attract event also proves the selected move was sleepUsable: the
+    # Gen 3 sleep handler incremented skippedTime before those lower-priority checks. This
+    # transient records the still-unclassified attempt and is snapshot-safe.
     rest_sleep_pending_attempt: Mapping[str, bool] = field(default_factory=dict)
     # Public consecutive-stall counter (spec v3, docs/observation_v3_spec.md change 3): per side,
     # the number of consecutive SUCCESSFUL stall-move uses (Protect/Detect/Endure — gen3 shares
@@ -1290,9 +1294,10 @@ class _ReplayParser:
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
-        # Rest-sleep provenance: victim key -> attempts already burned off the Rest.
+        # Rest-sleep provenance: victim key -> raw public attempts since this Rest began.
         # See ShowdownReplayState.rest_sleep_counts (and why it is attempts, not turns).
         self.rest_sleep_counts: dict[str, int] = {}
+        self.rest_sleep_refunded_turns: dict[str, int] = {}
         self.rest_sleep_skipped_turns: dict[str, int] = {}
         self.rest_sleep_pending_attempt: dict[str, bool] = {}
         # Public consecutive-stall counter (spec v3 change 3) + its transient in-flight flag.
@@ -1367,6 +1372,9 @@ class _ReplayParser:
         }
         parser.rest_sleep_counts = {
             key: int(count) for key, count in snapshot.rest_sleep_counts.items()
+        }
+        parser.rest_sleep_refunded_turns = {
+            key: int(count) for key, count in snapshot.rest_sleep_refunded_turns.items()
         }
         parser.rest_sleep_skipped_turns = {
             key: int(count) for key, count in snapshot.rest_sleep_skipped_turns.items()
@@ -1996,6 +2004,7 @@ class _ReplayParser:
                     # side's victim set already means "not induced", but the count is what
                     # lets the world builder rebuild rest_turns instead of guessing.
                     self.rest_sleep_counts[key] = 0
+                    self.rest_sleep_refunded_turns.pop(key, None)
                     self.rest_sleep_skipped_turns.pop(key, None)
                     self.rest_sleep_pending_attempt.pop(key, None)
                 else:
@@ -2016,6 +2025,28 @@ class _ReplayParser:
                     # rejected by the materialization range check rather than clamped.
                     self.rest_sleep_counts[key] += 1
                     self.rest_sleep_pending_attempt[key] = True
+            return
+        if event_type == "cant" and len(parts) >= 4:
+            # ``slp.onBeforeMove`` has priority 10. A later same-actor cant (flinch,
+            # Truant, paralysis, or Attract) proves a sleepUsable move crossed that
+            # handler: an ordinary selected move would have stopped at sleep. Gen 3
+            # incremented skippedTime before this later gate, even without |move|.
+            actor_slot = _slot_from_ident(parts[2])
+            if actor_slot in {"p1", "p2"}:
+                self._mark_pending_rest_sleep_refundable(
+                    self._induced_sleep_victim_key(actor_slot, parts[2])
+                )
+            return
+        if event_type == "-activate" and len(parts) >= 4:
+            # Confusion and Attract announce their lower-priority check before the
+            # branch that decides whether the Pokemon can move. Either branch is
+            # already enough to prove skippedTime was incremented.
+            actor_slot = _slot_from_ident(parts[2])
+            activation = _normalize_identifier(parts[3])
+            if actor_slot in {"p1", "p2"} and activation in {"confusion", "moveattract"}:
+                self._mark_pending_rest_sleep_refundable(
+                    self._induced_sleep_victim_key(actor_slot, parts[2])
+                )
             return
         if event_type == "move" and len(parts) >= 4:
             # Sleep Talk and Snore are the only moves a sleeping mon can act with, and gen3
@@ -2059,6 +2090,14 @@ class _ReplayParser:
                     victims.discard(key)
                 self._clear_rest_sleep_state(key)
 
+    def _mark_pending_rest_sleep_refundable(self, key: str) -> None:
+        """Move a publicly proven sleepUsable attempt into skippedTime."""
+
+        if self.rest_sleep_pending_attempt.pop(key, False):
+            self.rest_sleep_skipped_turns[key] = (
+                self.rest_sleep_skipped_turns.get(key, 0) + 1
+            )
+
     def _settle_pending_rest_sleep_attempts(self) -> None:
         """Finish public sleep attempts that did not resolve through Sleep Talk/Snore.
 
@@ -2090,14 +2129,20 @@ class _ReplayParser:
         if isinstance(skipped, bool) or not isinstance(skipped, int) or skipped < 0:
             self._clear_rest_sleep_state(key)
             return
-        remaining = self.rest_sleep_counts[key] - skipped
-        if remaining < 0:
+        refunded = self.rest_sleep_refunded_turns.get(key, 0)
+        if (
+            isinstance(refunded, bool)
+            or not isinstance(refunded, int)
+            or refunded < 0
+            or refunded + skipped > self.rest_sleep_counts[key]
+        ):
             self._clear_rest_sleep_state(key)
             return
-        self.rest_sleep_counts[key] = remaining
+        self.rest_sleep_refunded_turns[key] = refunded + skipped
 
     def _clear_rest_sleep_state(self, key: str) -> None:
         self.rest_sleep_counts.pop(key, None)
+        self.rest_sleep_refunded_turns.pop(key, None)
         self.rest_sleep_skipped_turns.pop(key, None)
         self.rest_sleep_pending_attempt.pop(key, None)
 
@@ -2214,6 +2259,7 @@ class _ReplayParser:
                 for slot, victims in self.induced_sleep_victims.items()
             },
             rest_sleep_counts=dict(self.rest_sleep_counts),
+            rest_sleep_refunded_turns=dict(self.rest_sleep_refunded_turns),
             rest_sleep_skipped_turns=dict(self.rest_sleep_skipped_turns),
             rest_sleep_pending_attempt=dict(self.rest_sleep_pending_attempt),
             stall_counter=dict(self.stall_counter),

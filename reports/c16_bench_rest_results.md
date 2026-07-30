@@ -15,11 +15,11 @@ retention, the same Showdown checkout, and the same 41-patch engine build.
 | unpatched `origin/main` | 96 | 93 | 92 | 1 | `roll_scaled_component` at the motivating identity |
 | patched branch | 96 | 93 | 93 | 0 | clearance |
 
-The unpatched report hash is
-`82e052ca06f227e1198b19d6cae84d2b850fc6b7ad0549929511fb9519c6ed26`.
-The patched report hash is
-`af3a3a2429af1233424c7fb0ee9bb4cf3fa9a420b7af113fcc58d7c2c5c8d58a`.
-The reports are verification outputs, not tracked fixtures.
+The locally generated unpatched report hash was
+`82e052ca06f227e1198b19d6cae84d2b850fc6b7ad0549929511fb9519c6ed26`; the locally generated
+patched report hash was `af3a3a2429af1233424c7fb0ee9bb4cf3fa9a420b7af113fcc58d7c2c5c8d58a`.
+Those JSON outputs are not tracked, so the hashes are execution notes rather than independently
+auditable repository evidence. The reproducible command below is the verification contract.
 
 ## Reproduction
 
@@ -44,11 +44,13 @@ This is a targeted identity clearance, not a population-wide certification
 claim. The broader tests pin:
 
 - ordinary Rest attempt counts;
-- active Sleep Talk/Snore states remaining fail-closed;
+- active or unresolved Sleep Talk/Snore states refusing construction explicitly;
 - the exact benched refund and one-time switch-in application;
+- interrupted Sleep Talk/Snore attempts (flinch, Truant, confusion, Attract) retaining the refund;
 - a later ordinary sleep turn cancelling the trailing refund;
-- snapshot restoration;
-- wake, faint, per-mon cure, and team cure cleanup;
+- snapshot restoration of attempt, applied-refund, pending-refund, and pending-attempt state;
+- Natural Cure, faint, per-mon cure, and team-cure cleanup of all Rest provenance maps;
+- Early Bird's two-units-per-attempt and one-unit-per-refund arithmetic;
 - exact opponent-side public-row materialization.
 
 The fresh certification re-sweep remains the global regression and recurrence
