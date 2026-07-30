@@ -1544,16 +1544,23 @@ def _hp_and_status(
                     "rest_sleep_skipped_time_pending",
                     f"{slot}: {species!r} has public Rest skippedTime the engine cannot represent",
                 )
-            rest_turns = _rest_turns_from_row(row, early_bird=rest_sleep_early_bird)
-            if rest_turns is not None:
-                # EXACT, not approximated: the public attempt count reconstructs the
-                # engine's own Rest counter with nothing left to guess.
-                return hp, "sleep", rest_turns
+            if "restSleepAttempts" in row:
+                rest_turns = _rest_turns_from_row(row, early_bird=rest_sleep_early_bird)
+                if rest_turns is not None:
+                    # EXACT, not approximated: the public attempt count reconstructs the
+                    # engine's own Rest counter with nothing left to guess.
+                    return hp, "sleep", rest_turns
+                # A present annotation is positive Rest provenance, even when its
+                # counter is invalid. Never reinterpret it as induced sleep: that
+                # would zero rest_turns and re-arm Sleep Clause.
+                raise EngineWorldUnsupported(
+                    "rest_sleep_provenance_unrepresentable",
+                    f"{slot}: {species!r} has unrepresentable public Rest provenance",
+                )
             if approximate_sleep_turns:
-                # Documented approximation, and now only for an INDUCED sleep — a Rest
-                # sleep took the exact branch above. Model the mon as freshly asleep
-                # (sleep_turns=0); biases wake-up odds late in a sleep. The exact fix
-                # is public sleep-counter tracking in the replay state.
+                # Documented approximation only for an unannotated, induced sleep.
+                # Model the mon as freshly asleep (sleep_turns=0); this biases wake-up
+                # odds late in a sleep. The exact fix is public sleep-counter tracking.
                 return hp, "sleep", 0
         raise EngineWorldUnsupported(
             "status_unsupported",

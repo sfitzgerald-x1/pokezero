@@ -311,10 +311,20 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         )
         self.assertEqual(sleeper.rest_turns, 2)
 
-    def test_early_bird_second_public_sleep_cant_is_inconsistent_and_fails_closed(self) -> None:
-        with self.assertRaises(EngineWorldUnsupported) as caught:
-            self._sleeper(sleeper=_SKARMORY_EARLY_BIRD, rest_attempts=2)
-        self.assertEqual(caught.exception.reason, "status_unsupported")
+    def test_early_bird_inconsistent_attempts_fail_closed_even_with_approximation(self) -> None:
+        # Early Bird's second attempt wakes the mon, so a sleeping public row cannot
+        # legitimately carry either count. Exact Rest provenance must not degrade into
+        # generic induced sleep just because approximation is enabled.
+        for attempts in (2, 3):
+            with self.subTest(attempts=attempts):
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        _payload(self.dex, rest_attempts=attempts),
+                        _override(sleeper=_SKARMORY_EARLY_BIRD),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
+                    )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
     def test_repeated_normal_sleep_talk_refunds_allow_a_raw_attempt_count_above_two(self) -> None:
         sleeper = self._sleeper(rest_attempts=3, refunded_time=3)
@@ -331,7 +341,7 @@ class RestTurnsReconstructionTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.reason, "rest_sleep_skipped_time_pending")
 
-    def test_an_unannotated_sleeper_keeps_the_old_behaviour_exactly(self) -> None:
+    def test_a_valid_unannotated_sleeper_can_still_use_approximation(self) -> None:
         # An opponent-induced sleeper is never annotated, so it must still fail
         # closed without the flag and still build as freshly-asleep with it. This
         # is the regression guard on the arm the fix does NOT change.
@@ -356,25 +366,35 @@ class RestTurnsReconstructionTests(unittest.TestCase):
         self.assertEqual(benched.rest_turns, 2)
         self.assertEqual(active.rest_turns, 2)
 
-    def test_an_inconsistent_count_fails_closed_rather_than_clamping(self) -> None:
+    def test_out_of_range_rest_provenance_fails_closed_even_with_approximation(self) -> None:
         # The raw count can grow beyond two when Sleep Talk is repeatedly refunded
         # across switches. It still must describe a live Rest counter in 1..3.
         for bad in (3, 7, -1):
             with self.subTest(bad=bad):
                 with self.assertRaises(EngineWorldUnsupported) as caught:
                     battle_spec_from_payload(
-                        _payload(self.dex, rest_attempts=bad), _override(), dex=self.dex
+                        _payload(self.dex, rest_attempts=bad),
+                        _override(),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
                     )
-                self.assertEqual(caught.exception.reason, "status_unsupported")
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
-    def test_a_non_integer_count_is_not_coerced(self) -> None:
-        # Bools are ints in Python: True must not read as "one attempt spent".
+    def test_malformed_or_non_integer_rest_provenance_fails_closed_with_approximation(self) -> None:
+        # Bools are ints in Python: True must not read as "one attempt spent". Set the
+        # key directly so None remains explicit provenance rather than unannotated sleep.
         for bad in (True, False, "1", 1.0, None):
             with self.subTest(bad=bad):
-                with self.assertRaises(EngineWorldUnsupported):
+                payload = _payload(self.dex, rest_attempts=0)
+                payload["sides"]["p2"]["pokemon"][0]["restSleepAttempts"] = bad
+                with self.assertRaises(EngineWorldUnsupported) as caught:
                     battle_spec_from_payload(
-                        _payload(self.dex, rest_attempts=bad), _override(), dex=self.dex
+                        payload,
+                        _override(),
+                        dex=self.dex,
+                        approximate_sleep_turns=True,
                     )
+                self.assertEqual(caught.exception.reason, "rest_sleep_provenance_unrepresentable")
 
     def test_a_fainted_row_never_carries_a_rest_state(self) -> None:
         payload = _payload(self.dex, rest_attempts=1)
