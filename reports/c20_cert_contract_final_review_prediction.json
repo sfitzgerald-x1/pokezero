@@ -1,0 +1,31 @@
+{
+  "schema": "pokezero.cert-contract-final-review-prediction.v1",
+  "recorded_at": "2026-07-30",
+  "review_source": "fresh-independent-codex-review",
+  "predictions": [
+    {
+      "id": "malformed-gates-final-intent",
+      "current_behavior": "A contract with a present but non-object certification_gates field can take the legacy readout path.",
+      "expected_fix": "Presence of certification_gates is final intent and must disable legacy opt-out, regardless of the field value.",
+      "required_regression": "A contract with certification_gates=[] and otherwise valid legacy opt-out inputs fails closed."
+    },
+    {
+      "id": "checkpoint-divergence-class-binding",
+      "current_behavior": "Checkpoint/report binding reconstructs aggregate counters and repros but does not bind divergence_classes.",
+      "expected_fix": "The durable checkpoint aggregate derives divergence_classes from per-game counters using the same classifier as build_report, and certification rejects any report disagreement.",
+      "required_regression": "Fabricated or omitted report divergence_classes fail checkpoint/report binding."
+    },
+    {
+      "id": "parseable-checkpoint-corruption",
+      "current_behavior": "Parseable JSON values that are not checkpoint records are silently skipped, including in the middle of a JSONL file.",
+      "expected_fix": "Every nonblank parseable line must be a checkpoint object with the exact checkpoint schema; any schema/type mismatch is fatal and no bytes are rewritten.",
+      "required_regression": "Mid-file and final {}, 42, and [] records fail closed, while only an unparseable final torn write remains repairable."
+    }
+  ],
+  "acceptance": {
+    "focused_tests_pass": true,
+    "full_public_tests_pass": true,
+    "engine_fingerprint_unchanged": "646655e01eb986ee8cdfcae3f8b3705345ea4416d8f05972cda83c554824004e",
+    "fresh_independent_review": "PASS"
+  }
+}
