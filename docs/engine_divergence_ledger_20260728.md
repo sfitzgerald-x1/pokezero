@@ -6003,9 +6003,9 @@ certification sweep is authorized under its standing requirements.
 # Appendix Z12 — The certification sweep: 10,000 games, and an honest FAIL
 
 Run per the standing requirements: 8 x 1250 games, seeds `2000000 + k*100000`
-(validated against the private registry's 26 protected bands via a `deployment/`
-checkout; this sweep's own reservation filed as `engine-cert-sweep-20260730`
-BEFORE launch); per-shard wheel REBUILD into eight separate venvs + in-shard
+(validated against the full protected-band registry — 26 bands — with this
+sweep's own reservation filed BEFORE launch; the registry and reservations live
+outside this repository); per-shard wheel REBUILD into eight separate venvs + in-shard
 behavioral probes — all 8 gates 9/9 at `3204c777` (41 patches); `--checkpoint`
 retention on every shard (which is what saved the run: the shards died once
 mid-flight and resumed from checkpoint with zero loss, 1081-1149 games each at
@@ -6098,3 +6098,61 @@ evidence retained in the shard checkpoints); (3) the readout instrument taught
 this cycle's sweep-scale signatures so its mechanical coverage starts where
 this one ended (96.9% raw, ~99% after triage). Seeds 2000000-2701249 are
 consumed and registry-filed; the next sweep draws fresh blocks.
+
+## Z12.6 Amendments from the #969 review
+
+**Instrument correction (material):** the I1 `_to_full` signature fired BEFORE
+any absorb check, hiding **38 rows** of the sweep's new absorb mechanisms inside
+documented families — 19 absorb-through-Protect where the heal happened to CAP
+(e.g. 2000377/9) and 19 absorb-on-MISSED-move (e.g. 2000014/84: the engine heals
+in both accuracy arms while the sim rolled the miss). The absorb-shape exclusion
+now precedes the I1 rule in `scripts/cert_sweep_readout.py`; deterministic
+re-run: **UNATTRIBUTED 304 -> 342** (I1 559 -> 524, LS 481 -> 479, I5 166 ->
+165), absorb-through-Protect **45** (26 uncapped + 19 capped), absorb variants
+**34** (15 + 19 missed-move). **The 103/103 validation was structurally blind to
+this signature: c13 contains zero absorb rows** — a validation set can only
+validate the shapes it contains.
+
+**Z12.3 denominator correction:** 143 (now 179) new-mechanism rows are 3.7%
+(4.7%) **of divergences** but ~1.4% (1.8%) **of games**. And "drew ~0 by
+chance" understates what the census could see: the measured per-game rate is
+~1 in 60, i.e. a 300-game census expected ~5 such rows near-unclustered across
+four mechanisms (P per-mechanism ~1.3-1.7%) — thin classes it could plausibly
+miss or file singly, not a fluke of zero.
+
+**Durability:** shard reports, checkpoints, probe logs and the readout are
+archived at `~/workspace/agents/pokezero-agent/cert-sweep-20260730/`; their
+sha256s are committed here so the evidence is pinned even off-tree:
+
+```
+a24719a0e9ce76d6fc630d93ffad2d945d03c43961c1b1947e2cc4d84a2044ac  cert_readout_v2.json
+b4a0d2c2a182e693554b3fbe2b241126d367178319cd6d9f690e28e8d524dd59  cert_shard_0.json
+6819192a8a520923d0e2bba21f3e000ed63f4d7fed4a23a47af20b2d5bcf1e89  cert_shard_0.jsonl
+3259aa315252f505002b5570343f74b2f305ed00f30e1437ad19d081590e2c3a  cert_shard_1.json
+4ff386cfe852d1978776ae00281e5d69c9c5f4635138d57b897efc254d6c81a1  cert_shard_1.jsonl
+8003fbc80d86c7d07b2fbb9f39c521093d047ce98b2cb4c2c9497d0df4722d7b  cert_shard_2.json
+e93269f8aae14fbed41c51c1715e9889b1c522fadd448c590dea410d4cae15e4  cert_shard_2.jsonl
+442417c845c9046d7b7e4855dcdc4cba9d20f17a3acf76a447cddfa61882786c  cert_shard_3.json
+638d460e51cd04ae6559a4d28c290587e070a444d832bcf43c3813268f6e870c  cert_shard_3.jsonl
+486b635854c62e6eecf0eae54c98dcf53f49940404f14b96c9d2ab5994985d0d  cert_shard_4.json
+ac7ff66f252df9f775c16e32fa6f32c3e3a66b13459547e1b2349f5de4752be9  cert_shard_4.jsonl
+5a9e87fd694da86a7fa36a2c8db0f05b424485328769b1729aee7fca28073a95  cert_shard_5.json
+ea207da8ad2ec84b5028fa0ae26ed6f45a37345909fa97c9435cddb4d9a7910a  cert_shard_5.jsonl
+962ac6efd52cd4b689154ac083678ae8ba6e28c96465c1b963c4453cbcb953c4  cert_shard_6.json
+502562b27ba284e9a9ee4fe9eb1094fafc4405ee31ccb4ec507d4aeb460c8099  cert_shard_6.jsonl
+5c0235d98fbc91f72338e51001a4b82506899c46eae3cbdfdfe9d86c5e9e462d  cert_shard_7.json
+7b3e3523ad3bb415c35d6bfa15ca2e88e36a56ab11d13b826314dd37ff4a23ce  cert_shard_7.jsonl
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_0_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_1_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_2_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_3_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_4_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_5_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_6_probes.log
+045afcbe4606a4a28e580bdb046228953a947335db38743ed2d03f7d53a67cee  shard_7_probes.log
+```
+
+**Ordering standard (process):** the c14 walk RESULTS were committed one commit
+before the walker CODE that produced them (caught in review). Standing order
+going forward: instrument change first, artifacts it produces second — the same
+separation the prediction-first rule already enforces on the other side.

@@ -122,6 +122,24 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
             or cls in ("mapper_lossy", "no_usable_branch"):
         return "I6_sleeptalk_callee_union", "Sleep Talk callee boundary / lossy callee-union rendering"
 
+    # ABSORB-SHAPE EXCLUSION — ordered AHEAD of the I1 _to_full rule
+    # deliberately (#969 review): an absorb-ability heal that happens to CAP
+    # renders as `abilitywaterabsorb_to_full` and satisfied the I1 signature,
+    # hiding ~38 sweep rows of the NEW absorb mechanisms inside a documented
+    # family. The 103/103 validation could not catch this: c13 contains zero
+    # absorb rows, so the signature was never exercised there.
+    joined = " ".join(misses)
+    if re.search(r"ability(?:water|volt)absorb", joined):
+        engine_side_absorb = any(
+            re.search(r"ability(?:water|volt)absorb", miss.partition("engine")[2])
+            for miss in misses)
+        blocked_or_missed = ("Protect" in proto and "-activate" in proto) or \
+            "|-miss|" in proto or "[miss]" in proto
+        if engine_side_absorb and blocked_or_missed:
+            return ("UNATTRIBUTED",
+                    "engine-only absorb heal on a Protect-blocked or missed "
+                    "move (sweep NEW absorb mechanism; capped variant)")
+
     # I1: cap-state shape (_to_full on either side of the majority miss)
     if "_to_full" in majority:
         return "I1_cap_state_shape", "capped-heal component shape in the majority miss (avg-roll world evolution)"

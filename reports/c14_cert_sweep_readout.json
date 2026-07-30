@@ -13,18 +13,26 @@
  "rows_retained": 3821,
  "family_attribution": {
   "limit:roll_divergent_lethality": 1281,
-  "I1_cap_state_shape": 559,
-  "LS_capped_lethal_shape": 481,
-  "UNATTRIBUTED": 304,
+  "I1_cap_state_shape": 524,
+  "LS_capped_lethal_shape": 479,
+  "UNATTRIBUTED": 342,
   "limit:world_sample_drag_target": 271,
   "I3_roll_inherited": 240,
   "I6_sleeptalk_callee_union": 215,
-  "I5_boundary_truncation": 166,
   "I4_attribution_tie": 166,
+  "I5_boundary_truncation": 165,
   "I2_matcher_accounting": 112,
   "LS_confusion_fan": 26
  },
  "unattributed_rows": [
+  {
+   "seed": 2000014,
+   "step": 84,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
   {
    "seed": 2000031,
    "step": 60,
@@ -32,6 +40,14 @@
    "family": "UNATTRIBUTED",
    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
    "failure_family": "CAND_recoil_vs_substitute_basis"
+  },
+  {
+   "seed": 2000051,
+   "step": 106,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2000054,
@@ -50,12 +66,28 @@
    "failure_family": "NEW_truant_loaf_phase_drift"
   },
   {
+   "seed": 2000126,
+   "step": 111,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2000131,
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
    "failure_family": "CAND_incapacitated_arm_pricing"
+  },
+  {
+   "seed": 2000178,
+   "step": 143,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2000204,
@@ -72,6 +104,14 @@
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
    "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000228,
+   "step": 73,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2000261,
@@ -104,6 +144,22 @@
    "family": "UNATTRIBUTED",
    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
    "failure_family": "LS_crit_arm_pairing_echo"
+  },
+  {
+   "seed": 2000377,
+   "step": 9,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000377,
+   "step": 96,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2000382,
@@ -184,6 +240,22 @@
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
    "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2000597,
+   "step": 78,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000597,
+   "step": 79,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2000621,
@@ -275,6 +347,14 @@
   },
   {
    "seed": 2000999,
+   "step": 63,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000999,
    "step": 78,
    "class": "component_extra_in_engine:abilitywaterabsorb",
    "family": "UNATTRIBUTED",
@@ -304,6 +384,14 @@
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
    "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2001145,
+   "step": 146,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2001146,
@@ -442,6 +530,22 @@
    "failure_family": "NEW_recharge_turn_residual_gap"
   },
   {
+   "seed": 2100373,
+   "step": 58,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2100386,
+   "step": 66,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2100398,
    "step": 77,
    "class": "roll_scaled_component",
@@ -578,6 +682,14 @@
    "failure_family": "NEW_truant_loaf_phase_drift"
   },
   {
+   "seed": 2100836,
+   "step": 83,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2100838,
    "step": 97,
    "class": "roll_scaled_component",
@@ -698,6 +810,14 @@
    "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
+   "seed": 2200187,
+   "step": 60,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2200217,
    "step": 45,
    "class": "component_missing_in_engine:psn",
@@ -754,6 +874,14 @@
    "failure_family": "CAND_unresolved_magnitude"
   },
   {
+   "seed": 2200499,
+   "step": 22,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2200577,
    "step": 41,
    "class": "roll_scaled_component",
@@ -778,12 +906,28 @@
    "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
+   "seed": 2200690,
+   "step": 56,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2200744,
    "step": 40,
    "class": "component_extra_in_engine:abilitywaterabsorb",
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 82)])",
    "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2200815,
+   "step": 110,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2200819,
@@ -930,6 +1074,22 @@
    "failure_family": "CAND_unresolved_magnitude"
   },
   {
+   "seed": 2300055,
+   "step": 51,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2300058,
+   "step": 78,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2300076,
    "step": 7,
    "class": "roll_scaled_component",
@@ -1008,6 +1168,14 @@
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 15)] engine_only=[])",
    "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300259,
+   "step": 18,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2300312,
@@ -1330,6 +1498,14 @@
    "failure_family": "NEW_truant_loaf_phase_drift"
   },
   {
+   "seed": 2400257,
+   "step": 44,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2400288,
    "step": 53,
    "class": "roll_scaled_component",
@@ -1368,6 +1544,14 @@
    "family": "UNATTRIBUTED",
    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
    "failure_family": "LS_structural_arm_echo"
+  },
+  {
+   "seed": 2400336,
+   "step": 80,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2400342,
@@ -1474,6 +1658,14 @@
    "failure_family": "NEW_absorb_variant"
   },
   {
+   "seed": 2400686,
+   "step": 111,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2400695,
    "step": 9,
    "class": "roll_scaled_component",
@@ -1554,6 +1746,14 @@
    "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
+   "seed": 2401093,
+   "step": 23,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2401112,
    "step": 16,
    "class": "roll_scaled_component",
@@ -1615,6 +1815,14 @@
    "class": "component_extra_in_engine:abilitywaterabsorb",
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2500101,
+   "step": 89,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
    "failure_family": "NEW_absorb_variant"
   },
   {
@@ -1810,6 +2018,22 @@
    "failure_family": "NEW_recharge_turn_residual_gap"
   },
   {
+   "seed": 2500979,
+   "step": 48,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2501008,
+   "step": 72,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2501008,
    "step": 87,
    "class": "component_extra_in_engine:abilitywaterabsorb",
@@ -1850,6 +2074,22 @@
    "failure_family": "LS_structural_arm_echo"
   },
   {
+   "seed": 2600009,
+   "step": 96,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2600009,
+   "step": 97,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2600025,
    "step": 59,
    "class": "roll_scaled_component",
@@ -1872,6 +2112,14 @@
    "family": "UNATTRIBUTED",
    "basis": "triage bucket: structural_component_count",
    "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600170,
+   "step": 126,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   },
   {
    "seed": 2600222,
@@ -2122,6 +2370,14 @@
    "failure_family": "LS_structural_arm_echo"
   },
   {
+   "seed": 2601106,
+   "step": 31,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2601125,
    "step": 4,
    "class": "roll_scaled_component",
@@ -2144,6 +2400,14 @@
    "family": "UNATTRIBUTED",
    "basis": "triage bucket: structural_component_count",
    "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2601168,
+   "step": 79,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2601196,
@@ -2184,6 +2448,14 @@
    "family": "UNATTRIBUTED",
    "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
    "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700023,
+   "step": 33,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2700048,
@@ -2266,6 +2538,14 @@
    "failure_family": "NEW_truant_loaf_phase_drift"
   },
   {
+   "seed": 2700501,
+   "step": 93,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
    "seed": 2700572,
    "step": 63,
    "class": "roll_scaled_component",
@@ -2288,6 +2568,14 @@
    "family": "UNATTRIBUTED",
    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
    "failure_family": "LS_structural_arm_echo"
+  },
+  {
+   "seed": 2700647,
+   "step": 37,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2700664,
@@ -2426,6 +2714,14 @@
    "failure_family": "I2_matcher_accounting"
   },
   {
+   "seed": 2701121,
+   "step": 56,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal fires on a MISSED move (heal applied unconditionally in both accuracy arms)",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
    "seed": 2701137,
    "step": 5,
    "class": "roll_scaled_component",
@@ -2456,6 +2752,14 @@
    "family": "UNATTRIBUTED",
    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
    "failure_family": "CAND_incapacitated_arm_pricing"
+  },
+  {
+   "seed": 2701234,
+   "step": 70,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "engine absorb heal (capped variant) on a Protect-blocked move; identical mechanism to the uncapped rows, differing only in the cap",
+   "failure_family": "NEW_absorb_heal_through_protect"
   }
  ],
  "per_class_observed_vs_predicted": {
@@ -3063,17 +3367,20 @@
    ]
   }
  },
- "failure_decomposition": {
-  "PENDING_magnitude_pair": 74,
+ "failure_decomposition_final": {
+  "LS_structural_arm_echo": 58,
   "NEW_recharge_turn_residual_gap": 56,
-  "PENDING_other": 50,
   "NEW_truant_loaf_phase_drift": 48,
-  "PENDING_engine_only_damage_majority": 30,
-  "NEW_absorb_heal_through_protect": 26,
-  "NEW_absorb_variant": 13,
-  "PENDING_accuracy_miss_boundary": 7
+  "NEW_absorb_heal_through_protect": 45,
+  "NEW_absorb_variant": 34,
+  "LS_crit_arm_pairing_echo": 33,
+  "CAND_unresolved_magnitude": 28,
+  "CAND_recoil_vs_substitute_basis": 12,
+  "CAND_incapacitated_arm_pricing": 11,
+  "CAND_same_turn_stat_event_gap": 9,
+  "I4_attribution_tie": 6,
+  "I2_matcher_accounting": 2
  },
- "verdict_detail": "SWEEP FAILURE under the pre-registered zero-unattributed criterion: 304 of 3821 divergent rows are not attributable to a documented family. 143 rows decompose into four NEW named mechanisms (recharge-turn residual gap 56; Truant loaf-phase drift 48; absorb-ability heal fires through Protect 26; absorb variants 13 - samples replayed per family); 161 rows remain PENDING replay-first triage (magnitude pairs 74, engine-only-damage majorities 30, accuracy-miss boundaries 7, other 50). Total diverged 3821 landed INSIDE the pre-registered interval [2832, 4161]; engine_errors 0; coverage 0.9773; repros_complete on all 8 shards; per-shard wheels rebuilt and probes 9/9 at 3204c777.",
  "triage_161": {
   "predictions": "reports/c14_triage_predictions.json",
   "table": [
@@ -4207,18 +4514,16 @@
   ],
   "note": "CAND_* families are WHAT-level candidates (candidate-not-finding); LS_/I2_/I4_ assignments are documented-comparison-family variants at sweep scale, sampled per bucket before generalizing"
  },
- "failure_decomposition_final": {
-  "LS_structural_arm_echo": 58,
+ "failure_decomposition": {
+  "PENDING_magnitude_pair": 74,
   "NEW_recharge_turn_residual_gap": 56,
+  "PENDING_other": 50,
   "NEW_truant_loaf_phase_drift": 48,
-  "LS_crit_arm_pairing_echo": 33,
-  "CAND_unresolved_magnitude": 28,
+  "PENDING_engine_only_damage_majority": 30,
   "NEW_absorb_heal_through_protect": 26,
-  "NEW_absorb_variant": 15,
-  "CAND_recoil_vs_substitute_basis": 12,
-  "CAND_incapacitated_arm_pricing": 11,
-  "CAND_same_turn_stat_event_gap": 9,
-  "I4_attribution_tie": 6,
-  "I2_matcher_accounting": 2
- }
+  "NEW_absorb_variant": 13,
+  "PENDING_accuracy_miss_boundary": 7
+ },
+ "instrument_note": "#969 review amendment: the I1 _to_full signature originally fired BEFORE any absorb check, hiding 38 absorb-mechanism rows (19 capped through Protect, 19 on missed moves) inside documented families. The absorb-shape exclusion now precedes the I1 rule. The 103/103 validation was structurally blind to this: c13 contains zero absorb rows, so the signature was never exercised on the validation set.",
+ "verdict_detail": "SWEEP FAILURE under the pre-registered zero-unattributed criterion: 342 of 3821 divergent rows are not attributable to a documented family. Named new mechanisms: recharge-turn residual gap 56, Truant loaf-phase drift 48, absorb-heal-through-Protect 45 (26 uncapped + 19 capped), absorb variants incl. missed-move heals 34; documented-family variants from the 161-triage: 99; WHAT-level candidates 60. Diverged total 3821 INSIDE the pre-registered interval [2832, 4161]; engine_errors 0; coverage 0.9773; repros_complete all shards."
 }
