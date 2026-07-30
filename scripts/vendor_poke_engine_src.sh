@@ -56,12 +56,6 @@ mkdir -p "$DEST"
 rsync -a --delete --exclude='.DS_Store' "$SRC/" "$DEST/"
 echo "vendored poke-engine $VERSION (gen3-patched) at third_party/poke-engine-src/"
 
-# Record which patch set this build came from, so the differential harness can
-# refuse to measure against a stale install (scripts/engine_build_fingerprint.py).
-# NOT tolerated to fail: a missing or stale stamp is exactly the state the gate
-# exists to catch, and swallowing the error would leave a freshly built engine
-# carrying someone else's fingerprint.
-# This step runs LAST, after the engine is already built and installed. If it is
-# the only thing that failed, the ENGINE IS FINE — re-run the stamp on its own:
-#     python scripts/engine_build_fingerprint.py --write
-"$PYTHON" "$REPO/scripts/engine_build_fingerprint.py" --write
+# Do not stamp a vendored source tree. A valid certification stamp proves both
+# the Python wheel and the native search crate were rebuilt from this tree; the
+# coordinating two-consumer builder creates that stamp after installation.
