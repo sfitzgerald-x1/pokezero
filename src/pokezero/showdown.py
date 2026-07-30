@@ -1275,6 +1275,11 @@ class _ReplayParser:
         self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # See ShowdownReplayState.truant_phase. None = no holder / phase unknown.
         self.truant_phase: dict[str, Optional[bool]] = {"p1": None, "p2": None}
+        # True between |upkeep| and the next |turn| -- the window in which a faint
+        # replacement enters AFTER that turn's residual has already run.
+        self._post_upkeep_window: bool = False
+        # Slots whose next |turn| flip must be skipped (see _TRUANT replacement guard).
+        self._truant_skip_next_flip: set[str] = set()
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
@@ -1442,6 +1447,10 @@ class _ReplayParser:
                 # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
                 if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
                     self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
+                    if self._post_upkeep_window:
+                        self._truant_skip_next_flip.add(pokemon.showdown_slot)
+                    else:
+                        self._truant_skip_next_flip.discard(pokemon.showdown_slot)
                 else:
                     # Not a holder: nothing to carry, and distinct from False (which asserts
                     # a KNOWN acting phase).
@@ -1542,6 +1551,10 @@ class _ReplayParser:
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
+        if event_type == "upkeep":
+            # Residuals for this turn are done; anything switching in from here until the
+            # next |turn| is a post-residual faint replacement.
+            self._post_upkeep_window = True
         if event_type == "turn" and len(parts) >= 3:
             try:
                 self.turn_number = int(parts[2])
@@ -1562,8 +1575,20 @@ class _ReplayParser:
             # the whole stint.
             if self.turn_number >= 2:
                 for slot, phase in self.truant_phase.items():
-                    if phase is not None:
-                        self.truant_phase[slot] = not phase
+                    if phase is None:
+                        continue
+                    if slot in self._truant_skip_next_flip:
+                        # Replacement guard. A holder that entered as a POST-RESIDUAL faint
+                        # replacement missed nothing: that turn's `onResidual` had already
+                        # run before it arrived, so flipping here would double-count it.
+                        # Sim-probed: a Slaking replacing a mon that fainted at upkeep LOAFS
+                        # on its first move turn, whereas a Slaking switched in as the turn's
+                        # ACTION acts on its first move turn. Same seed, opposite outcome, and
+                        # the only difference is which side of the residual it entered on.
+                        continue
+                    self.truant_phase[slot] = not phase
+            self._truant_skip_next_flip.clear()
+            self._post_upkeep_window = False
             # Confusion turns-so-far (spec v3 change 4): each turn the confusion volatile is
             # publicly present on a slot's active mon, its elapsed-duration counter advances.
             # Left uncapped in the raw counter (a mon asleep-while-confused can dwell past the

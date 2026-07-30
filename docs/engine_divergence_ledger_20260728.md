@@ -5975,21 +5975,60 @@ derivation is worth having — it explains the family — but where the protocol
 outright, anchor on it. The four earlier formulations of this fix all fought because they were
 deriving a quantity the sim was already publishing.
 
-## Z13.4 Re-read: 40 cleared, 3 still divergent, 2 newly divergent
+## Z13.4 CORRECTED — 54 cleared, 0 new, after the replacement guard
 
-Re-read of every candidate seed through the fixed build (43 of 44; one run did not complete):
+**The first version of this appendix understated its deviation, and the understatement was a
+SCOPE artifact.** It reported 40 cleared / 2 new from a re-read of the 44 seeds my own
+signature filter had selected. A reviewer re-read 116 seeds and found the position both
+stronger and dirtier than claimed: **53 cleared** (including **9 rows #969 had already
+attributed to documented families** — the under-attribution this program keeps rediscovering,
+predicted in Z6.4 and corroborated again here) and **at least 5 newly divergent by identity**:
+
+| newly divergent (pre-guard) | how it was missed |
+| --- | --- |
+| 2100487/48, 2300743/79 | disclosed by me |
+| 2000583/38, 2101037/44, 2300534/47 | **invisible to a 44-seed scope** — their baseline rows belonged to OTHER families, so the seeds were never in my list |
+
+All five share the shape I had already named as the open hole: `|cant| ability: Truant` with
+the engine attacking. Base-code controls reproduce their baselines exactly, so they were
+PR-caused, not pre-existing.
+
+**The standing lesson is about the instrument, not the count.** A re-read scoped to the seeds
+a fix was *aimed* at can measure CLEARANCE but **cannot bound NEW rows**, because a fix can
+only create divergence in games it touches, and it touches games the aim never selected. What
+I reported as "2 new" was a rate with an unmeasured tail, not a closed list — and I described
+it as though it were closed. **Clearance and regression need different scopes: the aimed set
+for one, everything the mechanism can reach for the other.**
+
+### The guard, and the corrected numbers
+
+The open sub-case was probed rather than argued: a holder entering as a **post-residual faint
+replacement** (between `|upkeep|` and the next `|turn|`) LOAFS on its first move turn, where a
+holder switched in as the turn's ACTION acts. Same seed value, opposite outcome; the only
+difference is which side of the residual it entered on. Without the guard the `|turn|` flip
+double-counts a residual the mon was never present for, and the parity inverts for the stint.
+
+The trigger is parser-visible, which is why the guard is cheap: `|upkeep|` opens a window,
+`|turn|` closes it, and a holder switching in inside it skips exactly one flip.
+
+Re-read at the reviewer's **116-seed scope**, after the guard:
 
 | | |
 | --- | --- |
-| CLEARED | **40** |
-| still divergent | 3 |
-| newly divergent | **2** (2100487/48, 2300743/79) |
+| baseline rows in scope | 161 |
+| **CLEARED** | **54** |
+| still divergent | 107 (other families in the same games) |
+| **newly divergent** | **0** |
+| **net** | **+54** |
 
-**Not zero, and not collateral.** Both new rows are `|cant| Slaking|ability: Truant` with the
-engine attacking — the SAME family in the opposite direction, i.e. residual instances of the
-parity this fix is closing, not damage to an unrelated mechanism. Net +38 of ~45. The
-remaining 5 are all engine-attacks-where-Showdown-loafed, which is where an anchor cannot help:
-the anchor arrives DURING the turn whose world was already built.
+All five of the reviewer's new rows are gone; for the three carrying base controls the
+post-guard row set matches the baseline **exactly** (`[23,67]`, `[49]`, `[45]`), so the guard
+neither introduced rows nor cost clears.
+
+**Residual honesty:** 0 new at 116 seeds is still not a proof of 0 new. That scope is far
+wider than the aimed set and includes the seeds that caught the original miss, but
+previously-clean Slaking games remain unmeasured until the next full sweep. This is a much
+better bound than before, not a closed one.
 
 ## Z13.5 Family correction, forwarded
 
