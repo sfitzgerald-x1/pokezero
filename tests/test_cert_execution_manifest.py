@@ -584,6 +584,54 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                     engine_stamp=paths["stamp"],
                 )
 
+    def test_checked_in_final_contract_matches_current_launch_vocabulary(self) -> None:
+        contract = json.loads(
+            (ROOT / "reports" / "c15_resweep_spec.json").read_text(encoding="utf-8")
+        )
+        calibration = json.loads(
+            (ROOT / "reports" / "c24_final_classifier_c14_calibration.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(manifest.validate_final_contract_schema(contract), [])
+        gates = contract["certification_gates"]
+        self.assertEqual(
+            gates["required_readout_sha256"],
+            _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
+        )
+        self.assertEqual(
+            gates["required_execution_manifest_producer_sha256"],
+            _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
+        )
+        table = contract["pre_registered_family_rate_table"]
+        self.assertEqual(
+            set(table["documented_families"]),
+            set(manifest.EMITTABLE_DOCUMENTED_FAMILIES)
+            | {
+                "limit:roll_divergent_lethality",
+                "limit:world_sample_drag_target",
+                "limit:world_substitute_health_unknown",
+            },
+        )
+        self.assertEqual(
+            {
+                entry["exclusion_counter"]
+                for entry in table["new_mechanisms_post_fix"].values()
+            },
+            set(manifest.EMITTABLE_EXCLUSION_COUNTERS),
+        )
+        self.assertEqual(
+            table["calibration_boundaries"],
+            calibration["source_evidence"]["boundaries_measured"],
+        )
+        self.assertEqual(
+            {
+                family: entry["wilson95"]
+                for family, entry in table["documented_families"].items()
+            },
+            calibration["registered_family_count_intervals"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

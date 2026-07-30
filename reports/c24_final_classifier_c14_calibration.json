@@ -1,0 +1,75 @@
+{
+  "schema": "c24-final-classifier-c14-calibration/1",
+  "purpose": "Prediction-first calibration for the fresh 48-patch certification sweep. This artifact reclassifies the already-consumed C14 archive and contains no sweep-2 measurement.",
+  "source_evidence": {
+    "archive": "The complete 10,000-game C14 certification archive whose hashes are recorded in docs/engine_divergence_ledger_20260728.md Appendix Z12.6.",
+    "boundaries_measured": 791757,
+    "coverage_measured_fraction": 0.9773,
+    "current_classifier_source_commit": "9ec00db077356c01bc6f7b416e75625e3895f055",
+    "current_classifier_readout_sha256": "92e832afc8bc0faac247609e4cd729053fa3e2b987b3e488db6848eceae4b325",
+    "fresh_sweep2_measurements_inspected": 0
+  },
+  "method": {
+    "classifier_replay": "Run the archived C14 shard reports through the final cert_sweep_readout.py classifier with the explicit historical legacy opt-out.",
+    "upper_rate_policy": "Use the larger conservative historical Wilson upper count where classifier tightening moved old rows out of an attributed family. Wilson lower counts remain advisory and are set to zero for newly registered families.",
+    "substitute_limit_policy": "The archived rows predate canonical Substitute provenance. reports/c17_substitute_retained_verification.json independently verifies all 13 retained identities under the current classifier, so the historical [8,22] Wilson count interval is the pre-registered bound.",
+    "no_two_sided_prediction": "No prediction_interval_rate is registered. Only each Wilson upper rate is binding."
+  },
+  "current_classifier_archive_replay": {
+    "family_counts": {
+      "limit:roll_divergent_lethality": 1281,
+      "LS_capped_lethal_shape": 438,
+      "limit:world_sample_drag_target": 271,
+      "I3_roll_inherited": 235,
+      "I4_attribution_tie": 166,
+      "I5_boundary_truncation": 164,
+      "I1_cap_state_shape": 52,
+      "I6_sleeptalk_callee_union": 35,
+      "LS_confusion_fan": 3,
+      "LS_crit_arm_pairing_echo": 2,
+      "I2_matcher_accounting": 2,
+      "LS_structural_arm_echo": 0
+    },
+    "unattributed_count": 1172,
+    "unattributed_note": "Expected on a historical archive produced before the 48-patch fixes. These counts calibrate forecasts; they are not a post-fix verdict.",
+    "exclusion_counts": {
+      "structural_component_count_without_supported_sibling": 884,
+      "absorb_through_protect_or_miss": 79,
+      "recharge_turn_residual_gap": 61,
+      "truant_loaf_phase_drift": 50,
+      "unattributed_generic": 47,
+      "same_turn_stat_event_gap": 27,
+      "recoil_vs_substitute_basis": 13,
+      "incapacitated_arm_pricing": 11
+    }
+  },
+  "registered_family_count_intervals": {
+    "limit:roll_divergent_lethality": [1213, 1353],
+    "I1_cap_state_shape": [0, 564],
+    "LS_capped_lethal_shape": [0, 523],
+    "limit:world_sample_drag_target": [241, 305],
+    "I3_roll_inherited": [0, 272],
+    "I6_sleeptalk_callee_union": [0, 246],
+    "I4_attribution_tie": [0, 193],
+    "I5_boundary_truncation": [0, 191],
+    "I2_matcher_accounting": [0, 134],
+    "LS_crit_arm_pairing_echo": [0, 40],
+    "LS_confusion_fan": [0, 38],
+    "LS_structural_arm_echo": [0, 56],
+    "limit:world_substitute_health_unknown": [0, 22]
+  },
+  "predicted_zero_exclusion_counters": [
+    "absorb_through_protect_or_miss",
+    "incapacitated_arm_pricing",
+    "recharge_turn_residual_gap",
+    "recoil_vs_substitute_basis",
+    "same_turn_stat_event_gap",
+    "structural_component_count_without_supported_sibling",
+    "truant_loaf_phase_drift",
+    "unattributed_generic"
+  ],
+  "coverage_floor_decision": {
+    "registered_minimum": 0.97,
+    "basis": "Below the committed C14 result (0.9773), C6 result (0.9765), and the repeated 0.978 certification-era probes while still failing closed on a material coverage regression."
+  }
+}
