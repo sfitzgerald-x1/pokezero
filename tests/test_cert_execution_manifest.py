@@ -784,7 +784,8 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         attestation_path = ROOT / "reports" / "c25_cert_contract_attestation.json"
         attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
         self.assertEqual(
-            attestation["schema"], "engine-cert-contract-attestation/1"
+            attestation["schema_version"],
+            "pokezero.engine-cert-contract-attestation/v1",
         )
         contract_bytes = subprocess.check_output(
             (

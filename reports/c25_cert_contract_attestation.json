@@ -1,5 +1,5 @@
 {
-  "schema": "engine-cert-contract-attestation/1",
+  "schema_version": "pokezero.engine-cert-contract-attestation/v1",
   "contract_source_commit": "e1ee668a57689375ff865293178e511fa12982ae",
   "contract_path": "reports/c15_resweep_spec.json",
   "contract_sha256": "3e1af2af626f278af6b640f5c340665a6b8374f7fe7af3fefdb889de2c3fb80d",
