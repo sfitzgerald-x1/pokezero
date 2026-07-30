@@ -231,6 +231,28 @@ class CertificationContractTests(unittest.TestCase):
             ],
         )
 
+    def test_count_interval_is_scaled_by_measured_boundaries(self) -> None:
+        contract = self._contract()
+        table = contract["pre_registered_family_rate_table"]
+        table["calibration_boundaries"] = 100
+        table["documented_families"] = {
+            "known_limit": {"wilson95": [1, 3]}
+        }
+        failures, evidence = readout._family_rate_gates(
+            {"known_limit": 4}, contract, boundaries_measured=200
+        )
+        self.assertEqual(failures, [])
+        self.assertEqual(
+            evidence["families"]["known_limit"]["registered_wilson95_rate"],
+            [0.01, 0.03],
+        )
+        self.assertEqual(
+            evidence["families"]["known_limit"][
+                "observed_rate_per_measured_boundary"
+            ],
+            0.02,
+        )
+
     def test_blocked_draft_cannot_fall_back_to_legacy_mode(self) -> None:
         failures, evidence = readout._contract_gates(
             paths=[],
