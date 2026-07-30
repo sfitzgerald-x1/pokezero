@@ -30,8 +30,8 @@
    "step": 60,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2000054,
@@ -54,8 +54,8 @@
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2000204,
@@ -78,48 +78,48 @@
    "step": 31,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.87 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2000281,
    "step": 99,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2000298,
    "step": 23,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.80:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.80 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2000348,
    "step": 53,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000382,
    "step": 104,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000393,
    "step": 10,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000393,
@@ -134,16 +134,16 @@
    "step": 81,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000431,
    "step": 32,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:two-thirds:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.71 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2000454,
@@ -158,8 +158,8 @@
    "step": 54,
    "class": "component_missing_in_engine:brn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=79.69: p2 attributed components differ: observed_only=[('brn', -24)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2000557,
@@ -174,8 +174,8 @@
    "step": 67,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.87 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2000583,
@@ -190,8 +190,8 @@
    "step": 100,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000628,
@@ -206,8 +206,8 @@
    "step": 126,
    "class": "component_mismatch:heal|leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:heal|leechseed; majority: pct=85.00: p1 attributed components differ: observed_only=[('leechseed', -38)] engine_only=[('psn', -38), ('psn', -19)])",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2000679,
@@ -222,16 +222,16 @@
    "step": 102,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):recoil;unexplained_ratio_1.83:move",
-   "failure_family": "PENDING_other"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2000730,
    "step": 66,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2000765,
@@ -254,8 +254,8 @@
    "step": 90,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2000924,
@@ -286,8 +286,8 @@
    "step": 80,
    "class": "component_missing_in_engine:sandstorm",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p2 attributed components differ: observed_only=[('sandstorm', -13)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2001064,
@@ -310,8 +310,8 @@
    "step": 8,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2001148,
@@ -326,16 +326,16 @@
    "step": 120,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.91:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.91 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2001179,
    "step": 136,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2001188,
@@ -350,8 +350,8 @@
    "step": 12,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2001206,
@@ -366,40 +366,40 @@
    "step": 50,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2001217,
    "step": 16,
    "class": "component_extra_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=42.50: p1 attributed components differ: observed_only=[] engine_only=[('psn', -13)])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2001225,
    "step": 73,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2100044,
    "step": 13,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2100079,
    "step": 7,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.85:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.85 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2100109,
@@ -422,8 +422,8 @@
    "step": 35,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;unexplained_ratio_0.92:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2100237,
@@ -446,32 +446,32 @@
    "step": 77,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.81:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2100398,
    "step": 78,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:two-thirds:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2100471,
    "step": 18,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2100482,
    "step": 83,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.90 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2100487,
@@ -486,8 +486,8 @@
    "step": 48,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.27:recoil;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2100578,
@@ -502,16 +502,16 @@
    "step": 93,
    "class": "component_mismatch:heal|leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:heal|leechseed; majority: pct=75.00: p1 attributed components differ: observed_only=[('heal', 21)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2100613,
    "step": 23,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2100687,
@@ -534,8 +534,8 @@
    "step": 4,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2100691,
@@ -550,16 +550,16 @@
    "step": 94,
    "class": "component_extra_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=63.75: p1 attributed components differ: observed_only=[] engine_only=[('psn', -18)])",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "absorb-ability component in miss (sweep family echo)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2100730,
    "step": 39,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=32.81: p1 attributed components differ: observed_only=[('psn', -24)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2100785,
@@ -582,16 +582,16 @@
    "step": 97,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101029,
    "step": 22,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101037,
@@ -606,8 +606,8 @@
    "step": 36,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2101119,
@@ -622,40 +622,40 @@
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2101141,
    "step": 22,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101145,
    "step": 112,
    "class": "component_extra_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=50.00: p2 attributed components differ: observed_only=[] engine_only=[('psn', -32)])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101156,
    "step": 7,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101156,
    "step": 8,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2101216,
@@ -670,8 +670,8 @@
    "step": 80,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2200127,
@@ -686,8 +686,8 @@
    "step": 62,
    "class": "component_mismatch:heal,itemleftovers|leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:heal,itemleftovers|leechseed; majority: pct=75.00: p1 roll-scaled components differ: observed=[] engine=[('', -26)])",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2200173,
@@ -710,16 +710,16 @@
    "step": 51,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2200265,
    "step": 81,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2200291,
@@ -742,16 +742,16 @@
    "step": 20,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2200369,
    "step": 75,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2200577,
@@ -774,8 +774,8 @@
    "step": 39,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.92:drain;unexplained_ratio_1.20:itemleftovers_to_full;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2200744,
@@ -798,8 +798,8 @@
    "step": 60,
    "class": "component_mismatch:heal,itemleftovers|leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:heal,itemleftovers|leechseed; majority: pct=80.00: p1 attributed components differ: observed_only=[('itemleftovers', 15), ('leechseed', -31), ('sandstorm', -15))",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2200826,
@@ -846,24 +846,24 @@
    "step": 11,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2200943,
    "step": 21,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2200987,
    "step": 62,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2201002,
@@ -878,8 +878,8 @@
    "step": 55,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_1.09:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 1.24 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2201022,
@@ -910,8 +910,8 @@
    "step": 46,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:two-thirds:move;within_roll_window:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2201221,
@@ -926,8 +926,8 @@
    "step": 84,
    "class": "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed; majority: pct=84.38: p1 attributed components differ: observed_only=[('abilityliquidooze', -24), ('itemleftovers', 13)] engine_onl)",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: unresolved shape",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2300076,
@@ -950,8 +950,8 @@
    "step": 7,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2300138,
@@ -966,8 +966,8 @@
    "step": 80,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2300170,
@@ -1014,8 +1014,8 @@
    "step": 25,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2300442,
@@ -1030,8 +1030,8 @@
    "step": 11,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2300461,
@@ -1046,8 +1046,8 @@
    "step": 45,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2300547,
@@ -1062,8 +1062,8 @@
    "step": 117,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.81:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.81 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2300562,
@@ -1102,8 +1102,8 @@
    "step": 58,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2300743,
@@ -1118,8 +1118,8 @@
    "step": 133,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2300787,
@@ -1134,8 +1134,8 @@
    "step": 50,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2300855,
@@ -1166,16 +1166,16 @@
    "step": 102,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2300881,
    "step": 33,
    "class": "component_extra_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=42.50: p1 attributed components differ: observed_only=[] engine_only=[('psn', -17)])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2300894,
@@ -1190,8 +1190,8 @@
    "step": 69,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2300932,
@@ -1206,8 +1206,8 @@
    "step": 35,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2301032,
@@ -1222,8 +1222,8 @@
    "step": 12,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2301134,
@@ -1246,8 +1246,8 @@
    "step": 40,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2301234,
@@ -1262,16 +1262,16 @@
    "step": 83,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:two-thirds:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2400056,
    "step": 86,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2400075,
@@ -1294,32 +1294,32 @@
    "step": 9,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2400156,
    "step": 29,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2400172,
    "step": 89,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.90 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2400176,
    "step": 76,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "absorb-ability component in miss (sweep family echo)",
+   "failure_family": "NEW_absorb_variant"
   },
   {
    "seed": 2400200,
@@ -1366,32 +1366,32 @@
    "step": 8,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400342,
    "step": 78,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2400451,
    "step": 56,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:two-thirds:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.68 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2400468,
    "step": 182,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2400469,
@@ -1406,16 +1406,16 @@
    "step": 36,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2400516,
    "step": 215,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400569,
@@ -1430,16 +1430,16 @@
    "step": 10,
    "class": "component_missing_in_engine:brn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=93.75: p1 attributed components differ: observed_only=[('brn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400588,
    "step": 83,
    "class": "component_mismatch:itemleftovers|leechseed",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_mismatch:itemleftovers|leechseed; majority: pct=85.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)",
+   "failure_family": "I4_attribution_tie"
   },
   {
    "seed": 2400624,
@@ -1454,8 +1454,8 @@
    "step": 79,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400667,
@@ -1478,40 +1478,40 @@
    "step": 9,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2400719,
    "step": 68,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.12:recoil;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2400824,
    "step": 21,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2400834,
    "step": 79,
    "class": "component_missing_in_engine:sandstorm",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p2 attributed components differ: observed_only=[('sandstorm', -16)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400858,
    "step": 62,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2400872,
@@ -1534,16 +1534,16 @@
    "step": 2,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2401002,
    "step": 8,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2401030,
@@ -1566,48 +1566,48 @@
    "step": 54,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.49 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2401129,
    "step": 94,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2401141,
    "step": 41,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2401166,
    "step": 75,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.59:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2401207,
    "step": 18,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2401237,
    "step": 14,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.88 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2500084,
@@ -1622,16 +1622,16 @@
    "step": 60,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.89 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2500151,
    "step": 116,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2500163,
@@ -1662,48 +1662,48 @@
    "step": 55,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500224,
    "step": 70,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2500235,
    "step": 31,
    "class": "component_magnitude:abilityliquidooze",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_magnitude:abilityliquidooze; majority: pct=93.75: p2 attributed components differ: observed_only=[('abilityliquidooze', -20)] engine_only=[('abilityliquidooze')",
-   "failure_family": "PENDING_other"
+   "basis": "majority pair within the legal window (run-time legal-set unavailability)",
+   "failure_family": "I2_matcher_accounting"
   },
   {
    "seed": 2500297,
    "step": 96,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.87 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2500298,
    "step": 82,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500315,
    "step": 30,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move;double (crit, or type 2x):recoil",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2500342,
@@ -1726,8 +1726,8 @@
    "step": 12,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500497,
@@ -1750,24 +1750,24 @@
    "step": 72,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500576,
    "step": 7,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2500690,
    "step": 10,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p2 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500703,
@@ -1782,24 +1782,24 @@
    "step": 40,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2500743,
    "step": 60,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.44:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500750,
    "step": 62,
    "class": "component_missing_in_engine:sandstorm",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p1 attributed components differ: observed_only=[('sandstorm', -18)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2500930,
@@ -1838,16 +1838,16 @@
    "step": 96,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.87 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2501099,
    "step": 40,
    "class": "component_missing_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=79.69: p2 attributed components differ: observed_only=[('psn', -24)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2600025,
@@ -1878,8 +1878,8 @@
    "step": 44,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.04:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2600250,
@@ -1902,16 +1902,16 @@
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_accuracy_miss_boundary"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2600362,
    "step": 82,
    "class": "component_magnitude:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_magnitude:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -126)] engine_only=[('psn', -112)])",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: majority ratio 1.12 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2600366,
@@ -1934,8 +1934,8 @@
    "step": 111,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.91:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.91 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2600524,
@@ -1950,64 +1950,64 @@
    "step": 80,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.86:drain;unexplained_ratio_0.91:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: unresolved shape",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2600546,
    "step": 22,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.88 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2600546,
    "step": 25,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.88 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2600600,
    "step": 98,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2600607,
    "step": 68,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2600627,
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2600649,
    "step": 18,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2600657,
    "step": 49,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority magnitude ratio 0.89 on a boundary with a same-turn boost/status event; WHY open",
+   "failure_family": "CAND_same_turn_stat_event_gap"
   },
   {
    "seed": 2600664,
@@ -2030,8 +2030,8 @@
    "step": 66,
    "class": "component_missing_in_engine:brn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=70.31: p2 attributed components differ: observed_only=[('brn', -32)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2600794,
@@ -2046,8 +2046,8 @@
    "step": 54,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2600880,
@@ -2062,32 +2062,32 @@
    "step": 21,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.82:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.82 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2601008,
    "step": 27,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2601023,
    "step": 51,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.43:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2601033,
    "step": 129,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.89 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2601034,
@@ -2102,8 +2102,8 @@
    "step": 20,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2601049,
@@ -2118,16 +2118,16 @@
    "step": 22,
    "class": "component_missing_in_engine:itemleftovers",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=93.75: p2 attributed components differ: observed_only=[('itemleftovers', 18)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2601125,
    "step": 4,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2601147,
@@ -2150,32 +2150,32 @@
    "step": 25,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.87 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2601196,
    "step": 46,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.75:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.75 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2601208,
    "step": 118,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2601208,
    "step": 124,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2601219,
@@ -2198,8 +2198,8 @@
    "step": 34,
    "class": "component_extra_in_engine:psn",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=47.81: p1 attributed components differ: observed_only=[] engine_only=[('psn', -15)])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700115,
@@ -2214,16 +2214,16 @@
    "step": 151,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.90 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2700257,
    "step": 74,
    "class": "component_missing_in_engine:sandstorm",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p2 attributed components differ: observed_only=[('sandstorm', -16)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700262,
@@ -2254,8 +2254,8 @@
    "step": 37,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: majority ratio 0.87 unexplained",
+   "failure_family": "CAND_unresolved_magnitude"
   },
   {
    "seed": 2700422,
@@ -2286,8 +2286,8 @@
    "step": 131,
    "class": "component_missing_in_engine:itemleftovers",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=50.00: p2 attributed components differ: observed_only=[('itemleftovers', 25)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700664,
@@ -2302,8 +2302,8 @@
    "step": 38,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2700734,
@@ -2318,8 +2318,8 @@
    "step": 65,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   },
   {
    "seed": 2700766,
@@ -2334,8 +2334,8 @@
    "step": 32,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.42:move",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700809,
@@ -2366,8 +2366,8 @@
    "step": 11,
    "class": "component_missing_in_engine:itemleftovers",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=93.75: p2 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700944,
@@ -2382,16 +2382,16 @@
    "step": 81,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.76:move;within_roll_window:move;within_roll_window:recoil",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2700990,
    "step": 43,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2701014,
@@ -2406,32 +2406,32 @@
    "step": 47,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:unexplained_ratio_0.37:recoil;within_roll_window:move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open",
+   "failure_family": "CAND_recoil_vs_substitute_basis"
   },
   {
    "seed": 2701067,
    "step": 87,
    "class": "component_extra_in_engine:partialtrap",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_extra_in_engine:partialtrap; majority: pct=59.77: p1 attributed components differ: observed_only=[] engine_only=[('partialtrap', -15)])",
-   "failure_family": "PENDING_other"
+   "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)",
+   "failure_family": "LS_structural_arm_echo"
   },
   {
    "seed": 2701081,
    "step": 15,
    "class": "component_magnitude:abilityliquidooze",
    "family": "UNATTRIBUTED",
-   "basis": "no documented signature matched (class component_magnitude:abilityliquidooze; majority: pct=93.75: p1 attributed components differ: observed_only=[('abilityliquidooze', -16)] engine_only=[('abilityliquidooze')",
-   "failure_family": "PENDING_other"
+   "basis": "majority pair within the legal window (run-time legal-set unavailability)",
+   "failure_family": "I2_matcher_accounting"
   },
   {
    "seed": 2701137,
    "step": 5,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
-   "failure_family": "PENDING_magnitude_pair"
+   "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)",
+   "failure_family": "LS_crit_arm_pairing_echo"
   },
   {
    "seed": 2701144,
@@ -2454,8 +2454,8 @@
    "step": 52,
    "class": "roll_scaled_component",
    "family": "UNATTRIBUTED",
-   "basis": "triage bucket: structural_component_count",
-   "failure_family": "PENDING_engine_only_damage_majority"
+   "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open",
+   "failure_family": "CAND_incapacitated_arm_pricing"
   }
  ],
  "per_class_observed_vs_predicted": {
@@ -3073,5 +3073,1152 @@
   "NEW_absorb_variant": 13,
   "PENDING_accuracy_miss_boundary": 7
  },
- "verdict_detail": "SWEEP FAILURE under the pre-registered zero-unattributed criterion: 304 of 3821 divergent rows are not attributable to a documented family. 143 rows decompose into four NEW named mechanisms (recharge-turn residual gap 56; Truant loaf-phase drift 48; absorb-ability heal fires through Protect 26; absorb variants 13 - samples replayed per family); 161 rows remain PENDING replay-first triage (magnitude pairs 74, engine-only-damage majorities 30, accuracy-miss boundaries 7, other 50). Total diverged 3821 landed INSIDE the pre-registered interval [2832, 4161]; engine_errors 0; coverage 0.9773; repros_complete on all 8 shards; per-shard wheels rebuilt and probes 9/9 at 3204c777."
+ "verdict_detail": "SWEEP FAILURE under the pre-registered zero-unattributed criterion: 304 of 3821 divergent rows are not attributable to a documented family. 143 rows decompose into four NEW named mechanisms (recharge-turn residual gap 56; Truant loaf-phase drift 48; absorb-ability heal fires through Protect 26; absorb variants 13 - samples replayed per family); 161 rows remain PENDING replay-first triage (magnitude pairs 74, engine-only-damage majorities 30, accuracy-miss boundaries 7, other 50). Total diverged 3821 landed INSIDE the pre-registered interval [2832, 4161]; engine_errors 0; coverage 0.9773; repros_complete on all 8 shards; per-shard wheels rebuilt and probes 9/9 at 3204c777.",
+ "triage_161": {
+  "predictions": "reports/c14_triage_predictions.json",
+  "table": [
+   {
+    "seed": 2000031,
+    "step": 60,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2000131,
+    "step": 47,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2000261,
+    "step": 31,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.87 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2000281,
+    "step": 99,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2000298,
+    "step": 23,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.80 unexplained"
+   },
+   {
+    "seed": 2000348,
+    "step": 53,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000382,
+    "step": 104,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000393,
+    "step": 10,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000405,
+    "step": 81,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000431,
+    "step": 32,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.71 unexplained"
+   },
+   {
+    "seed": 2000522,
+    "step": 54,
+    "class": "component_missing_in_engine:brn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2000561,
+    "step": 67,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.87 unexplained"
+   },
+   {
+    "seed": 2000621,
+    "step": 100,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000655,
+    "step": 126,
+    "class": "component_mismatch:heal|leechseed",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2000705,
+    "step": 102,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2000730,
+    "step": 66,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2000804,
+    "step": 90,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2001004,
+    "step": 80,
+    "class": "component_missing_in_engine:sandstorm",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2001146,
+    "step": 8,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2001162,
+    "step": 120,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.91 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2001179,
+    "step": 136,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2001195,
+    "step": 12,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2001211,
+    "step": 50,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2001217,
+    "step": 16,
+    "class": "component_extra_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2001225,
+    "step": 73,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2100044,
+    "step": 13,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2100079,
+    "step": 7,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.85 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2100227,
+    "step": 35,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2100398,
+    "step": 77,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2100398,
+    "step": 78,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2100471,
+    "step": 18,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2100482,
+    "step": 83,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.90 unexplained"
+   },
+   {
+    "seed": 2100568,
+    "step": 48,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2100610,
+    "step": 93,
+    "class": "component_mismatch:heal|leechseed",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2100613,
+    "step": 23,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2100690,
+    "step": 4,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2100715,
+    "step": 94,
+    "class": "component_extra_in_engine:psn",
+    "family": "NEW_absorb_variant",
+    "basis": "absorb-ability component in miss (sweep family echo)"
+   },
+   {
+    "seed": 2100730,
+    "step": 39,
+    "class": "component_missing_in_engine:psn",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2100838,
+    "step": 97,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2101029,
+    "step": 22,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2101090,
+    "step": 36,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2101125,
+    "step": 47,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2101141,
+    "step": 22,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2101145,
+    "step": 112,
+    "class": "component_extra_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2101156,
+    "step": 7,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2101156,
+    "step": 8,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2200051,
+    "step": 80,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2200147,
+    "step": 62,
+    "class": "component_mismatch:heal,itemleftovers|leechseed",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2200232,
+    "step": 51,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2200265,
+    "step": 81,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2200366,
+    "step": 20,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2200369,
+    "step": 75,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2200617,
+    "step": 39,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2200824,
+    "step": 60,
+    "class": "component_mismatch:heal,itemleftovers|leechseed",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2200912,
+    "step": 11,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2200943,
+    "step": 21,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2200987,
+    "step": 62,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2201005,
+    "step": 55,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 1.24 unexplained"
+   },
+   {
+    "seed": 2201115,
+    "step": 46,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2300040,
+    "step": 84,
+    "class": "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: unresolved shape"
+   },
+   {
+    "seed": 2300093,
+    "step": 7,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2300154,
+    "step": 80,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2300312,
+    "step": 25,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2300458,
+    "step": 11,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2300534,
+    "step": 45,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2300552,
+    "step": 117,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.81 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2300739,
+    "step": 58,
+    "class": "component_missing_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2300744,
+    "step": 133,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2300818,
+    "step": 50,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2300870,
+    "step": 102,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2300881,
+    "step": 33,
+    "class": "component_extra_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2300924,
+    "step": 69,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2300945,
+    "step": 35,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2301073,
+    "step": 12,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2301214,
+    "step": 40,
+    "class": "component_missing_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400009,
+    "step": 83,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2400056,
+    "step": 86,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2400140,
+    "step": 9,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2400156,
+    "step": 29,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2400172,
+    "step": 89,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.90 unexplained"
+   },
+   {
+    "seed": 2400176,
+    "step": 76,
+    "class": "roll_scaled_component",
+    "family": "NEW_absorb_variant",
+    "basis": "absorb-ability component in miss (sweep family echo)"
+   },
+   {
+    "seed": 2400317,
+    "step": 8,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400342,
+    "step": 78,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.90 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2400451,
+    "step": 56,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.68 unexplained"
+   },
+   {
+    "seed": 2400468,
+    "step": 182,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2400484,
+    "step": 36,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2400516,
+    "step": 215,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400572,
+    "step": 10,
+    "class": "component_missing_in_engine:brn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400588,
+    "step": 83,
+    "class": "component_mismatch:itemleftovers|leechseed",
+    "family": "I4_attribution_tie",
+    "basis": "matching magnitudes under different residual labels in a branch arm (mapper attribution at multi-residual boundary)"
+   },
+   {
+    "seed": 2400631,
+    "step": 79,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400695,
+    "step": 9,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2400719,
+    "step": 68,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2400824,
+    "step": 21,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2400834,
+    "step": 79,
+    "class": "component_missing_in_engine:sandstorm",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400858,
+    "step": 62,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2400952,
+    "step": 2,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2401002,
+    "step": 8,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2401127,
+    "step": 54,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.49 unexplained"
+   },
+   {
+    "seed": 2401129,
+    "step": 94,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2401141,
+    "step": 41,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2401166,
+    "step": 75,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2401207,
+    "step": 18,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2401237,
+    "step": 14,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.88 unexplained"
+   },
+   {
+    "seed": 2500120,
+    "step": 60,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.89 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2500151,
+    "step": 116,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2500206,
+    "step": 55,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500224,
+    "step": 70,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2500235,
+    "step": 31,
+    "class": "component_magnitude:abilityliquidooze",
+    "family": "I2_matcher_accounting",
+    "basis": "majority pair within the legal window (run-time legal-set unavailability)"
+   },
+   {
+    "seed": 2500297,
+    "step": 96,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.87 unexplained"
+   },
+   {
+    "seed": 2500298,
+    "step": 82,
+    "class": "component_missing_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500315,
+    "step": 30,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2500402,
+    "step": 12,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500544,
+    "step": 72,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500576,
+    "step": 7,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2500690,
+    "step": 10,
+    "class": "component_missing_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500743,
+    "step": 40,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2500743,
+    "step": 60,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2500750,
+    "step": 62,
+    "class": "component_missing_in_engine:sandstorm",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2501061,
+    "step": 96,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.87 unexplained"
+   },
+   {
+    "seed": 2501099,
+    "step": 40,
+    "class": "component_missing_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2600222,
+    "step": 44,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2600290,
+    "step": 47,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2600362,
+    "step": 82,
+    "class": "component_magnitude:psn",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 1.12 unexplained"
+   },
+   {
+    "seed": 2600510,
+    "step": 111,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.91 unexplained"
+   },
+   {
+    "seed": 2600535,
+    "step": 80,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: unresolved shape"
+   },
+   {
+    "seed": 2600546,
+    "step": 22,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.88 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2600546,
+    "step": 25,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.88 unexplained"
+   },
+   {
+    "seed": 2600600,
+    "step": 98,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2600607,
+    "step": 68,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2600627,
+    "step": 47,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2600649,
+    "step": 18,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2600657,
+    "step": 49,
+    "class": "roll_scaled_component",
+    "family": "CAND_same_turn_stat_event_gap",
+    "basis": "WHAT: majority magnitude ratio 0.89 on a boundary with a same-turn boost/status event; WHY open"
+   },
+   {
+    "seed": 2600756,
+    "step": 66,
+    "class": "component_missing_in_engine:brn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2600857,
+    "step": 54,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2600992,
+    "step": 21,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.82 unexplained"
+   },
+   {
+    "seed": 2601008,
+    "step": 27,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2601023,
+    "step": 51,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2601033,
+    "step": 129,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.89 unexplained"
+   },
+   {
+    "seed": 2601046,
+    "step": 20,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2601063,
+    "step": 22,
+    "class": "component_missing_in_engine:itemleftovers",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2601125,
+    "step": 4,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2601196,
+    "step": 25,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.87 unexplained"
+   },
+   {
+    "seed": 2601196,
+    "step": 46,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.75 unexplained"
+   },
+   {
+    "seed": 2601208,
+    "step": 118,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2601208,
+    "step": 124,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700083,
+    "step": 34,
+    "class": "component_extra_in_engine:psn",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700218,
+    "step": 151,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.90 unexplained"
+   },
+   {
+    "seed": 2700257,
+    "step": 74,
+    "class": "component_missing_in_engine:sandstorm",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700355,
+    "step": 37,
+    "class": "roll_scaled_component",
+    "family": "CAND_unresolved_magnitude",
+    "basis": "WHAT: majority ratio 0.87 unexplained"
+   },
+   {
+    "seed": 2700613,
+    "step": 131,
+    "class": "component_missing_in_engine:itemleftovers",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700702,
+    "step": 38,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2700752,
+    "step": 65,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   },
+   {
+    "seed": 2700803,
+    "step": 32,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700917,
+    "step": 11,
+    "class": "component_missing_in_engine:itemleftovers",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700967,
+    "step": 81,
+    "class": "roll_scaled_component",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2700990,
+    "step": 43,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2701047,
+    "step": 47,
+    "class": "roll_scaled_component",
+    "family": "CAND_recoil_vs_substitute_basis",
+    "basis": "WHAT: recoil magnitude differs when the hit broke a Substitute (damage-basis question), WHY open"
+   },
+   {
+    "seed": 2701067,
+    "step": 87,
+    "class": "component_extra_in_engine:partialtrap",
+    "family": "LS_structural_arm_echo",
+    "basis": "component-count differs vs majority arm; observed shape lives in a sibling arm (accounting)"
+   },
+   {
+    "seed": 2701081,
+    "step": 15,
+    "class": "component_magnitude:abilityliquidooze",
+    "family": "I2_matcher_accounting",
+    "basis": "majority pair within the legal window (run-time legal-set unavailability)"
+   },
+   {
+    "seed": 2701137,
+    "step": 5,
+    "class": "roll_scaled_component",
+    "family": "LS_crit_arm_pairing_echo",
+    "basis": "observed crit outcome paired against the non-crit majority arm (branch-set accounting; crit arm carries the observed shape)"
+   },
+   {
+    "seed": 2701204,
+    "step": 52,
+    "class": "roll_scaled_component",
+    "family": "CAND_incapacitated_arm_pricing",
+    "basis": "WHAT: observed |cant| frz/fresh-slp outcome not the engine majority arm; arm pricing/hidden-counter shape, WHY open"
+   }
+  ],
+  "note": "CAND_* families are WHAT-level candidates (candidate-not-finding); LS_/I2_/I4_ assignments are documented-comparison-family variants at sweep scale, sampled per bucket before generalizing"
+ },
+ "failure_decomposition_final": {
+  "LS_structural_arm_echo": 58,
+  "NEW_recharge_turn_residual_gap": 56,
+  "NEW_truant_loaf_phase_drift": 48,
+  "LS_crit_arm_pairing_echo": 33,
+  "CAND_unresolved_magnitude": 28,
+  "NEW_absorb_heal_through_protect": 26,
+  "NEW_absorb_variant": 15,
+  "CAND_recoil_vs_substitute_basis": 12,
+  "CAND_incapacitated_arm_pricing": 11,
+  "CAND_same_turn_stat_event_gap": 9,
+  "I4_attribution_tie": 6,
+  "I2_matcher_accounting": 2
+ }
 }

@@ -6064,3 +6064,37 @@ unexplained.** No certification is claimed.
   103/103 pre-sweep)
 - shard checkpoints/reports retained off-tree (scratchpad `cert/`), seeds
   2000000-2701249 consumed and filed in the registry
+
+## Z12.5 Triage of the 161 (replay-first, bucket-sampled, pre-registered)
+
+Predictions in `reports/c14_triage_predictions.json` (own commit, first); 4-6 rows
+replayed per bucket before generalizing; full per-row table in
+`reports/c14_cert_sweep_readout.json` (`triage_161`). Scored: the Slakoth
+hypothesis was WRONG (zero Slakoth rows); "most fold into documented families or
+the new mechanisms" held at 101/161.
+
+| rows | verdict |
+|---|---|
+| 58 | LS structural-arm echo — observed shape lives in a sibling arm; majority complains on count (documented comparison family, sweep-scale variant) |
+| 33 | LS crit-arm pairing echo — observed crit outcome paired against the non-crit majority (incl. crit-KO-ends-turn) |
+| 6 + 2 | I4 attribution ties at multi-residual boundaries; I2 window accounting |
+| 2 | absorb-family echoes (join the fix lane's population) |
+| **28** | **CANDIDATE (WHAT): unresolved majority-magnitude gaps** |
+| **12** | **CANDIDATE (WHAT): recoil basis when the hit broke a Substitute** |
+| **11** | **CANDIDATE (WHAT): incapacitated-arm pricing (observed `|cant|` frz / fresh-slp not the engine majority)** |
+| **9** | **CANDIDATE (WHAT): same-turn boost/status boundaries with ratio 0.70-0.96** |
+
+**Updated ledger arithmetic for the 304**: 99 fold into documented comparison
+families; 145 sit in the four NEW named mechanisms (recharge 56, Truant 48,
+absorb-through-Protect 26, absorb variants 15 — fix lanes running); **60 remain
+WHAT-level candidates in four named shapes, WHY open — these are the honest
+unexplained count now**, and at least recoil-vs-Substitute looks engine-side,
+i.e. the 161 DO add candidate fix items beyond the three running lanes.
+
+**Re-sweep readiness**: a fresh certification sweep on unburned blocks needs
+(1) the recharge/absorb/Truant fixes landed with identity-diff verification;
+(2) WHY-level adjudication of the four candidate shapes (60 rows, replay
+evidence retained in the shard checkpoints); (3) the readout instrument taught
+this cycle's sweep-scale signatures so its mechanical coverage starts where
+this one ended (96.9% raw, ~99% after triage). Seeds 2000000-2701249 are
+consumed and registry-filed; the next sweep draws fresh blocks.
