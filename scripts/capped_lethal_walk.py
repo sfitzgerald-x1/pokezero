@@ -213,7 +213,7 @@ def _parse_branch(events: Sequence[str], pre_hp: Mapping[str, int]) -> tuple[
             current_move = next_key
             next_key += 1
             groups[current_move] = {"crit": crit_pending, "applied": -delta,
-                                    "capped": hp == 0}
+                                    "capped": hp == 0, "hp_before": prev}
             ops.append(BranchOp("roll", slot, delta, current_move, False, maxhp[slot]))
         else:
             source = _normalize_source(from_tag)
@@ -294,6 +294,27 @@ def _candidate_maxes(state_str: str, s1: str, s2: str) -> dict[str, set[tuple[in
     return out
 
 
+def _nonkill_average(max_damage: int, health: int) -> int | None:
+    """The engine's kill-split non-lethal arm value, transcribed from
+    `compare_health_with_damage_multiples` (gen3/generate_instructions.rs):
+    walk damage = max*0.85 upward in max*0.01 steps for 16 rolls, truncating
+    each addend; return trunc(sum/count) over the rolls strictly below
+    `health`. Returns None when no roll is below (pure kill)."""
+
+    total = 0
+    count = 0
+    damage = max_damage * 0.85
+    increment = max_damage * 0.01
+    for _ in range(16):
+        if damage < health:
+            total += int(damage)
+            count += 1
+        damage += increment
+    if count == 0:
+        return None
+    return total // count
+
+
 def _roll_bases_for_group(group: Mapping[str, Any], attacker_slot: str,
                           maxes: Mapping[str, set[tuple[int, bool]]]) -> tuple[list[int], str]:
     """Candidate 100%-roll bases m for a move whose branch applied `applied`.
@@ -305,10 +326,24 @@ def _roll_bases_for_group(group: Mapping[str, Any], attacker_slot: str,
 
     applied = int(group["applied"])
     capped = bool(group["capped"])
+    hp_before = group.get("hp_before")
     exact = [m for m, _crit in maxes.get(attacker_slot, ())
              if int(m * 0.925) == applied]
     if exact and not capped:
         return sorted(set(exact)), "calculate_damage"
+    if not capped and hp_before is not None:
+        # KILL-SPLIT NON-LETHAL ARM (Z10.1 correction): when the move's max
+        # reaches the defender's HP but its min does not, the engine splits
+        # the branch and the non-lethal arm applies the CONDITIONAL average
+        # of the non-lethal rolls (`compare_health_with_damage_multiples`,
+        # gen3/generate_instructions.rs), NOT trunc(0.925 * max). Inverting
+        # 0.925 on such an arm derives a wrong base — that mis-derivation
+        # produced c9's damage_calc verdict on 1500251/56.
+        ks = [m for m, _crit in maxes.get(attacker_slot, ())
+              if _nonkill_average(m, hp_before) == applied
+              and m >= hp_before > int(m * 0.85)]
+        if ks:
+            return sorted(set(ks)), "calculate_damage(kill-split)"
     if capped:
         # Any m from calculate_damage whose branch application would reach the
         # cap; if none, infer the minimal family from the cap value itself.
@@ -317,10 +352,23 @@ def _roll_bases_for_group(group: Mapping[str, Any], attacker_slot: str,
         if reach:
             return sorted(set(reach)), "calculate_damage(capped)"
         return [applied], "inferred-from-cap(min-family)"
-    # No exact candidate (same-turn stat change moved the base): invert.
-    inferred = [m for m in range(int(applied / 0.925) - 1, int((applied + 1) / 0.925) + 2)
-                if m > 0 and int(m * 0.925) == applied]
-    return inferred or [applied], "inverted-0.925"
+    # No calculate_damage candidate (same-turn stat change moved the base):
+    # invert BOTH arm identities and pool the consistent bases.
+    lo = max(1, int(applied * 0.99))
+    hi = int((applied + 1) / 0.85) + 2
+    plain = [m for m in range(lo, hi) if int(m * 0.925) == applied]
+    split = []
+    if hp_before is not None:
+        split = [m for m in range(lo, hi)
+                 if m >= hp_before > int(m * 0.85)
+                 and _nonkill_average(m, hp_before) == applied]
+    if plain and not split:
+        return plain, "inverted-0.925"
+    if split and not plain:
+        return split, "inverted(kill-split)"
+    if plain or split:
+        return sorted(set(plain) | set(split)), "inverted(ambiguous-arm)"
+    return [applied], "inverted-0.925"
 
 
 def _simulate(ops: Sequence[BranchOp], pre_hp: Mapping[str, int],
@@ -352,8 +400,10 @@ def _simulate(ops: Sequence[BranchOp], pre_hp: Mapping[str, int],
     for idx, op in enumerate(ops):
         if op.kind == "roll":
             m = bases[op.move_key]
-            pct = _ROLLS[assignment[op.move_key]]
-            value = m * pct // 100
+            # Engine roll ladder, transcribed: damage = m*0.85 stepped by
+            # m*0.01, each value truncated (compare_health_with_damage_
+            # multiples / the randomizer both walk this ladder).
+            value = int(m * 0.85 + assignment[op.move_key] * m * 0.01)
             dealt = min(value, hp[op.slot])
             kills_sub = value >= hp[op.slot]
             kills_branch = -op.delta >= hp_branch[op.slot]
@@ -527,6 +577,17 @@ def walk_row(row: Mapping[str, Any]) -> dict[str, Any]:
     closest: tuple[int, dict[str, Any]] | None = None
     any_branches = False
     total_unresolved = 0
+    total_indeterminate_bases = False
+    # calculate_damage prices the RECORDED choices against the PRE-state
+    # actives. A Sleep Talk callee's damage, or damage into a mid-turn
+    # switch-in, is priced wrongly by construction, so faint-capped roll
+    # bases from it are untrustworthy on such boundaries.
+    protocol_lines = row.get("protocol") or []
+    bases_reliable = not (
+        any("[from] Sleep Talk" in ln for ln in protocol_lines)
+        or any(ln.startswith("|switch|") or ln.startswith("|drag|")
+               for ln in protocol_lines)
+    )
 
     for index, state_str in enumerate(states):
         try:
@@ -548,6 +609,7 @@ def walk_row(row: Mapping[str, Any]) -> dict[str, Any]:
         slot_ctx = _slot_context(state_str, slot_sides)
         cand_mass = 0.0
         cand_unresolved = 0
+        cand_indeterminate_mass = 0.0
         branch_rows: list[dict[str, Any]] = []
         for branch in branches:
             pct = float(branch.get("percentage") or 0.0)
@@ -575,15 +637,31 @@ def walk_row(row: Mapping[str, Any]) -> dict[str, Any]:
             base_options: list[list[int]] = []
             base_srcs: list[str] = []
             damaged_slot: dict[int, str] = {}
+            branch_indeterminate = False
             for key in keys:
                 slot = next(op.slot for op in ops if op.kind == "roll" and op.move_key == key)
                 damaged_slot[key] = slot
                 attacker = "p2" if slot == "p1" else "p1"
                 bases, src = _roll_bases_for_group(groups[key], attacker, maxes)
+                # A DETERMINATE base is required for any verdict-bearing
+                # arithmetic (X.3.2: a roll index only means something against
+                # the engine's actual 100% base). Two ways a base is not
+                # determinate: (a) the applied value was faint-capped and
+                # calculate_damage produced nothing (min-family inference);
+                # (b) the applied value was faint-capped and the boundary has
+                # a Sleep Talk callee or a mid-turn switch/drag, so
+                # calculate_damage priced the WRONG move or the WRONG
+                # defender and its capped-reach candidates are meaningless.
+                if src == "inferred-from-cap(min-family)":
+                    branch_indeterminate = True
+                elif src == "calculate_damage(capped)" and not bases_reliable:
+                    bases, src = [int(groups[key]["applied"])], "wrong-target-capped(min-family)"
+                    branch_indeterminate = True
                 base_options.append(bases)
                 base_srcs.append(src)
             brow["roll_bases"] = {str(k): {"options": base_options[i], "source": base_srcs[i]}
                                   for i, k in enumerate(keys)}
+            brow["indeterminate_base"] = branch_indeterminate
             reproducing = 0
             total = 0
             ladder: list[dict[str, Any]] = []
@@ -625,16 +703,26 @@ def walk_row(row: Mapping[str, Any]) -> dict[str, Any]:
                     best_combo_mass = combo_mass
                     reproducing, total = combo_hits, combo_total
                     ladder = [{"move": k, "base": bases[k],
-                               "rolls": [bases[k] * p // 100 for p in _ROLLS]}
+                               "rolls": [int(bases[k] * 0.85 + i * bases[k] * 0.01)
+                                         for i in range(16)]}
                               for k in keys]
             brow["reproducing_assignments"] = reproducing
             brow["assignments_total"] = total
             brow["mass_pct"] = best_combo_mass
             brow["roll_ladder"] = ladder
-            cand_mass += best_combo_mass
+            if branch_indeterminate:
+                # Mass computed over an indeterminate base is not evidence:
+                # it neither counts toward the limit floor nor supports a
+                # "reachable under no assignment" claim. Recorded separately.
+                brow["indeterminate_mass_pct"] = brow.pop("mass_pct")
+                cand_indeterminate_mass += brow["indeterminate_mass_pct"]
+                total_indeterminate_bases = True
+            else:
+                cand_mass += best_combo_mass
             branch_rows.append(brow)
         candidates_out.append({"candidate": index, "branches": branch_rows,
                                "mass_pct": cand_mass,
+                               "indeterminate_mass_pct": cand_indeterminate_mass,
                                "unresolved_assignments": cand_unresolved})
         total_unresolved += cand_unresolved
         if cand_mass > best_mass:
@@ -654,6 +742,18 @@ def walk_row(row: Mapping[str, Any]) -> dict[str, Any]:
         result["verdict"] = "limit:roll_divergent_lethality"
     elif best_mass > 0.0:
         result["verdict"] = "limit_not_established"
+    elif total_indeterminate_bases:
+        # X.3.4: the branch set is non-finite under X.3.2 — a faint-capped
+        # move whose 100% base is not recoverable (Sleep Talk callee or
+        # mid-turn switch defeats calculate_damage; the cap hides the max)
+        # admits no determinate roll index. Neither reachability nor its
+        # negation can be established, so the row keeps its label.
+        result["verdict"] = "cannot_enumerate"
+        result["precondition"] = (
+            "no move admits a determinate roll index: a faint-capped damage "
+            "value on a boundary where calculate_damage prices the wrong "
+            "move or defender (Sleep Talk callee / mid-turn switch); "
+            "the uncapped base is unrecoverable from the recorded state")
     elif total_unresolved:
         # Some assignments could not be resolved (a capped residual whose
         # uncapped magnitude is not in the transcription table). "Reachable
