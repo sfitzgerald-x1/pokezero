@@ -6461,7 +6461,7 @@ Both engine consumers then rebuilt all **45 patches with fuzz=0** at fingerprint
 `0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10`;
 the fixture refresh remains last. The builders clean their temporary trees, so `.orig` artifacts
 are not retained. Behavioral probes passed 9/9, focused Python fidelity tests passed 29/29,
-the public-invariant test passed 1/1, and the Rust release suite passed 289/289.
+the public-invariant test passed 1/1, and the Rust release suite passed 271/271.
 
 ## Z16.1 Full retained-population re-read through patch 44
 

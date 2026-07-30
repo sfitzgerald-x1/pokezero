@@ -38,7 +38,7 @@
   "verification": {
     "focused_python": "29/29 PASS",
     "public_invariant": "1/1 PASS",
-    "rust_release_suite": "289/289 PASS",
+    "rust_release_suite": "271/271 PASS",
     "behavioral_probes": "9/9 PASS",
     "force_switch_mapper_pin": "PASS"
   },

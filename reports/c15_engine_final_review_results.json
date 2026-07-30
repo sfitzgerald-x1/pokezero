@@ -27,7 +27,7 @@
     "focused_python_fidelity": "29/29 PASS",
     "public_invariant": "1/1 PASS",
     "behavioral_probes": "9/9 PASS",
-    "rust_release_suite": "289/289 PASS",
+    "rust_release_suite": "271/271 PASS",
     "git_diff_check": "PASS"
   },
   "scope_boundary": "This hardens retained-population evidence and patch packaging. It does not replace the fresh 10k zero-unattributed certification sweep."
