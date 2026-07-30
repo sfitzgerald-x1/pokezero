@@ -2122,6 +2122,17 @@ def _public_materialization_payload(
             # duration, the move-slot lock, and the same-turn redirect the engine already
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
+            # gen3 Truant loaf parity for the active mon: True = loafs on its next move
+            # attempt, False = acts, absent = no holder OR the phase is genuinely unknown
+            # (a truncated prefix whose switch-in was never observed). The world must keep
+            # those last two apart -- "no volatile" and "we don't know" produce the same
+            # engine behaviour but only one of them is a claim.
+            #
+            # This replaces a "moved last round -> loafs now" proxy computed downstream. The
+            # sim's bit is a free-running toggle flipped at EVERY residual regardless of what
+            # the mon did, so the proxy inverts permanently the first time a holder is kept
+            # from moving by sleep, paralysis, flinch, freeze, recharge or a switch.
+            "truantPhase": replay.truant_phase.get(player),
             # Live in-battle retype of the ACTIVE mon, which the species token cannot
             # express. The parser has produced this since the v3 obs work but only the
             # OBSERVATION path consumed it (`_apply_live_type_override`); the world was

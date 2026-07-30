@@ -6157,3 +6157,258 @@ ea207da8ad2ec84b5028fa0ae26ed6f45a37345909fa97c9435cddb4d9a7910a  cert_shard_5.j
 before the walker CODE that produced them (caught in review). Standing order
 going forward: instrument change first, artifacts it produces second — the same
 separation the prediction-first rule already enforces on the other side.
+
+---
+
+# Appendix Z13 — Truant loaf phase: derived, probed, and 40 of 45
+
+Branch `scott/engine-world-truant-phase`. Parser + `engine_world` only; engine unchanged
+(41 patches, `3204c777dec347aa`). Prediction pre-registered in its own commit before any code.
+
+## Z13.1 gen3 owns Truant, and the existing rule was a proxy for the wrong thing
+
+`data/mods/gen3/abilities.ts` replaces base's volatile machinery (`onStart: undefined`) with a
+free-running boolean:
+
+```js
+onSwitchIn(p) { p.truantTurn = this.turn !== 0; }
+onResidualOrder: 27
+onResidual(p) { p.truantTurn = !p.truantTurn; }   // EVERY turn end, unconditionally
+```
+
+`engine_search._truant_loaf_slots` used **"moved last round -> loafs now"**. That is a proxy
+for the bit, not the bit: the first turn a holder is stopped by something OTHER than Truant
+(sleep, paralysis, flinch, freeze, recharge, a switch) the two disagree, and **the parity
+stays inverted for the rest of the stint**. One mechanism, tens of rows.
+
+## Z13.2 Probe over derivation — and the probe corrected the derivation once
+
+The composed derivation for a TRACED Truant (patch 32: a copied ability's Start event does not
+fire, so `onSwitchIn` never runs for the tracer; `sim/pokemon.ts` leaves `truantTurn` false on
+entry; `onResidual` flips regardless) predicts the tracer LOAFS on its first move turn — the
+opposite of native. Three `gen3customgame` probes:
+
+| scenario | first move turn | matches derivation? |
+| --- | --- | --- |
+| traced at **turn 0** (lead) | **ACTS** | no — derivation said loaf |
+| traced **mid-battle** (turn 2) | **LOAFS** | yes |
+| switch out, re-enter, **re-trace** | **LOAFS** again (parity resets) | yes |
+
+The lead exception is the same missing **end-of-turn-0 residual** that broke the native lead:
+there is no residual to flip before turn 1. Both cases collapse to one rule once that is
+accounted for. The derivation was right about the mechanism and wrong about one boundary
+condition, which is exactly what the probe-over-derivation rule exists to catch.
+
+## Z13.3 What shipped, and what a flip-count model cannot do
+
+* **Native** holders (`slakoth`/`slaking`, both mono-ability): seeded at switch-in with
+  `turn != 0`, flipped per `|turn|` **from turn 2** (no end-of-turn-0 residual).
+* **Traced** holders: **no derived seed.** Seeding `false` at acquisition and counting `|turn|`
+  flips reproduces the probe in the common case and misses when the acquisition switch-in is a
+  mid-turn replacement **after a faint** — there is no `|turn|` boundary between acquisition
+  and the next move, so the count is short by one and the parity inverts. Measured: it cost a
+  new divergence (2200291/41) while fixing three. Removing it made the same seed 3 -> 0 clean.
+* **Anchors** establish and correct the phase from what the sim publishes:
+  `|cant|...|ability: Truant` means loafing this turn, a holder's own `|move|` means acting.
+  Exact, and needs no flip accounting.
+
+**The general lesson: a derived counter and an observed fact are not interchangeable.** The
+derivation is worth having — it explains the family — but where the protocol states the answer
+outright, anchor on it. The four earlier formulations of this fix all fought because they were
+deriving a quantity the sim was already publishing.
+
+## Z13.4 CORRECTED — 54 cleared, 0 new, after the replacement guard
+
+**The first version of this appendix understated its deviation, and the understatement was a
+SCOPE artifact.** It reported 40 cleared / 2 new from a re-read of the 44 seeds my own
+signature filter had selected. A reviewer re-read 116 seeds and found the position both
+stronger and dirtier than claimed: **53 cleared** (including **9 rows #969 had already
+attributed to documented families** — the under-attribution this program keeps rediscovering,
+predicted in Z6.4 and corroborated again here) and **at least 5 newly divergent by identity**:
+
+| newly divergent (pre-guard) | how it was missed |
+| --- | --- |
+| 2100487/48, 2300743/79 | disclosed by me |
+| 2000583/38, 2101037/44, 2300534/47 | **invisible to a 44-seed scope** — their baseline rows belonged to OTHER families, so the seeds were never in my list |
+
+All five share the shape I had already named as the open hole: `|cant| ability: Truant` with
+the engine attacking. Base-code controls reproduce their baselines exactly, so they were
+PR-caused, not pre-existing.
+
+**The standing lesson is about the instrument, not the count.** A re-read scoped to the seeds
+a fix was *aimed* at can measure CLEARANCE but **cannot bound NEW rows**, because a fix can
+only create divergence in games it touches, and it touches games the aim never selected. What
+I reported as "2 new" was a rate with an unmeasured tail, not a closed list — and I described
+it as though it were closed. **Clearance and regression need different scopes: the aimed set
+for one, everything the mechanism can reach for the other.**
+
+### The guard, and the corrected numbers
+
+The open sub-case was probed rather than argued: a holder entering as a **post-residual faint
+replacement** (between `|upkeep|` and the next `|turn|`) LOAFS on its first move turn, where a
+holder switched in as the turn's ACTION acts. Same seed value, opposite outcome; the only
+difference is which side of the residual it entered on. Without the guard the `|turn|` flip
+double-counts a residual the mon was never present for, and the parity inverts for the stint.
+
+The trigger is parser-visible, which is why the guard is cheap: `|upkeep|` opens a window,
+`|turn|` closes it, and a holder switching in inside it skips exactly one flip.
+
+Re-read at the reviewer's **116-seed scope**, after the guard:
+
+| | |
+| --- | --- |
+| baseline rows in scope | 161 |
+| **CLEARED** | **54** |
+| still divergent | 107 (other families in the same games) |
+| **newly divergent** | **0** |
+| **net** | **+54** |
+
+All five of the reviewer's new rows are gone; for the three carrying base controls the
+post-guard row set matches the baseline **exactly** (`[23,67]`, `[49]`, `[45]`), so the guard
+neither introduced rows nor cost clears.
+
+**Residual honesty:** 0 new at 116 seeds is still not a proof of 0 new. That scope is far
+wider than the aimed set and includes the seeds that caught the original miss, but
+previously-clean Slaking games remain unmeasured until the next full sweep. This is a much
+better bound than before, not a closed one.
+
+## Z13.5 Family correction, forwarded
+
+Seed 2400315's rows are **not** loaf parity. They are `|cant|`-BOUNDARY residual drops
+(`component_missing_in_engine:sandstorm` on both `|cant| Truant` and `|cant| recharge` lines):
+engine and sim agree on who loafed and disagree on whether the end-of-turn block runs. The
+recharge-residual-gap family is therefore **broader than `|cant| recharge`** — it is any
+`|cant|` boundary. My signature filter mis-bucketed them, which also explains part of the
+44-vs-48 gap.
+
+---
+
+# Appendix Z14 — WHY-adjudication of two sweep shapes (and a refused ownership)
+
+Branch `scott/c15-why-adjudication`. Engine 41 patches, fingerprint `3204c777dec347aa`,
+unchanged — this round is adjudication, not repair.
+
+**Scope honesty up front: two of the four assigned shapes are adjudicated here.**
+`CAND_unresolved_magnitude` (28 rows) and `CAND_same_turn_stat_event_gap` (9 rows) were NOT
+sampled and carry no verdict from me. They are listed so the next reader knows the boundary of
+this appendix rather than inferring coverage from its title.
+
+## Z14.1 CAND_recoil_vs_substitute_basis (12 rows) — CORRECTED: world knowledge-limit
+
+**The sim-chain half of this entry stands; the engine half was wrong and is withdrawn.**
+
+### What holds
+
+gen3 has no `substitute` override, so the condition resolves UP to **gen4's**
+(`data/mods/gen4/moves.ts:1283`), which clamps `damage` to the sub's remaining HP, applies
+recoil *inside* that handler from the clamped value, and returns `HIT_SUBSTITUTE === 0` — so
+`move.totalDamage` is falsy and the outer recoil block (`gen3/scripts.ts:460`) never
+double-applies. gen3 also owns `calcRecoilDamage` and **floors** where base rounds.
+
+### What was FALSE
+
+I wrote that "the engine computes recoil from the FULL damage". **It does not.** The engine's
+substitute path sets `damage_dealt = min(calculated, substitute_health)` and recoil consumes
+the clamped value — **semantically identical to gen4's handler**. The engine path is
+**verified sim-exact**.
+
+### The real mechanism, and how I got it wrong
+
+`engine_world.py` seeds the sub with a **documented upper-bound approximation**:
+
+```python
+substitute_health = 0
+if "substitute" in volatiles:
+    # Public info does not carry the sub's remaining HP; a fresh sub costs
+    # maxhp/4, so that is the documented upper-bound approximation.
+    substitute_health = party[active_index].maxhp // 4
+```
+
+There is **no depletion tracking**. So the engine clamps correctly — to a sub that the world
+believes is always full. Venusaur: `262 // 4 = 65`, and `floor(65/3) = 21` — **exactly** the
+engine's observed recoil. The engine was reading its own seeded 65, not a full-damage figure.
+
+My −21/−19 arithmetic **back-fitted**: I inferred "full damage ≈ 63" from `floor(x/3) = 21`
+when **63, 64 and 65 all floor to 21**, and picked the value that fit my hypothesis instead of
+reading the retained `DamageSubstitute` instruction, which states the number outright. The
+artifact was in hand and I reasoned past it.
+
+### Re-laned, and the prediction replaced
+
+**Lane: world / knowledge limit**, not engine damage.
+
+* An **engine patch clears ZERO rows** — there is nothing wrong with the engine path.
+* **Depletion tracking** in the world clears the **inferable subset**: sub-breaking hits whose
+  absorbed amounts can be reconstructed from public damage lines.
+* The remainder is a **genuine limit shape**: Showdown does not publish how much a Substitute
+  absorbed on a non-breaking hit, so the world cannot always know the remaining HP. Part of
+  this family is not fixable without hidden information, and should be adjudicated as a limit
+  rather than carried as an open defect.
+
+## Z14.2 CAND_incapacitated_arm_pricing (11 rows) — CORRECTED: split, and one refusal withdrawn
+
+The blanket refusal was **half right and is half withdrawn**. Three rows sampled; two
+mechanisms, two lanes.
+
+### Freeze rows — engine lane, mechanism corrected
+
+I wrote that the engine "has no 80/20 freeze arm". **It has one; it did not fire.** The thaw
+exclusion at `gen3/generate_instructions.rs:1580` reads:
+
+```rust
+&& ![Choices::HIDDENPOWER, Choices::WEATHERBALL].contains(&choice.move_id)
+```
+
+— only the **generic** `HIDDENPOWER`. Espeon's `HIDDENPOWERFIRE70` is a distinct enum variant,
+so the engine treated it as a thawing fire hit, thawed the frozen mon, and let it act. gen3
+says Hidden Power must not thaw.
+
+The same file already enumerates **all 33 HP variants** thirty lines earlier (line 1374, for
+`MoveCategory`), so the fix class is exactly the enumerate-every-variant pattern this ledger
+established for the counter/mirrorcoat Hidden Power work — a known precedent, not a new design.
+
+Confirmed on a second row: **2100471/18**, Chimecho's Hidden Power into a frozen Sableye, same
+absent freeze arm, engine's Sableye acting for 185.
+
+### The fresh-sleep row — refusal WITHDRAWN, world lane (mine)
+
+**2000281/99 was my lane and I refused it wrongly.** The engine does not "apply the sleep and
+then let the mon move" — it emits **zero instructions on every branch**, because its
+rest-aware sleep clause saw a **benched Entei seeded with `rest_turns = 0`**. The world's
+rest-provenance machinery (`restSleepAttempts` → `3 − k`) failed to mark a **BENCHED** public
+Rest sleeper, so the clause could not engage.
+
+That is a world-construction gap — precisely the lane I declined. **Sub-shape (b)
+("same-turn status not gating the second mover") is withdrawn**: no sampled row exhibits it,
+and it should be re-established from a row that does before anyone builds on it.
+
+### Sizing the split
+
+Of three sampled rows: **2 engine** (HP-variant thaw), **1 world** (benched Rest provenance).
+A 3-row sample cannot size an 11-row family with confidence; it establishes that the family is
+**mixed**, which is the part that matters for routing. The remaining 8 need the same
+treatment before either lane commits to a clearance number.
+
+## Z14.3 The rule, and the appendix that instantiated it
+
+The original text of this section proposed: *a WHAT names where a divergence is VISIBLE; the
+lane follows from the WHY, and the two are routinely different.* The rule survives. What did
+not survive is my application of it — **this appendix was itself an instance**, and the split
+falls exactly along one line:
+
+| WHY derived from | outcome |
+| --- | --- |
+| **sim source, read directly** (gen4 substitute chain, `HIT_SUBSTITUTE`, gen3 `calcRecoilDamage`) | **held** |
+| **arithmetic, without reading the retained branch instructions** (engine recoil basis, "no freeze arm", "applies the sleep then moves") | **all three refuted** |
+
+I have a standing rule for this — replay before narrating, read the artifact rather than the
+note — and I applied it to the SIM and skipped it on the ENGINE. The retained repros carried
+`DamageSubstitute`, the branch dumps, and the instruction lists that state each of the three
+answers outright. Every failed claim was an inference over a number when the number's
+provenance was one field away.
+
+**Sharpened rule: derivation is licensed for a source you are READING and never for a
+component whose output you are only INFERRING.** Reading Showdown's chain to predict engine
+behaviour is half a derivation; the other half is opening the engine's own recorded output.
+The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
+artifact said 65.

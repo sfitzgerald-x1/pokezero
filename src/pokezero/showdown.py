@@ -1013,6 +1013,25 @@ class ShowdownReplayState:
     # the belief stamped a historical trace -- observed handing a Gardevoir `levitate` from
     # an earlier switch-in, which silently granted it Spikes immunity.
     traced_ability: Mapping[str, Optional[str]] = field(default_factory=dict)
+    # gen3 Truant loaf parity for the active mon: True = this mon loafs on its next move
+    # attempt, False = it acts, absent/None = no Truant holder or the phase is UNKNOWN.
+    #
+    # gen3 owns Truant outright (`data/mods/gen3/abilities.ts`, `onStart: undefined`) and
+    # models it as a free-running boolean, NOT base's volatile:
+    #
+    #     onSwitchIn(p) { p.truantTurn = this.turn !== 0; }
+    #     onBeforeMove(p) { if (p.truantTurn) { cant 'ability: Truant'; return false; } }
+    #     onResidualOrder: 27
+    #     onResidual(p) { p.truantTurn = !p.truantTurn; }
+    #
+    # The bit flips at EVERY residual unconditionally -- whether the mon moved, slept,
+    # flinched, was paralyzed, recharged or did nothing. That is why "moved last round ->
+    # loafs now" is a proxy rather than the bit: the first turn a holder fails to move for a
+    # NON-Truant reason the two disagree, and the parity stays inverted thereafter.
+    #
+    # `this.turn !== 0` is the compensation for the extra residual a mid-battle switch-in
+    # sees before its first move opportunity, so a lead and a switch-in both ACT first.
+    truant_phase: Mapping[str, Optional[bool]] = field(default_factory=dict)
     # Public sleep-clause tracker (spec v3, docs/observation_v3_spec.md change 2): per INDUCING
     # side, the set of enemy victims it has publicly put to sleep (victim keys
     # ``<slot>:<normalized ident name>``). Attribution rule: a ``-status … slp`` line WITHOUT
@@ -1254,6 +1273,13 @@ class _ReplayParser:
         self.live_type_override: dict[str, Optional[str]] = {"p1": None, "p2": None}
         # See ShowdownReplayState.traced_ability: transient, cleared on switch-out.
         self.traced_ability: dict[str, Optional[str]] = {"p1": None, "p2": None}
+        # See ShowdownReplayState.truant_phase. None = no holder / phase unknown.
+        self.truant_phase: dict[str, Optional[bool]] = {"p1": None, "p2": None}
+        # True between |upkeep| and the next |turn| -- the window in which a faint
+        # replacement enters AFTER that turn's residual has already run.
+        self._post_upkeep_window: bool = False
+        # Slots whose next |turn| flip must be skipped (see _TRUANT replacement guard).
+        self._truant_skip_next_flip: set[str] = set()
         # Public sleep-clause tracker (spec v3): per INDUCING side, the set of enemy victims
         # it has publicly put to sleep. See ShowdownReplayState.induced_sleep_victims.
         self.induced_sleep_victims: dict[str, set[str]] = {"p1": set(), "p2": set()}
@@ -1324,6 +1350,9 @@ class _ReplayParser:
         parser.traced_ability = {
             slot: snapshot.traced_ability.get(slot) for slot in ("p1", "p2")
         }
+        parser.truant_phase = {
+            slot: snapshot.truant_phase.get(slot) for slot in ("p1", "p2")
+        }
         parser.induced_sleep_victims = {
             slot: set(snapshot.induced_sleep_victims.get(slot, ())) for slot in ("p1", "p2")
         }
@@ -1377,6 +1406,55 @@ class _ReplayParser:
             if pokemon is not None:
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
+                # gen3 Truant phase for the INCOMING mon. Truant's `onSwitchIn` runs only for
+                # a mon that already has the ability, and sets
+                # `truantTurn = this.turn !== 0` -- so a mid-battle switch-in starts on the
+                # LOAF side of the toggle and a turn-0 lead on the ACT side. Both then take
+                # one `onResidual` flip before their first move opportunity, which is why both
+                # end up ACTING on it. Seeded here rather than inferred from later behaviour
+                # because the switch line is the event the sim itself keys on.
+                #
+                # Species is sufficient and unambiguous: `slakoth` and `slaking` are the only
+                # gen3 Truant lines and both are MONO-ability, so no reveal is needed. A mon
+                # that acquires Truant later by Trace is handled at the `-ability` line, not
+                # here -- at ITS switch-in it did not have the ability, so Truant's onSwitchIn
+                # never ran for it and its `truantTurn` is still the `false` that
+                # `sim/pokemon.ts` resets on entry.
+                # gen3 seeds the phase at switch-in: `truantTurn = this.turn !== 0`. Both a
+                # turn-0 lead (False) and a mid-battle switch-in (True) then take exactly one
+                # `onResidual` flip before their first move opportunity, which is why both end
+                # up ACTING on it -- the `turn !== 0` term is that compensation.
+                #
+                # Reproducing it in a replay needs the flip to land on the same side of the
+                # residual boundary, and the per-`|turn|` flip below is skipped for turn 1
+                # because there is no end-of-turn-0 residual to mirror. Getting that wrong
+                # inverted the lead's parity and produced divergences at the first boundary.
+                #
+                # Species is decisive: `slakoth` and `slaking` are the only gen3 Truant lines
+                # and both are mono-ability. A mon that acquires Truant later by Trace is
+                # seeded at its `-ability` line instead.
+                #
+                # Deriving it was tried and withdrawn. gen3 seeds `truantTurn = this.turn != 0`
+                # at switch-in, which is correct for the sim but depends, in a REPLAY, on the
+                # flip landing on the right side of the residual boundary. It did not for a
+                # turn-0 lead -- there is no "end of turn 0" residual to flip -- and the
+                # resulting inverted parity produced divergences at the very first boundary,
+                # trading rows rather than fixing them.
+                #
+                # Unknown is the honest state and it is not a loss: per the same gen3 rule
+                # BOTH a lead and a mid-battle switch-in act on their first move opportunity,
+                # which is what the downstream proxy already assumes. The phase becomes known
+                # at the first public anchor (`_anchor_truant_phase`) and is exact thereafter.
+                if _normalize_identifier(pokemon.species or "") in _TRUANT_SPECIES:
+                    self.truant_phase[pokemon.showdown_slot] = self.turn_number != 0
+                    if self._post_upkeep_window:
+                        self._truant_skip_next_flip.add(pokemon.showdown_slot)
+                    else:
+                        self._truant_skip_next_flip.discard(pokemon.showdown_slot)
+                else:
+                    # Not a holder: nothing to carry, and distinct from False (which asserts
+                    # a KNOWN acting phase).
+                    self.truant_phase[pokemon.showdown_slot] = None
                 # A new mon takes the slot with fresh (zero) stat-boost stages — UNLESS it came
                 # in via Baton Pass, which carries the passer's boosts to the incoming mon. Only
                 # a true |switch| can be a Baton Pass; a |drag| (Roar/Whirlwind) never is. We
@@ -1473,6 +1551,10 @@ class _ReplayParser:
             self.public_events.append(_public_event_from_line(line))
             self.public_lines.append(line)
             return
+        if event_type == "upkeep":
+            # Residuals for this turn are done; anything switching in from here until the
+            # next |turn| is a post-residual faint replacement.
+            self._post_upkeep_window = True
         if event_type == "turn" and len(parts) >= 3:
             try:
                 self.turn_number = int(parts[2])
@@ -1485,6 +1567,28 @@ class _ReplayParser:
             for slot, stage in self.toxic_stage.items():
                 if stage:
                     self.toxic_stage[slot] = min(15, stage + 1)
+            # gen3 Truant: `onResidual` flips the bit every turn UNCONDITIONALLY. It is
+            # deliberately NOT gated on the mon having moved, having a volatile, or anything
+            # else -- that gating is exactly the proxy this replaces.
+            # Turn 1 is skipped on purpose: the flip mirrors the PREVIOUS turn's residual and
+            # there is no end-of-turn-0 residual. Flipping there inverts a lead's parity for
+            # the whole stint.
+            if self.turn_number >= 2:
+                for slot, phase in self.truant_phase.items():
+                    if phase is None:
+                        continue
+                    if slot in self._truant_skip_next_flip:
+                        # Replacement guard. A holder that entered as a POST-RESIDUAL faint
+                        # replacement missed nothing: that turn's `onResidual` had already
+                        # run before it arrived, so flipping here would double-count it.
+                        # Sim-probed: a Slaking replacing a mon that fainted at upkeep LOAFS
+                        # on its first move turn, whereas a Slaking switched in as the turn's
+                        # ACTION acts on its first move turn. Same seed, opposite outcome, and
+                        # the only difference is which side of the residual it entered on.
+                        continue
+                    self.truant_phase[slot] = not phase
+            self._truant_skip_next_flip.clear()
+            self._post_upkeep_window = False
             # Confusion turns-so-far (spec v3 change 4): each turn the confusion volatile is
             # publicly present on a slot's active mon, its elapsed-duration counter advances.
             # Left uncapped in the raw counter (a mon asleep-while-confused can dwell past the
@@ -1525,6 +1629,7 @@ class _ReplayParser:
         _update_volatiles(parts, self.volatiles)
         self._update_live_type_override(parts)
         self._update_traced_ability(parts, line)
+        self._anchor_truant_phase(parts, line)
         self._update_leech_seed(parts)
         self._prune_direct_materialization_blockers()
         _update_future_sight(parts, self.future_sight, self.turn_number)
@@ -1697,6 +1802,55 @@ class _ReplayParser:
             if slot is not None:
                 self.wish_set_turns.pop(slot, None)
 
+    def _slot_holds_truant(self, slot: str) -> bool:
+        """Whether this slot's active mon has Truant, natively or by Trace.
+
+        Species is decisive for the native case: `slakoth` and `slaking` are the only gen3
+        Truant lines and both are mono-ability, so no reveal is needed.
+        """
+        if self.traced_ability.get(slot) == "truant":
+            return True
+        active = self.public_active.get(slot)
+        species = getattr(active, "species", None) if active is not None else None
+        return _normalize_identifier(species or "") in _TRUANT_SPECIES
+
+    def _anchor_truant_phase(self, parts: Sequence[str], line: str) -> None:
+        """Correct the Truant parity against the two facts the sim publishes.
+
+        The switch-in seed plus the per-``|turn|`` flip reproduce gen3's toggle in principle,
+        but they are a DERIVATION: they depend on having seen the switch-in, on the turn
+        number being what we think, and on the flip landing on the right side of the residual.
+        Any one of those being off inverts the parity for the rest of the stint, silently,
+        because a boolean that is wrong looks exactly like a boolean that is right.
+
+        These two lines are ground truth for the turn they appear in, so they are used as
+        anchors rather than as evidence:
+
+        * ``|cant|<mon>|ability: Truant``  -> the holder is LOAFING this turn;
+        * ``|move|<mon>|...``              -> the holder ACTED this turn, so it is not loafing.
+
+        The anchor sets the value for the CURRENT turn; the next ``|turn|`` flip carries it
+        forward. A derivation that agrees is confirmed, and one that has drifted is corrected
+        at the first public evidence instead of staying wrong until the mon switches out.
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type not in {"cant", "move"} or len(parts) < 3:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.truant_phase:
+            return
+        if not self._slot_holds_truant(slot):
+            return
+        if event_type == "cant":
+            if "Truant" in line:
+                self.truant_phase[slot] = True
+            return
+        # A called move (Sleep Talk's callee) is not an independent action; the caller's own
+        # ``|move|`` line already anchored the turn.
+        if any(part.startswith("[from]") for part in parts[4:]):
+            return
+        self.truant_phase[slot] = False
+
     def _update_traced_ability(self, parts: Sequence[str], line: str) -> None:
         """Track the ability the active mon is CURRENTLY borrowing via Trace.
 
@@ -1720,7 +1874,35 @@ class _ReplayParser:
             return
         copied = parts[3].strip()
         if copied:
-            self.traced_ability[slot] = _normalize_identifier(copied)
+            normalized = _normalize_identifier(copied)
+            self.traced_ability[slot] = normalized
+            if normalized == "truant":
+                # Traced Truant is deliberately NOT given a derived starting parity, even
+                # though the parity is derivable and was probed. Sim-verified behaviour:
+                #
+                #   lead (turn 0) acquisition  -> ACTS on its first move turn
+                #   mid-battle acquisition     -> LOAFS on its first move turn
+                #   re-entry re-traces         -> fresh acquisition, parity resets
+                #
+                # which composes from patch 32 (a copied ability's Start event does not fire,
+                # so Truant's `onSwitchIn` never runs for a tracer), `sim/pokemon.ts` leaving
+                # `truantTurn` false on entry, and `onResidual` flipping every turn end.
+                #
+                # Seeding `false` here and counting `|turn|` flips reproduces that in the
+                # common case and MISSES when the acquisition switch-in is a mid-turn
+                # replacement after a faint: there is no `|turn|` boundary between the
+                # acquisition and the next move, so the flip count is short by one and the
+                # parity inverts for the rest of the stint. Measured: it cost one new
+                # divergence (2200291/41) while fixing three.
+                #
+                # The anchors below establish the traced parity from the sim's own published
+                # behaviour instead, which is exact and needs no flip accounting. Marking the
+                # holder is all that is required here.
+                if self.truant_phase.get(slot) is None:
+                    pass  # phase stays UNKNOWN until the first anchor; see _anchor_truant_phase
+            elif self.truant_phase.get(slot) is not None:
+                # Traced something else: the mon is no longer a Truant holder.
+                self.truant_phase[slot] = None
 
     def _update_live_type_override(self, parts: Sequence[str]) -> None:
         """Track the active mon's LIVE type for retypes the species token cannot express.
@@ -1969,6 +2151,7 @@ class _ReplayParser:
             pending_baton_pass=tuple(sorted(self.pending_baton_pass)),
             live_type_override=dict(self.live_type_override),
             traced_ability=dict(self.traced_ability),
+            truant_phase=dict(self.truant_phase),
             induced_sleep_victims={
                 slot: tuple(sorted(victims))
                 for slot, victims in self.induced_sleep_victims.items()
@@ -2681,6 +2864,10 @@ def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, dic
 # procs, type changes, internal markers); we track only this closed, decision-relevant set so every
 # emitted volatile:<id> token has an enumerated vocab row (no OOV) and is a genuine status. This is
 # the single source of truth — randbat_vocab enumerates volatile:<id> from it.
+# The only gen3 Truant lines, and both are MONO-ability, so species alone identifies a
+# holder with no reveal required. (Durant is the only other Truant carrier and is gen5.)
+_TRUANT_SPECIES = frozenset({"slakoth", "slaking"})
+
 TRACKED_VOLATILES = frozenset({
     "confusion", "leechseed", "substitute", "taunt", "encore", "disable", "torment", "attract",
     "nightmare", "curse", "ingrain", "foresight", "lockon", "mindreader", "destinybond", "grudge",

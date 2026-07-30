@@ -748,6 +748,25 @@ def _require_world_reproduces_trap(
     )
 
 
+def _truant_volatile_decision(
+    side_payload: Mapping[str, Any], truant_loafs: bool
+) -> bool:
+    """Whether this side's active mon carries the TRUANT (loafing) volatile.
+
+    The PAYLOAD wins whenever it is a bool. The parser tracks the sim's own free-running
+    toggle; `truant_loafs` is the caller-side "acted last round -> loafs now" proxy that this
+    replaces, so a payload `False` must OVERRIDE a proxy `True` rather than OR with it.
+
+    `None` means genuinely unknown -- no holder, or a truncated prefix whose switch-in was
+    never observed -- and falls back to the proxy, preserving previous behaviour instead of
+    asserting an acting phase the world cannot support.
+    """
+    phase = side_payload.get("truantPhase")
+    if isinstance(phase, bool):
+        return phase
+    return bool(truant_loafs)
+
+
 def _apply_live_typechange(
     sides: Mapping[str, SideSpec], payload: Mapping[str, Any]
 ) -> dict[str, SideSpec]:
@@ -1073,10 +1092,18 @@ def _build_side_spec(
         # without it, searched worlds hand the recharging mon a free action.
         volatiles = volatiles + ["mustrecharge"]
         supported = supported | {"mustrecharge"}
-    if truant_loafs:
-        # Truant phase is publicly derivable (acted last round -> loafs now).
-        # The engine models the alternation once seeded with the volatile;
-        # without it every sampled world has Slaking about to act.
+    # Truant phase. The PAYLOAD value wins when present: the parser tracks the sim's own
+    # free-running toggle (`onResidual` flips `truantTurn` every turn unconditionally, seeded
+    # at switch-in by `this.turn !== 0`), whereas the `truant_loafs` argument is a caller-side
+    # "acted last round -> loafs now" proxy. The proxy agrees with the bit until the first
+    # turn a holder is stopped from moving by something OTHER than Truant -- sleep, paralysis,
+    # flinch, freeze, recharge, a switch -- after which it is inverted for the rest of the
+    # stint. That single failure produced the 48-row loaf-phase family.
+    #
+    # `None` means genuinely unknown (no holder, or a truncated prefix whose switch-in was
+    # never seen) and falls back to the caller's value, preserving previous behaviour rather
+    # than asserting an acting phase we cannot support.
+    if _truant_volatile_decision(side_payload, truant_loafs):
         volatiles = volatiles + ["truant"]
         supported = supported | {"truant"}
     unsupported = sorted(set(volatiles) - supported)
