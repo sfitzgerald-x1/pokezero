@@ -5,7 +5,7 @@
     "archive": "The complete 10,000-game C14 certification archive whose hashes are recorded in docs/engine_divergence_ledger_20260728.md Appendix Z12.6.",
     "boundaries_measured": 791757,
     "coverage_measured_fraction": 0.9773,
-    "current_classifier_source_commit": "ddccae7898bf7a95c16ee2d01d360fde2faab432",
+    "current_classifier_source_commit": "51ce2ff4556859aaa51387f8774a2c7be46b095f",
     "current_classifier_readout_sha256": "820639a9cb163caddbe3b11a79b5cd333e9fd5816568937f4bdb8441af45bb99",
     "fresh_sweep2_measurements_inspected": 0
   },
