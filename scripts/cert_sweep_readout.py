@@ -638,7 +638,10 @@ def _contract_gates(
 
 
 def _family_rate_gates(
-    family_counts: Mapping[str, int], contract: Mapping[str, Any]
+    family_counts: Mapping[str, int],
+    contract: Mapping[str, Any],
+    *,
+    boundaries_measured: int,
 ) -> tuple[list[str], dict[str, Any]]:
     """Reject unregistered or unexpectedly broad attribution families."""
 
@@ -652,6 +655,9 @@ def _family_rate_gates(
     registered = table.get("documented_families")
     if not isinstance(registered, Mapping):
         return ["pre_registered_family_rate_table has no documented_families"], evidence
+    if boundaries_measured <= 0:
+        failures.append("family-rate gate requires positive boundaries_measured")
+    calibration_boundaries = int(table.get("calibration_boundaries", -1))
 
     for family, count in family_counts.items():
         if family == "UNATTRIBUTED":
@@ -660,24 +666,51 @@ def _family_rate_gates(
         if not isinstance(prediction, Mapping):
             failures.append(f"attributed family {family!r} was not pre-registered")
             continue
-        interval = prediction.get("wilson95")
+        rate_interval = prediction.get("wilson95_rate")
         if not (
-            isinstance(interval, list)
-            and len(interval) == 2
-            and all(isinstance(value, (int, float)) for value in interval)
+            isinstance(rate_interval, list)
+            and len(rate_interval) == 2
+            and all(isinstance(value, (int, float)) for value in rate_interval)
         ):
-            failures.append(f"attributed family {family!r} has no registered Wilson interval")
+            count_interval = prediction.get("wilson95")
+            if (
+                isinstance(count_interval, list)
+                and len(count_interval) == 2
+                and all(isinstance(value, (int, float)) for value in count_interval)
+                and calibration_boundaries > 0
+            ):
+                rate_interval = [
+                    float(count_interval[0]) / calibration_boundaries,
+                    float(count_interval[1]) / calibration_boundaries,
+                ]
+        if not (
+            isinstance(rate_interval, list)
+            and len(rate_interval) == 2
+            and all(isinstance(value, (int, float)) for value in rate_interval)
+        ):
+            failures.append(
+                f"attributed family {family!r} has no registered Wilson rate interval"
+            )
             continue
-        upper = float(interval[1])
+        if not (
+            0.0 <= float(rate_interval[0]) <= float(rate_interval[1]) <= 1.0
+        ):
+            failures.append(
+                f"attributed family {family!r} has an invalid Wilson rate interval"
+            )
+            continue
+        upper_rate = float(rate_interval[1])
+        observed_rate = count / max(1, boundaries_measured)
         evidence["families"][family] = {
             "observed": int(count),
-            "registered_wilson95": interval,
-            "upper_bound_enforced": upper,
+            "observed_rate_per_measured_boundary": observed_rate,
+            "registered_wilson95_rate": rate_interval,
+            "upper_rate_enforced": upper_rate,
         }
-        if count > upper:
+        if observed_rate > upper_rate:
             failures.append(
-                f"attributed family {family!r} count {count} exceeds "
-                f"registered upper bound {upper:g}"
+                f"attributed family {family!r} rate {observed_rate:.8g} exceeds "
+                f"registered upper rate {upper_rate:.8g}"
             )
 
     predicted_zero = table.get("new_mechanisms_post_fix")
@@ -778,7 +811,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         coverage=coverage,
         aggregate=agg,
     )
-    family_failures, family_evidence = _family_rate_gates(fam_counts, pred)
+    family_failures, family_evidence = _family_rate_gates(
+        fam_counts, pred, boundaries_measured=agg["boundaries_measured"]
+    )
     gate_failures = contract_failures + family_failures
     verdict = "PASS" if (
         not unattributed

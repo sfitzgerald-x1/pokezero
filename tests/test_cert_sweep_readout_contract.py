@@ -202,7 +202,9 @@ class CertificationContractTests(unittest.TestCase):
 
     def test_unregistered_family_fails(self) -> None:
         failures, _ = readout._family_rate_gates(
-            {"new_broad_echo": 1}, self._contract()
+            {"new_broad_echo": 1},
+            self._contract(),
+            boundaries_measured=100,
         )
         self.assertEqual(
             failures, ["attributed family 'new_broad_echo' was not pre-registered"]
@@ -211,14 +213,16 @@ class CertificationContractTests(unittest.TestCase):
     def test_registered_family_upper_bound_is_enforced(self) -> None:
         contract = self._contract()
         contract["pre_registered_family_rate_table"]["documented_families"] = {
-            "known_limit": {"wilson95": [1, 3]}
+            "known_limit": {"wilson95_rate": [0.01, 0.03]}
         }
-        failures, _ = readout._family_rate_gates({"known_limit": 4}, contract)
+        failures, _ = readout._family_rate_gates(
+            {"known_limit": 4}, contract, boundaries_measured=100
+        )
         self.assertEqual(
             failures,
             [
-                "attributed family 'known_limit' count 4 exceeds "
-                "registered upper bound 3"
+                "attributed family 'known_limit' rate 0.04 exceeds "
+                "registered upper rate 0.03"
             ],
         )
 
