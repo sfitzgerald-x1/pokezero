@@ -66,6 +66,7 @@ from engine_transition_differential import (  # noqa: E402
 )
 from cert_execution_manifest import (  # noqa: E402
     EMITTABLE_DOCUMENTED_FAMILIES,
+    EMITTABLE_EXCLUSION_COUNTERS,
     EMITTABLE_LIMIT_FAMILIES,
     REGISTERED_ZERO_EXCLUSION_COUNTERS,
     validate_execution_manifest_schema,
