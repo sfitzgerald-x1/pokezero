@@ -278,6 +278,10 @@ class EventAwareBranchLegality(unittest.TestCase):
             # 25 has the Gen 3 85..100% support 21..25. The retained Calm Mind
             # row needs 21 after the boost; the stale pre-state range was 24..29.
             self.assertIn(state, {"post-boost", "post-switch", "after-drop"})
+            if state == "after-drop":
+                # Aurora Beam is the earlier p1 -> p2 hit. The affected later
+                # Tackle targets p1, so only side_two's rolls are valid there.
+                return [90], [25]
             return [25], []
 
         differential.poke_engine = SimpleNamespace(
@@ -303,7 +307,8 @@ class EventAwareBranchLegality(unittest.TestCase):
             side_two_choice="calmmind",
         )
 
-        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(legal.target_side, "p2")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
         self.assertEqual(self.loaded_states, ["post-boost"])
 
     def test_uses_pre_damage_snapshot_after_a_same_turn_switch(self):
@@ -320,7 +325,8 @@ class EventAwareBranchLegality(unittest.TestCase):
             side_two_choice="lanturn",
         )
 
-        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(legal.target_side, "p2")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
         self.assertEqual(self.loaded_states, ["post-switch"])
 
     def test_ignores_state_changes_that_follow_direct_damage(self):
@@ -390,7 +396,8 @@ class EventAwareBranchLegality(unittest.TestCase):
             side_two_choice="tackle",
         )
 
-        self.assertEqual(legal, {21, 22, 23, 24, 25})
+        self.assertEqual(legal.target_side, "p1")
+        self.assertEqual(legal.damages, {21, 22, 23, 24, 25})
         self.assertEqual(self.loaded_states, ["after-drop"])
 
     def test_rejects_completed_post_state_without_a_prefix_snapshot(self):
@@ -409,6 +416,26 @@ class EventAwareBranchLegality(unittest.TestCase):
             )
 
         self.assertEqual(self.loaded_states, [])
+
+    def test_branch_local_support_does_not_reprice_an_earlier_hit(self):
+        support = differential.BranchLegalRollSupport("p1", {21, 22, 23, 24, 25})
+
+        self.assertEqual(
+            differential.branch_component_legal_rolls(
+                support,
+                target_side="p1",
+                pre_legal={41, 42},
+            ),
+            {21, 22, 23, 24, 25},
+        )
+        self.assertEqual(
+            differential.branch_component_legal_rolls(
+                support,
+                target_side="p2",
+                pre_legal={41, 42},
+            ),
+            {41, 42},
+        )
 
 
 if __name__ == "__main__":

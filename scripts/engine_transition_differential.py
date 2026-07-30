@@ -527,6 +527,14 @@ class BranchLegalRollError(ValueError):
     """A state-changing branch could not supply its required local support."""
 
 
+@dataclasses.dataclass(frozen=True)
+class BranchLegalRollSupport:
+    """Exact roll support for one defender hit after a state mutation."""
+
+    target_side: str
+    damages: set[int]
+
+
 def _event_changes_roll_state(event: object) -> bool:
     """Whether a rendered pre-hit event changes the damage-calculation state."""
 
@@ -549,7 +557,7 @@ def branch_event_legal_rolls(
     *,
     side_one_choice: str,
     side_two_choice: str,
-) -> set[int] | None:
+) -> BranchLegalRollSupport | None:
     """Return support repriced after a pre-damage switch or stat event.
 
     ``calculate_damage`` on the boundary pre-state prices the wrong target when
@@ -558,7 +566,9 @@ def branch_event_legal_rolls(
     the exact branch prefix immediately before the first defender damage. The
     completed ``post_state`` is deliberately never accepted here: it may include
     the hit itself and later effects (for example Knock Off's item removal),
-    which cannot affect the hit being compared.
+    which cannot affect the hit being compared. The returned support is scoped
+    to that hit's protocol target, so an earlier hit in the same branch keeps
+    ordinary pre-state support.
     """
 
     events = branch.get("events")
@@ -567,6 +577,7 @@ def branch_event_legal_rolls(
 
     acting_side: str | None = None
     direct_damage_index: int | None = None
+    direct_damage_target: str | None = None
     for index, event in enumerate(events):
         if not isinstance(event, str):
             continue
@@ -580,13 +591,23 @@ def branch_event_legal_rolls(
             continue
         target = fields[2] if len(fields) > 2 else ""
         target_side = target.split(":", maxsplit=1)[0][:2]
+        state_changed = any(_event_changes_roll_state(prior) for prior in events[:index])
         # A bare Substitute HP cost is not an opponent hit. It needs no damage
         # support and the mapper correctly has no pre-hit snapshot for it.
-        # Malformed idents remain fail-closed as potential direct damage.
-        if acting_side is None or target_side not in {"p1", "p2"} or target_side != acting_side:
-            if any(_event_changes_roll_state(prior) for prior in events[:index]):
-                direct_damage_index = index
-                break
+        if acting_side in {"p1", "p2"} and target_side == acting_side:
+            continue
+        # A malformed actor or target after a state mutation cannot be mapped to
+        # the correct side-specific support, so never reuse stale support.
+        if acting_side not in {"p1", "p2"} or target_side not in {"p1", "p2"}:
+            if state_changed:
+                raise BranchLegalRollError(
+                    "state-changing branch has malformed direct-damage ident"
+                )
+            continue
+        if state_changed:
+            direct_damage_index = index
+            direct_damage_target = target_side
+            break
     if direct_damage_index is None:
         return None
 
@@ -606,7 +627,25 @@ def branch_event_legal_rolls(
         raise BranchLegalRollError(
             f"could not calculate branch-local legal rolls: {type(error).__name__}"
         ) from error
-    return legal_roll_damages(list(side_one_rolls) + list(side_two_rolls))
+    assert direct_damage_target is not None
+    rolls = side_one_rolls if direct_damage_target == "p2" else side_two_rolls
+    return BranchLegalRollSupport(
+        target_side=direct_damage_target,
+        damages=legal_roll_damages(list(rolls)),
+    )
+
+
+def branch_component_legal_rolls(
+    support: BranchLegalRollSupport | None,
+    *,
+    target_side: str,
+    pre_legal: set[int] | None,
+) -> set[int] | None:
+    """Use rebuilt support only for the branch hit it was captured before."""
+
+    if support is not None and support.target_side == target_side:
+        return support.damages
+    return pre_legal
 
 
 def _roll_damage_scale(components: Sequence[tuple[str, int]]) -> int:
@@ -1181,7 +1220,7 @@ def evaluate_boundary_strict(
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
             try:
-                legal = branch_event_legal_rolls(
+                branch_support = branch_event_legal_rolls(
                     branch,
                     side_one_choice=side_one_choice,
                     side_two_choice=side_two_choice,
@@ -1189,8 +1228,6 @@ def evaluate_boundary_strict(
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
                 continue
-            if legal is None:
-                legal = pre_legal
             usable_branches += 1
             engine_components = damage_components(
                 branch.get("events") or [],
@@ -1202,6 +1239,11 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_components(engine_components[label])
+                legal = branch_component_legal_rolls(
+                    branch_support,
+                    target_side=label,
+                    pre_legal=pre_legal,
+                )
                 # ROLL FIRST. A branch whose roll does not match is the wrong
                 # branch, and its deterministic components are then compared
                 # against a different damage history — reporting THAT as the
