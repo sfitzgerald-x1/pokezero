@@ -1,0 +1,321 @@
+{
+ "purpose": "instrument coverage on the c14 archived shards (sha256s in Z12.6) after the sweep-scale signature upgrade",
+ "instrument_commit": "this PR (instrument committed one commit BEFORE this artifact, per the Z12.6 ordering standard)",
+ "validation": {
+  "c13_population": "103/103 PASS (regression gate)",
+  "sweep_rows_cited_per_new_rule": true
+ },
+ "aggregate": {
+  "boundaries_measured": 791757,
+  "boundaries_full_round": 810125,
+  "transitions_matched": 787888,
+  "transitions_diverged": 3821,
+  "engine_errors": 0,
+  "games": 10000
+ },
+ "family_attribution": {
+  "limit:roll_divergent_lethality": 1281,
+  "I1_cap_state_shape": 517,
+  "LS_capped_lethal_shape": 474,
+  "UNATTRIBUTED": 277,
+  "limit:world_sample_drag_target": 271,
+  "I3_roll_inherited": 240,
+  "I6_sleeptalk_callee_union": 215,
+  "I4_attribution_tie": 176,
+  "I5_boundary_truncation": 164,
+  "I2_matcher_accounting": 111,
+  "LS_structural_arm_echo": 41,
+  "LS_crit_arm_pairing_echo": 28,
+  "LS_confusion_fan": 26
+ },
+ "unattributed": 277,
+ "unattributed_named_shapes": {
+  "engine-only absorb heal on a Protect-blocked or missed move": 79,
+  "recharge-turn boundary: engine branch drops end-of-turn resi": 61,
+  "no documented signature matched": 54,
+  "Truant boundary with one-sided damage components: loaf-phase": 50,
+  "recoil magnitude on a Substitute-breaking hit": 13,
+  "observed |cant| frz/fresh-slp outcome is not the engine majo": 11,
+  "majority magnitude ratio 0.90 on a same-turn boost/status bo": 2,
+  "majority magnitude ratio 0.89 on a same-turn boost/status bo": 2,
+  "majority magnitude ratio 0.87 on a same-turn boost/status bo": 1,
+  "majority magnitude ratio 0.91 on a same-turn boost/status bo": 1,
+  "majority magnitude ratio 0.85 on a same-turn boost/status bo": 1,
+  "majority magnitude ratio 0.81 on a same-turn boost/status bo": 1,
+  "majority magnitude ratio 0.88 on a same-turn boost/status bo": 1
+ },
+ "named_coverage_pct": 98.59,
+ "generic_fallback_rows": [
+  {
+   "seed": 2000298,
+   "step": 23,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2000393,
+   "step": 10,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2000431,
+   "step": 32,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2000522,
+   "step": 54,
+   "class": "component_missing_in_engine:brn"
+  },
+  {
+   "seed": 2000561,
+   "step": 67,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2001004,
+   "step": 80,
+   "class": "component_missing_in_engine:sandstorm"
+  },
+  {
+   "seed": 2001217,
+   "step": 16,
+   "class": "component_extra_in_engine:psn"
+  },
+  {
+   "seed": 2100482,
+   "step": 83,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2100690,
+   "step": 4,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2101145,
+   "step": 112,
+   "class": "component_extra_in_engine:psn"
+  },
+  {
+   "seed": 2200369,
+   "step": 75,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2201005,
+   "step": 55,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2300040,
+   "step": 84,
+   "class": "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed"
+  },
+  {
+   "seed": 2300154,
+   "step": 80,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2300739,
+   "step": 58,
+   "class": "component_missing_in_engine:psn"
+  },
+  {
+   "seed": 2300881,
+   "step": 33,
+   "class": "component_extra_in_engine:psn"
+  },
+  {
+   "seed": 2301214,
+   "step": 40,
+   "class": "component_missing_in_engine:psn"
+  },
+  {
+   "seed": 2400156,
+   "step": 29,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2400172,
+   "step": 89,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2400451,
+   "step": 56,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2400572,
+   "step": 10,
+   "class": "component_missing_in_engine:brn"
+  },
+  {
+   "seed": 2400834,
+   "step": 79,
+   "class": "component_missing_in_engine:sandstorm"
+  },
+  {
+   "seed": 2401002,
+   "step": 8,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2401127,
+   "step": 54,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2401237,
+   "step": 14,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2500151,
+   "step": 116,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2500235,
+   "step": 31,
+   "class": "component_magnitude:abilityliquidooze"
+  },
+  {
+   "seed": 2500297,
+   "step": 96,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2500298,
+   "step": 82,
+   "class": "component_missing_in_engine:psn"
+  },
+  {
+   "seed": 2500576,
+   "step": 7,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2500690,
+   "step": 10,
+   "class": "component_missing_in_engine:psn"
+  },
+  {
+   "seed": 2500750,
+   "step": 62,
+   "class": "component_missing_in_engine:sandstorm"
+  },
+  {
+   "seed": 2501061,
+   "step": 96,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2501099,
+   "step": 40,
+   "class": "component_missing_in_engine:psn"
+  },
+  {
+   "seed": 2600362,
+   "step": 82,
+   "class": "component_magnitude:psn"
+  },
+  {
+   "seed": 2600510,
+   "step": 111,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2600535,
+   "step": 80,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2600546,
+   "step": 25,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2600649,
+   "step": 18,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2600756,
+   "step": 66,
+   "class": "component_missing_in_engine:brn"
+  },
+  {
+   "seed": 2600992,
+   "step": 21,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2601033,
+   "step": 129,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2601063,
+   "step": 22,
+   "class": "component_missing_in_engine:itemleftovers"
+  },
+  {
+   "seed": 2601196,
+   "step": 25,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2601196,
+   "step": 46,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2700083,
+   "step": 34,
+   "class": "component_extra_in_engine:psn"
+  },
+  {
+   "seed": 2700218,
+   "step": 151,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2700257,
+   "step": 74,
+   "class": "component_missing_in_engine:sandstorm"
+  },
+  {
+   "seed": 2700355,
+   "step": 37,
+   "class": "roll_scaled_component"
+  },
+  {
+   "seed": 2700613,
+   "step": 131,
+   "class": "component_missing_in_engine:itemleftovers"
+  },
+  {
+   "seed": 2700917,
+   "step": 11,
+   "class": "component_missing_in_engine:itemleftovers"
+  },
+  {
+   "seed": 2701067,
+   "step": 87,
+   "class": "component_extra_in_engine:partialtrap"
+  },
+  {
+   "seed": 2701081,
+   "step": 15,
+   "class": "component_magnitude:abilityliquidooze"
+  },
+  {
+   "seed": 2701137,
+   "step": 5,
+   "class": "roll_scaled_component"
+  }
+ ],
+ "note": "first-class exclusions attribute-by-shape slightly MORE rows to the new mechanisms than the post-hoc triage did (absorb 79, recharge 61, Truant 50) - same direction, wider net; the 54 generic rows are the unresolved-magnitude candidate pool for the WHY round"
+}
