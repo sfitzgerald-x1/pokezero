@@ -417,10 +417,15 @@ class BattleSpecConstructionTests(unittest.TestCase):
         starmie_max = _maxhp(_STARMIE, self.dex)
         payload["sides"]["p1"]["pokemon"][0]["condition"] = "0 fnt"
         payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        # A fainted active cannot carry a stale Substitute into the forced
+        # replacement world, even if the preceding snapshot had one.
+        payload["sides"]["p1"]["substituteHealthState"] = "absent"
+        payload["sides"]["p1"]["substituteHealth"] = None
         world = battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertTrue(world.spec.side_one.force_switch)
         self.assertFalse(world.spec.side_two.force_switch)
         self.assertEqual(world.spec.side_one.pokemon[0].hp, 0)
+        self.assertNotIn("substitute", world.spec.side_one.volatile_statuses)
 
     def test_unown_letter_formes_collapse_to_base_species(self) -> None:
         unown_dex = _dex()
@@ -460,7 +465,7 @@ class BattleSpecConstructionTests(unittest.TestCase):
             battle_spec_from_payload(
                 payload, _override(), dex=self.dex, approximate_substitute_health=True
             )
-        self.assertEqual(caught.exception.reason, "substitute_health_unknown")
+        self.assertEqual(caught.exception.reason, "substitute_health_provenance_contradiction")
 
         payload["sides"]["p2"]["substituteHealthState"] = "full"
         world = battle_spec_from_payload(
@@ -470,6 +475,13 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertIn("substitute", side.volatile_statuses)
         self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
 
+        payload["sides"]["p2"]["substituteHealthState"] = "exact"
+        payload["sides"]["p2"]["substituteHealth"] = 7
+        exact = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        ).spec.side_two
+        self.assertEqual(exact.substitute_health, 7)
+
         payload["sides"]["p2"]["volatiles"] = []
         payload["sides"]["p2"]["substituteHealthState"] = "broken"
         broken = battle_spec_from_payload(
@@ -477,6 +489,32 @@ class BattleSpecConstructionTests(unittest.TestCase):
         ).spec.side_two
         self.assertNotIn("substitute", broken.volatile_statuses)
         self.assertEqual(broken.substitute_health, 0)
+
+    def test_active_substitute_invalid_provenance_is_a_terminal_contradiction(self) -> None:
+        for state, health in (
+            (None, None),
+            ("", None),
+            ("absent", None),
+            ("broken", None),
+            ("UNKNOWN", None),
+            ("arbitrary", None),
+            ("exact", None),
+            ("exact", 0),
+        ):
+            with self.subTest(state=state, health=health):
+                payload = _payload(self.dex)
+                payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+                if state is not None:
+                    payload["sides"]["p2"]["substituteHealthState"] = state
+                payload["sides"]["p2"]["substituteHealth"] = health
+                with self.assertRaises(EngineWorldUnsupported) as caught:
+                    battle_spec_from_payload(
+                        payload, _override(), dex=self.dex, approximate_substitute_health=True
+                    )
+                self.assertEqual(
+                    caught.exception.reason,
+                    "substitute_health_provenance_contradiction",
+                )
 
     def test_substitute_unknown_after_public_hit_fails_closed(self) -> None:
         payload = _payload(self.dex)

@@ -386,9 +386,9 @@ def battle_spec_from_payload(
     position holds public state this construction cannot express exactly.
 
     ``substituteHealthState`` is the replay's public Substitute provenance:
-    only ``"full"`` can build an active Substitute. The protocol does not
-    expose damage absorbed by a non-breaking hit, so ``"unknown"`` is a
-    deliberate fail-closed comparison limit rather than an approximation.
+    ``"full"`` and an exact ``"exact"`` + ``substituteHealth`` pair can build
+    an active Substitute. ``"unknown"`` is the sole public-information limit;
+    missing or invalid active provenance is an instrumentation contradiction.
     """
 
     _reject_unsupported_globals(payload)
@@ -1115,25 +1115,47 @@ def _build_side_spec(
     if unsupported:
         raise EngineWorldUnsupported("volatile_unsupported", f"side {slot!r}: {unsupported}")
     substitute_health = 0
-    substitute_health_state = normalize_id(
-        str(side_payload.get("substituteHealthState") or "")
+    raw_substitute_health_state = side_payload.get("substituteHealthState")
+    substitute_health_state = (
+        raw_substitute_health_state
+        if isinstance(raw_substitute_health_state, str)
+        else None
     )
+    raw_substitute_health = side_payload.get("substituteHealth")
     if "substitute" in volatiles:
         # A freshly-created Substitute is public-exact at floor(maxhp / 4).
-        # A non-breaking hit does not reveal its absorbed amount, so replaying
-        # it as full would silently construct a false world.
-        if substitute_health_state != "full":
+        # Only canonical ``unknown`` provenance is a named public-information
+        # limit. Missing or malformed provenance signals a broken fold.
+        if substitute_health_state == "full":
+            substitute_health = party[active_index].maxhp // 4
+        elif substitute_health_state == "exact":
+            if (
+                isinstance(raw_substitute_health, bool)
+                or not isinstance(raw_substitute_health, int)
+                or not 0 < raw_substitute_health <= party[active_index].maxhp // 4
+            ):
+                raise EngineWorldUnsupported(
+                    "substitute_health_provenance_contradiction",
+                    f"side {slot!r} has invalid exact Substitute HP "
+                    f"{raw_substitute_health!r}",
+                )
+            substitute_health = raw_substitute_health
+        elif substitute_health_state == "unknown":
             raise EngineWorldUnsupported(
                 "substitute_health_unknown",
-                f"side {slot!r} has active Substitute with public state "
-                f"{substitute_health_state or 'missing'!r}",
+                f"side {slot!r} has explicit unknown Substitute health provenance",
             )
-        substitute_health = party[active_index].maxhp // 4
-    elif substitute_health_state not in {"", "absent", "broken"}:
+        else:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has active Substitute with invalid public state "
+                f"{raw_substitute_health_state!r}",
+            )
+    elif substitute_health_state not in {None, "", "absent", "broken"}:
         raise EngineWorldUnsupported(
-            "payload_malformed",
+            "substitute_health_provenance_contradiction",
             f"side {slot!r} has no Substitute volatile but health state "
-            f"{substitute_health_state!r}",
+            f"{raw_substitute_health_state!r}",
         )
 
     boosts: dict[str, int] = {}

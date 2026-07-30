@@ -54,6 +54,16 @@ class WorldConstructionLimits(unittest.TestCase):
         self.assertFalse(count_world_construction_limit(counts, error))
         self.assertEqual(counts, Counter())
 
+    def test_substitute_provenance_contradiction_is_never_a_limit(self):
+        counts = Counter()
+        error = EngineWorldUnsupported(
+            "substitute_health_provenance_contradiction",
+            "active Substitute has missing provenance",
+        )
+        self.assertIsNone(world_construction_limit(error))
+        self.assertFalse(count_world_construction_limit(counts, error))
+        self.assertEqual(counts, Counter())
+
 
 class HealToFullTolerance(unittest.TestCase):
     """`*_to_full` heals cap in the OPPOSITE direction to `capped_lethal`.

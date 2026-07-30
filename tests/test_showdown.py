@@ -1938,6 +1938,57 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertEqual(broken.substitute_health_state["p2"], "broken")
         self.assertEqual(broken.volatiles["p2"], ())
 
+    def test_substitute_fixed_damage_hits_track_exact_remaining_hp(self) -> None:
+        for move, expected in (
+            ("Seismic Toss", 50),
+            ("Night Shade", 50),
+            ("Dragon Rage", 60),
+            ("Sonic Boom", 80),
+        ):
+            with self.subTest(move=move):
+                parser = _ReplayParser()
+                parser.feed(
+                    [
+                        "|switch|p1a: Haunter|Haunter, L50|100/100",
+                        "|switch|p2a: Snorlax|Snorlax, L80|400/400",
+                        "|-start|p2a: Snorlax|Substitute",
+                        f"|move|p1a: Haunter|{move}|p2a: Snorlax",
+                        "|-activate|p2a: Snorlax|Substitute|[damage]",
+                    ]
+                )
+                state = parser.snapshot()
+                self.assertEqual(state.substitute_health_state["p2"], "exact")
+                self.assertEqual(state.substitute_health["p2"], expected)
+
+    def test_substitute_fixed_damage_without_damage_marker_remains_unknown(self) -> None:
+        state = parse_showdown_replay(
+            [
+                "|switch|p1a: Haunter|Haunter, L50|100/100",
+                "|switch|p2a: Snorlax|Snorlax, L80|400/400",
+                "|-start|p2a: Snorlax|Substitute",
+                "|move|p1a: Haunter|Seismic Toss|p2a: Snorlax",
+                "|-activate|p2a: Snorlax|Substitute",
+            ]
+        )
+        self.assertEqual(state.substitute_health_state["p2"], "unknown")
+        self.assertIsNone(state.substitute_health["p2"])
+
+    def test_substitute_faint_clears_snapshot_state_before_force_switch(self) -> None:
+        parser = _ReplayParser()
+        parser.feed(
+            [
+                "|switch|p1a: Swampert|Swampert, L84|300/300",
+                "|switch|p2a: Snorlax|Snorlax, L80|400/400",
+                "|-start|p2a: Snorlax|Substitute",
+                "|faint|p2a: Snorlax",
+            ]
+        )
+        snapshot = parser.snapshot()
+        self.assertEqual(snapshot.volatiles["p2"], ())
+        self.assertEqual(snapshot.substitute_health_state["p2"], "absent")
+        self.assertIsNone(snapshot.substitute_health["p2"])
+        self.assertEqual(_ReplayParser.from_snapshot(snapshot).snapshot(), snapshot)
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.

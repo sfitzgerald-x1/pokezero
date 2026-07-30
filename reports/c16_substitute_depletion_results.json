@@ -1,7 +1,12 @@
 {
-  "schema": "c16-substitute-depletion-results/1",
-  "disposition": "proven_public_information_limit",
+  "schema": "c16-substitute-depletion-results/2",
+  "disposition": "superseded_pending_remeasurement",
   "limit_family": "limit:world_substitute_health_unknown",
+  "provenance_contract": {
+    "accepted_limit": "Only an active Substitute with canonical, explicit substituteHealthState=unknown is counted in limit:world_substitute_health_unknown.",
+    "terminal_contradictions": "Missing, absent, broken, malformed, arbitrary, or invalid exact Substitute provenance with an active volatile terminates as substitute_health_provenance_contradiction and is not a limit.",
+    "exact_public_cases": "The replay fold retains exact remaining HP only for directly preceding, non-breaking Gen 3 Seismic Toss, Night Shade, Dragon Rage, and Sonic Boom hits."
+  },
   "prediction_score": {
     "preregistered_rows": 12,
     "post_instrument_rows": 13,
@@ -113,11 +118,17 @@
       "delta": 1
     }
   ],
-  "verification": {
-    "identity_cutoffs": "13/13 named-limit deltas equal 1",
+  "historical_v1_verification": {
+    "identity_cutoffs": "13/13 named-limit deltas equal 1 under the superseded provenance classifier",
     "generic_substitute_health_skips": 0,
-    "focused_tests": "196 passed",
+    "focused_tests": "196 passed before the provenance and fixed-damage corrections",
     "repros_complete": true
   },
-  "coverage_boundary": "This proves the 13 archived identities are routed to a named public-information limit. It does not claim transition fidelity for an unknowable Substitute HP state; the fresh certification sweep is the global recurrence and regression bound."
+  "current_verification": {
+    "focused_unittest": "263 passed across the engine/parser/accounting/public-invariant and local Showdown materialization suites",
+    "public_invariant": "passed",
+    "fresh_certification_sweep": "not run in this evidence update",
+    "identity_counts": "not asserted because retained v1 counts may include rows that now resolve to exact fixed-damage health or terminal provenance contradictions"
+  },
+  "coverage_boundary": "The retained v1 identity rows are historical evidence only. This revision makes no post-fix aggregate claim until a fresh differential sweep classifies every active Substitute as exact, explicit unknown limit, or terminal provenance contradiction."
 }

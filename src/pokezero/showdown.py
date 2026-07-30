@@ -1098,6 +1098,8 @@ class ShowdownReplayState:
     # distinct from volatile presence because an active Substitute can exist
     # while its remaining HP is not public.
     substitute_health_state: Mapping[str, str] = field(default_factory=dict)
+    # Exact remaining HP when public fixed-damage chronology derives it.
+    substitute_health: Mapping[str, int | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1250,6 +1252,7 @@ class _ReplayParser:
         self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.substitute_health_state: dict[str, str] = {"p1": "absent", "p2": "absent"}
+        self.substitute_health: dict[str, int | None] = {"p1": None, "p2": None}
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.future_sight: dict[str, int] = {}
         self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
@@ -1322,6 +1325,9 @@ class _ReplayParser:
         parser.substitute_health_state = {
             slot: str(snapshot.substitute_health_state.get(slot, "absent"))
             for slot in ("p1", "p2")
+        }
+        parser.substitute_health = {
+            slot: snapshot.substitute_health.get(slot) for slot in ("p1", "p2")
         }
         parser.direct_materialization_blockers = {
             slot: set(snapshot.direct_materialization_blockers.get(slot, ()))
@@ -1510,6 +1516,7 @@ class _ReplayParser:
                 # passer and cannot be reconstructed for the recipient. Keep
                 # this provenance surface aligned with that fail-closed world.
                 self.substitute_health_state[pokemon.showdown_slot] = "absent"
+                self.substitute_health[pokemon.showdown_slot] = None
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
@@ -1644,7 +1651,7 @@ class _ReplayParser:
         self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
-        _update_substitute_health_state(parts, self.substitute_health_state)
+        self._update_substitute_health_state(parts)
         self._update_live_type_override(parts)
         self._update_traced_ability(parts, line)
         self._anchor_truant_phase(parts, line)
@@ -1661,6 +1668,75 @@ class _ReplayParser:
         self._update_stall_counter(parts)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _update_substitute_health_state(self, parts: Sequence[str]) -> None:
+        """Track canonical Substitute provenance and public exact HP cases."""
+
+        if len(parts) < 3:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.substitute_health_state:
+            return
+        event_type = parts[1]
+        if event_type == "faint":
+            # The force-switch snapshot is taken after this line. Retaining the
+            # fainted mon's Substitute would construct a phantom active effect.
+            self.volatiles[slot].discard("substitute")
+            self.substitute_health_state[slot] = "absent"
+            self.substitute_health[slot] = None
+            return
+        if len(parts) < 4 or _side_condition_identifier(parts[3]) != "substitute":
+            return
+        if event_type == "-start":
+            active = self.public_active.get(slot)
+            _, max_hp = _hp_numerator_denominator(
+                active.condition if active is not None else None
+            )
+            self.substitute_health_state[slot] = "full"
+            self.substitute_health[slot] = max_hp // 4 if max_hp else None
+            return
+        if event_type == "-end":
+            self.substitute_health_state[slot] = "broken"
+            self.substitute_health[slot] = None
+            return
+        if event_type != "-activate":
+            return
+
+        # A non-breaking hit normally reveals only that the Substitute lived.
+        # The immediately preceding move is sufficient only for these four
+        # public, deterministic Gen 3 fixed-damage moves.
+        damage = (
+            self._fixed_substitute_damage_from_previous_move(slot)
+            if any(part.strip() == "[damage]" for part in parts[4:])
+            else None
+        )
+        current = self.substitute_health.get(slot)
+        if damage is not None and current is not None and 0 < damage < current:
+            self.substitute_health_state[slot] = "exact"
+            self.substitute_health[slot] = current - damage
+        else:
+            self.substitute_health_state[slot] = "unknown"
+            self.substitute_health[slot] = None
+
+    def _fixed_substitute_damage_from_previous_move(self, target_slot: str) -> int | None:
+        if not self.public_lines:
+            return None
+        previous = self.public_lines[-1].split("|")
+        if (
+            len(previous) < 5
+            or previous[1] != "move"
+            or _slot_from_ident(previous[4]) != target_slot
+        ):
+            return None
+        move = _normalize_identifier(previous[3])
+        if move == "dragonrage":
+            return 40
+        if move == "sonicboom":
+            return 20
+        if move not in {"seismictoss", "nightshade"}:
+            return None
+        attacker = self.public_active.get(_slot_from_ident(previous[2]))
+        return _level_from_details(attacker.details) if attacker is not None else None
 
     def _reseed_toxic_stage_from_residual(self, parts: Sequence[str]) -> None:
         """Recover the badly-poisoned (tox) ramp stage from the PUBLIC end-of-turn toxic residual.
@@ -2143,6 +2219,7 @@ class _ReplayParser:
             boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
             substitute_health_state=dict(self.substitute_health_state),
+            substitute_health=dict(self.substitute_health),
             direct_materialization_blockers={
                 slot: tuple(sorted(blockers))
                 for slot, blockers in self.direct_materialization_blockers.items()
@@ -3113,33 +3190,6 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
         volatiles[slot].add(name)
     else:
         volatiles[slot].discard(name)
-
-
-def _update_substitute_health_state(
-    parts: Sequence[str], substitute_health_state: dict[str, str]
-) -> None:
-    """Track the public knowledge state of an active Substitute's HP.
-
-    Showdown publishes the creation rule and a break, but a non-breaking hit
-    exposes no absorbed amount. The middle state must therefore remain unknown
-    to direct-world construction.
-    """
-
-    if len(parts) < 4:
-        return
-    slot = _slot_from_ident(parts[2])
-    if slot not in substitute_health_state:
-        return
-    event_type = parts[1]
-    name = _side_condition_identifier(parts[3])
-    if name != "substitute":
-        return
-    if event_type == "-start":
-        substitute_health_state[slot] = "full"
-    elif event_type == "-activate":
-        substitute_health_state[slot] = "unknown"
-    elif event_type == "-end":
-        substitute_health_state[slot] = "broken"
 
 
 # Delayed-damage moves (Future Sight / Doom Desire): used on one turn, they land on the target's
