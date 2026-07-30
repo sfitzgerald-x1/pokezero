@@ -1,27 +1,34 @@
 {
-  "spec_version": "engine-cert-sweep-2/1 (final pre-registration; registered before launch)",
-  "registered_before_launch": true,
+  "spec_version": "engine-cert-sweep-2 draft-2 (blocked after independent review)",
+  "registered_before_launch": false,
   "launch_registration": {
-    "public_source_parent_commit": "7f323515de379c2fed864edbb144a01ce21b57ff",
-    "public_source_parent_note": "The launch-contract commit changes this JSON artifact only. Engine, world, matcher, and readout behavior are the pinned parent above.",
-    "engine_patch_count": 45,
-    "engine_fingerprint": "0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10",
+    "status": "BLOCKED",
+    "review": "Independent Opus review blocked the premature final registration before any fresh measurement was launched.",
+    "public_source_parent_commit": null,
+    "engine_patch_count": null,
+    "engine_fingerprint": null,
+    "readout_sha256": null,
     "fresh_measurements_inspected_before_registration": 0
   },
   "gated_on": [
     "SATISFIED: engine patches 42-45 landed in #976, including recharge residuals, absorb Protect/accuracy ordering, typed-Hidden-Power thaw exclusion, and public no-op branch fidelity",
     "SATISFIED: Substitute public-depletion tracking and fail-closed sampled-world routing landed in #977",
     "SATISFIED: bench-Rest provenance landed in #975",
-    "SATISFIED: the incapacitated-arm and magnitude/stat-gap populations were adjudicated in #974; unresolved identities remain explicit documented follow-ups and are not generalized into an attribution rule",
+    "BLOCKED: repair the confirmed fixed-point base-power rounding, dynamic Flail/Reversal HP timing, and Forecast weather-expiry engine defects",
+    "BLOCKED: repair the event-aware same-turn legal-set and post-switch branch-legality matcher defects",
+    "BLOCKED: adjudicate the six retained incapacitated-action rows not closed by #974",
+    "BLOCKED: re-verify Substitute classification over the retained population at the post-#977 source",
     "SATISFIED: unsupported structural-count rows remain fail-closed UNATTRIBUTED unless a sibling arm actually carries the observed components",
-    "SATISFIED: final family-rate table and predicted-zero mechanisms are frozen in this artifact before launch"
+    "BLOCKED: regenerate the family-rate table with the final classifier and freeze all predicted-zero mechanisms before launch",
+    "BLOCKED: pin the final source commit, engine fingerprint, readout hash, seed contract, coverage floor, and immutable execution-manifest schema",
+    "BLOCKED: coordinator go after independent review of the completed contract and runner"
   ],
   "corrected_972_disposition_map": {
     "recoil_vs_substitute_basis": "world/knowledge-limit; public depletion tracking must land and verify the inferable subset before launch; not an engine fix lane",
     "incapacitated_arm_pricing": {
       "engine": "typed-HP thaw exclusion",
       "world": "bench-Rest provenance",
-      "unresolved": "the 8 rows not sampled by #972 require row-level adjudication before launch"
+      "unresolved": "six retained rows remain to be adjudicated at row level before launch"
     }
  },
  "seeds": {
@@ -29,15 +36,15 @@
   "registry": "validated against 34 protected bands; reservation engine-cert-sweep2-20260730 filed 2026-07-30 (registry and reservations live outside this repository)"
  },
  "execution": "identical to Z12: 8 x 1250 games; per-shard wheel REBUILD + in-shard behavioral probes (9/9 required per shard); --checkpoint retention; strict matcher; --repros-per-game 40 --keep-repro 1000; resume from per-game JSONL after retryable infrastructure failure",
- "readout": "scripts/cert_sweep_readout.py at the registered source parent or later only when changes are evidence-only. The binding result is zero unattributed rows, zero engine errors, complete repro retention, and exactly 10,000 distinct seeds.",
+ "readout": "DRAFT: scripts/cert_sweep_readout.py must fail closed on the final source/fingerprint/readout hashes, shard/probe markers, strict matcher, seed contract, coverage floor, engine errors, repro retention, family-rate registration, and zero-unattributed criterion.",
  "acceptance_criterion": {
    "binding": "PASS only when the readout reports zero unattributed rows, zero engine errors, complete repro retention, and exactly 10,000 distinct games from the reserved sweep-2 bands.",
-   "failure": "Any unattributed row, engine error, missing/duplicate seed, incomplete shard marker, mixed engine fingerprint, failed behavioral probe, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",
+   "failure": "Any unattributed row, engine error, missing/duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",
    "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
  },
  "scope_statement": "#970 lesson folded: this sweep bounds NEW rows GLOBALLY by construction - 10,000 fresh games with full-frame attribution and the zero-unattributed criterion - not merely clearance at the fix lanes' aimed seeds. Any mechanism the fixes regress or newly expose surfaces as UNATTRIBUTED.",
- "pre_registered_family_rate_table": {
-  "note": "rates sweep-calibrated from c14 observed (Wilson 95% on 791,757 boundaries), NOT census-calibrated - the c14 lesson; final table re-derived and committed prediction-first at launch",
+ "draft_family_rate_table": {
+  "note": "NONBINDING DRAFT carried from c14. Recompute with the final classifier after all source fixes merge, then rename this field to pre_registered_family_rate_table in a separate pre-launch commit.",
   "documented_families": {
    "limit:roll_divergent_lethality": {
     "observed_c14": 1281,
@@ -158,7 +165,7 @@
    "inferable_substitute_depletion": {
     "observed_c14": 13,
     "predicted_next": 0,
-    "on_nonzero": "REGRESSION unless routed to the explicit world-sample incompatibility or unknown-health comparison limit"
+    "on_nonzero": "REGRESSION - no post-run routing exception may be added; any allowed comparison-limit signature and rate must be registered before launch"
    }
   },
   "what_level_candidates_if_why_round_does_not_close_them": {
@@ -199,5 +206,5 @@
    }
   }
  },
-  "gate_adjudication_for_signoff": "The #965-endorsed disjunction covers only established fixes, documented follow-ups, and proven comparison limits. #974 closed the retained magnitude/stat-gap population at that row-level bar but deliberately did not generalize the 11 remaining WHAT identities into a broad signature. Fresh rows matching no established mechanism remain UNATTRIBUTED and fail this sweep. Attributed-as-candidate never satisfies certification."
+  "gate_adjudication_for_signoff": "The #965-endorsed disjunction covers only established fixes, documented follow-ups, and proven comparison limits. The independent review established that #974 did not close six incapacitated-action rows and also confirmed source defects that must be repaired before registration. Fresh rows matching no established mechanism remain UNATTRIBUTED and fail this sweep. Attributed-as-candidate never satisfies certification."
 }
