@@ -498,7 +498,8 @@ class CertificationContractTests(unittest.TestCase):
             contract = self._contract()
             contract["pre_registered_family_rate_table"]["documented_families"] = {
                 "limit:world_substitute_health_unknown": {
-                    "wilson95_rate": [0.0, 0.0]
+                    "upper_rate": 0.0,
+                    "upper_rate_basis": "coverage_budget",
                 }
             }
             contract_path = root / "contract.json"
@@ -524,6 +525,7 @@ class CertificationContractTests(unittest.TestCase):
         self.assertEqual(evidence["observed"], 2)
         self.assertEqual(evidence["divergence_row_observed"], 0)
         self.assertEqual(evidence["aggregate_counter_observed"], 2)
+        self.assertEqual(evidence["upper_rate_basis"], "coverage_budget")
         self.assertEqual(
             payload["gate_failures"],
             [

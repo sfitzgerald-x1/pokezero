@@ -32,8 +32,8 @@
     "required_source_commit": "ddccae7898bf7a95c16ee2d01d360fde2faab432",
     "required_image_commit": "ddccae7898bf7a95c16ee2d01d360fde2faab432",
     "required_engine_fingerprint": "d6f514411bfe4e2cd665b0b7af6eb77a33676c25f66734ca4e33cb9a635b75aa",
-    "required_readout_sha256": "bd42d95d435ed234b7a575290c7e7c70dbf53213c45266f855cb1303f3cc2053",
-    "required_execution_manifest_producer_sha256": "bc2eed7f677ac682f59a286258e63ad0574443a8da346b7809c8085846293b54"
+    "required_readout_sha256": "820639a9cb163caddbe3b11a79b5cd333e9fd5816568937f4bdb8441af45bb99",
+    "required_execution_manifest_producer_sha256": "653014317f3ed2739aadc8431c4f6240dc5f00913cb57995cf03b3ade474b953"
   },
   "gated_on": [
     "SATISFIED: all 48 vendored engine patches, world-construction repairs, matcher repairs, and row-level adjudications are merged in the pinned source parent.",
@@ -49,7 +49,7 @@
     "raw_zero_is_not_required": "Documented comparison-limit and instrument families may remain divergent. Certification means zero unexplained difference, not zero raw divergent transitions."
   },
   "pre_registered_family_rate_table": {
-    "note": "Count intervals are calibrated from the consumed C14 archive over 791,757 measured boundaries and normalized by the readout. Lower bounds are advisory; upper rates are binding. No two-sided prediction interval is registered.",
+    "note": "Twelve count intervals are calibrated from the consumed C14/C15 archive over 791,757 measured boundaries and normalized by the readout. The Substitute-health counter did not exist archive-wide, so it uses an explicit conservative 0.031 upper rate derived from the 3% coverage budget rather than a false empirical Wilson claim. Lower Wilson bounds are advisory; every upper rate is binding.",
     "calibration_boundaries": 791757,
     "documented_families": {
       "limit:roll_divergent_lethality": {"wilson95": [1213, 1353]},
@@ -64,7 +64,10 @@
       "LS_crit_arm_pairing_echo": {"wilson95": [0, 40]},
       "LS_confusion_fan": {"wilson95": [0, 38]},
       "LS_structural_arm_echo": {"wilson95": [0, 56]},
-      "limit:world_substitute_health_unknown": {"wilson95": [0, 22]}
+      "limit:world_substitute_health_unknown": {
+        "upper_rate": 0.031,
+        "upper_rate_basis": "coverage_budget"
+      }
     },
     "new_mechanisms_post_fix": {
       "absorb_through_protect_or_miss": {

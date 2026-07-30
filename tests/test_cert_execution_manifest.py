@@ -423,7 +423,8 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         ]
         names = documented["propertyNames"]["anyOf"][0]["enum"]
         self.assertEqual(set(names), manifest.EMITTABLE_DOCUMENTED_FAMILIES)
-        self.assertEqual(documented["propertyNames"]["anyOf"][1]["pattern"], "^limit:.+")
+        limit_names = documented["propertyNames"]["anyOf"][1]["enum"]
+        self.assertEqual(set(limit_names), manifest.EMITTABLE_LIMIT_FAMILIES)
         prediction = schema["properties"]["predicted_class_rates_10k"]["additionalProperties"]
         self.assertEqual(prediction["required"], ["expected_10k", "wilson95_count_10k"])
         self.assertEqual(prediction["properties"]["expected_10k"]["minimum"], 0)
@@ -438,10 +439,36 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             self._final_contract(paths)
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
             contract["pre_registered_family_rate_table"]["documented_families"] = {
-                "not-emittable": {"wilson95_rate": [0.0, 1.1]},
+                "limit:typo": {"wilson95_rate": [0.0, 1.0]},
             }
             errors = manifest.validate_final_contract_schema(contract)
-        self.assertTrue(any("not-emittable" in error and "cannot be emitted" in error for error in errors))
+        self.assertTrue(
+            any(
+                "limit:typo" in error and "cannot be emitted" in error
+                for error in errors
+            )
+        )
+
+    def test_final_contract_reserves_coverage_upper_rate_for_substitute_limit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._inputs(root)
+            self._final_contract(paths)
+            contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
+            contract["pre_registered_family_rate_table"]["documented_families"] = {
+                "I1_cap_state_shape": {
+                    "upper_rate": 0.031,
+                    "upper_rate_basis": "coverage_budget",
+                }
+            }
+            errors = manifest.validate_final_contract_schema(contract)
+        self.assertIn(
+            "final contract documented family 'I1_cap_state_shape' cannot use a "
+            "coverage-budget upper_rate",
+            errors,
+        )
 
     def test_final_contract_rejects_invalid_direct_rate_despite_count_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,11 +650,7 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         self.assertEqual(
             set(table["documented_families"]),
             set(manifest.EMITTABLE_DOCUMENTED_FAMILIES)
-            | {
-                "limit:roll_divergent_lethality",
-                "limit:world_sample_drag_target",
-                "limit:world_substitute_health_unknown",
-            },
+            | set(manifest.EMITTABLE_LIMIT_FAMILIES),
         )
         self.assertEqual(
             {
@@ -691,12 +714,9 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 "LS_crit_arm_pairing_echo"
             ],
             "LS_confusion_fan": c15["family_attribution"]["LS_confusion_fan"],
-            "LS_structural_arm_echo": next(
-                count
-                for label, count in c15["unattributed_named_shapes"].items()
-                if label.startswith("structural component-count mismatch")
-            ),
-            "limit:world_substitute_health_unknown": c17["summary"]["identities"],
+            "LS_structural_arm_echo": c15["unattributed_named_shapes"][
+                "structural component-count mismatch without a sibling engine"
+            ],
         }
         self.assertEqual(
             calibration["registered_family_source_counts"], source_counts
@@ -721,11 +741,41 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             {
                 family: entry["wilson95"]
                 for family, entry in table["documented_families"].items()
+                if "wilson95" in entry
             },
             expected_intervals,
         )
         self.assertEqual(
             calibration["registered_family_count_intervals"], expected_intervals
+        )
+        substitute = table["documented_families"][
+            "limit:world_substitute_health_unknown"
+        ]
+        substitute_evidence = calibration["registered_non_empirical_upper_rates"][
+            "limit:world_substitute_health_unknown"
+        ]
+        self.assertEqual(substitute["upper_rate"], substitute_evidence["upper_rate"])
+        self.assertEqual(
+            substitute["upper_rate_basis"], substitute_evidence["basis"]
+        )
+        self.assertEqual(c17["summary"]["identities"], 13)
+        self.assertEqual(
+            sum(row["at_limit"] - row["before_limit"] for row in c17["identities"]),
+            c17["summary"]["identities"],
+        )
+        fingerprint = json.loads(
+            subprocess.check_output(
+                [sys.executable, "scripts/engine_build_fingerprint.py", "--print"],
+                cwd=ROOT,
+                text=True,
+            )
+        )
+        self.assertEqual(
+            gates["required_engine_fingerprint"], fingerprint["fingerprint"]
+        )
+        self.assertEqual(
+            fingerprint["count"],
+            contract["launch_registration"]["engine_patch_count"],
         )
 
 

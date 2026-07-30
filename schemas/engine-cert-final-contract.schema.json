@@ -50,14 +50,17 @@
               {
                 "enum": ["I1_cap_state_shape", "I2_matcher_accounting", "I3_roll_inherited", "I4_attribution_tie", "I5_boundary_truncation", "I6_sleeptalk_callee_union", "LS_capped_lethal_shape", "LS_confusion_fan", "LS_crit_arm_pairing_echo", "LS_structural_arm_echo"]
               },
-              {"pattern": "^limit:.+"}
+              {
+                "enum": ["limit:roll_divergent_lethality", "limit:world_sample_drag_target", "limit:world_substitute_health_unknown"]
+              }
             ]
           },
           "additionalProperties": {
             "type": "object",
             "anyOf": [
               {"required": ["wilson95_rate"]},
-              {"required": ["wilson95"]}
+              {"required": ["wilson95"]},
+              {"required": ["upper_rate", "upper_rate_basis"]}
             ],
             "properties": {
               "wilson95_rate": {
@@ -77,7 +80,9 @@
                 "minItems": 2,
                 "maxItems": 2,
                 "items": {"type": "number", "minimum": 0, "maximum": 1}
-              }
+              },
+              "upper_rate": {"type": "number", "minimum": 0, "maximum": 1},
+              "upper_rate_basis": {"const": "coverage_budget"}
             }
           }
         },

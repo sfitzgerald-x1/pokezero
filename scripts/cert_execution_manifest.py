@@ -62,6 +62,11 @@ EMITTABLE_DOCUMENTED_FAMILIES = frozenset({
     "LS_crit_arm_pairing_echo",
     "LS_structural_arm_echo",
 })
+EMITTABLE_LIMIT_FAMILIES = frozenset({
+    "limit:roll_divergent_lethality",
+    "limit:world_sample_drag_target",
+    "limit:world_substitute_health_unknown",
+})
 EMITTABLE_EXCLUSION_COUNTERS = frozenset({
     "absorb_through_protect_or_miss",
     "incapacitated_arm_pricing",
@@ -289,7 +294,7 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 label = f"final contract documented family {family!r}"
                 if not isinstance(family, str) or not (
                         family in EMITTABLE_DOCUMENTED_FAMILIES
-                        or (family.startswith("limit:") and len(family) > len("limit:"))):
+                        or family in EMITTABLE_LIMIT_FAMILIES):
                     errors.append(f"{label} cannot be emitted by the classifier")
                     continue
                 if not isinstance(prediction, Mapping):
@@ -299,16 +304,38 @@ def validate_final_contract_schema(contract: object) -> list[str]:
                 direct_valid = _valid_rate_interval(direct)
                 count = prediction.get("wilson95")
                 count_valid = _valid_finite_interval(count)
+                upper_rate = prediction.get("upper_rate")
+                upper_rate_valid = (
+                    type(upper_rate) in (int, float)
+                    and math.isfinite(float(upper_rate))
+                    and 0.0 <= float(upper_rate) <= 1.0
+                )
                 normalized_count_valid = False
                 if count_valid and calibration_boundaries is not None and calibration_boundaries > 0:
                     normalized = [float(count[0]) / calibration_boundaries, float(count[1]) / calibration_boundaries]
                     normalized_count_valid = _valid_rate_interval(normalized)
-                if direct is not None and not direct_valid:
+                if upper_rate is not None:
+                    if not upper_rate_valid:
+                        errors.append(f"{label} has an invalid upper_rate")
+                    if family != "limit:world_substitute_health_unknown":
+                        errors.append(
+                            f"{label} cannot use a coverage-budget upper_rate"
+                        )
+                    if direct is not None or count is not None:
+                        errors.append(
+                            f"{label} mixes upper_rate with a Wilson interval"
+                        )
+                    if prediction.get("upper_rate_basis") != "coverage_budget":
+                        errors.append(
+                            f"{label} upper_rate_basis is not coverage_budget"
+                        )
+                elif direct is not None and not direct_valid:
                     errors.append(f"{label} has an invalid wilson95_rate interval")
                 elif direct is None and not normalized_count_valid:
                     errors.append(
                         f"{label} has neither a valid wilson95_rate nor a valid "
-                        "wilson95 count interval with positive calibration_boundaries"
+                        "wilson95 count interval with positive calibration_boundaries "
+                        "nor an explicit upper_rate"
                     )
                 prediction_interval = prediction.get("prediction_interval_rate")
                 if prediction_interval is not None and not _valid_rate_interval(prediction_interval):

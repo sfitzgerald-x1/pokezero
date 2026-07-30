@@ -67,6 +67,7 @@ from engine_transition_differential import (  # noqa: E402
 from cert_execution_manifest import (  # noqa: E402
     EMITTABLE_DOCUMENTED_FAMILIES,
     EMITTABLE_EXCLUSION_COUNTERS,
+    EMITTABLE_LIMIT_FAMILIES,
     validate_execution_manifest_schema,
     validate_final_contract_schema,
     validate_predicted_class_rates,
@@ -1038,52 +1039,71 @@ def _family_rate_gates(
     for family, prediction in registered.items():
         if not isinstance(family, str) or not (
             family in EMITTABLE_DOCUMENTED_FAMILIES
-            or (family.startswith("limit:") and len(family) > len("limit:"))
+            or family in EMITTABLE_LIMIT_FAMILIES
         ):
             failures.append(f"registered family {family!r} cannot be emitted by the classifier")
             continue
         if not isinstance(prediction, Mapping):
             failures.append(f"registered family {family!r} has no prediction object")
             continue
-        rate_interval = prediction.get("wilson95_rate")
-        if rate_interval is None:
-            count_interval = prediction.get("wilson95")
+        explicit_upper_rate = _finite_number(prediction.get("upper_rate"))
+        if prediction.get("upper_rate") is not None:
             if (
-                isinstance(count_interval, list)
-                and len(count_interval) == 2
-                and all(_finite_number(value) is not None for value in count_interval)
-                and calibration_boundaries > 0
+                family != "limit:world_substitute_health_unknown"
+                or explicit_upper_rate is None
+                or not 0.0 <= explicit_upper_rate <= 1.0
+                or prediction.get("upper_rate_basis") != "coverage_budget"
+                or prediction.get("wilson95_rate") is not None
+                or prediction.get("wilson95") is not None
             ):
-                rate_interval = [
-                    float(count_interval[0]) / calibration_boundaries,
-                    float(count_interval[1]) / calibration_boundaries,
-                ]
-        elif not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
-            failures.append(
-                f"registered family {family!r} has an invalid wilson95_rate interval"
-            )
-            continue
-        if not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
-            failures.append(
-                f"registered family {family!r} has no registered Wilson rate interval"
-            )
-            continue
-        if not (
-            0.0 <= float(rate_interval[0]) <= float(rate_interval[1]) <= 1.0
-        ):
-            failures.append(
-                f"registered family {family!r} has an invalid Wilson rate interval"
-            )
-            continue
-        lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
+                failures.append(
+                    f"registered family {family!r} has an invalid explicit upper rate"
+                )
+                continue
+            rate_interval = None
+            lower_rate, upper_rate = 0.0, explicit_upper_rate
+            upper_rate_basis = "coverage_budget"
+        else:
+            rate_interval = prediction.get("wilson95_rate")
+            if rate_interval is None:
+                count_interval = prediction.get("wilson95")
+                if (
+                    isinstance(count_interval, list)
+                    and len(count_interval) == 2
+                    and all(_finite_number(value) is not None for value in count_interval)
+                    and calibration_boundaries > 0
+                ):
+                    rate_interval = [
+                        float(count_interval[0]) / calibration_boundaries,
+                        float(count_interval[1]) / calibration_boundaries,
+                    ]
+            elif not (
+                isinstance(rate_interval, list)
+                and len(rate_interval) == 2
+                and all(_finite_number(value) is not None for value in rate_interval)
+            ):
+                failures.append(
+                    f"registered family {family!r} has an invalid wilson95_rate interval"
+                )
+                continue
+            if not (
+                isinstance(rate_interval, list)
+                and len(rate_interval) == 2
+                and all(_finite_number(value) is not None for value in rate_interval)
+            ):
+                failures.append(
+                    f"registered family {family!r} has no registered Wilson rate interval"
+                )
+                continue
+            if not (
+                0.0 <= float(rate_interval[0]) <= float(rate_interval[1]) <= 1.0
+            ):
+                failures.append(
+                    f"registered family {family!r} has an invalid Wilson rate interval"
+                )
+                continue
+            lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
+            upper_rate_basis = "wilson95"
         prediction_interval = prediction.get("prediction_interval_rate")
         has_prediction_interval = (
             isinstance(prediction_interval, list)
@@ -1112,6 +1132,7 @@ def _family_rate_gates(
             "registered_wilson95_rate": rate_interval,
             "lower_rate_advisory": lower_rate,
             "upper_rate_enforced": upper_rate,
+            "upper_rate_basis": upper_rate_basis,
             "prediction_interval_rate": prediction_interval if has_prediction_interval else None,
         }
         if has_prediction_interval and observed_rate < float(prediction_interval[0]):
