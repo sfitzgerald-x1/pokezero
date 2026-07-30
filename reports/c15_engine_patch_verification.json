@@ -1,0 +1,111 @@
+{
+  "purpose": "Final verification for gen3 engine patches 42-44 after rebuilding both engine consumers",
+  "chronology": {
+    "patches_42_43_prediction_commit": "884776a",
+    "patches_42_43_prediction_correction_commit": "40b7f3d",
+    "patches_42_43_implementation_commit": "7350b64",
+    "patch_44_prediction_commit": "39368cb",
+    "patch_44_implementation_commit": "62b8a14"
+  },
+  "builds": {
+    "sweep_reference": {
+      "patches": 41,
+      "fingerprint": "3204c777dec347aa"
+    },
+    "patch_43_ablation": {
+      "patches": 43,
+      "fingerprint": "f48605eea93106d600acdc6bc8b5efdcb3de6854b27e738cc92b687719b215df"
+    },
+    "final_patch_44": {
+      "patches": 44,
+      "fingerprint": "07185542f8d418888eaf09d551457a5d35de33774bcb0e3dae18c827193c7af3",
+      "python_builder": "PASS: all patches applied with fuzz=0",
+      "vendored_builder": "PASS: all patches applied with fuzz=0",
+      "orig_files": 0,
+      "fixture_refresh_last": true
+    }
+  },
+  "verification": {
+    "behavioral_probes": "9/9 PASS",
+    "focused_python": "12/12 PASS",
+    "rust_release_suite": "PASS: all test binaries",
+    "patch_44_fail_unpatched": {
+      "result": "PASS",
+      "detail": "The 43-patch wheel failed exactly the typed HP 60, typed HP 70, and self-thaw divergence pins; both controls passed."
+    }
+  },
+  "retained_sweep_reread": {
+    "source_rows": 3821,
+    "source_retention": "complete",
+    "patch_43": {
+      "diverged": 3668,
+      "matched": 153,
+      "artifact_sha256": "0c046bb1582319e823d235e7b74964e7005c19aea6ac5657af020d586c24799f"
+    },
+    "patch_44": {
+      "diverged": 3663,
+      "matched": 158,
+      "artifact_sha256": "dc0548e21666577541a7bde6aaf078390fe471eafb4dc1f107ab3f4d39b521ca"
+    },
+    "patch_44_only_clearances": [
+      [2000131, 47],
+      [2100295, 88],
+      [2100471, 18],
+      [2200265, 81],
+      [2300744, 133]
+    ],
+    "patch_44_other_verdict_changes": 0,
+    "patch_44_other_class_changes": 0
+  },
+  "patches_42_43_prediction_score": {
+    "recharge_registered_pure": "56/56 cleared",
+    "absorb_registered_pure": "75/75 cleared",
+    "recharge_registered_mixed": "7/9 cleared; two retained their other divergence",
+    "absorb_registered_mixed": "4/6 cleared; two retained their other divergence",
+    "registration_miss": {
+      "summary": "The corrected signature scan still undercounted the absorb mechanism. Eleven additional pure Protect/miss rows cleared, and one additional mixed miss row changed class after the spurious absorb arm disappeared.",
+      "additional_clearances": [
+        [2001109, 58],
+        [2200737, 20],
+        [2201249, 59],
+        [2300769, 102],
+        [2400173, 39],
+        [2400686, 57],
+        [2401071, 96],
+        [2500021, 44],
+        [2600056, 17],
+        [2700007, 135],
+        [2700202, 105]
+      ],
+      "class_change": {
+        "row": [2701065, 24],
+        "before": "roll_scaled_component",
+        "after": "component_missing_in_engine:psn"
+      }
+    }
+  },
+  "patch_44_prediction_score": {
+    "registered_pure": "4/4 cleared",
+    "registered_mixed": "1/1 cleared",
+    "outside_registered_signature": "0 verdict changes and 0 class changes"
+  },
+  "fresh_300_game_census": {
+    "games": 300,
+    "seeds": [1500000, 1500299],
+    "boundaries_measured": 23335,
+    "diverged": 103,
+    "engine_errors": 0,
+    "repros_complete": true,
+    "identity_and_class_diff_vs_c13_rebaseline": {
+      "added": 0,
+      "removed": 0,
+      "class_changes": 0,
+      "counter_changes": 0,
+      "canonical_identity_sha256": "f7f1c580146100d6b11531cd06fa158af1d7e2b10852a1285f35fe1d4f1b9d60"
+    },
+    "report_sha256": "dfebf9ec4da2ff02e2c371ace04c73ce9edff57334d6602a39b4d1d251f7ae5f",
+    "checkpoint_sha256": "4f0ad61c8e0b0fe4bfd1954ca4e048ca682032115f72153c0fec31fd0fbc5aeb",
+    "process_exit": "1 by design because the differential reports retained divergences; artifact generation completed"
+  },
+  "conclusion": "Patches 42-44 clear their replayed mechanisms with no fresh-census identity or class regression. This is lane verification, not engine certification: 3663 retained sweep rows remain for documented limits, follow-ups, and the final zero-unattributed re-sweep."
+}

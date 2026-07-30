@@ -6412,3 +6412,55 @@ component whose output you are only INFERRING.** Reading Showdown's chain to pre
 behaviour is half a derivation; the other half is opening the engine's own recorded output.
 The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
 artifact said 65.
+
+---
+
+# Appendix Z15 — Engine patches 42-44: final rebuild and identity-diff evidence
+
+Three engine defects identified by the certification sweep were repaired behind separate
+prediction commits:
+
+| patch | mechanism |
+| --- | --- |
+| 42 | A voluntary switch beside a recharge `cant` incorrectly skipped the full end-of-turn residual block. |
+| 43 | Water/Volt Absorb conversion erased Protect and accuracy, so heals fired through Protect and on missed moves. |
+| 44 | Typed Hidden Power variants bypassed the Gen 3 no-thaw exclusion and unconditionally thawed a frozen target. |
+
+Both engine consumers rebuilt all **44 patches with fuzz=0** at fingerprint
+`07185542f8d418888eaf09d551457a5d35de33774bcb0e3dae18c827193c7af3`;
+the fixture refresh remains last and no `.orig` files were produced. Behavioral probes passed
+9/9, focused Python pins passed 12/12, and the Rust release suite passed. On the 43-patch
+ablation wheel, exactly the three typed-Hidden-Power divergence pins failed while both controls
+passed.
+
+## Z15.1 Full retained-population re-read
+
+All 3,821 retained sweep rows were re-read through both the 43-patch ablation and the final
+44-patch build:
+
+| build | matched | still divergent |
+| --- | ---: | ---: |
+| 43 patches | 153 | 3,668 |
+| 44 patches | 158 | 3,663 |
+
+Patch 44 changed exactly five identities: its four pre-registered pure rows plus the one
+pre-registered mixed candidate (`2100295/88`). No other row changed verdict or class.
+
+Patches 42-43 cleared every registered pure row (56/56 recharge, 75/75 absorb) and eleven of
+the fifteen registered mixed candidates. The prediction's corrected absorb scan was still too
+narrow: **eleven additional Protect/miss rows cleared**, and `2701065/24` retained a poison
+divergence but changed class after the spurious absorb arm disappeared. Those misses are
+reported rather than pocketed; the exact identities live in
+`reports/c15_engine_patch_verification.json`.
+
+## Z15.2 Fresh census regression bound
+
+A fresh strict 300-game census over seeds 1,500,000-1,500,299 measured 23,335 boundaries,
+retained all 103 divergences, and produced zero engine errors. Against the c13 re-baseline,
+the divergence identity set, class mapping, counters, and measured-boundary count are all
+identical; the canonical identity/class hash is
+`f7f1c580146100d6b11531cd06fa158af1d7e2b10852a1285f35fe1d4f1b9d60`.
+
+This closes the patches' regression requirement, not the certification program. The remaining
+3,663 retained rows still require their documented limit/follow-up dispositions, and the
+binding gate remains a fresh 10,000-game re-sweep with zero unattributed rows.
