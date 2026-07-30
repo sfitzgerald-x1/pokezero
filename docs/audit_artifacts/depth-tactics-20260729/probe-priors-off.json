@@ -1,0 +1,4865 @@
+{
+ "batch": 64,
+ "c_puct": 1.4,
+ "checkpoint_provenance": {
+  "checkpoint": "local-artifacts/v3hist-k64-enthalf-5m-20260723-iteration-2657.pt",
+  "checkpoint_sha256": "7d363855b5282498afbe5b76763754b614501a42d7281be612ede6930bbdb1b1",
+  "model_path": "local-artifacts/.mcts-eval-artifacts-054071e376d133a0/model_ts.pt",
+  "schema": "pokezero.observation.v3",
+  "tables_path": "local-artifacts/.mcts-eval-artifacts-054071e376d133a0/encoder_tables.json",
+  "transition_token_budget": 64
+ },
+ "commit": "4f20e83ca372afd3fe4e80bd4aaba08dc648b07a",
+ "depths": [
+  1,
+  2,
+  4,
+  6
+ ],
+ "engine_fingerprint": "5b29e611468d3baa930984d5b8557280835e72f1ce38d8dc3c6b183e15c344dc",
+ "engine_patches": 34,
+ "positions": [
+  {
+   "derivation": "toss=100 exact; return avg 46 (max 50/min 42), hb avg 67 (max 73/min 62). B at 85: hb leaves 18 and costs T2 to recharge; A (210) dies to the 3rd toss before acting on T3. return leaves 39, and 39 <= min 42 makes the T2 KO certain. d1 sees hb 67 > return 46; d2 sees return's terminal win and hb's forced loss.",
+   "design": {
+    "argmax_flip_horizon": 2,
+    "expected_needed_depth": 2,
+    "flip_stable": true,
+    "forced_win": {
+     "hyperbeam": false,
+     "return": true
+    },
+    "horizon_table": [
+     {
+      "argmax": "hyperbeam",
+      "horizon": 1,
+      "values": {
+       "hyperbeam": 0.5673515423943276,
+       "return": 0.5620820131183575
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 2,
+      "values": {
+       "hyperbeam": 0.5248595257976177,
+       "return": 1.0
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 3,
+      "values": {
+       "hyperbeam": 0.0625,
+       "return": 1.0
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 4,
+      "values": {
+       "hyperbeam": 0.0625,
+       "return": 1.0
+      }
+     }
+    ],
+    "position": "hb-recharge-trap",
+    "trap_move_p_win_upper": 0.0625,
+    "win_bounds": {
+     "hyperbeam": {
+      "p_win_lower": 0.0625,
+      "p_win_upper": 0.0625
+     },
+     "return": {
+      "p_win_lower": 1.0,
+      "p_win_upper": 1.0
+     }
+    },
+    "win_move_forced": true,
+    "win_move_p_win_lower": 1.0
+   },
+   "position": "hb-recharge-trap",
+   "rolls": {
+    "hyperbeam": {
+     "crit": [
+      73,
+      147
+     ],
+     "noncrit": [
+      73,
+      147
+     ]
+    },
+    "return": {
+     "crit": [
+      50,
+      100
+     ],
+     "noncrit": [
+      50,
+      100
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.601354,
+          "share": 0.6868,
+          "visits": 2813
+         },
+         {
+          "move": "return",
+          "q": 0.582369,
+          "share": 0.3132,
+          "visits": 1283
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.001132,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.595407,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.601354,
+          "share": 0.6868,
+          "visits": 2813
+         },
+         {
+          "move": "return",
+          "q": 0.582369,
+          "share": 0.3132,
+          "visits": 1283
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000212,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.595408,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.601354,
+          "share": 0.6868,
+          "visits": 2813
+         },
+         {
+          "move": "return",
+          "q": 0.582369,
+          "share": 0.3132,
+          "visits": 1283
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000209,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.595407,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.986976,
+          "share": 0.9773,
+          "visits": 4003
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.517021,
+          "share": 0.0227,
+          "visits": 93
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00033,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.976305,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.986954,
+          "share": 0.9775,
+          "visits": 4004
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.516361,
+          "share": 0.0225,
+          "visits": 92
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000336,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.976384,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.986938,
+          "share": 0.9775,
+          "visits": 4004
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.516052,
+          "share": 0.0225,
+          "visits": 92
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000342,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.976361,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984869,
+          "share": 0.9861,
+          "visits": 4039
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.221924,
+          "share": 0.0139,
+          "visits": 57
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000359,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974252,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984864,
+          "share": 0.9858,
+          "visits": 4038
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.224366,
+          "share": 0.0142,
+          "visits": 58
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000347,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974095,
+        "seed": 1337,
+        "terminal_branches": 12
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984922,
+          "share": 0.9858,
+          "visits": 4038
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.235724,
+          "share": 0.0142,
+          "visits": 58
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000352,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974313,
+        "seed": 900913,
+        "terminal_branches": 14
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984869,
+          "share": 0.9861,
+          "visits": 4039
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.221924,
+          "share": 0.0139,
+          "visits": 57
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000351,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974252,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984864,
+          "share": 0.9858,
+          "visits": 4038
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.224366,
+          "share": 0.0142,
+          "visits": 58
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000354,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974095,
+        "seed": 1337,
+        "terminal_branches": 12
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.984922,
+          "share": 0.9858,
+          "visits": 4038
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.235724,
+          "share": 0.0142,
+          "visits": 58
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000352,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.974313,
+        "seed": 900913,
+        "terminal_branches": 14
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.07888,
+          "share": 0.5442,
+          "visits": 2229
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.074819,
+          "share": 0.4558,
+          "visits": 1867
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.02802,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.077029,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.078319,
+          "share": 0.5378,
+          "visits": 2203
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.074859,
+          "share": 0.4622,
+          "visits": 1893
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.011192,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.07672,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.078829,
+          "share": 0.5457,
+          "visits": 2235
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.074588,
+          "share": 0.4543,
+          "visits": 1861
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007571,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.076903,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.87118,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.06205,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.02725,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860315,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.871016,
+          "share": 0.9868,
+          "visits": 4042
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.052463,
+          "share": 0.0132,
+          "visits": 54
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.016605,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860225,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.871501,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.056556,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.015952,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860558,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.871103,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.059563,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.016416,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860206,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.87095,
+          "share": 0.9868,
+          "visits": 4042
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.047947,
+          "share": 0.0132,
+          "visits": 54
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.016014,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.8601,
+        "seed": 1337,
+        "terminal_branches": 11
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.87136,
+          "share": 0.9868,
+          "visits": 4042
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.05164,
+          "share": 0.0132,
+          "visits": 54
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.015929,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860554,
+        "seed": 900913,
+        "terminal_branches": 13
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.871103,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.059563,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.01624,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860206,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.87095,
+          "share": 0.9868,
+          "visits": 4042
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.047947,
+          "share": 0.0132,
+          "visits": 54
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.015917,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.8601,
+        "seed": 1337,
+        "terminal_branches": 11
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.87136,
+          "share": 0.9868,
+          "visits": 4042
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.05164,
+          "share": 0.0132,
+          "visits": 54
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.016124,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 8,
+        "root_priors": null,
+        "root_value": 0.860554,
+        "seed": 900913,
+        "terminal_branches": 13
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "SNORLAX,100,NORMAL,TYPELESS,NORMAL,TYPELESS,210,461,THICKFAT,THICKFAT,NONE,SERIOUS,85;85;85;85;85;85,256,166,166,256,96,NONE,0,0,460,RETURN;false;20,HYPERBEAM;false;5,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/REGISTEEL,100,STEEL,TYPELESS,STEEL,TYPELESS,85,301,CLEARBODY,CLEARBODY,NONE,SERIOUS,85;85;85;85;85;85,186,336,186,336,136,NONE,0,0,205,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Hyper Beam recharge trap (needs d2)",
+   "trap_move": "hyperbeam",
+   "win_move": "return"
+  },
+  {
+   "derivation": "toss=100 exact; return avg 46, +2 return avg 92/min 85/max 100. B at 160: spam deals 138 by T3 (A dies during T4) \u2014 forced loss; SD->+2x2 deals 184 with the T3 KO certain (68 remaining <= min 85) \u2014 forced win. 46+46 == 0+92 makes depth 2 a tie by construction; depth 1 strictly prefers return.",
+   "design": {
+    "argmax_flip_horizon": 2,
+    "expected_needed_depth": 2,
+    "flip_stable": true,
+    "forced_win": {
+     "return": false,
+     "swordsdance": true
+    },
+    "horizon_table": [
+     {
+      "argmax": "return",
+      "horizon": 1,
+      "values": {
+       "return": 0.5398947692855315,
+       "swordsdance": 0.5093860302093767
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 2,
+      "values": {
+       "return": 0.5200454137509889,
+       "swordsdance": 0.5445258333430766
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 3,
+      "values": {
+       "return": 0.5809842575439508,
+       "swordsdance": 1.0
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 4,
+      "values": {
+       "return": 0.176025390625,
+       "swordsdance": 1.0
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 5,
+      "values": {
+       "return": 0.176025390625,
+       "swordsdance": 1.0
+      }
+     }
+    ],
+    "position": "sd-race",
+    "trap_move_p_win_upper": 0.176025390625,
+    "win_bounds": {
+     "return": {
+      "p_win_lower": 0.176025390625,
+      "p_win_upper": 0.176025390625
+     },
+     "swordsdance": {
+      "p_win_lower": 1.0,
+      "p_win_upper": 1.0
+     }
+    },
+    "win_move_forced": true,
+    "win_move_p_win_lower": 1.0
+   },
+   "position": "sd-race",
+   "rolls": {
+    "return": {
+     "crit": [
+      50,
+      100
+     ],
+     "noncrit": [
+      50,
+      100
+     ]
+    },
+    "swordsdance": {
+     "crit": [
+      0,
+      0
+     ],
+     "noncrit": [
+      0,
+      0
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.543187,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.461987,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000198,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.533711,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.543187,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.461987,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000186,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.533711,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.543187,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.461987,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000183,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.533711,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.515436,
+          "share": 0.6936,
+          "visits": 2841
+         },
+         {
+          "move": "return",
+          "q": 0.495517,
+          "share": 0.3064,
+          "visits": 1255
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00032,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.509333,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.515438,
+          "share": 0.6938,
+          "visits": 2842
+         },
+         {
+          "move": "return",
+          "q": 0.495482,
+          "share": 0.3062,
+          "visits": 1254
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000317,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.509329,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.515444,
+          "share": 0.6943,
+          "visits": 2844
+         },
+         {
+          "move": "return",
+          "q": 0.495429,
+          "share": 0.3057,
+          "visits": 1252
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000312,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.509326,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.943255,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.343615,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000502,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.932568,
+        "seed": 7,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.942583,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.346136,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000481,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.931953,
+        "seed": 1337,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.943165,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.345893,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000496,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.93252,
+        "seed": 900913,
+        "terminal_branches": 18
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.943255,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.343615,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000499,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.932568,
+        "seed": 7,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.942583,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.346136,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000509,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.931953,
+        "seed": 1337,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.943165,
+          "share": 0.9822,
+          "visits": 4023
+         },
+         {
+          "move": "return",
+          "q": 0.345893,
+          "share": 0.0178,
+          "visits": 73
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000506,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.93252,
+        "seed": 900913,
+        "terminal_branches": 18
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.052999,
+          "share": 0.6694,
+          "visits": 2742
+         },
+         {
+          "move": "return",
+          "q": 0.035812,
+          "share": 0.3306,
+          "visits": 1354
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007411,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.047317,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.052979,
+          "share": 0.6729,
+          "visits": 2756
+         },
+         {
+          "move": "return",
+          "q": 0.035338,
+          "share": 0.3271,
+          "visits": 1340
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007585,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.047208,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.052988,
+          "share": 0.6709,
+          "visits": 2748
+         },
+         {
+          "move": "return",
+          "q": 0.035597,
+          "share": 0.3291,
+          "visits": 1348
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007732,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.047265,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.067862,
+          "share": 0.8198,
+          "visits": 3358
+         },
+         {
+          "move": "return",
+          "q": 0.01946,
+          "share": 0.1802,
+          "visits": 738
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.021472,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 10,
+        "root_priors": null,
+        "root_value": 0.059141,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.067259,
+          "share": 0.8191,
+          "visits": 3355
+         },
+         {
+          "move": "return",
+          "q": 0.019123,
+          "share": 0.1809,
+          "visits": 741
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.025767,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 10,
+        "root_priors": null,
+        "root_value": 0.058551,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.06762,
+          "share": 0.8198,
+          "visits": 3358
+         },
+         {
+          "move": "return",
+          "q": 0.019199,
+          "share": 0.1802,
+          "visits": 738
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.021757,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 10,
+        "root_priors": null,
+        "root_value": 0.058896,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.709802,
+          "share": 0.9775,
+          "visits": 4004
+         },
+         {
+          "move": "return",
+          "q": 0.01833,
+          "share": 0.0225,
+          "visits": 92
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.056476,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 19,
+        "root_priors": null,
+        "root_value": 0.694271,
+        "seed": 7,
+        "terminal_branches": 20
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.706762,
+          "share": 0.9778,
+          "visits": 4005
+         },
+         {
+          "move": "return",
+          "q": 0.008984,
+          "share": 0.0222,
+          "visits": 91
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.061828,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 18,
+        "root_priors": null,
+        "root_value": 0.691259,
+        "seed": 1337,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.709531,
+          "share": 0.9778,
+          "visits": 4005
+         },
+         {
+          "move": "return",
+          "q": 0.012805,
+          "share": 0.0222,
+          "visits": 91
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.034524,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 17,
+        "root_priors": null,
+        "root_value": 0.694052,
+        "seed": 900913,
+        "terminal_branches": 18
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.709802,
+          "share": 0.9775,
+          "visits": 4004
+         },
+         {
+          "move": "return",
+          "q": 0.01833,
+          "share": 0.0225,
+          "visits": 92
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.041495,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 19,
+        "root_priors": null,
+        "root_value": 0.694271,
+        "seed": 7,
+        "terminal_branches": 20
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.706762,
+          "share": 0.9778,
+          "visits": 4005
+         },
+         {
+          "move": "return",
+          "q": 0.008984,
+          "share": 0.0222,
+          "visits": 91
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.035602,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 18,
+        "root_priors": null,
+        "root_value": 0.691259,
+        "seed": 1337,
+        "terminal_branches": 19
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.709531,
+          "share": 0.9778,
+          "visits": 4005
+         },
+         {
+          "move": "return",
+          "q": 0.012805,
+          "share": 0.0222,
+          "visits": 91
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.034081,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 17,
+        "root_priors": null,
+        "root_value": 0.694052,
+        "seed": 900913,
+        "terminal_branches": 18
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "SNORLAX,100,NORMAL,TYPELESS,NORMAL,TYPELESS,310,461,THICKFAT,THICKFAT,NONE,SERIOUS,85;85;85;85;85;85,256,166,166,256,96,NONE,0,0,460,RETURN;false;20,SWORDSDANCE;false;30,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/REGISTEEL,100,STEEL,TYPELESS,STEEL,TYPELESS,160,301,CLEARBODY,CLEARBODY,NONE,SERIOUS,85;85;85;85;85;85,186,336,186,336,136,NONE,0,0,205,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Swords Dance race (needs d2: exact damage ties, crit branch decides)",
+   "trap_move": "return",
+   "win_move": "swordsdance"
+  },
+  {
+   "derivation": "toss=100 exact; surf avg 75 (five surfs = 375 < 620, crit never in range => the trap arm is a STRICT forced loss, no crit lottery). A at 310 survives exactly three tosses. Perish sung at T1 faints B at the end of T4 while benched Registeel survives untouched => terminal WIN at ply 4. Sung at T2+, our side is emptied mid-T5 (A dead mid-T4, one-toss fodder dead mid-T5) before the count expires => forced loss. d1-d3 see only surf's hp progress.",
+   "design": {
+    "argmax_flip_horizon": 5,
+    "expected_needed_depth": 5,
+    "flip_stable": true,
+    "forced_win": {
+     "perishsong": true,
+     "registeel": false,
+     "surf": false
+    },
+    "horizon_table": [
+     {
+      "argmax": "surf",
+      "horizon": 1,
+      "values": {
+       "perishsong": 0.3690537384835407,
+       "registeel": 0.37132234102437556,
+       "surf": 0.40372467679804985
+      }
+     },
+     {
+      "argmax": "surf",
+      "horizon": 2,
+      "values": {
+       "perishsong": 0.3583526259813529,
+       "registeel": 0.37132234102437556,
+       "surf": 0.39302356429586205
+      }
+     },
+     {
+      "argmax": "surf",
+      "horizon": 3,
+      "values": {
+       "perishsong": 0.3476515134791651,
+       "registeel": 0.36062122852218775,
+       "surf": 0.38232245179367425
+      }
+     },
+     {
+      "argmax": "surf",
+      "horizon": 4,
+      "values": {
+       "perishsong": 0.37778524671200453,
+       "registeel": 0.34992011601999995,
+       "surf": 0.41245618502651366
+      }
+     },
+     {
+      "argmax": "perishsong",
+      "horizon": 5,
+      "values": {
+       "perishsong": 1.0,
+       "registeel": 0.3392190035178122,
+       "surf": 0.41245618502651366
+      }
+     },
+     {
+      "argmax": "perishsong",
+      "horizon": 6,
+      "values": {
+       "perishsong": 1.0,
+       "registeel": 0.0,
+       "surf": 0.0
+      }
+     }
+    ],
+    "position": "perish-clock",
+    "trap_move_p_win_upper": 0.0,
+    "win_bounds": {
+     "perishsong": {
+      "p_win_lower": 1.0,
+      "p_win_upper": 1.0
+     },
+     "registeel": {
+      "p_win_lower": 0.0,
+      "p_win_upper": 0.0
+     },
+     "surf": {
+      "p_win_lower": 0.0,
+      "p_win_upper": 0.0
+     }
+    },
+    "win_move_forced": true,
+    "win_move_p_win_lower": 1.0
+   },
+   "position": "perish-clock",
+   "rolls": {
+    "perishsong": {
+     "crit": [
+      0,
+      0
+     ],
+     "noncrit": [
+      0,
+      0
+     ]
+    },
+    "surf": {
+     "crit": [
+      82,
+      165
+     ],
+     "noncrit": [
+      82,
+      165
+     ]
+    },
+    "switch registeel": {
+     "crit": [
+      0,
+      0
+     ],
+     "noncrit": [
+      0,
+      0
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.302354,
+          "share": 0.7881,
+          "visits": 3228
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244606,
+          "share": 0.1086,
+          "visits": 445
+         },
+         {
+          "move": "perishsong",
+          "q": 0.241045,
+          "share": 0.1033,
+          "visits": 423
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000214,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.289749,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.302354,
+          "share": 0.7881,
+          "visits": 3228
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244606,
+          "share": 0.1086,
+          "visits": 445
+         },
+         {
+          "move": "perishsong",
+          "q": 0.241045,
+          "share": 0.1033,
+          "visits": 423
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.0002,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.289749,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.302354,
+          "share": 0.7881,
+          "visits": 3228
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244606,
+          "share": 0.1086,
+          "visits": 445
+         },
+         {
+          "move": "perishsong",
+          "q": 0.241045,
+          "share": 0.1033,
+          "visits": 423
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000194,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.289749,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.270979,
+          "share": 0.7109,
+          "visits": 2912
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244609,
+          "share": 0.199,
+          "visits": 815
+         },
+         {
+          "move": "perishsong",
+          "q": 0.20051,
+          "share": 0.0901,
+          "visits": 369
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000358,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.259383,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.271008,
+          "share": 0.7112,
+          "visits": 2913
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244609,
+          "share": 0.1987,
+          "visits": 814
+         },
+         {
+          "move": "perishsong",
+          "q": 0.20051,
+          "share": 0.0901,
+          "visits": 369
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000368,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.25941,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.270946,
+          "share": 0.7104,
+          "visits": 2910
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.244609,
+          "share": 0.1992,
+          "visits": 816
+         },
+         {
+          "move": "perishsong",
+          "q": 0.200518,
+          "share": 0.0903,
+          "visits": 370
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00036,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.259337,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.239501,
+          "share": 0.8093,
+          "visits": 3315
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.179077,
+          "share": 0.105,
+          "visits": 430
+         },
+         {
+          "move": "perishsong",
+          "q": 0.163667,
+          "share": 0.0857,
+          "visits": 351
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000957,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.226659,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.239433,
+          "share": 0.8093,
+          "visits": 3315
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.179077,
+          "share": 0.105,
+          "visits": 430
+         },
+         {
+          "move": "perishsong",
+          "q": 0.163411,
+          "share": 0.0857,
+          "visits": 351
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000923,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.226582,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.239539,
+          "share": 0.8098,
+          "visits": 3317
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.179084,
+          "share": 0.1047,
+          "visits": 429
+         },
+         {
+          "move": "perishsong",
+          "q": 0.16343,
+          "share": 0.0854,
+          "visits": 350
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000955,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.226704,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.859371,
+          "share": 0.9727,
+          "visits": 3984
+         },
+         {
+          "move": "surf",
+          "q": 0.236422,
+          "share": 0.0164,
+          "visits": 67
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.193989,
+          "share": 0.011,
+          "visits": 45
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 3,
+        "elapsed_s": 0.001199,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.841871,
+        "seed": 7,
+        "terminal_branches": 41
+       },
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.85935,
+          "share": 0.9724,
+          "visits": 3983
+         },
+         {
+          "move": "surf",
+          "q": 0.23765,
+          "share": 0.0166,
+          "visits": 68
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.193989,
+          "share": 0.011,
+          "visits": 45
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 1,
+        "elapsed_s": 0.00118,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.841719,
+        "seed": 1337,
+        "terminal_branches": 40
+       },
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.859385,
+          "share": 0.9727,
+          "visits": 3984
+         },
+         {
+          "move": "surf",
+          "q": 0.236753,
+          "share": 0.0164,
+          "visits": 67
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.193989,
+          "share": 0.011,
+          "visits": 45
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 3,
+        "elapsed_s": 0.001214,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.84189,
+        "seed": 900913,
+        "terminal_branches": 42
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.065545,
+          "share": 0.4871,
+          "visits": 1995
+         },
+         {
+          "move": "perishsong",
+          "q": 0.061815,
+          "share": 0.3933,
+          "visits": 1611
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.018754,
+          "share": 0.1196,
+          "visits": 490
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009351,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.05848,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.06517,
+          "share": 0.4832,
+          "visits": 1979
+         },
+         {
+          "move": "perishsong",
+          "q": 0.061751,
+          "share": 0.3967,
+          "visits": 1625
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.01875,
+          "share": 0.1201,
+          "visits": 492
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009232,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.058238,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.064359,
+          "share": 0.4729,
+          "visits": 1937
+         },
+         {
+          "move": "perishsong",
+          "q": 0.061727,
+          "share": 0.406,
+          "visits": 1663
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.018743,
+          "share": 0.1211,
+          "visits": 496
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009068,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.057767,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.045023,
+          "share": 0.4507,
+          "visits": 1846
+         },
+         {
+          "move": "perishsong",
+          "q": 0.043288,
+          "share": 0.4084,
+          "visits": 1673
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.008764,
+          "share": 0.1409,
+          "visits": 577
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.037167,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 17,
+        "root_priors": null,
+        "root_value": 0.039206,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.043932,
+          "share": 0.4587,
+          "visits": 1879
+         },
+         {
+          "move": "perishsong",
+          "q": 0.041331,
+          "share": 0.3965,
+          "visits": 1624
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.008756,
+          "share": 0.1448,
+          "visits": 593
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.03622,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 17,
+        "root_priors": null,
+        "root_value": 0.037808,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.044866,
+          "share": 0.4583,
+          "visits": 1877
+         },
+         {
+          "move": "perishsong",
+          "q": 0.042462,
+          "share": 0.3997,
+          "visits": 1637
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.008765,
+          "share": 0.1421,
+          "visits": 582
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.035887,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 17,
+        "root_priors": null,
+        "root_value": 0.038776,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.021705,
+          "share": 0.4331,
+          "visits": 1774
+         },
+         {
+          "move": "perishsong",
+          "q": 0.018385,
+          "share": 0.363,
+          "visits": 1487
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.002447,
+          "share": 0.2039,
+          "visits": 835
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.40637,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 116,
+        "root_priors": null,
+        "root_value": 0.016574,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.021893,
+          "share": 0.4336,
+          "visits": 1776
+         },
+         {
+          "move": "perishsong",
+          "q": 0.018578,
+          "share": 0.3635,
+          "visits": 1489
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.002447,
+          "share": 0.2029,
+          "visits": 831
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.368485,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 114,
+        "root_priors": null,
+        "root_value": 0.016743,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "surf",
+          "q": 0.02177,
+          "share": 0.4333,
+          "visits": 1775
+         },
+         {
+          "move": "perishsong",
+          "q": 0.018445,
+          "share": 0.363,
+          "visits": 1487
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.002444,
+          "share": 0.2036,
+          "visits": 834
+         }
+        ],
+        "chosen": "surf",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.251695,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 115,
+        "root_priors": null,
+        "root_value": 0.016628,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.512937,
+          "share": 0.9465,
+          "visits": 3877
+         },
+         {
+          "move": "surf",
+          "q": 0.021239,
+          "share": 0.0295,
+          "visits": 121
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.001555,
+          "share": 0.0239,
+          "visits": 98
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 8,
+        "elapsed_s": 0.313148,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": 106,
+        "root_priors": null,
+        "root_value": 0.486176,
+        "seed": 7,
+        "terminal_branches": 66
+       },
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.512411,
+          "share": 0.9463,
+          "visits": 3876
+         },
+         {
+          "move": "surf",
+          "q": 0.02116,
+          "share": 0.0298,
+          "visits": 122
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.001555,
+          "share": 0.0239,
+          "visits": 98
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 8,
+        "elapsed_s": 0.192751,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": 107,
+        "root_priors": null,
+        "root_value": 0.485556,
+        "seed": 1337,
+        "terminal_branches": 66
+       },
+       {
+        "arms": [
+         {
+          "move": "perishsong",
+          "q": 0.512597,
+          "share": 0.9468,
+          "visits": 3878
+         },
+         {
+          "move": "surf",
+          "q": 0.020707,
+          "share": 0.0293,
+          "visits": 120
+         },
+         {
+          "move": "switch registeel",
+          "q": 0.001555,
+          "share": 0.0239,
+          "visits": 98
+         }
+        ],
+        "chosen": "perishsong",
+        "deep_ko_triggers": 8,
+        "elapsed_s": 0.19634,
+        "iterations": 4096,
+        "max_depth_reached": 5,
+        "model_evals": 107,
+        "root_priors": null,
+        "root_value": 0.485959,
+        "seed": 900913,
+        "terminal_branches": 66
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "LAPRAS,100,WATER,ICE,WATER,ICE,310,401,WATERABSORB,WATERABSORB,NONE,SERIOUS,85;85;85;85;85;85,206,196,206,226,156,NONE,0,0,220,PERISHSONG;false;5,SURF;false;15,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=REGISTEEL,100,STEEL,TYPELESS,STEEL,TYPELESS,95,301,CLEARBODY,CLEARBODY,NONE,SERIOUS,85;85;85;85;85;85,186,336,186,336,136,NONE,0,0,205,AMNESIA;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/BLISSEY,100,NORMAL,TYPELESS,NORMAL,TYPELESS,620,651,NATURALCURE,NATURALCURE,NONE,SERIOUS,85;85;85;85;85;85,56,56,186,306,146,NONE,0,0,46.8,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,FEMALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Perish Song clock (needs d5: 4 turns + forced-replacement ply)",
+   "trap_move": "surf",
+   "win_move": "perishsong"
+  },
+  {
+   "derivation": "hb min 62 >= 55: certain KO at T1 (no recharge on a KO in gen3); return max 50 < 55 cannot KO and A (110) dies to the second toss. All depths must argmax hyperbeam.",
+   "design": {
+    "argmax_flip_horizon": 1,
+    "expected_needed_depth": 1,
+    "flip_stable": true,
+    "forced_win": {
+     "hyperbeam": false,
+     "return": false
+    },
+    "horizon_table": [
+     {
+      "argmax": "hyperbeam",
+      "horizon": 1,
+      "values": {
+       "hyperbeam": 0.9470870828737751,
+       "return": 0.5308608775970723
+      }
+     },
+     {
+      "argmax": "hyperbeam",
+      "horizon": 2,
+      "values": {
+       "hyperbeam": 0.9,
+       "return": 0.0625
+      }
+     },
+     {
+      "argmax": "hyperbeam",
+      "horizon": 3,
+      "values": {
+       "hyperbeam": 0.9,
+       "return": 0.0625
+      }
+     }
+    ],
+    "position": "immediate-ko-control",
+    "trap_move_p_win_upper": 0.0625,
+    "win_bounds": {
+     "hyperbeam": {
+      "p_win_lower": 0.9,
+      "p_win_upper": 0.9
+     },
+     "return": {
+      "p_win_lower": 0.0625,
+      "p_win_upper": 0.0625
+     }
+    },
+    "win_move_forced": false,
+    "win_move_p_win_lower": 0.9
+   },
+   "position": "immediate-ko-control",
+   "rolls": {
+    "hyperbeam": {
+     "crit": [
+      73,
+      147
+     ],
+     "noncrit": [
+      73,
+      147
+     ]
+    },
+    "return": {
+     "crit": [
+      50,
+      100
+     ],
+     "noncrit": [
+      50,
+      100
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.941911,
+          "share": 0.9744,
+          "visits": 3991
+         },
+         {
+          "move": "return",
+          "q": 0.527402,
+          "share": 0.0256,
+          "visits": 105
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000197,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.931285,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.941911,
+          "share": 0.9744,
+          "visits": 3991
+         },
+         {
+          "move": "return",
+          "q": 0.527402,
+          "share": 0.0256,
+          "visits": 105
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00018,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.931285,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.941911,
+          "share": 0.9744,
+          "visits": 3991
+         },
+         {
+          "move": "return",
+          "q": 0.527402,
+          "share": 0.0256,
+          "visits": 105
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000189,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.931285,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900511,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102048,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000199,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.88979,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900736,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102249,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000241,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.890014,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900589,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102049,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000206,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.889867,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900511,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102048,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000199,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.88979,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900736,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102249,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000199,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.890014,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900589,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102049,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000199,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.889867,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900511,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102048,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000192,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.88979,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900736,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102249,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000194,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.890014,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.900589,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.102049,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000196,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.889867,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.868606,
+          "share": 0.9863,
+          "visits": 4040
+         },
+         {
+          "move": "return",
+          "q": 0.069627,
+          "share": 0.0137,
+          "visits": 56
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005692,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.857682,
+        "seed": 7,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.868549,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.060694,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00565,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.857701,
+        "seed": 1337,
+        "terminal_branches": 2
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.86853,
+          "share": 0.9863,
+          "visits": 4040
+         },
+         {
+          "move": "return",
+          "q": 0.07123,
+          "share": 0.0137,
+          "visits": 56
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005716,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85763,
+        "seed": 900913,
+        "terminal_branches": 2
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867727,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.060026,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005733,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.856882,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867969,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.051821,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005951,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85701,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867433,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.062864,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00559,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85663,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867727,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.060026,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005994,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.856882,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867969,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.051821,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00568,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85701,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867433,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.062864,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00535,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85663,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867727,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.060026,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005438,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.856882,
+        "seed": 7,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867969,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.051821,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005481,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85701,
+        "seed": 1337,
+        "terminal_branches": 6
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.867433,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "return",
+          "q": 0.062864,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.005447,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 2,
+        "root_priors": null,
+        "root_value": 0.85663,
+        "seed": 900913,
+        "terminal_branches": 6
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "SNORLAX,100,NORMAL,TYPELESS,NORMAL,TYPELESS,110,461,THICKFAT,THICKFAT,NONE,SERIOUS,85;85;85;85;85;85,256,166,166,256,96,NONE,0,0,460,RETURN;false;20,HYPERBEAM;false;5,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/REGISTEEL,100,STEEL,TYPELESS,STEEL,TYPELESS,55,301,CLEARBODY,CLEARBODY,NONE,SERIOUS,85;85;85;85;85;85,186,336,186,336,136,NONE,0,0,205,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Immediate KO control (needs d1; all depths must agree)",
+   "trap_move": "return",
+   "win_move": "hyperbeam"
+  },
+  {
+   "derivation": "toss=100; A at 410 survives four tosses. B at 250: spam totals 184 by T4 \u2014 forced loss during T5; SD + 3x(+2 return avg 92) totals 276 with the T4 KO certain (66 <= min 85) \u2014 forced win at ply 4. Cumulative-damage flip: h2 ties (92=92), h3 SD leads (184 vs 138) before any terminal exists.",
+   "design": {
+    "argmax_flip_horizon": 3,
+    "expected_needed_depth": 3,
+    "flip_stable": true,
+    "forced_win": {
+     "return": false,
+     "swordsdance": true
+    },
+    "horizon_table": [
+     {
+      "argmax": "return",
+      "horizon": 1,
+      "values": {
+       "return": 0.5357441303209698,
+       "swordsdance": 0.505235391244815
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 2,
+      "values": {
+       "return": 0.5142237330807874,
+       "swordsdance": 0.5135995133554441
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 3,
+      "values": {
+       "return": 0.4943329254551088,
+       "swordsdance": 0.5735415993771119
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 4,
+      "values": {
+       "return": 0.5809842575439508,
+       "swordsdance": 1.0
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 5,
+      "values": {
+       "return": 0.176025390625,
+       "swordsdance": 1.0
+      }
+     },
+     {
+      "argmax": "swordsdance",
+      "horizon": 6,
+      "values": {
+       "return": 0.176025390625,
+       "swordsdance": 1.0
+      }
+     }
+    ],
+    "position": "sd-race-deep",
+    "trap_move_p_win_upper": 0.176025390625,
+    "win_bounds": {
+     "return": {
+      "p_win_lower": 0.176025390625,
+      "p_win_upper": 0.176025390625
+     },
+     "swordsdance": {
+      "p_win_lower": 1.0,
+      "p_win_upper": 1.0
+     }
+    },
+    "win_move_forced": true,
+    "win_move_p_win_lower": 1.0
+   },
+   "position": "sd-race-deep",
+   "rolls": {
+    "return": {
+     "crit": [
+      50,
+      100
+     ],
+     "noncrit": [
+      50,
+      100
+     ]
+    },
+    "swordsdance": {
+     "crit": [
+      0,
+      0
+     ],
+     "noncrit": [
+      0,
+      0
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.502118,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.420944,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000204,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.492645,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.502118,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.420944,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000191,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.492645,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.502118,
+          "share": 0.8833,
+          "visits": 3618
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.420944,
+          "share": 0.1167,
+          "visits": 478
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000183,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.492645,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.456927,
+          "share": 0.584,
+          "visits": 2392
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.449374,
+          "share": 0.416,
+          "visits": 1704
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000341,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.453785,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.456767,
+          "share": 0.5818,
+          "visits": 2383
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.44942,
+          "share": 0.4182,
+          "visits": 1713
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000342,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.453695,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.456833,
+          "share": 0.5828,
+          "visits": 2387
+         },
+         {
+          "move": "swordsdance",
+          "q": 0.4494,
+          "share": 0.4172,
+          "visits": 1709
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000333,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.453732,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.878263,
+          "share": 0.9773,
+          "visits": 4003
+         },
+         {
+          "move": "return",
+          "q": 0.409756,
+          "share": 0.0227,
+          "visits": 93
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000705,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.867626,
+        "seed": 7,
+        "terminal_branches": 4
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.878673,
+          "share": 0.9773,
+          "visits": 4003
+         },
+         {
+          "move": "return",
+          "q": 0.409537,
+          "share": 0.0227,
+          "visits": 93
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000684,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.868021,
+        "seed": 1337,
+        "terminal_branches": 4
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.878189,
+          "share": 0.9773,
+          "visits": 4003
+         },
+         {
+          "move": "return",
+          "q": 0.409539,
+          "share": 0.0227,
+          "visits": 93
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000688,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.867549,
+        "seed": 900913,
+        "terminal_branches": 4
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.876823,
+          "share": 0.9785,
+          "visits": 4008
+         },
+         {
+          "move": "return",
+          "q": 0.382666,
+          "share": 0.0215,
+          "visits": 88
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000789,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.866206,
+        "seed": 7,
+        "terminal_branches": 34
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.876756,
+          "share": 0.9785,
+          "visits": 4008
+         },
+         {
+          "move": "return",
+          "q": 0.383985,
+          "share": 0.0215,
+          "visits": 88
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000799,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.86617,
+        "seed": 1337,
+        "terminal_branches": 34
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.876797,
+          "share": 0.9785,
+          "visits": 4008
+         },
+         {
+          "move": "return",
+          "q": 0.38329,
+          "share": 0.0215,
+          "visits": 88
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000795,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.866194,
+        "seed": 900913,
+        "terminal_branches": 34
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.096635,
+          "share": 0.7771,
+          "visits": 3183
+         },
+         {
+          "move": "return",
+          "q": 0.060637,
+          "share": 0.2229,
+          "visits": 913
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007656,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.088611,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.096558,
+          "share": 0.7803,
+          "visits": 3196
+         },
+         {
+          "move": "return",
+          "q": 0.059835,
+          "share": 0.2197,
+          "visits": 900
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007358,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.088489,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.096604,
+          "share": 0.7783,
+          "visits": 3188
+         },
+         {
+          "move": "return",
+          "q": 0.060326,
+          "share": 0.2217,
+          "visits": 908
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.007099,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 3,
+        "root_priors": null,
+        "root_value": 0.088562,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.080155,
+          "share": 0.7815,
+          "visits": 3201
+         },
+         {
+          "move": "return",
+          "q": 0.043114,
+          "share": 0.2185,
+          "visits": 895
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.041532,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 12,
+        "root_priors": null,
+        "root_value": 0.072061,
+        "seed": 7,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.079511,
+          "share": 0.7812,
+          "visits": 3200
+         },
+         {
+          "move": "return",
+          "q": 0.042494,
+          "share": 0.2188,
+          "visits": 896
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.02267,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 12,
+        "root_priors": null,
+        "root_value": 0.071414,
+        "seed": 1337,
+        "terminal_branches": 0
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.080087,
+          "share": 0.7832,
+          "visits": 3208
+         },
+         {
+          "move": "return",
+          "q": 0.042636,
+          "share": 0.2168,
+          "visits": 888
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.026336,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 12,
+        "root_priors": null,
+        "root_value": 0.071968,
+        "seed": 900913,
+        "terminal_branches": 0
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.538197,
+          "share": 0.9673,
+          "visits": 3962
+         },
+         {
+          "move": "return",
+          "q": 0.012063,
+          "share": 0.0327,
+          "visits": 134
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.089005,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 42,
+        "root_priors": null,
+        "root_value": 0.520984,
+        "seed": 7,
+        "terminal_branches": 4
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.535508,
+          "share": 0.9685,
+          "visits": 3967
+         },
+         {
+          "move": "return",
+          "q": 0.011571,
+          "share": 0.0315,
+          "visits": 129
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.084851,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 41,
+        "root_priors": null,
+        "root_value": 0.519007,
+        "seed": 1337,
+        "terminal_branches": 4
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.535251,
+          "share": 0.968,
+          "visits": 3965
+         },
+         {
+          "move": "return",
+          "q": 0.011275,
+          "share": 0.032,
+          "visits": 131
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.102974,
+        "iterations": 4096,
+        "max_depth_reached": 3,
+        "model_evals": 48,
+        "root_priors": null,
+        "root_value": 0.518493,
+        "seed": 900913,
+        "terminal_branches": 5
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.538241,
+          "share": 0.9673,
+          "visits": 3962
+         },
+         {
+          "move": "return",
+          "q": 0.010768,
+          "share": 0.0327,
+          "visits": 134
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.091595,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": 44,
+        "root_priors": null,
+        "root_value": 0.520985,
+        "seed": 7,
+        "terminal_branches": 34
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.535215,
+          "share": 0.9685,
+          "visits": 3967
+         },
+         {
+          "move": "return",
+          "q": 0.010456,
+          "share": 0.0315,
+          "visits": 129
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.086042,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": 41,
+        "root_priors": null,
+        "root_value": 0.518688,
+        "seed": 1337,
+        "terminal_branches": 34
+       },
+       {
+        "arms": [
+         {
+          "move": "swordsdance",
+          "q": 0.534755,
+          "share": 0.968,
+          "visits": 3965
+         },
+         {
+          "move": "return",
+          "q": 0.01015,
+          "share": 0.032,
+          "visits": 131
+         }
+        ],
+        "chosen": "swordsdance",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.099955,
+        "iterations": 4096,
+        "max_depth_reached": 4,
+        "model_evals": 48,
+        "root_priors": null,
+        "root_value": 0.517977,
+        "seed": 900913,
+        "terminal_branches": 35
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "SNORLAX,100,NORMAL,TYPELESS,NORMAL,TYPELESS,410,461,THICKFAT,THICKFAT,NONE,SERIOUS,85;85;85;85;85;85,256,166,166,256,96,NONE,0,0,460,RETURN;false;20,SWORDSDANCE;false;30,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/REGISTEEL,100,STEEL,TYPELESS,STEEL,TYPELESS,250,301,CLEARBODY,CLEARBODY,NONE,SERIOUS,85;85;85;85;85;85,186,336,186,336,136,NONE,0,0,205,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Deep Swords Dance race (flip d3, terminal d4)",
+   "trap_move": "return",
+   "win_move": "swordsdance"
+  },
+  {
+   "derivation": "toss=100; return avg 111/min 102/max 120, hb avg 163/max 177 (measured on the materialized state). B at 310: hb+return = 274 and even max rolls reach 283 < 310 => the hb line cannot finish before A dies end-T3 (hb pinned to 1 PP so a second beam cannot); return x2 leaves 88 <= min 102 => certain T3 KO. d1 sees hb 163 > return 111; d2 the gradient (88 vs 147 remaining), d3 the terminal.",
+   "design": {
+    "argmax_flip_horizon": 2,
+    "expected_needed_depth": 2,
+    "flip_stable": true,
+    "forced_win": {
+     "hyperbeam": false,
+     "return": true
+    },
+    "horizon_table": [
+     {
+      "argmax": "hyperbeam",
+      "horizon": 1,
+      "values": {
+       "hyperbeam": 0.5004661154899965,
+       "return": 0.45397116667503395
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 2,
+      "values": {
+       "hyperbeam": 0.44790673525568175,
+       "return": 0.5348507976054507
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 3,
+      "values": {
+       "hyperbeam": 0.12109375,
+       "return": 1.0
+      }
+     },
+     {
+      "argmax": "return",
+      "horizon": 4,
+      "values": {
+       "hyperbeam": 0.12109375,
+       "return": 1.0
+      }
+     }
+    ],
+    "position": "hb-recharge-trap-b",
+    "trap_move_p_win_upper": 0.12109375,
+    "win_bounds": {
+     "hyperbeam": {
+      "p_win_lower": 0.12109375,
+      "p_win_upper": 0.12109375
+     },
+     "return": {
+      "p_win_lower": 1.0,
+      "p_win_upper": 1.0
+     }
+    },
+    "win_move_forced": true,
+    "win_move_p_win_lower": 1.0
+   },
+   "position": "hb-recharge-trap-b",
+   "rolls": {
+    "hyperbeam": {
+     "crit": [
+      177,
+      354
+     ],
+     "noncrit": [
+      177,
+      354
+     ]
+    },
+    "return": {
+     "crit": [
+      120,
+      240
+     ],
+     "noncrit": [
+      120,
+      240
+     ]
+    }
+   },
+   "searches": {
+    "hp_fraction_crate": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.472298,
+          "share": 0.8728,
+          "visits": 3575
+         },
+         {
+          "move": "return",
+          "q": 0.39888,
+          "share": 0.1272,
+          "visits": 521
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000217,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.462959,
+        "seed": 7,
+        "terminal_branches": 1
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.472298,
+          "share": 0.8728,
+          "visits": 3575
+         },
+         {
+          "move": "return",
+          "q": 0.39888,
+          "share": 0.1272,
+          "visits": 521
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00021,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.462959,
+        "seed": 1337,
+        "terminal_branches": 1
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.472298,
+          "share": 0.8728,
+          "visits": 3575
+         },
+         {
+          "move": "return",
+          "q": 0.39888,
+          "share": 0.1272,
+          "visits": 521
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000209,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.462959,
+        "seed": 900913,
+        "terminal_branches": 1
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.487927,
+          "share": 0.9351,
+          "visits": 3830
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.331629,
+          "share": 0.0649,
+          "visits": 266
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00038,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.477777,
+        "seed": 7,
+        "terminal_branches": 5
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.488138,
+          "share": 0.9351,
+          "visits": 3830
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.331462,
+          "share": 0.0649,
+          "visits": 266
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000375,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.477963,
+        "seed": 1337,
+        "terminal_branches": 5
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.487877,
+          "share": 0.9351,
+          "visits": 3830
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.331589,
+          "share": 0.0649,
+          "visits": 266
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000374,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.477727,
+        "seed": 900913,
+        "terminal_branches": 5
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.95299,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.157312,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000489,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.942306,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.953178,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.158435,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00049,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.942506,
+        "seed": 1337,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.951953,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.154355,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000491,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.941243,
+        "seed": 900913,
+        "terminal_branches": 13
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.95299,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.157312,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000488,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.942306,
+        "seed": 7,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.953178,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.158435,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.00049,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.942506,
+        "seed": 1337,
+        "terminal_branches": 13
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.951953,
+          "share": 0.9866,
+          "visits": 4041
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.154355,
+          "share": 0.0134,
+          "visits": 55
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.000477,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": null,
+        "root_priors": null,
+        "root_value": 0.941243,
+        "seed": 900913,
+        "terminal_branches": 13
+       }
+      ],
+      "unanimous": true
+     }
+    },
+    "model": {
+     "d1": {
+      "chosen_trap": 3,
+      "chosen_win": 0,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.075463,
+          "share": 0.813,
+          "visits": 3330
+         },
+         {
+          "move": "return",
+          "q": 0.02944,
+          "share": 0.187,
+          "visits": 766
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009481,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.066857,
+        "seed": 7,
+        "terminal_branches": 1
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.075199,
+          "share": 0.814,
+          "visits": 3334
+         },
+         {
+          "move": "return",
+          "q": 0.02888,
+          "share": 0.186,
+          "visits": 762
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009641,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.066582,
+        "seed": 1337,
+        "terminal_branches": 1
+       },
+       {
+        "arms": [
+         {
+          "move": "hyperbeam",
+          "q": 0.074471,
+          "share": 0.8108,
+          "visits": 3321
+         },
+         {
+          "move": "return",
+          "q": 0.029186,
+          "share": 0.1892,
+          "visits": 775
+         }
+        ],
+        "chosen": "hyperbeam",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.009443,
+        "iterations": 4096,
+        "max_depth_reached": 0,
+        "model_evals": 4,
+        "root_priors": null,
+        "root_value": 0.065902,
+        "seed": 900913,
+        "terminal_branches": 1
+       }
+      ],
+      "unanimous": true
+     },
+     "d2": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.120436,
+          "share": 0.8459,
+          "visits": 3465
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.060822,
+          "share": 0.1541,
+          "visits": 631
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.026018,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.111252,
+        "seed": 7,
+        "terminal_branches": 5
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.119963,
+          "share": 0.8442,
+          "visits": 3458
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.061191,
+          "share": 0.1558,
+          "visits": 638
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.022056,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.110809,
+        "seed": 1337,
+        "terminal_branches": 5
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.120763,
+          "share": 0.8445,
+          "visits": 3459
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.061828,
+          "share": 0.1555,
+          "visits": 637
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.025275,
+        "iterations": 4096,
+        "max_depth_reached": 1,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.111598,
+        "seed": 900913,
+        "terminal_branches": 5
+       }
+      ],
+      "unanimous": true
+     },
+     "d4": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.735935,
+          "share": 0.979,
+          "visits": 4010
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.046648,
+          "share": 0.021,
+          "visits": 86
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.026638,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.721463,
+        "seed": 7,
+        "terminal_branches": 14
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.737595,
+          "share": 0.9783,
+          "visits": 4007
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.055003,
+          "share": 0.0217,
+          "visits": 89
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.022628,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.722763,
+        "seed": 1337,
+        "terminal_branches": 14
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.734909,
+          "share": 0.978,
+          "visits": 4006
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.046461,
+          "share": 0.022,
+          "visits": 90
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.026173,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.719782,
+        "seed": 900913,
+        "terminal_branches": 14
+       }
+      ],
+      "unanimous": true
+     },
+     "d6": {
+      "chosen_trap": 0,
+      "chosen_win": 3,
+      "runs": [
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.735935,
+          "share": 0.979,
+          "visits": 4010
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.046648,
+          "share": 0.021,
+          "visits": 86
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.0258,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.721463,
+        "seed": 7,
+        "terminal_branches": 14
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.737595,
+          "share": 0.9783,
+          "visits": 4007
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.055003,
+          "share": 0.0217,
+          "visits": 89
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.022767,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.722763,
+        "seed": 1337,
+        "terminal_branches": 14
+       },
+       {
+        "arms": [
+         {
+          "move": "return",
+          "q": 0.734909,
+          "share": 0.978,
+          "visits": 4006
+         },
+         {
+          "move": "hyperbeam",
+          "q": 0.046461,
+          "share": 0.022,
+          "visits": 90
+         }
+        ],
+        "chosen": "return",
+        "deep_ko_triggers": 0,
+        "elapsed_s": 0.025726,
+        "iterations": 4096,
+        "max_depth_reached": 2,
+        "model_evals": 11,
+        "root_priors": null,
+        "root_value": 0.719782,
+        "seed": 900913,
+        "terminal_branches": 14
+       }
+      ],
+      "unanimous": true
+     }
+    }
+   },
+   "state_str": "TAUROS,100,NORMAL,TYPELESS,NORMAL,TYPELESS,210,291,INTIMIDATE,INTIMIDATE,NONE,SERIOUS,85;85;85;85;85;85,236,226,116,176,256,NONE,0,0,88.4,RETURN;false;20,HYPERBEAM;false;1,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/UMBREON,100,DARK,TYPELESS,DARK,TYPELESS,310,331,SYNCHRONIZE,SYNCHRONIZE,NONE,SERIOUS,85;85;85;85;85;85,166,256,156,296,166,NONE,0,0,27,SEISMICTOSS;false;32,NONE;true;0,NONE;true;0,NONE;true;0,false,TYPELESS,MALE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=NONE,100,NORMAL,TYPELESS,NORMAL,TYPELESS,0,100,NONE,NONE,NONE,SERIOUS,85;85;85;85;85;85,100,100,100,100,100,NONE,0,0,1,NONE;false;32,NONE;false;32,NONE;false;32,NONE;false;32,false,NORMAL,NONE=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/NONE;0/NONE;0/false;0/false",
+   "title": "Hyper Beam recharge trap, second species set (needs d2)",
+   "trap_move": "hyperbeam",
+   "win_move": "return"
+  }
+ ],
+ "probe": "depth-tactics",
+ "seeds": [
+  7,
+  1337,
+  900913
+ ],
+ "sims": 4096
+}
