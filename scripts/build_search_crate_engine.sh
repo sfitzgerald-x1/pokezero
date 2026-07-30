@@ -13,6 +13,9 @@ if [ ! -x "$PYTHON" ]; then
   echo "error: executable Python not found: $PYTHON" >&2
   exit 2
 fi
+PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")"
+mkdir -p "$WHEEL_OUT"
+WHEEL_OUT="$(cd "$WHEEL_OUT" && pwd)"
 case "$CARGO_JOBS" in
   ''|*[!0-9]*|0)
     echo "error: CARGO_BUILD_JOBS must be a positive integer" >&2
@@ -22,7 +25,6 @@ esac
 
 "$REPO/scripts/vendor_poke_engine_src.sh" "$PYTHON"
 "$PYTHON" -m maturin --version >/dev/null
-mkdir -p "$WHEEL_OUT"
 
 (
   cd "$REPO/rust/pokezero-search"

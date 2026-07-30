@@ -204,6 +204,45 @@ class CertificationContractTests(unittest.TestCase):
             any("completion marker" in failure for failure in payload["gate_failures"])
         )
 
+    def test_explicit_coordinator_go_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._shard(root / "shard-0.json", 1000)
+            self._shard(root / "shard-1.json", 2000)
+            contract = self._contract()
+            contract["launch_registration"]["coordinator_go"] = False
+            payload = self._run(root, contract=contract)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertIn(
+            "contract has no explicit coordinator go",
+            payload["gate_failures"],
+        )
+
+    def test_aggregate_and_branch_probe_provenance_are_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = [root / "shard-0.json", root / "shard-1.json"]
+            self._shard(paths[0], 1000)
+            self._shard(paths[1], 2000)
+            contract = self._contract()
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            manifest = self._manifest(paths, contract_path)
+            manifest.pop("aggregate_provenance")
+            manifest["shards"][0].pop("branch_events_probe")
+            payload = self._run(root, contract=contract, manifest=manifest)
+        self.assertEqual(payload["verdict"], "FAIL")
+        self.assertIn(
+            "execution manifest has no aggregate provenance",
+            payload["gate_failures"],
+        )
+        self.assertTrue(
+            any(
+                "branch-events probe evidence is absent" in failure
+                for failure in payload["gate_failures"]
+            )
+        )
+
     def test_seed_block_mismatch_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
