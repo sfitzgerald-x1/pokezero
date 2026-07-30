@@ -470,16 +470,30 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             root = Path(tmp)
             paths = self._inputs(root)
             self._final_contract(paths)
+            output = root / "manifest.json"
             contract = json.loads(paths["contract"].read_text(encoding="utf-8"))
             contract["launch_registration"][
                 "fresh_measurements_inspected_before_registration"
             ] = False
-            errors = manifest.validate_final_contract_schema(contract)
-        self.assertIn(
-            "final contract launch_registration."
-            "fresh_measurements_inspected_before_registration is not zero",
-            errors,
-        )
+            paths["contract"].write_text(json.dumps(contract), encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "fresh_measurements_inspected_before_registration is not zero",
+            ):
+                manifest.produce_manifest(
+                    contract=paths["contract"],
+                    readout=ROOT / "scripts" / "cert_sweep_readout.py",
+                    output=output,
+                    reports=[paths["report"]],
+                    checkpoints=[paths["checkpoint"]],
+                    completion_markers=[paths["marker"]],
+                    behavioral_logs=[paths["behavior"]],
+                    branch_logs=[paths["branch"]],
+                    aggregate_behavioral_log=paths["behavior"],
+                    aggregate_branch_log=paths["branch"],
+                    engine_stamp=paths["stamp"],
+                )
+            self.assertFalse(output.exists())
 
     def test_final_contract_schema_rejects_consumer_required_gate_before_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
