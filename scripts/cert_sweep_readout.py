@@ -56,6 +56,7 @@ from engine_transition_differential import (  # noqa: E402
 
 _PCT_RE = re.compile(r"pct=([\d.]+)")
 _PAIR_RE = re.compile(r"\('([^']*)',\s*(-?\d+)\)")
+_MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components differ")
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -94,10 +95,14 @@ def _sibling_arm_carries_observed_components(
     """
 
     observed_components = Counter(observed)
-    if not observed_components:
+    majority_side = _MISS_SIDE_RE.search(majority)
+    if not observed_components or majority_side is None:
         return False
     for miss in misses:
         if miss == majority:
+            continue
+        sibling_side = _MISS_SIDE_RE.search(miss)
+        if sibling_side is None or sibling_side.group(1) != majority_side.group(1):
             continue
         _, sibling_engine_components = _miss_pairs(miss)
         if Counter(sibling_engine_components) == observed_components:
