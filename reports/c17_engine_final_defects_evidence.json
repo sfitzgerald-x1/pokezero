@@ -5,6 +5,8 @@
   "scope": {
     "source_prediction": "reports/c17_engine_final_defects_prediction.json",
     "color_change_prediction": "reports/c17_color_change_freeze_prediction.json",
+    "forecast_handoff_prediction": "reports/c17_forecast_suppressor_handoff_prediction.json",
+    "review_regression_prediction": "reports/c17_engine_review_regression_prediction.json",
     "retained_c15_source": "reports/c15_why_magnitude_statgap_results.json",
     "color_change_source": "commit adc08c5:reports/c17_incapacitated_action_adjudication.json",
     "excluded": [
@@ -80,22 +82,43 @@
     }
   },
   "implemented_patch": {
-    "path": "third_party/poke-engine-gen3-final-defects.patch",
+    "paths": [
+      "third_party/poke-engine-gen3-final-defects.patch",
+      "third_party/poke-engine-gen3-forecast-suppressor-handoff.patch",
+      "third_party/poke-engine-gen3-review-compositions.patch"
+    ],
     "changes": [
       "Floor every affected 1.5x and 0.5x base-power modifier before downstream damage calculation.",
       "Expand the first move's sixteen damage rolls only when a pending second Flail/Reversal can read a different HP band.",
       "Treat Cloud Nine/Air Lock ingress as suppression rather than a Forecast event; refresh Forecast when a suppressor exits or weather actually changes.",
-      "Defer Color Change until after damaging-move secondaries and stop a slower action freshly frozen by that first action."
+      "Defer Color Change until after damaging-move secondaries and stop a slower action freshly frozen by that first action.",
+      "Run Forecast before a departing weather suppressor is replaced, including suppressor-to-suppressor handoffs, while retaining suppression from the opposite active Pokemon.",
+      "Preserve the first move's ordinary multi-hit count inside exact-roll Flail/Reversal fan-out.",
+      "Pass actual post-cap direct damage to deferred Color Change so zero-damage Endure branches do not retype."
+    ]
+  },
+  "independent_review_repairs": {
+    "status": "complete",
+    "findings_closed": [
+      "Dynamic-power exact-roll fan-out no longer collapses a first-moving Double Kick to one hit.",
+      "Forecast runs at the departing suppressor boundary before the incoming suppressor becomes active.",
+      "Deferred Color Change now tests actual target HP loss rather than a pre-cap roll."
+    ],
+    "controls": [
+      "Every Double Kick branch emits two target Damage instructions when the opponent has pending Flail.",
+      "A live Showdown gen3customgame transcript pins Castform's form change before a Cloud Nine-to-Cloud Nine switch line.",
+      "Ice Beam into a one-HP Kecleon using Endure emits Damage 0 and never emits ChangeType.",
+      "The existing positive-damage freeze-before-Color-Change and Substitute controls remain green."
     ]
   },
   "focused_patched_results": {
-    "python": "tests.test_engine_gen3_abilities: 41 passed",
+    "python": "tests.test_engine_gen3_abilities plus tests.test_public_invariant: 45 passed",
     "rust": "gen3_variable_bp_fidelity: 8 passed",
-    "stateful_replay_pins": "Flail, Forecast, and Color Change: 3 passed after rebuilding the patched local wheel",
-    "both_fuzz_zero_builders": "scripts/vendor_poke_engine_src.sh and scripts/setup_poke_engine.sh each applied all 46 patches, including this patch, without fuzz",
-    "fingerprint": "3ed8a9498f8e95199c0bc9fdc8f81b8992fb77fafda624afa8d5ff7f540e12d0",
-    "behavioral_probes": "all standing behavioral probes passed",
-    "broader_python": "128 focused engine and public-invariant tests passed",
+    "stateful_replay_pins": "Flail, Forecast, suppressor handoff, Color Change ordering, multi-hit composition, and zero-damage Endure controls passed after rebuilding the patched local wheel",
+    "both_fuzz_zero_builders": "scripts/vendor_poke_engine_src.sh and scripts/setup_poke_engine.sh each applied all 48 patches, including the three final-defect patches, without fuzz",
+    "fingerprint": "cdbec34055c100d8d31525e1304d3a22de1999c0d45c2b3907133d3b2c8b1f21",
+    "behavioral_probes": "all 9 standing behavioral probes passed",
+    "broader_python": "58 focused engine and public-invariant tests passed",
     "broader_rust": "full rust/pokezero-search cargo test suite passed"
   },
   "remaining_required_verification": []
