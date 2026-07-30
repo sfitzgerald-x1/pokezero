@@ -1,0 +1,177 @@
+{
+ "registered_before_launch": true,
+ "sweep": "certification, 8 x 1250 games, seeds 2000000 + k*100000 (k=0..7), strict matcher, --repros-per-game 40 --keep-repro 1000, --checkpoint per shard",
+ "commit_sha": "05c4624",
+ "patches": 41,
+ "fingerprint": "3204c777dec347aa1df930cd509af7634fc1c3d66cddd3ab2c8fc16e91db80ce",
+ "seed_registry": "validated via deployment/ checkout against 26 protected bands (13 reservation files); this sweep's own reservation filed as engine-cert-sweep-20260730 before launch",
+ "per_shard_gates": "wheel REBUILT per shard venv (the #941 blind-spot rule) + scripts/engine_behavioral_probes.py 9/9 in-shard before measuring; any probe failure disqualifies the shard",
+ "census_basis": {
+  "games": 300,
+  "boundaries_measured": 23335,
+  "transitions_diverged": 103,
+  "boundaries_expected_10k": 777833
+ },
+ "acceptance_criterion": {
+  "binding": "ZERO UNATTRIBUTED ROWS: every divergent row must classify to a documented limit class or, on replay-first triage, to a documented adjudicated family (reports/c12_decomposition.json families as amended by Z10/Z11). Any row not attributable = SWEEP FAILURE, reported not absorbed.",
+  "achievable_bar": "documented limit classes and adjudicated instrument/limit-shape families at their predicted rates; engine_errors == 0; measured_fraction_of_full_rounds reported alongside",
+  "not_the_bar": "raw zero diverged transitions - the comparison itself prices stochastic branch sets (Z11.4); the honest zero is zero UNEXPLAINED"
+ },
+ "predicted_total_diverged_10k": {
+  "expected": 3433,
+  "wilson95": [
+   2832,
+   4161
+  ]
+ },
+ "predicted_class_rates_10k": {
+  "component_extra_in_engine:itemleftovers": {
+   "count_300g": 4,
+   "expected_10k": 133.3,
+   "wilson95_count_10k": [
+    51.9,
+    342.8
+   ]
+  },
+  "component_extra_in_engine:itemleftovers,psn": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_extra_in_engine:itemleftovers,sandstorm": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_magnitude:heal": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_magnitude:movepainsplit": {
+   "count_300g": 2,
+   "expected_10k": 66.7,
+   "wilson95_count_10k": [
+    18.3,
+    243.1
+   ]
+  },
+  "component_mismatch:heal|itemleftovers,psn": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_mismatch:heal|leechseed": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_mismatch:sandstorm|brn": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:abilityliquidooze": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:heal": {
+   "count_300g": 2,
+   "expected_10k": 66.7,
+   "wilson95_count_10k": [
+    18.3,
+    243.1
+   ]
+  },
+  "component_missing_in_engine:itemleftovers": {
+   "count_300g": 10,
+   "expected_10k": 333.3,
+   "wilson95_count_10k": [
+    181.1,
+    613.5
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,movewish": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,psn": {
+   "count_300g": 1,
+   "expected_10k": 33.3,
+   "wilson95_count_10k": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,sandstorm": {
+   "count_300g": 4,
+   "expected_10k": 133.3,
+   "wilson95_count_10k": [
+    51.9,
+    342.8
+   ]
+  },
+  "component_missing_in_engine:psn": {
+   "count_300g": 2,
+   "expected_10k": 66.7,
+   "wilson95_count_10k": [
+    18.3,
+    243.1
+   ]
+  },
+  "limit:roll_divergent_lethality": {
+   "count_300g": 33,
+   "expected_10k": 1100.0,
+   "wilson95_count_10k": [
+    783.4,
+    1544.2
+   ]
+  },
+  "limit:world_sample_drag_target": {
+   "count_300g": 5,
+   "expected_10k": 166.7,
+   "wilson95_count_10k": [
+    71.2,
+    390.1
+   ]
+  },
+  "roll_scaled_component": {
+   "count_300g": 32,
+   "expected_10k": 1066.7,
+   "wilson95_count_10k": [
+    755.7,
+    1505.3
+   ]
+  }
+ },
+ "notes": [
+  "class counts at 300 games are small for the thin classes; Wilson intervals widen accordingly - the binding criterion is attribution, not per-class count matching",
+  "new SEEDS mean new rows; family attribution at readout is by signature (majority-miss shape, markers, replay), not by row identity"
+ ]
+}
