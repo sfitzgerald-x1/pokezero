@@ -6157,3 +6157,126 @@ ea207da8ad2ec84b5028fa0ae26ed6f45a37345909fa97c9435cddb4d9a7910a  cert_shard_5.j
 before the walker CODE that produced them (caught in review). Standing order
 going forward: instrument change first, artifacts it produces second — the same
 separation the prediction-first rule already enforces on the other side.
+
+---
+
+# Appendix Z13 — Truant loaf phase: derived, probed, and 40 of 45
+
+Branch `scott/engine-world-truant-phase`. Parser + `engine_world` only; engine unchanged
+(41 patches, `3204c777dec347aa`). Prediction pre-registered in its own commit before any code.
+
+## Z13.1 gen3 owns Truant, and the existing rule was a proxy for the wrong thing
+
+`data/mods/gen3/abilities.ts` replaces base's volatile machinery (`onStart: undefined`) with a
+free-running boolean:
+
+```js
+onSwitchIn(p) { p.truantTurn = this.turn !== 0; }
+onResidualOrder: 27
+onResidual(p) { p.truantTurn = !p.truantTurn; }   // EVERY turn end, unconditionally
+```
+
+`engine_search._truant_loaf_slots` used **"moved last round -> loafs now"**. That is a proxy
+for the bit, not the bit: the first turn a holder is stopped by something OTHER than Truant
+(sleep, paralysis, flinch, freeze, recharge, a switch) the two disagree, and **the parity
+stays inverted for the rest of the stint**. One mechanism, tens of rows.
+
+## Z13.2 Probe over derivation — and the probe corrected the derivation once
+
+The composed derivation for a TRACED Truant (patch 32: a copied ability's Start event does not
+fire, so `onSwitchIn` never runs for the tracer; `sim/pokemon.ts` leaves `truantTurn` false on
+entry; `onResidual` flips regardless) predicts the tracer LOAFS on its first move turn — the
+opposite of native. Three `gen3customgame` probes:
+
+| scenario | first move turn | matches derivation? |
+| --- | --- | --- |
+| traced at **turn 0** (lead) | **ACTS** | no — derivation said loaf |
+| traced **mid-battle** (turn 2) | **LOAFS** | yes |
+| switch out, re-enter, **re-trace** | **LOAFS** again (parity resets) | yes |
+
+The lead exception is the same missing **end-of-turn-0 residual** that broke the native lead:
+there is no residual to flip before turn 1. Both cases collapse to one rule once that is
+accounted for. The derivation was right about the mechanism and wrong about one boundary
+condition, which is exactly what the probe-over-derivation rule exists to catch.
+
+## Z13.3 What shipped, and what a flip-count model cannot do
+
+* **Native** holders (`slakoth`/`slaking`, both mono-ability): seeded at switch-in with
+  `turn != 0`, flipped per `|turn|` **from turn 2** (no end-of-turn-0 residual).
+* **Traced** holders: **no derived seed.** Seeding `false` at acquisition and counting `|turn|`
+  flips reproduces the probe in the common case and misses when the acquisition switch-in is a
+  mid-turn replacement **after a faint** — there is no `|turn|` boundary between acquisition
+  and the next move, so the count is short by one and the parity inverts. Measured: it cost a
+  new divergence (2200291/41) while fixing three. Removing it made the same seed 3 -> 0 clean.
+* **Anchors** establish and correct the phase from what the sim publishes:
+  `|cant|...|ability: Truant` means loafing this turn, a holder's own `|move|` means acting.
+  Exact, and needs no flip accounting.
+
+**The general lesson: a derived counter and an observed fact are not interchangeable.** The
+derivation is worth having — it explains the family — but where the protocol states the answer
+outright, anchor on it. The four earlier formulations of this fix all fought because they were
+deriving a quantity the sim was already publishing.
+
+## Z13.4 CORRECTED — 54 cleared, 0 new, after the replacement guard
+
+**The first version of this appendix understated its deviation, and the understatement was a
+SCOPE artifact.** It reported 40 cleared / 2 new from a re-read of the 44 seeds my own
+signature filter had selected. A reviewer re-read 116 seeds and found the position both
+stronger and dirtier than claimed: **53 cleared** (including **9 rows #969 had already
+attributed to documented families** — the under-attribution this program keeps rediscovering,
+predicted in Z6.4 and corroborated again here) and **at least 5 newly divergent by identity**:
+
+| newly divergent (pre-guard) | how it was missed |
+| --- | --- |
+| 2100487/48, 2300743/79 | disclosed by me |
+| 2000583/38, 2101037/44, 2300534/47 | **invisible to a 44-seed scope** — their baseline rows belonged to OTHER families, so the seeds were never in my list |
+
+All five share the shape I had already named as the open hole: `|cant| ability: Truant` with
+the engine attacking. Base-code controls reproduce their baselines exactly, so they were
+PR-caused, not pre-existing.
+
+**The standing lesson is about the instrument, not the count.** A re-read scoped to the seeds
+a fix was *aimed* at can measure CLEARANCE but **cannot bound NEW rows**, because a fix can
+only create divergence in games it touches, and it touches games the aim never selected. What
+I reported as "2 new" was a rate with an unmeasured tail, not a closed list — and I described
+it as though it were closed. **Clearance and regression need different scopes: the aimed set
+for one, everything the mechanism can reach for the other.**
+
+### The guard, and the corrected numbers
+
+The open sub-case was probed rather than argued: a holder entering as a **post-residual faint
+replacement** (between `|upkeep|` and the next `|turn|`) LOAFS on its first move turn, where a
+holder switched in as the turn's ACTION acts. Same seed value, opposite outcome; the only
+difference is which side of the residual it entered on. Without the guard the `|turn|` flip
+double-counts a residual the mon was never present for, and the parity inverts for the stint.
+
+The trigger is parser-visible, which is why the guard is cheap: `|upkeep|` opens a window,
+`|turn|` closes it, and a holder switching in inside it skips exactly one flip.
+
+Re-read at the reviewer's **116-seed scope**, after the guard:
+
+| | |
+| --- | --- |
+| baseline rows in scope | 161 |
+| **CLEARED** | **54** |
+| still divergent | 107 (other families in the same games) |
+| **newly divergent** | **0** |
+| **net** | **+54** |
+
+All five of the reviewer's new rows are gone; for the three carrying base controls the
+post-guard row set matches the baseline **exactly** (`[23,67]`, `[49]`, `[45]`), so the guard
+neither introduced rows nor cost clears.
+
+**Residual honesty:** 0 new at 116 seeds is still not a proof of 0 new. That scope is far
+wider than the aimed set and includes the seeds that caught the original miss, but
+previously-clean Slaking games remain unmeasured until the next full sweep. This is a much
+better bound than before, not a closed one.
+
+## Z13.5 Family correction, forwarded
+
+Seed 2400315's rows are **not** loaf parity. They are `|cant|`-BOUNDARY residual drops
+(`component_missing_in_engine:sandstorm` on both `|cant| Truant` and `|cant| recharge` lines):
+engine and sim agree on who loafed and disagree on whether the end-of-turn block runs. The
+recharge-residual-gap family is therefore **broader than `|cant| recharge`** — it is any
+`|cant|` boundary. My signature filter mis-bucketed them, which also explains part of the
+44-vs-48 gap.
