@@ -8,7 +8,7 @@
     "forecast_handoff_prediction": "reports/c17_forecast_suppressor_handoff_prediction.json",
     "review_regression_prediction": "reports/c17_engine_review_regression_prediction.json",
     "retained_c15_source": "reports/c15_why_magnitude_statgap_results.json",
-    "color_change_source": "commit adc08c5:reports/c17_incapacitated_action_adjudication.json",
+    "color_change_source": "reports/c17_incapacitated_action_adjudication.json from squash-merged PR #978 (main commit e46a6beb9df026c70d001de1deb0627cd0cd18d7)",
     "excluded": [
       "scripts/cert_sweep_readout.py",
       "scripts/engine_transition_differential.py",
@@ -116,7 +116,8 @@
     "rust": "gen3_variable_bp_fidelity: 8 passed",
     "stateful_replay_pins": "Flail, Forecast, suppressor handoff, Color Change ordering, multi-hit composition, and zero-damage Endure controls passed after rebuilding the patched local wheel",
     "both_fuzz_zero_builders": "scripts/vendor_poke_engine_src.sh and scripts/setup_poke_engine.sh each applied all 48 patches, including the three final-defect patches, without fuzz",
-    "fingerprint": "cdbec34055c100d8d31525e1304d3a22de1999c0d45c2b3907133d3b2c8b1f21",
+    "fingerprint": "9fd8b39ce08e3819591aa13a0b7736d80cf29946c4a0570f26a8d37af0063b1e",
+    "two_consumer_stamp": "pokezero-engine-build/2 attests the rebuilt poke_engine and pokezero_search module artifacts",
     "behavioral_probes": "all 9 standing behavioral probes passed",
     "broader_python": "58 focused engine and public-invariant tests passed",
     "broader_rust": "full rust/pokezero-search cargo test suite passed"

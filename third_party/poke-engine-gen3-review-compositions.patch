@@ -1,9 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -2712,6 +2712,25 @@
-         &mut incoming_instructions,
-         &mut final_instructions,
-     );
+@@ -2714,0 +2715,19 @@
 +
 +    let hit_count = match choice.multi_hit() {
 +        MultiHitMove::None => 1,
@@ -23,22 +20,10 @@
 +        }
 +        MultiHitMove::TripleAxel => 3,
 +    };
- 
-     // A first-move hit can move a pending Flail/Reversal user across one of its
-     // HP-based base-power bands. The ordinary branch normally keeps only an
-@@ -2744,7 +2763,7 @@
-                         state,
-                         attacking_side,
-                         roll_instructions,
+@@ -2747 +2766 @@
 -                        1,
 +                        hit_count,
-                         true,
-                         blocked_by_protect,
-                         roll_damage,
-@@ -2774,37 +2793,6 @@
-     if incoming_instructions.percentage == 0.0 {
-         state.reverse_instructions(&incoming_instructions.instruction_list);
-         return;
+@@ -2777,31 +2795,0 @@
 -    }
 -
 -    // start multi-hit
@@ -70,41 +55,19 @@
 -            // is the best we can do
 -            hit_count = 3
 -        }
-     }
- 
-     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
-@@ -4470,8 +4458,13 @@
-     final_instructions: &mut Vec<StateInstructions>,
- ) {
-     let mut hit_sub = false;
+@@ -4472,0 +4461 @@
 +    let mut actual_damage_dealt = 0;
-     for _ in 0..hit_count {
-         if does_damage {
+@@ -4474,0 +4464,4 @@
 +            let defender_hp_before = state
 +                .get_side_immutable(&attacking_side.get_other_side())
 +                .get_active_immutable()
 +                .hp;
-             hit_sub = generate_instructions_from_damage(
-                 state,
-                 choice,
-@@ -4479,6 +4472,11 @@
-                 &attacking_side,
-                 &mut instructions,
-             );
+@@ -4481,0 +4475,5 @@
 +            let defender_hp_after = state
 +                .get_side_immutable(&attacking_side.get_other_side())
 +                .get_active_immutable()
 +                .hp;
 +            actual_damage_dealt += cmp::max(defender_hp_before - defender_hp_after, 0);
-         }
-         if let Some(side_condition) = &choice.side_condition {
-             generate_instructions_from_side_conditions(
-@@ -4644,7 +4642,7 @@
-                     state,
-                     choice,
-                     &attacking_side,
+@@ -4647 +4645 @@
 -                    damage_amount,
 +                    actual_damage_dealt,
-                     branch,
-                 );
-                 state.reverse_instructions(&branch.instruction_list);

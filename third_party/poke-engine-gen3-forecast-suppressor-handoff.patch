@@ -1,9 +1,6 @@
 --- a/src/gen3/generate_instructions.rs
 +++ b/src/gen3/generate_instructions.rs
-@@ -422,6 +422,29 @@
-         Abilities::AIRLOCK | Abilities::CLOUDNINE
-     );
-     ability_on_switch_out(state, &switching_side_ref, incoming_instructions);
+@@ -424,0 +425,23 @@
 +
 +    // Gen 3 Air Lock / Cloud Nine fire Forecast's WeatherChange handler when
 +    // the holder LEAVES, while an incoming suppressor does not fire it on
@@ -27,13 +24,7 @@
 +            .get_active()
 +            .ability = outgoing_ability;
 +    }
- 
-     let switch_instruction = Instruction::Switch(SwitchInstruction {
-         side_ref: switching_side_ref,
-@@ -434,13 +457,6 @@
-         .instruction_list
-         .push(switch_instruction);
- 
+@@ -437,7 +459,0 @@
 -    // A departing Air Lock / Cloud Nine holder re-enables the stored weather
 -    // before the replacement's entry event. Forecast observes that transition;
 -    // a suppressor entering does not itself fire Forecast's handler.
@@ -41,6 +32,3 @@
 -        update_forecast(state, incoming_instructions);
 -    }
 -
-     if should_last_used_move {
-         let side = state.get_side(&switching_side_ref);
-         set_last_used_move_as_switch(
