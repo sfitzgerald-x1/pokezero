@@ -6283,7 +6283,139 @@ recharge-residual-gap family is therefore **broader than `|cant| recharge`** —
 
 ---
 
-# Appendix Z14 — Certification instrument correction before the second sweep
+# Appendix Z14 — WHY-adjudication of two sweep shapes (and a refused ownership)
+
+Branch `scott/c15-why-adjudication`. Engine 41 patches, fingerprint `3204c777dec347aa`,
+unchanged — this round is adjudication, not repair.
+
+**Scope honesty up front: two of the four assigned shapes are adjudicated here.**
+`CAND_unresolved_magnitude` (28 rows) and `CAND_same_turn_stat_event_gap` (9 rows) were NOT
+sampled and carry no verdict from me. They are listed so the next reader knows the boundary of
+this appendix rather than inferring coverage from its title.
+
+## Z14.1 CAND_recoil_vs_substitute_basis (12 rows) — CORRECTED: world knowledge-limit
+
+**The sim-chain half of this entry stands; the engine half was wrong and is withdrawn.**
+
+### What holds
+
+gen3 has no `substitute` override, so the condition resolves UP to **gen4's**
+(`data/mods/gen4/moves.ts:1283`), which clamps `damage` to the sub's remaining HP, applies
+recoil *inside* that handler from the clamped value, and returns `HIT_SUBSTITUTE === 0` — so
+`move.totalDamage` is falsy and the outer recoil block (`gen3/scripts.ts:460`) never
+double-applies. gen3 also owns `calcRecoilDamage` and **floors** where base rounds.
+
+### What was FALSE
+
+I wrote that "the engine computes recoil from the FULL damage". **It does not.** The engine's
+substitute path sets `damage_dealt = min(calculated, substitute_health)` and recoil consumes
+the clamped value — **semantically identical to gen4's handler**. The engine path is
+**verified sim-exact**.
+
+### The real mechanism, and how I got it wrong
+
+`engine_world.py` seeds the sub with a **documented upper-bound approximation**:
+
+```python
+substitute_health = 0
+if "substitute" in volatiles:
+    # Public info does not carry the sub's remaining HP; a fresh sub costs
+    # maxhp/4, so that is the documented upper-bound approximation.
+    substitute_health = party[active_index].maxhp // 4
+```
+
+There is **no depletion tracking**. So the engine clamps correctly — to a sub that the world
+believes is always full. Venusaur: `262 // 4 = 65`, and `floor(65/3) = 21` — **exactly** the
+engine's observed recoil. The engine was reading its own seeded 65, not a full-damage figure.
+
+My −21/−19 arithmetic **back-fitted**: I inferred "full damage ≈ 63" from `floor(x/3) = 21`
+when **63, 64 and 65 all floor to 21**, and picked the value that fit my hypothesis instead of
+reading the retained `DamageSubstitute` instruction, which states the number outright. The
+artifact was in hand and I reasoned past it.
+
+### Re-laned, and the prediction replaced
+
+**Lane: world / knowledge limit**, not engine damage.
+
+* An **engine patch clears ZERO rows** — there is nothing wrong with the engine path.
+* **Depletion tracking** in the world clears the **inferable subset**: sub-breaking hits whose
+  absorbed amounts can be reconstructed from public damage lines.
+* The remainder is a **genuine limit shape**: Showdown does not publish how much a Substitute
+  absorbed on a non-breaking hit, so the world cannot always know the remaining HP. Part of
+  this family is not fixable without hidden information, and should be adjudicated as a limit
+  rather than carried as an open defect.
+
+## Z14.2 CAND_incapacitated_arm_pricing (11 rows) — CORRECTED: split, and one refusal withdrawn
+
+The blanket refusal was **half right and is half withdrawn**. Three rows sampled; two
+mechanisms, two lanes.
+
+### Freeze rows — engine lane, mechanism corrected
+
+I wrote that the engine "has no 80/20 freeze arm". **It has one; it did not fire.** The thaw
+exclusion at `gen3/generate_instructions.rs:1580` reads:
+
+```rust
+&& ![Choices::HIDDENPOWER, Choices::WEATHERBALL].contains(&choice.move_id)
+```
+
+— only the **generic** `HIDDENPOWER`. Espeon's `HIDDENPOWERFIRE70` is a distinct enum variant,
+so the engine treated it as a thawing fire hit, thawed the frozen mon, and let it act. gen3
+says Hidden Power must not thaw.
+
+The same file already enumerates **all 33 HP variants** thirty lines earlier (line 1374, for
+`MoveCategory`), so the fix class is exactly the enumerate-every-variant pattern this ledger
+established for the counter/mirrorcoat Hidden Power work — a known precedent, not a new design.
+
+Confirmed on a second row: **2100471/18**, Chimecho's Hidden Power into a frozen Sableye, same
+absent freeze arm, engine's Sableye acting for 185.
+
+### The fresh-sleep row — refusal WITHDRAWN, world lane (mine)
+
+**2000281/99 was my lane and I refused it wrongly.** The engine does not "apply the sleep and
+then let the mon move" — it emits **zero instructions on every branch**, because its
+rest-aware sleep clause saw a **benched Entei seeded with `rest_turns = 0`**. The world's
+rest-provenance machinery (`restSleepAttempts` → `3 − k`) failed to mark a **BENCHED** public
+Rest sleeper, so the clause could not engage.
+
+That is a world-construction gap — precisely the lane I declined. **Sub-shape (b)
+("same-turn status not gating the second mover") is withdrawn**: no sampled row exhibits it,
+and it should be re-established from a row that does before anyone builds on it.
+
+### Sizing the split
+
+Of three sampled rows: **2 engine** (HP-variant thaw), **1 world** (benched Rest provenance).
+A 3-row sample cannot size an 11-row family with confidence; it establishes that the family is
+**mixed**, which is the part that matters for routing. The remaining 8 need the same
+treatment before either lane commits to a clearance number.
+
+## Z14.3 The rule, and the appendix that instantiated it
+
+The original text of this section proposed: *a WHAT names where a divergence is VISIBLE; the
+lane follows from the WHY, and the two are routinely different.* The rule survives. What did
+not survive is my application of it — **this appendix was itself an instance**, and the split
+falls exactly along one line:
+
+| WHY derived from | outcome |
+| --- | --- |
+| **sim source, read directly** (gen4 substitute chain, `HIT_SUBSTITUTE`, gen3 `calcRecoilDamage`) | **held** |
+| **arithmetic, without reading the retained branch instructions** (engine recoil basis, "no freeze arm", "applies the sleep then moves") | **all three refuted** |
+
+I have a standing rule for this — replay before narrating, read the artifact rather than the
+note — and I applied it to the SIM and skipped it on the ENGINE. The retained repros carried
+`DamageSubstitute`, the branch dumps, and the instruction lists that state each of the three
+answers outright. Every failed claim was an inference over a number when the number's
+provenance was one field away.
+
+**Sharpened rule: derivation is licensed for a source you are READING and never for a
+component whose output you are only INFERRING.** Reading Showdown's chain to predict engine
+behaviour is half a derivation; the other half is opening the engine's own recorded output.
+The recoil row is the cleanest illustration — `floor(x/3) = 21` admits 63, 64 and 65, and the
+artifact said 65.
+
+---
+
+# Appendix Z15 — Certification instrument correction before the second sweep
 
 Review of the re-sweep preparation found two attribution rules that were too broad to support
 the zero-unattributed gate. Both corrections are intentionally conservative: a row returns to a
@@ -6291,16 +6423,17 @@ named WHAT-level candidate unless its documented comparison basis is present in 
 
 * **I4 mapper ties:** an equal-magnitude, different-label tie now attributes only when it is in
   the majority arm. A minority-arm tie cannot explain an unexplained majority-arm mismatch.
-* **LS structural-arm echoes:** a component-count mismatch now attributes only when a sibling
-  engine arm exactly carries the full observed nonempty component multiset. The former
+* **LS structural-arm echoes:** a component-count mismatch now attributes only when a same-side
+  sibling engine arm exactly carries the full observed nonempty component multiset. The former
   `s2000561/67` citation was stale: its sibling arms do not carry the observed hit. Unsupported
   count mismatches remain named-unattributed instead of being treated as branch-set accounting.
 
-The associated re-sweep specification also records the corrected #972 map: recoil-versus-
-Substitute is a world/knowledge-limit disposition, while the incapacitated-arm family requires
-both the engine typed-HP thaw exclusion and world bench-Rest provenance fixes. The Truant class
-table now carries the same explicit nonzero regression failure condition as its sibling
-post-fix mechanisms.
+The associated re-sweep specification also records the corrected #972 map without treating the
+adjudication as completed implementation: recoil-versus-Substitute requires the public
+depletion/knowledge-limit world lane; the incapacitated-arm family requires the engine typed-HP
+thaw exclusion, world bench-Rest provenance, and adjudication of the eight rows not sampled by
+#972. Every remaining WHAT-level candidate pool must close to a fix, documented follow-up, or
+proven comparison limit before launch.
 
 The immutable c14 archive was hash-verified (17/17) and regenerated twice under the amended
 instrument with byte-identical output. The c13 regression population remains **103/103 PASS**.

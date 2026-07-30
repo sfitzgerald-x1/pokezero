@@ -1,6 +1,6 @@
 {
  "purpose": "instrument coverage on the c14 archived shards (sha256s in Z12.6) after the certification-critical attribution correction",
- "instrument_commit": "this PR amendment (instrument change committed before this regenerated artifact)",
+  "instrument_commit": "PR amendment series; the artifact was regenerated against the final same-side instrument and is reproducible, but this corrective series is not claimed as prediction-first",
  "validation": {
   "c13_population": "103/103 PASS (regression gate)",
   "archive_sha256": "17/17 PASS",

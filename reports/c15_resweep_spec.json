@@ -1,17 +1,21 @@
 {
- "spec_version": "engine-cert-sweep-2 draft (final pre-registration commits at launch, prediction-first)",
- "gated_on": [
-  "engine lane patches 42-43 (recharge-turn residuals, absorb-through-Protect/missed-move) landed and identity-diff verified",
-  "recoil-vs-Substitute adjudicated as the #972 world/knowledge-limit disposition",
-  "incapacitated-arm fixes landed: engine typed-HP thaw exclusion plus world bench-Rest provenance, each identity-diff verified",
-  "coordinator go"
- ],
- "corrected_972_disposition_map": {
-  "recoil_vs_substitute_basis": "world/knowledge-limit; not an engine fix lane",
-  "incapacitated_arm_pricing": {
-   "engine": "typed-HP thaw exclusion",
-   "world": "bench-Rest provenance"
-  }
+  "spec_version": "engine-cert-sweep-2 draft (final pre-registration commits at launch, prediction-first)",
+  "gated_on": [
+    "engine lane patches 42-44 (recharge/Truant cant-boundary residuals, absorb-through-Protect/missed-move, typed-HP thaw exclusion) landed and identity-diff verified",
+    "Substitute public-depletion tracking and named knowledge-limit routing landed, with the inferable archived subset identity-diff verified",
+    "world bench-Rest provenance landed and identity-diff verified",
+    "all 11 incapacitated-arm rows adjudicated; the 8 rows not sampled by #972 are not presumed closed by the two known fixes",
+    "all remaining c14 WHAT-level pools adjudicated to a landed fix, documented follow-up, or proven comparison-limit, including unresolved magnitude, same-turn stat-event, and unsupported structural-count rows",
+    "final class-rate table committed prediction-first against the launch commit",
+    "coordinator go"
+  ],
+  "corrected_972_disposition_map": {
+    "recoil_vs_substitute_basis": "world/knowledge-limit; public depletion tracking must land and verify the inferable subset before launch; not an engine fix lane",
+    "incapacitated_arm_pricing": {
+      "engine": "typed-HP thaw exclusion",
+      "world": "bench-Rest provenance",
+      "unresolved": "the 8 rows not sampled by #972 require row-level adjudication before launch"
+    }
  },
  "seeds": {
   "blocks": "2800000 + k*100000, k=0..7, 1250 games each",
@@ -168,5 +172,5 @@
    }
   }
  },
- "gate_adjudication_for_signoff": "My reading, stated for sign-off: the #965-endorsed disjunction covers families ADJUDICATED as comparison-limits - 'the divergence is in the comparison, not the engine' must be ESTABLISHED, not presumed. The 134 WHAT-level candidate rows (the structural component-count family, 4 other named shapes, and the unresolved generic fallback pool) do not meet that bar: their WHY is open. Attributed-as-candidate therefore does NOT satisfy the certification gate. A sweep that observes these shapes at rate can only PASS if, by launch time, each shape has been adjudicated to a WHY (fix, documented engine follow-up, or proven comparison-limit). If the WHY round closes them as comparison-limits, expected-at-rate presence is consistent with certification; if it fixes them, they join the predicted-zero set; until one of those happens, certification is blocked on them."
+  "gate_adjudication_for_signoff": "My reading, stated for sign-off: the #965-endorsed disjunction covers families ADJUDICATED as comparison-limits - 'the divergence is in the comparison, not the engine' must be ESTABLISHED, not presumed. The 134 WHAT-level candidate rows (the structural component-count family, 3 other named shapes, and the unresolved generic fallback pool) do not meet that bar: their WHY is open. Attributed-as-candidate therefore does NOT satisfy the certification gate. A sweep that observes these shapes at rate can only PASS if, by launch time, each shape has been adjudicated to a WHY (fix, documented engine follow-up, or proven comparison-limit). If the WHY round closes them as comparison-limits, expected-at-rate presence is consistent with certification; if it fixes them, they join the predicted-zero set; until one of those happens, certification is blocked on them."
 }
