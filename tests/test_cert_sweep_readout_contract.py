@@ -82,14 +82,14 @@ class CertificationContractTests(unittest.TestCase):
             "readout_sha256": readout._sha256(Path(readout.__file__)),
             "shards": [
                 {
-                    "report": path.name,
+                    "seed_start": 1000 if index == 0 else 2000,
                     "report_sha256": readout._sha256(path),
                     "complete_marker": complete,
                     "behavioral_probes": {"passed": 9, "total": 9},
                     "source_commit": self.source_commit,
                     "engine_fingerprint": self.engine_fingerprint,
                 }
-                for path in paths
+                for index, path in enumerate(paths)
             ],
         }
 

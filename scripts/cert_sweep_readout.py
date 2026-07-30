@@ -536,26 +536,33 @@ def _contract_gates(
     if not isinstance(manifest_shards, list):
         failures.append("execution manifest has no shard list")
         manifest_shards = []
-    manifest_by_report: dict[str, Mapping[str, Any]] = {}
+    manifest_by_seed_start: dict[int, Mapping[str, Any]] = {}
     for entry in manifest_shards:
-        if not isinstance(entry, Mapping) or not isinstance(entry.get("report"), str):
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("seed_start"), int):
             failures.append("execution manifest contains an invalid shard entry")
             continue
-        report = entry["report"]
-        if report in manifest_by_report:
-            failures.append(f"execution manifest repeats shard report {report}")
-        manifest_by_report[report] = entry
-    if len(manifest_by_report) != expected_shards:
+        seed_start = entry["seed_start"]
+        if seed_start in manifest_by_seed_start:
+            failures.append(
+                f"execution manifest repeats shard seed_start {seed_start}"
+            )
+        manifest_by_seed_start[seed_start] = entry
+    if len(manifest_by_seed_start) != expected_shards:
         failures.append(
-            f"execution manifest contains {len(manifest_by_report)} unique shard entries, "
+            f"execution manifest contains {len(manifest_by_seed_start)} unique shard entries, "
             f"expected {expected_shards}"
         )
 
-    report_names = {path.name for path in paths}
-    if set(manifest_by_report) != report_names:
-        failures.append("execution manifest report set does not match supplied shard reports")
-    for path in paths:
-        entry = manifest_by_report.get(path.name)
+    actual_seed_starts = {
+        int((shard.get("seeds") or {}).get("min", -1)) for shard in shards
+    }
+    if set(manifest_by_seed_start) != actual_seed_starts:
+        failures.append(
+            "execution manifest seed-start set does not match supplied shard reports"
+        )
+    for path, shard in zip(paths, shards):
+        seed_start = int((shard.get("seeds") or {}).get("min", -1))
+        entry = manifest_by_seed_start.get(seed_start)
         if entry is None:
             continue
         if entry.get("report_sha256") != _sha256(path):
