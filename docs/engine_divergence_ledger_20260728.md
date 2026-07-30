@@ -5997,3 +5997,70 @@ Every row attributed; engine-side known divergences all fixed (#967/#968,
 patches 34–41) or formally zero-row (E6 was fixed as patch 41 with its first
 attributed row; no engine-side family retains an attributed row). The
 certification sweep is authorized under its standing requirements.
+
+---
+
+# Appendix Z12 — The certification sweep: 10,000 games, and an honest FAIL
+
+Run per the standing requirements: 8 x 1250 games, seeds `2000000 + k*100000`
+(validated against the private registry's 26 protected bands via a `deployment/`
+checkout; this sweep's own reservation filed as `engine-cert-sweep-20260730`
+BEFORE launch); per-shard wheel REBUILD into eight separate venvs + in-shard
+behavioral probes — all 8 gates 9/9 at `3204c777` (41 patches); `--checkpoint`
+retention on every shard (which is what saved the run: the shards died once
+mid-flight and resumed from checkpoint with zero loss, 1081-1149 games each at
+the restart); class-rate table pre-registered in its own commit before launch
+(`reports/c14_sweep_prediction.json`).
+
+## Z12.1 Aggregate, against the pre-registration
+
+| | predicted | observed |
+|---|---|---|
+| diverged | 3433, 95% [2832, 4161] | **3821 — inside the interval** |
+| engine errors | 0 | **0** |
+| coverage (measured fraction) | reported alongside | **0.9773** |
+| retention | complete | **3821/3821, all 8 shards `repros_complete`** |
+
+## Z12.2 VERDICT: **FAIL** under the pre-registered zero-unattributed criterion
+
+3517 of 3821 rows attribute mechanically to documented families (readout
+instrument validated 103/103 on the c13 population before any fresh row was
+read): 1552 documented limit classes, 559 I1, 507 LS shapes, 240 I3, 215 I6,
+166 I5, 166 I4, 112 I2. **304 rows do not attribute** — and per the
+pre-registration they are reported, not absorbed:
+
+**Four NEW named mechanisms (143 rows, samples replayed per family):**
+
+| rows | mechanism |
+|---|---|
+| 56 | **recharge-turn residual gap** — on a `\|cant\|<mon>\|recharge` boundary (choice `none`), the engine's branch emits NO end-of-turn residuals; Showdown runs the block (Leftovers, psn tick observed-only at 100%) |
+| 48 | **Truant loaf-phase drift** — Slaking boundaries where the engine's branch loafs when the sim attacked (engine=[] vs observed damage) or vice versa: the world's truant phase is mis-seeded |
+| 26 | **absorb-ability heal fires through Protect** — Vaporeon/Jolteon protects, Showdown blocks the move entirely; the engine emits the Water/Volt Absorb quarter heal anyway (the #944 Protect-gate class, one dispatcher arm wider) |
+| 13 | absorb-ability variants (incl. missing absorb heal on Sleep-Talk-called water moves) |
+
+**161 rows PENDING replay-first triage** (next cycle's brief, sub-shapes
+counted mechanically): magnitude pairs in the majority miss (74), engine-only
+damage in the majority (30), accuracy-miss boundaries (7), other (50).
+
+## Z12.3 Why 300-game cycles never saw these
+
+The four new families sum to ~1.4% of divergences ≈ 0.014/game; a 300-game
+census expects ~1-4 rows TOTAL across them, and drew ~0 by chance. The
+certification sweep did exactly what a 33x scale-up is for: it priced the tail.
+The residue program's method holds — every one of the 3517 attributed rows
+lands in a family this ledger derived at 300-game scale, the pre-registered
+total interval CONTAINED the observation, and the four new families arrived
+with signatures crisp enough to name from samples. The gate that matters
+stays honest: **zero UNEXPLAINED is the criterion, and 304 rows are currently
+unexplained.** No certification is claimed.
+
+## Z12.4 Artifacts
+
+- `reports/c14_sweep_prediction.json` — pre-registered before launch (separate commit)
+- `reports/c14_cert_sweep_readout.json` — full readout: per-class observed-vs-
+  predicted with Wilson intervals, per-row attribution, the 304 with failure
+  families
+- `scripts/cert_sweep_readout.py` — the attribution instrument (validated
+  103/103 pre-sweep)
+- shard checkpoints/reports retained off-tree (scratchpad `cert/`), seeds
+  2000000-2701249 consumed and filed in the registry

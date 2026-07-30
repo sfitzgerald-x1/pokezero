@@ -1,0 +1,3077 @@
+{
+ "verdict": "FAIL",
+ "aggregate": {
+  "boundaries_measured": 791757,
+  "boundaries_full_round": 810125,
+  "transitions_matched": 787888,
+  "transitions_diverged": 3821,
+  "engine_errors": 0,
+  "games": 10000
+ },
+ "coverage_measured_fraction": 0.9773,
+ "repros_complete_all_shards": true,
+ "rows_retained": 3821,
+ "family_attribution": {
+  "limit:roll_divergent_lethality": 1281,
+  "I1_cap_state_shape": 559,
+  "LS_capped_lethal_shape": 481,
+  "UNATTRIBUTED": 304,
+  "limit:world_sample_drag_target": 271,
+  "I3_roll_inherited": 240,
+  "I6_sleeptalk_callee_union": 215,
+  "I5_boundary_truncation": 166,
+  "I4_attribution_tie": 166,
+  "I2_matcher_accounting": 112,
+  "LS_confusion_fan": 26
+ },
+ "unattributed_rows": [
+  {
+   "seed": 2000031,
+   "step": 60,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2000054,
+   "step": 49,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2000059,
+   "step": 11,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2000131,
+   "step": 47,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2000204,
+   "step": 51,
+   "class": "component_missing_in_engine:heal,itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:heal,itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('heal', 45), ('itemleftovers', 16), ('psn', -16)] engine_on)",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2000214,
+   "step": 12,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000261,
+   "step": 31,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000281,
+   "step": 99,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2000298,
+   "step": 23,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.80:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000348,
+   "step": 53,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000382,
+   "step": 104,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000393,
+   "step": 10,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000393,
+   "step": 28,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2000405,
+   "step": 81,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2000431,
+   "step": 32,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:two-thirds:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000454,
+   "step": 39,
+   "class": "component_extra_in_engine:abilityvoltabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilityvoltabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilityvoltabsorb', 56)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000522,
+   "step": 54,
+   "class": "component_missing_in_engine:brn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=79.69: p2 attributed components differ: observed_only=[('brn', -24)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2000557,
+   "step": 80,
+   "class": "component_extra_in_engine:abilityvoltabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilityvoltabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilityvoltabsorb', 56)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000561,
+   "step": 67,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000583,
+   "step": 23,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2000621,
+   "step": 100,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2000628,
+   "step": 72,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2000655,
+   "step": 126,
+   "class": "component_mismatch:heal|leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:heal|leechseed; majority: pct=85.00: p1 attributed components differ: observed_only=[('leechseed', -38)] engine_only=[('psn', -38), ('psn', -19)])",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2000679,
+   "step": 47,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2000705,
+   "step": 102,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):recoil;unexplained_ratio_1.83:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2000730,
+   "step": 66,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2000765,
+   "step": 26,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2000791,
+   "step": 37,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2000804,
+   "step": 90,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2000924,
+   "step": 13,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p1 attributed components differ: observed_only=[('sandstorm', -15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2000988,
+   "step": 39,
+   "class": "component_missing_in_engine:itemleftovers,psn,sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn,sandstorm; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 18), ('psn', -36), ('sandstorm', -18)] eng)",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2000999,
+   "step": 78,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=85.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2001004,
+   "step": 80,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p2 attributed components differ: observed_only=[('sandstorm', -13)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2001064,
+   "step": 28,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2001109,
+   "step": 57,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2001146,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2001148,
+   "step": 61,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 15), ('psn', -15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2001162,
+   "step": 120,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.91:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2001179,
+   "step": 136,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2001188,
+   "step": 59,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2001195,
+   "step": 12,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2001206,
+   "step": 38,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2001211,
+   "step": 50,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2001217,
+   "step": 16,
+   "class": "component_extra_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=42.50: p1 attributed components differ: observed_only=[] engine_only=[('psn', -13)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2001225,
+   "step": 73,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2100044,
+   "step": 13,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2100079,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.85:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100109,
+   "step": 41,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100211,
+   "step": 24,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2100227,
+   "step": 35,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;unexplained_ratio_0.92:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100237,
+   "step": 15,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2100368,
+   "step": 38,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100398,
+   "step": 77,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.81:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2100398,
+   "step": 78,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:two-thirds:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2100471,
+   "step": 18,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2100482,
+   "step": 83,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100487,
+   "step": 52,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2100568,
+   "step": 48,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.27:recoil;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100578,
+   "step": 34,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 23)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100610,
+   "step": 93,
+   "class": "component_mismatch:heal|leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:heal|leechseed; majority: pct=75.00: p1 attributed components differ: observed_only=[('heal', 21)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2100613,
+   "step": 23,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100687,
+   "step": 72,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 18), ('psn', -18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100687,
+   "step": 91,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 18), ('psn', -18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100690,
+   "step": 4,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2100691,
+   "step": 81,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100715,
+   "step": 94,
+   "class": "component_extra_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=63.75: p1 attributed components differ: observed_only=[] engine_only=[('psn', -18)])",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2100730,
+   "step": 39,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=32.81: p1 attributed components differ: observed_only=[('psn', -24)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2100785,
+   "step": 45,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16), ('psn', -16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2100787,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2100838,
+   "step": 97,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2101029,
+   "step": 22,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2101037,
+   "step": 49,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 13)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2101090,
+   "step": 36,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2101119,
+   "step": 46,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2101125,
+   "step": 47,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2101141,
+   "step": 22,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2101145,
+   "step": 112,
+   "class": "component_extra_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=50.00: p2 attributed components differ: observed_only=[] engine_only=[('psn', -32)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2101156,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2101156,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2101216,
+   "step": 69,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2200051,
+   "step": 80,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2200127,
+   "step": 49,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2200147,
+   "step": 62,
+   "class": "component_mismatch:heal,itemleftovers|leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:heal,itemleftovers|leechseed; majority: pct=75.00: p1 roll-scaled components differ: observed=[] engine=[('', -26)])",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2200173,
+   "step": 37,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2200217,
+   "step": 45,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p2 attributed components differ: observed_only=[('psn', -66)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2200232,
+   "step": 51,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2200265,
+   "step": 81,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2200291,
+   "step": 42,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2200321,
+   "step": 13,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2200366,
+   "step": 20,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2200369,
+   "step": 75,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2200577,
+   "step": 41,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2200593,
+   "step": 12,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2200617,
+   "step": 39,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.92:drain;unexplained_ratio_1.20:itemleftovers_to_full;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2200744,
+   "step": 40,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 82)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2200819,
+   "step": 28,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2200824,
+   "step": 60,
+   "class": "component_mismatch:heal,itemleftovers|leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:heal,itemleftovers|leechseed; majority: pct=80.00: p1 attributed components differ: observed_only=[('itemleftovers', 15), ('leechseed', -31), ('sandstorm', -15))",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2200826,
+   "step": 29,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 14)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2200836,
+   "step": 36,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2200858,
+   "step": 28,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2200877,
+   "step": 68,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2200906,
+   "step": 37,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=93.75: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2200912,
+   "step": 11,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2200943,
+   "step": 21,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2200987,
+   "step": 62,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2201002,
+   "step": 57,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2201005,
+   "step": 55,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_1.09:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2201022,
+   "step": 66,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2201093,
+   "step": 60,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2201093,
+   "step": 61,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2201115,
+   "step": 46,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:two-thirds:move;within_roll_window:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2201221,
+   "step": 29,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2300040,
+   "step": 84,
+   "class": "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed; majority: pct=84.38: p1 attributed components differ: observed_only=[('abilityliquidooze', -24), ('itemleftovers', 13)] engine_onl)",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2300076,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300081,
+   "step": 60,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300093,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300138,
+   "step": 31,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 15), ('psn', -15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300154,
+   "step": 80,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300170,
+   "step": 14,
+   "class": "component_missing_in_engine:leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:leechseed; majority: pct=100.00: p1 attributed components differ: observed_only=[('leechseed', -45)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300224,
+   "step": 15,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300224,
+   "step": 34,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300243,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300254,
+   "step": 48,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300312,
+   "step": 25,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2300442,
+   "step": 44,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 18)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300458,
+   "step": 11,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300461,
+   "step": 14,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300534,
+   "step": 45,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300547,
+   "step": 59,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2300552,
+   "step": 117,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.81:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300562,
+   "step": 9,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300563,
+   "step": 13,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300614,
+   "step": 37,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 13)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300626,
+   "step": 4,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300739,
+   "step": 58,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2300743,
+   "step": 9,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300744,
+   "step": 133,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2300787,
+   "step": 21,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2300818,
+   "step": 50,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2300855,
+   "step": 87,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2300855,
+   "step": 89,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2300862,
+   "step": 68,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2300870,
+   "step": 102,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2300881,
+   "step": 33,
+   "class": "component_extra_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=42.50: p1 attributed components differ: observed_only=[] engine_only=[('psn', -17)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2300894,
+   "step": 81,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p2 attributed components differ: observed_only=[('psn', -13)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2300924,
+   "step": 69,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2300932,
+   "step": 29,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2300945,
+   "step": 35,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2301032,
+   "step": 32,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p2 attributed components differ: observed_only=[('psn', -16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2301073,
+   "step": 12,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2301134,
+   "step": 17,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2301160,
+   "step": 60,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 14)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2301214,
+   "step": 40,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2301234,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400009,
+   "step": 83,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:two-thirds:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400056,
+   "step": 86,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2400075,
+   "step": 56,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2400107,
+   "step": 100,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2400140,
+   "step": 9,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400156,
+   "step": 29,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400172,
+   "step": 89,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400176,
+   "step": 76,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2400200,
+   "step": 57,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400288,
+   "step": 53,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400315,
+   "step": 29,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p1 attributed components differ: observed_only=[('sandstorm', -22)] engine_only=[])",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400315,
+   "step": 32,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p1 attributed components differ: observed_only=[('sandstorm', -22)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2400315,
+   "step": 35,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p1 attributed components differ: observed_only=[('sandstorm', -22)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2400317,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400342,
+   "step": 78,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400451,
+   "step": 56,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:two-thirds:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400468,
+   "step": 182,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400469,
+   "step": 24,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400484,
+   "step": 36,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.05:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400516,
+   "step": 215,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400569,
+   "step": 21,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p2 attributed components differ: observed_only=[('psn', -66)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2400572,
+   "step": 10,
+   "class": "component_missing_in_engine:brn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=93.75: p1 attributed components differ: observed_only=[('brn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400588,
+   "step": 83,
+   "class": "component_mismatch:itemleftovers|leechseed",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_mismatch:itemleftovers|leechseed; majority: pct=85.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2400624,
+   "step": 30,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400631,
+   "step": 79,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400667,
+   "step": 37,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=93.75: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 82)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2400667,
+   "step": 66,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=93.75: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 82)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2400695,
+   "step": 9,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2400719,
+   "step": 68,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.12:recoil;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400824,
+   "step": 21,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400834,
+   "step": 79,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p2 attributed components differ: observed_only=[('sandstorm', -16)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2400858,
+   "step": 62,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2400872,
+   "step": 58,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2400882,
+   "step": 37,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 15)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2400952,
+   "step": 2,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401002,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401030,
+   "step": 74,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2401112,
+   "step": 16,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2401127,
+   "step": 54,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401129,
+   "step": 94,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401141,
+   "step": 41,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401166,
+   "step": 75,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.59:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2401207,
+   "step": 18,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2401237,
+   "step": 14,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500084,
+   "step": 63,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2500120,
+   "step": 60,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500151,
+   "step": 116,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500163,
+   "step": 13,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2500163,
+   "step": 69,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2500166,
+   "step": 35,
+   "class": "component_extra_in_engine:abilityvoltabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilityvoltabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilityvoltabsorb', 56)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2500206,
+   "step": 55,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500224,
+   "step": 70,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2500235,
+   "step": 31,
+   "class": "component_magnitude:abilityliquidooze",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_magnitude:abilityliquidooze; majority: pct=93.75: p2 attributed components differ: observed_only=[('abilityliquidooze', -20)] engine_only=[('abilityliquidooze')",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500297,
+   "step": 96,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500298,
+   "step": 82,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500315,
+   "step": 30,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move;double (crit, or type 2x):recoil",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500342,
+   "step": 41,
+   "class": "component_extra_in_engine:abilityvoltabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilityvoltabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilityvoltabsorb', 56)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2500348,
+   "step": 30,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 13)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2500402,
+   "step": 12,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500497,
+   "step": 30,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 19)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2500512,
+   "step": 45,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -44)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2500544,
+   "step": 72,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500576,
+   "step": 7,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2500690,
+   "step": 10,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=93.75: p2 attributed components differ: observed_only=[('psn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500703,
+   "step": 8,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2500743,
+   "step": 40,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2500743,
+   "step": 60,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.44:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500750,
+   "step": 62,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=93.75: p1 attributed components differ: observed_only=[('sandstorm', -18)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2500930,
+   "step": 45,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -44)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2501008,
+   "step": 87,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2501020,
+   "step": 9,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2501024,
+   "step": 43,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2501061,
+   "step": 96,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2501099,
+   "step": 40,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=79.69: p2 attributed components differ: observed_only=[('psn', -24)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2600025,
+   "step": 59,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600063,
+   "step": 72,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17), ('psn', -17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2600104,
+   "step": 52,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600222,
+   "step": 44,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.04:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2600250,
+   "step": 89,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600266,
+   "step": 25,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -45)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2600290,
+   "step": 47,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_accuracy_miss_boundary"
+  },
+  {
+   "seed": 2600362,
+   "step": 82,
+   "class": "component_magnitude:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_magnitude:psn; majority: pct=93.75: p1 attributed components differ: observed_only=[('psn', -126)] engine_only=[('psn', -112)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2600366,
+   "step": 42,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600370,
+   "step": 45,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600510,
+   "step": 111,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.91:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600524,
+   "step": 114,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 73)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2600535,
+   "step": 80,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.86:drain;unexplained_ratio_0.91:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600546,
+   "step": 22,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600546,
+   "step": 25,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.88:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600600,
+   "step": 98,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2600607,
+   "step": 68,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600627,
+   "step": 47,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2600649,
+   "step": 18,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600657,
+   "step": 49,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600664,
+   "step": 20,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2600681,
+   "step": 43,
+   "class": "component_missing_in_engine:itemleftovers,psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers,psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 14), ('psn', -14)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2600756,
+   "step": 66,
+   "class": "component_missing_in_engine:brn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:brn; majority: pct=70.31: p2 attributed components differ: observed_only=[('brn', -32)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2600794,
+   "step": 48,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 72)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2600857,
+   "step": 54,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:double (crit, or type 2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2600880,
+   "step": 50,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 12)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2600992,
+   "step": 21,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.82:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2601008,
+   "step": 27,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2601023,
+   "step": 51,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.43:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2601033,
+   "step": 129,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2601034,
+   "step": 66,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 74)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2601046,
+   "step": 20,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2601049,
+   "step": 42,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2601063,
+   "step": 22,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=93.75: p2 attributed components differ: observed_only=[('itemleftovers', 18)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2601125,
+   "step": 4,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2601147,
+   "step": 44,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 14)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2601167,
+   "step": 94,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2601196,
+   "step": 25,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2601196,
+   "step": 46,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.75:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2601208,
+   "step": 118,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2601208,
+   "step": 124,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.20:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2601219,
+   "step": 41,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700048,
+   "step": 42,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 63)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2700083,
+   "step": 34,
+   "class": "component_extra_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:psn; majority: pct=47.81: p1 attributed components differ: observed_only=[] engine_only=[('psn', -15)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700115,
+   "step": 40,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -66)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700218,
+   "step": 151,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.90:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2700257,
+   "step": 74,
+   "class": "component_missing_in_engine:sandstorm",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:sandstorm; majority: pct=100.00: p2 attributed components differ: observed_only=[('sandstorm', -16)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700262,
+   "step": 23,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2700329,
+   "step": 72,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700348,
+   "step": 109,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 83)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2700355,
+   "step": 37,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.87:move;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2700422,
+   "step": 31,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2700572,
+   "step": 63,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2700574,
+   "step": 15,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p2 attributed components differ: observed_only=[('psn', -44)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700613,
+   "step": 131,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=50.00: p2 attributed components differ: observed_only=[('itemleftovers', 25)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700664,
+   "step": 28,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700702,
+   "step": 38,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2700734,
+   "step": 47,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700752,
+   "step": 65,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  },
+  {
+   "seed": 2700766,
+   "step": 20,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 16)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700803,
+   "step": 32,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.42:move",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700809,
+   "step": 17,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p2 attributed components differ: observed_only=[('itemleftovers', 14)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2700833,
+   "step": 48,
+   "class": "component_extra_in_engine:abilityvoltabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilityvoltabsorb; majority: pct=100.00: p2 attributed components differ: observed_only=[] engine_only=[('abilityvoltabsorb', 56)])",
+   "failure_family": "NEW_absorb_heal_through_protect"
+  },
+  {
+   "seed": 2700880,
+   "step": 96,
+   "class": "component_extra_in_engine:abilitywaterabsorb",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:abilitywaterabsorb; majority: pct=100.00: p1 attributed components differ: observed_only=[] engine_only=[('abilitywaterabsorb', 82)])",
+   "failure_family": "NEW_absorb_variant"
+  },
+  {
+   "seed": 2700917,
+   "step": 11,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=93.75: p2 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700944,
+   "step": 42,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2700967,
+   "step": 81,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.76:move;within_roll_window:move;within_roll_window:recoil",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2700990,
+   "step": 43,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.89:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2701014,
+   "step": 31,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "NEW_truant_loaf_phase_drift"
+  },
+  {
+   "seed": 2701047,
+   "step": 47,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:unexplained_ratio_0.37:recoil;within_roll_window:move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2701067,
+   "step": 87,
+   "class": "component_extra_in_engine:partialtrap",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_extra_in_engine:partialtrap; majority: pct=59.77: p1 attributed components differ: observed_only=[] engine_only=[('partialtrap', -15)])",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2701081,
+   "step": 15,
+   "class": "component_magnitude:abilityliquidooze",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_magnitude:abilityliquidooze; majority: pct=93.75: p1 attributed components differ: observed_only=[('abilityliquidooze', -16)] engine_only=[('abilityliquidooze')",
+   "failure_family": "PENDING_other"
+  },
+  {
+   "seed": 2701137,
+   "step": 5,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: damage_calc:half (screen: Reflect/Light Screen, or type 1/2x):move",
+   "failure_family": "PENDING_magnitude_pair"
+  },
+  {
+   "seed": 2701144,
+   "step": 42,
+   "class": "component_missing_in_engine:psn",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:psn; majority: pct=100.00: p1 attributed components differ: observed_only=[('psn', -45)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2701184,
+   "step": 70,
+   "class": "component_missing_in_engine:itemleftovers",
+   "family": "UNATTRIBUTED",
+   "basis": "no documented signature matched (class component_missing_in_engine:itemleftovers; majority: pct=100.00: p1 attributed components differ: observed_only=[('itemleftovers', 17)] engine_only=[])",
+   "failure_family": "NEW_recharge_turn_residual_gap"
+  },
+  {
+   "seed": 2701204,
+   "step": 52,
+   "class": "roll_scaled_component",
+   "family": "UNATTRIBUTED",
+   "basis": "triage bucket: structural_component_count",
+   "failure_family": "PENDING_engine_only_damage_majority"
+  }
+ ],
+ "per_class_observed_vs_predicted": {
+  "component_extra_in_engine:abilityvoltabsorb": {
+   "observed": 5,
+   "observed_wilson95_rate": [
+    2.697383091383237e-06,
+    1.4784663598408499e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:abilitywaterabsorb": {
+   "observed": 36,
+   "observed_wilson95_rate": [
+    3.2844805703226954e-05,
+    6.294371529351541e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:brn": {
+   "observed": 4,
+   "observed_wilson95_rate": [
+    1.964615500161118e-06,
+    1.2991415889406406e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:brn,itemleftovers": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:itemleftovers": {
+   "observed": 132,
+   "observed_wilson95_rate": [
+    0.0001406008067273176,
+    0.00019768518309094926
+   ],
+   "predicted": 133.3,
+   "predicted_wilson95_count": [
+    51.9,
+    342.8
+   ]
+  },
+  "component_extra_in_engine:itemleftovers,movepainsplit": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:itemleftovers,psn": {
+   "observed": 17,
+   "observed_wilson95_rate": [
+    1.3406145229593214e-05,
+    3.438808506288909e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_extra_in_engine:itemleftovers,psn,sandstorm": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:itemleftovers,sandstorm": {
+   "observed": 12,
+   "observed_wilson95_rate": [
+    8.670219920991181e-06,
+    2.6493933870370054e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_extra_in_engine:leechseed": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:movepainsplit": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:partialtrap": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:psn": {
+   "observed": 14,
+   "observed_wilson95_rate": [
+    1.0533284459022605e-05,
+    2.968289993278706e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_extra_in_engine:spikes": {
+   "observed": 15,
+   "observed_wilson95_rate": [
+    1.1481469205330802e-05,
+    3.1260730486703064e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_magnitude:abilityliquidooze": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_magnitude:heal": {
+   "observed": 16,
+   "observed_wilson95_rate": [
+    1.2439372102777789e-05,
+    3.28288428894803e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_magnitude:movepainsplit": {
+   "observed": 214,
+   "observed_wilson95_rate": [
+    0.00023641996667291305,
+    0.00030899927776373943
+   ],
+   "predicted": 66.7,
+   "predicted_wilson95_count": [
+    18.3,
+    243.1
+   ]
+  },
+  "component_magnitude:psn": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:abilityliquidooze,itemleftovers|abilityliquidooze,leechseed": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:brn,movepainsplit|movepainsplit": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:heal,itemleftovers,psn|leechseed": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:heal,itemleftovers|leechseed": {
+   "observed": 5,
+   "observed_wilson95_rate": [
+    2.697383091383237e-06,
+    1.4784663598408499e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:heal|itemleftovers": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:heal|itemleftovers,psn": {
+   "observed": 0,
+   "observed_wilson95_rate": [
+    0.0,
+    4.85197018867067e-06
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_mismatch:heal|leechseed": {
+   "observed": 50,
+   "observed_wilson95_rate": [
+    4.790520953407204e-05,
+    8.324752566580931e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_mismatch:itemleftovers,movepainsplit|leechseed,movepainsplit": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:itemleftovers,psn|leechseed": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:itemleftovers|leechseed": {
+   "observed": 47,
+   "observed_wilson95_rate": [
+    4.4644187026685996e-05,
+    7.893050227252272e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:leechseed|brn": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:leechseed|psn": {
+   "observed": 7,
+   "observed_wilson95_rate": [
+    4.282659453635551e-06,
+    1.8251417836604616e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:movepainsplit,psn|movepainsplit": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:partialtrap|brn": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:partialtrap|psn": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_mismatch:sandstorm|brn": {
+   "observed": 0,
+   "observed_wilson95_rate": [
+    0.0,
+    4.85197018867067e-06
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_mismatch:sandstorm|psn": {
+   "observed": 5,
+   "observed_wilson95_rate": [
+    2.697383091383237e-06,
+    1.4784663598408499e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:abilityliquidooze": {
+   "observed": 8,
+   "observed_wilson95_rate": [
+    5.119951015197469e-06,
+    1.994014157526691e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:abilityliquidooze,itemleftovers": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:abilityvoltabsorb": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:abilitywaterabsorb": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:brn": {
+   "observed": 10,
+   "observed_wilson95_rate": [
+    6.8606125926480886e-06,
+    2.3251510598264717e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:brn,heal": {
+   "observed": 2,
+   "observed_wilson95_rate": [
+    6.927136407266836e-07,
+    9.211287148392414e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:brn,itemleftovers": {
+   "observed": 5,
+   "observed_wilson95_rate": [
+    2.697383091383237e-06,
+    1.4784663598408499e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:brn,itemleftovers,sandstorm": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:heal": {
+   "observed": 18,
+   "observed_wilson95_rate": [
+    1.4381057235559608e-05,
+    3.5939188357146906e-05
+   ],
+   "predicted": 66.7,
+   "predicted_wilson95_count": [
+    18.3,
+    243.1
+   ]
+  },
+  "component_missing_in_engine:heal,itemleftovers": {
+   "observed": 15,
+   "observed_wilson95_rate": [
+    1.1481469205330802e-05,
+    3.1260730486703064e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:heal,itemleftovers,psn": {
+   "observed": 4,
+   "observed_wilson95_rate": [
+    1.964615500161118e-06,
+    1.2991415889406406e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:heal,itemleftovers,sandstorm": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:itemleftovers": {
+   "observed": 252,
+   "observed_wilson95_rate": [
+    0.0002813380786220775,
+    0.000360069747223095
+   ],
+   "predicted": 333.3,
+   "predicted_wilson95_count": [
+    181.1,
+    613.5
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,leechseed": {
+   "observed": 3,
+   "observed_wilson95_rate": [
+    1.2885934845108578e-06,
+    1.1141422604832453e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:itemleftovers,movepainsplit": {
+   "observed": 1,
+   "observed_wilson95_rate": [
+    2.2294724496241438e-07,
+    7.155038243932469e-06
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:itemleftovers,movewish": {
+   "observed": 6,
+   "observed_wilson95_rate": [
+    3.4730603288662317e-06,
+    1.6535001661149717e-05
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,psn": {
+   "observed": 84,
+   "observed_wilson95_rate": [
+    8.570220531726425e-05,
+    0.0001313350500902404
+   ],
+   "predicted": 33.3,
+   "predicted_wilson95_count": [
+    5.9,
+    188.8
+   ]
+  },
+  "component_missing_in_engine:itemleftovers,psn,sandstorm": {
+   "observed": 4,
+   "observed_wilson95_rate": [
+    1.964615500161118e-06,
+    1.2991415889406406e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:itemleftovers,sandstorm": {
+   "observed": 34,
+   "observed_wilson95_rate": [
+    3.073161231088767e-05,
+    6.000487808540626e-05
+   ],
+   "predicted": 133.3,
+   "predicted_wilson95_count": [
+    51.9,
+    342.8
+   ]
+  },
+  "component_missing_in_engine:leechseed": {
+   "observed": 30,
+   "observed_wilson95_rate": [
+    2.6542300781692133e-05,
+    5.409012841370494e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:movepainsplit": {
+   "observed": 16,
+   "observed_wilson95_rate": [
+    1.2439372102777789e-05,
+    3.28288428894803e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "component_missing_in_engine:psn": {
+   "observed": 96,
+   "observed_wilson95_rate": [
+    9.930036170734173e-05,
+    0.00014804907730285344
+   ],
+   "predicted": 66.7,
+   "predicted_wilson95_count": [
+    18.3,
+    243.1
+   ]
+  },
+  "component_missing_in_engine:sandstorm": {
+   "observed": 23,
+   "observed_wilson95_rate": [
+    1.935794003597427e-05,
+    4.35923820578533e-05
+   ],
+   "predicted": null,
+   "predicted_wilson95_count": null
+  },
+  "limit:roll_divergent_lethality": {
+   "observed": 1281,
+   "observed_wilson95_rate": [
+    0.001531776663784119,
+    0.0017089009059917694
+   ],
+   "predicted": 1100.0,
+   "predicted_wilson95_count": [
+    783.4,
+    1544.2
+   ]
+  },
+  "limit:world_sample_drag_target": {
+   "observed": 271,
+   "observed_wilson95_rate": [
+    0.0003038840834577419,
+    0.00038551803309169063
+   ],
+   "predicted": 166.7,
+   "predicted_wilson95_count": [
+    71.2,
+    390.1
+   ]
+  },
+  "roll_scaled_component": {
+   "observed": 1049,
+   "observed_wilson95_rate": [
+    0.0012471604235113206,
+    0.0014074815966125507
+   ],
+   "predicted": 1066.7,
+   "predicted_wilson95_count": [
+    755.7,
+    1505.3
+   ]
+  }
+ },
+ "failure_decomposition": {
+  "PENDING_magnitude_pair": 74,
+  "NEW_recharge_turn_residual_gap": 56,
+  "PENDING_other": 50,
+  "NEW_truant_loaf_phase_drift": 48,
+  "PENDING_engine_only_damage_majority": 30,
+  "NEW_absorb_heal_through_protect": 26,
+  "NEW_absorb_variant": 13,
+  "PENDING_accuracy_miss_boundary": 7
+ },
+ "verdict_detail": "SWEEP FAILURE under the pre-registered zero-unattributed criterion: 304 of 3821 divergent rows are not attributable to a documented family. 143 rows decompose into four NEW named mechanisms (recharge-turn residual gap 56; Truant loaf-phase drift 48; absorb-ability heal fires through Protect 26; absorb variants 13 - samples replayed per family); 161 rows remain PENDING replay-first triage (magnitude pairs 74, engine-only-damage majorities 30, accuracy-miss boundaries 7, other 50). Total diverged 3821 landed INSIDE the pre-registered interval [2832, 4161]; engine_errors 0; coverage 0.9773; repros_complete on all 8 shards; per-shard wheels rebuilt and probes 9/9 at 3204c777."
+}
