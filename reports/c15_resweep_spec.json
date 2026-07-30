@@ -1,0 +1,164 @@
+{
+ "spec_version": "engine-cert-sweep-2 draft (final pre-registration commits at launch, prediction-first)",
+ "gated_on": [
+  "engine lane patches 42-43 (recharge-turn residuals, absorb-through-Protect/missed-move) landed and identity-diff verified",
+  "incapacitated-arm fix (or WHY-round adjudication) landed",
+  "coordinator go"
+ ],
+ "seeds": {
+  "blocks": "2800000 + k*100000, k=0..7, 1250 games each",
+  "registry": "validated against 34 protected bands; reservation engine-cert-sweep2-20260730 filed 2026-07-30 (registry and reservations live outside this repository)"
+ },
+ "execution": "identical to Z12: per-shard wheel REBUILD + in-shard behavioral probes (9/9 required per shard), --checkpoint retention, strict matcher, --repros-per-game 40 --keep-repro 1000",
+ "readout": "scripts/cert_sweep_readout.py at this PR's commit or later (98.59% named coverage on c14; c13 regression gate PASS)",
+ "scope_statement": "#970 lesson folded: this sweep bounds NEW rows GLOBALLY by construction - 10,000 fresh games with full-frame attribution and the zero-unattributed criterion - not merely clearance at the fix lanes' aimed seeds. Any mechanism the fixes regress or newly expose surfaces as UNATTRIBUTED.",
+ "draft_class_rate_table": {
+  "note": "rates sweep-calibrated from c14 observed (Wilson 95% on 791,757 boundaries), NOT census-calibrated - the c14 lesson; final table re-derived and committed prediction-first at launch",
+  "documented_families": {
+   "limit:roll_divergent_lethality": {
+    "observed_c14": 1281,
+    "predicted_next": 1281,
+    "wilson95": [
+     1213,
+     1353
+    ]
+   },
+   "I1_cap_state_shape": {
+    "observed_c14": 517,
+    "predicted_next": 517,
+    "wilson95": [
+     474,
+     564
+    ]
+   },
+   "LS_capped_lethal_shape": {
+    "observed_c14": 474,
+    "predicted_next": 474,
+    "wilson95": [
+     433,
+     519
+    ]
+   },
+   "limit:world_sample_drag_target": {
+    "observed_c14": 271,
+    "predicted_next": 271,
+    "wilson95": [
+     241,
+     305
+    ]
+   },
+   "I3_roll_inherited": {
+    "observed_c14": 240,
+    "predicted_next": 240,
+    "wilson95": [
+     211,
+     272
+    ]
+   },
+   "I6_sleeptalk_callee_union": {
+    "observed_c14": 215,
+    "predicted_next": 215,
+    "wilson95": [
+     188,
+     246
+    ]
+   },
+   "I4_attribution_tie": {
+    "observed_c14": 176,
+    "predicted_next": 176,
+    "wilson95": [
+     152,
+     204
+    ]
+   },
+   "I5_boundary_truncation": {
+    "observed_c14": 164,
+    "predicted_next": 164,
+    "wilson95": [
+     141,
+     191
+    ]
+   },
+   "I2_matcher_accounting": {
+    "observed_c14": 111,
+    "predicted_next": 111,
+    "wilson95": [
+     92,
+     134
+    ]
+   },
+   "LS_structural_arm_echo": {
+    "observed_c14": 41,
+    "predicted_next": 41,
+    "wilson95": [
+     30,
+     56
+    ]
+   },
+   "LS_crit_arm_pairing_echo": {
+    "observed_c14": 28,
+    "predicted_next": 28,
+    "wilson95": [
+     19,
+     40
+    ]
+   },
+   "LS_confusion_fan": {
+    "observed_c14": 26,
+    "predicted_next": 26,
+    "wilson95": [
+     18,
+     38
+    ]
+   }
+  },
+  "new_mechanisms_post_fix": {
+   "recharge_turn_residual_gap": {
+    "observed_c14": 61,
+    "predicted_next": 0,
+    "on_nonzero": "REGRESSION - sweep fails"
+   },
+   "truant_loaf_phase_drift": {
+    "observed_c14": 50,
+    "predicted_next": 0,
+    "caveat": "#970 verified clearance at its aimed-seed scope (54 cleared, 0 new at 116-seed scope per its ledger section); this sweep is the GLOBAL bound"
+   },
+   "absorb_through_protect_and_missed": {
+    "observed_c14": 79,
+    "predicted_next": 0,
+    "on_nonzero": "REGRESSION - sweep fails"
+   }
+  },
+  "what_level_candidates_if_why_round_does_not_close_them": {
+   "recoil_vs_substitute_basis": {
+    "observed_c14": 13,
+    "wilson95": [
+     8,
+     22
+    ]
+   },
+   "incapacitated_arm_pricing": {
+    "observed_c14": 11,
+    "wilson95": [
+     6,
+     20
+    ]
+   },
+   "same_turn_stat_event_gap": {
+    "observed_c14": 9,
+    "wilson95": [
+     5,
+     17
+    ]
+   },
+   "unresolved_magnitude_pool": {
+    "observed_c14": 54,
+    "wilson95": [
+     41,
+     70
+    ]
+   }
+  }
+ },
+ "gate_adjudication_for_signoff": "My reading, stated for sign-off: the #965-endorsed disjunction covers families ADJUDICATED as comparison-limits - 'the divergence is in the comparison, not the engine' must be ESTABLISHED, not presumed. The 87 WHAT-level candidate rows (4 named shapes + the unresolved-magnitude pool) do not meet that bar: their WHY is open, and at least recoil-vs-Substitute plausibly sits in the engine. Attributed-as-candidate therefore does NOT satisfy the certification gate. A sweep that observes these shapes at rate can only PASS if, by launch time, each shape has been adjudicated to a WHY (fix, documented engine follow-up, or proven comparison-limit). If the WHY round closes them as comparison-limits, expected-at-rate presence is consistent with certification; if it fixes them, they join the predicted-zero set; until one of those happens, certification is blocked on them."
+}
