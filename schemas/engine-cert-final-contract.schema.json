@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "engine-cert-final-contract.schema.json",
+  "title": "Public final engine certification contract",
+  "type": "object",
+  "required": ["registered_before_launch", "requires_execution_contract", "certification_gates", "pre_registered_family_rate_table", "predicted_class_rates_10k", "launch_registration"],
+  "properties": {
+    "registered_before_launch": {"const": true},
+    "requires_execution_contract": {"const": true},
+    "certification_gates": {
+      "type": "object",
+      "required": ["expected_shards", "expected_games", "seed_blocks", "minimum_coverage_measured_fraction", "required_build_check", "required_matcher", "required_repros_per_game", "required_keep_repro", "required_behavioral_probe_passes", "required_source_commit", "required_image_commit", "required_engine_fingerprint", "required_readout_sha256", "required_execution_manifest_producer_sha256"],
+      "properties": {
+        "expected_shards": {"type": "integer", "minimum": 1},
+        "expected_games": {"type": "integer", "minimum": 1},
+        "seed_blocks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["start", "games"],
+            "properties": {
+              "start": {"type": "integer", "minimum": 0},
+              "games": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "minimum_coverage_measured_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "required_build_check": {"type": "string", "minLength": 1},
+        "required_matcher": {"type": "string", "minLength": 1},
+        "required_repros_per_game": {"type": "integer", "minimum": 0},
+        "required_keep_repro": {"type": "integer", "minimum": 0},
+        "required_behavioral_probe_passes": {"type": "integer", "minimum": 1},
+        "required_source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_image_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "required_engine_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_readout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "required_execution_manifest_producer_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "pre_registered_family_rate_table": {
+      "type": "object",
+      "required": ["documented_families", "new_mechanisms_post_fix"],
+      "properties": {
+        "calibration_boundaries": {"type": "integer", "minimum": 1},
+        "documented_families": {
+          "type": "object",
+          "propertyNames": {
+            "anyOf": [
+              {
+                "enum": ["I1_cap_state_shape", "I2_matcher_accounting", "I3_roll_inherited", "I4_attribution_tie", "I5_boundary_truncation", "I6_sleeptalk_callee_union", "LS_capped_lethal_shape", "LS_confusion_fan", "LS_crit_arm_pairing_echo", "LS_structural_arm_echo"]
+              },
+              {"pattern": "^limit:.+"}
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "anyOf": [
+              {"required": ["wilson95_rate"]},
+              {"required": ["wilson95"]}
+            ],
+            "properties": {
+              "wilson95_rate": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number", "minimum": 0, "maximum": 1}
+              },
+              "wilson95": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number", "minimum": 0}
+              },
+              "prediction_interval_rate": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {"type": "number", "minimum": 0, "maximum": 1}
+              }
+            }
+          }
+        },
+        "new_mechanisms_post_fix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["predicted_next", "classifier_outcome", "exclusion_counter"],
+            "properties": {
+              "predicted_next": {"const": 0},
+              "classifier_outcome": {"const": "UNATTRIBUTED"},
+              "exclusion_counter": {
+                "type": "string",
+                "minLength": 1,
+                "enum": ["absorb_through_protect_or_miss", "incapacitated_arm_pricing", "recharge_turn_residual_gap", "recoil_vs_substitute_basis", "same_turn_stat_event_gap", "structural_component_count_without_supported_sibling", "truant_loaf_phase_drift", "unattributed_generic"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "predicted_class_rates_10k": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["expected_10k", "wilson95_count_10k"],
+        "properties": {
+          "expected_10k": {"type": "number", "minimum": 0},
+          "wilson95_count_10k": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
+    "launch_registration": {
+      "type": "object",
+      "required": ["fresh_measurements_inspected_before_registration", "coordinator_go", "engine_patch_count"],
+      "properties": {
+        "fresh_measurements_inspected_before_registration": {"const": 0},
+        "coordinator_go": {"const": true},
+        "engine_patch_count": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

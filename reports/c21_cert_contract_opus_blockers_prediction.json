@@ -1,0 +1,42 @@
+{
+  "schema": "pokezero.cert-contract-opus-blockers-prediction.v1",
+  "recorded_at": "2026-07-30",
+  "review_source": "independent-opus-review",
+  "predictions": [
+    {
+      "id": "checkpoint-build-gate-binding",
+      "current_behavior": "The readout can trust report-level build_check and acceptance_eligible even when durable checkpoint records are ungated or carry the wrong schema.",
+      "expected_fix": "The checkpoint aggregate derives and binds build_check plus acceptance_eligible, and the readout rejects every checkpoint record whose schema is not exact.",
+      "required_regression": "Missing, skipped, or mismatched per-record build gates and schemas cannot produce a final PASS."
+    },
+    {
+      "id": "read-only-merge-checkpoint-repair",
+      "current_behavior": "The merge reader can truncate or append to source checkpoint evidence while aggregating it.",
+      "expected_fix": "Only the explicit single-writer resume path may repair a torn tail; merge reads never mutate source bytes.",
+      "required_regression": "Read-only merge preserves hashes, and a torn final write fails clearly without modification."
+    },
+    {
+      "id": "family-rate-validator-precedence",
+      "current_behavior": "A present invalid wilson95_rate can be accepted by the producer through a valid count fallback and rejected only by the readout.",
+      "expected_fix": "A present wilson95_rate must itself be valid at producer, schema, and readout seams; count fallback applies only when it is absent.",
+      "required_regression": "An out-of-range direct interval plus a valid normalized count interval is rejected before manifest production."
+    },
+    {
+      "id": "remaining-native-build-inputs",
+      "current_behavior": "Search-crate pyproject.toml and build.rs are not fingerprinted, while generated target manifests can enter the fingerprint.",
+      "expected_fix": "Hash checked build.rs and pyproject.toml inputs for both native trees, exclude target and repository metadata, and invalidate their mtimes without walking generated target files.",
+      "required_regression": "Changing a checked build script or maturin feature config changes the fingerprint; changing target/package metadata does not."
+    },
+    {
+      "id": "prediction-artifact-verification-language",
+      "current_behavior": "The c20 prediction artifact phrases future verification outcomes as completed facts.",
+      "expected_fix": "Prediction artifacts describe a verification plan; measured outcomes remain in PR evidence and reviewer reports.",
+      "required_regression": "No prediction artifact added in this wave pre-claims PASS."
+    }
+  ],
+  "verification_plan": {
+    "focused_tests": "Run all certification, checkpoint, build-stamp, provenance, and public-invariant tests.",
+    "build": "Perform a fresh two-consumer build because the fingerprint input set changes.",
+    "review": "Require a fresh independent adversarial PASS."
+  }
+}

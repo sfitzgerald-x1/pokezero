@@ -34,8 +34,12 @@ echo "[1/8] vendor patched poke-engine source"
 # A vendor rsync can preserve old mtimes, so force every vendored Rust input
 # newer before compiling the crate.
 echo "[2/8] invalidate Cargo source mtimes"
-find "$REPO/third_party/poke-engine-src" -type f -name '*.rs' -exec touch {} +
-find "$REPO/rust/pokezero-search/src" -type f -name '*.rs' -exec touch {} +
+find "$REPO/third_party/poke-engine-src" -path '*/target' -prune -o -type f \
+  \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock -o -name pyproject.toml \) \
+  -exec touch {} +
+find "$REPO/rust/pokezero-search" -path '*/target' -prune -o -type f \
+  \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock -o -name pyproject.toml \) \
+  -exec touch {} +
 
 echo "[3/8] rebuild and install Python poke_engine"
 "$REPO/scripts/setup_poke_engine.sh" "$PYTHON"

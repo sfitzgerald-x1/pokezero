@@ -37,7 +37,7 @@
   "registry": "validated against 34 protected bands; reservation engine-cert-sweep2-20260730 filed 2026-07-30 (registry and reservations live outside this repository)"
  },
  "execution": "identical to Z12: 8 x 1250 games; per-shard wheel REBUILD + in-shard behavioral probes (9/9 required per shard); --checkpoint retention; strict matcher; --repros-per-game 40 --keep-repro 1000; resume from per-game JSONL after retryable infrastructure failure",
- "readout": "DRAFT: scripts/cert_sweep_readout.py must fail closed on the final source/fingerprint/readout hashes, shard/probe markers, strict matcher, seed contract, coverage floor, engine errors, repro retention, family-rate registration, and zero-unattributed criterion.",
+ "readout": "DRAFT: scripts/cert_sweep_readout.py must fail closed on the final source/fingerprint/readout hashes, shard/probe markers, strict matcher, seed contract, coverage floor, engine errors, repro retention, family-rate registration, and zero-unattributed criterion. Wilson lower rates estimated from calibration are advisory; registered upper rates remain binding. A lower rate becomes binding only when a separately pre-registered prediction interval is supplied.",
  "acceptance_criterion": {
    "binding": "PASS only when the readout reports zero unattributed rows, zero engine errors, complete repro retention, and exactly 10,000 distinct games from the reserved sweep-2 bands.",
    "failure": "Any unattributed row, engine error, missing/duplicate seed, insufficient coverage, incomplete shard marker, mixed provenance, failed behavioral probe, unregistered or out-of-band attributed family, or truncated repro population is an honest FAIL. Report it; do not widen attribution after reading the run.",

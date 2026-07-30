@@ -1,0 +1,29 @@
+{
+  "scope": "Prediction-only artifact for the four independent certification-contract blockers reported against PR #982. Committed before implementation; no cluster state or private deployment data is represented.",
+  "source_commit_before_implementation": "a35f1e19ab4d63ff150115fab1bce04003a7b00e",
+  "predictions": {
+    "checkpoint_report_binding": {
+      "pre_fix": "A checkpoint record may report transition:diverged=1 or retain a repro while its paired shard report claims zero divergence and no repros; producer and readout can still accept the pair.",
+      "post_fix": "FAIL: producer and readout derive an exact checkpoint aggregate over completed-game counters and retained repro identity/content, then require it to agree with the paired report's counters, divergence scalar, retained repro population, and retention metadata. A stale or substituted zero report cannot suppress checkpoint evidence."
+    },
+    "global_seed_uniqueness": {
+      "pre_fix": "Two individually contiguous shard reports with one shared seed can be accepted because their distinct counts are summed rather than checked as a global seed union.",
+      "post_fix": "FAIL: every registered seed block must be positive, ordered, and non-overlapping, and observed shard bands must also be non-overlapping. The union cardinality must equal expected_games and the registered block total."
+    },
+    "compiled_cargo_inputs": {
+      "pre_fix": "Changing a compiled nested vendored Cargo.toml, including poke-engine-py/Cargo.toml, can leave the engine fingerprint and mtime input set unchanged.",
+      "post_fix": "Every Cargo.toml and Cargo.lock under the vendored poke-engine workspace plus the native pokezero-search manifests/locks is included in the content fingerprint and freshness input set. Editing any such manifest changes the fingerprint."
+    },
+    "final_contract_schema": {
+      "pre_fix": "A registered final contract can pass public producer schema validation while omitting fields the consumer later requires, so it is guaranteed to fail only after execution begins.",
+      "post_fix": "FAIL before manifest production: the public schema and shared validator require all consumer-mandatory execution gates, exact registered seed blocks, coverage floor, build/matcher/repro/probe requirements, rate tables, and complete launch registration. A valid producer fixture remains accepted by the readout."
+    }
+  },
+  "verification_plan": [
+    "Official producer/readout regression where checkpoint counters and repros disagree with a zero-valued paired report.",
+    "Readout regression for overlapping observed and registered seed bands.",
+    "Fingerprint regression that edits vendored poke-engine-py/Cargo.toml and observes a changed digest.",
+    "Schema/producer regressions for every consumer-mandatory final-contract field.",
+    "Focused Python 3.13 tests, relevant broader tests, full Rust suite if practical, JSON/compile/bash/diff checks."
+  ]
+}

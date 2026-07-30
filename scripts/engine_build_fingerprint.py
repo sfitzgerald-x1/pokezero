@@ -15,9 +15,11 @@ possible shape for a measurement that gates an acceptance criterion.
 Two independent checks, because they catch different halves:
 
   FINGERPRINT (content).  A sha256 over the shared patch list, every patch file
-  it names, and every `.rs` under rust/pokezero-search/src — i.e. all the build
-  inputs. The builders stamp it into the venv at build time; a mismatch means the
-  installed artifacts were built from different inputs than the ones checked out.
+  it names, crate Rust sources, Cargo.toml/Cargo.lock files, build.rs scripts,
+  and pyproject.toml feature configuration for both native trees — i.e. the
+  checked build inputs, excluding generated target output. The builders stamp
+  it into the venv at build time; a mismatch means the installed artifacts were
+  built from different inputs than the ones checked out.
   Exact, and independent of timestamps.
 
   The stamp must be written at the END of a FULL rebuild (wheel AND crate), which
@@ -53,6 +55,7 @@ VENDORED = REPO_ROOT / "third_party" / "poke-engine-src"
 # provenance-unknown state — the mapper changes, the fingerprint does not. Hit
 # in practice while landing the positional attributor.
 CRATE_SRC = REPO_ROOT / "rust" / "pokezero-search" / "src"
+CRATE_ROOT = REPO_ROOT / "rust" / "pokezero-search"
 STAMP_NAME = ".engine-build-fingerprint.json"
 STAMP_SCHEMA = "pokezero-engine-build/2"
 
@@ -88,6 +91,46 @@ def crate_sources() -> list[Path]:
     return sorted(CRATE_SRC.rglob("*.rs"))
 
 
+def cargo_inputs() -> list[Path]:
+    """Every Cargo manifest/lock compiled by either native consumer tree."""
+
+    return _checked_tree_inputs({"Cargo.toml", "Cargo.lock"})
+
+
+def build_metadata_inputs() -> list[Path]:
+    """Checked build scripts and Python/maturin feature configuration."""
+
+    return _checked_tree_inputs({"build.rs", "pyproject.toml"})
+
+
+def _checked_tree_inputs(names: set[str]) -> list[Path]:
+    """Find checked build inputs while excluding generated and repository metadata."""
+
+    paths: set[Path] = set()
+    for root in (VENDORED, CRATE_ROOT):
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if (
+                path.is_file()
+                and path.name in names
+                and not {".git", "target"}.intersection(path.relative_to(root).parts)
+            ):
+                paths.add(path)
+    return sorted(paths)
+
+
+def build_inputs() -> list[Path]:
+    """All checked source inputs that can change either installed consumer."""
+
+    return (
+        list(patch_files())
+        + crate_sources()
+        + cargo_inputs()
+        + build_metadata_inputs()
+    )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -107,11 +150,15 @@ def compute_fingerprint() -> dict[str, Any]:
         digest.update(path.name.encode())
         digest.update(hashlib.sha256(blob).digest())
         entries.append(path.name)
-    # Crate sources, hashed by repo-relative path so the digest is location
-    # independent.
+    # Native source and dependency-resolution inputs are hashed by repo-relative
+    # path so the digest is location independent. Vendored Cargo files appear
+    # only after setup, which is intentional: a certification build must attest
+    # the actual engine source tree it compiled.
     crate = crate_sources()
-    digest.update(b"--crate--")
-    for path in crate:
+    cargo = cargo_inputs()
+    build_metadata = build_metadata_inputs()
+    digest.update(b"--native-inputs--")
+    for path in crate + cargo + build_metadata:
         digest.update(str(path.relative_to(REPO_ROOT)).encode())
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return {
@@ -119,6 +166,10 @@ def compute_fingerprint() -> dict[str, Any]:
         "patches": entries,
         "count": len(entries),
         "crate_sources": len(crate),
+        "cargo_inputs": [str(path.relative_to(REPO_ROOT)) for path in cargo],
+        "build_metadata_inputs": [
+            str(path.relative_to(REPO_ROOT)) for path in build_metadata
+        ],
     }
 
 
@@ -272,7 +323,7 @@ def check(*, strict_mtime: bool = True) -> list[str]:
                 )
 
     if strict_mtime:
-        sources = list(patch_files()) + [PATCH_LIST] + crate_sources()
+        sources = [PATCH_LIST] + build_inputs()
         if VENDORED.exists():
             sources += list(VENDORED.rglob("*.rs"))
         newest_source = max((p.stat().st_mtime for p in sources if p.exists()), default=0.0)

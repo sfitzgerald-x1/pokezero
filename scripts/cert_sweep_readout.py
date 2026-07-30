@@ -44,7 +44,6 @@ import hashlib
 import json
 import math
 import re
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -55,12 +54,22 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import poke_engine  # noqa: E402
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 
 from engine_transition_differential import (  # noqa: E402
+    CHECKPOINT_SCHEMA,
+    checkpoint_report_binding_failures,
     _ROLL_SCALED_SOURCES,
     damage_components,
     legal_roll_damages,
     _split_components,
+)
+from cert_execution_manifest import (  # noqa: E402
+    EMITTABLE_DOCUMENTED_FAMILIES,
+    EMITTABLE_EXCLUSION_COUNTERS,
+    validate_execution_manifest_schema,
+    validate_final_contract_schema,
+    validate_predicted_class_rates,
 )
 
 _PCT_RE = re.compile(r"pct=([\d.]+)")
@@ -68,33 +77,6 @@ _PAIR_RE = re.compile(r"\('([^']*)',\s*(-?\d+)\)")
 _MISS_SIDE_RE = re.compile(r"\b(p[12])\s+(?:attributed|roll-scaled) components differ")
 _PROBE_PASS_RE = re.compile(r"^\[[^]]+\] PASS\b", re.MULTILINE)
 _PROBE_FAIL_RE = re.compile(r"^\[[^]]+\] FAIL\b", re.MULTILINE)
-
-# These are the only named, non-limit outcomes the classifier can emit.  A
-# final rate table may register a concrete ``limit:*`` outcome too, but may not
-# invent an unreachable label and then call its observed count zero.
-EMITTABLE_DOCUMENTED_FAMILIES = frozenset({
-    "I1_cap_state_shape",
-    "I2_matcher_accounting",
-    "I3_roll_inherited",
-    "I4_attribution_tie",
-    "I5_boundary_truncation",
-    "I6_sleeptalk_callee_union",
-    "LS_capped_lethal_shape",
-    "LS_confusion_fan",
-    "LS_crit_arm_pairing_echo",
-    "LS_structural_arm_echo",
-})
-EMITTABLE_EXCLUSION_COUNTERS = frozenset({
-    "absorb_through_protect_or_miss",
-    "incapacitated_arm_pricing",
-    "recharge_turn_residual_gap",
-    "recoil_vs_substitute_basis",
-    "same_turn_stat_event_gap",
-    "structural_component_count_without_supported_sibling",
-    "truant_loaf_phase_drift",
-    "unattributed_generic",
-})
-
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:
@@ -121,7 +103,7 @@ def _miss_pairs(miss: str) -> tuple[list[tuple[str, int]], list[tuple[str, int]]
 
 
 def _sibling_arm_carries_observed_components(
-    misses: Sequence[str], majority: str, observed: Sequence[tuple[str, int]]
+    misses: Sequence[str], anchor: str, observed: Sequence[tuple[str, int]]
 ) -> bool:
     """Whether a non-majority engine arm exactly reproduces the observed components.
 
@@ -132,14 +114,14 @@ def _sibling_arm_carries_observed_components(
     """
 
     observed_components = Counter(observed)
-    majority_side = _MISS_SIDE_RE.search(majority)
-    if not observed_components or majority_side is None:
+    anchor_side = _MISS_SIDE_RE.search(anchor)
+    if not observed_components or anchor_side is None:
         return False
     for miss in misses:
-        if miss == majority:
+        if miss == anchor:
             continue
         sibling_side = _MISS_SIDE_RE.search(miss)
-        if sibling_side is None or sibling_side.group(1) != majority_side.group(1):
+        if sibling_side is None or sibling_side.group(1) != anchor_side.group(1):
             continue
         _, sibling_engine_components = _miss_pairs(miss)
         if Counter(sibling_engine_components) == observed_components:
@@ -204,6 +186,50 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
                 "observed |cant| frz/fresh-slp outcome is not the engine "
                 "majority arm (WHAT-level candidate: arm pricing, WHY open)")
 
+    # These candidates must outrank I2 even when the matching branch has only
+    # minority mass. I2 explains branch-set accounting; it cannot explain a
+    # concrete engine behavior that a small branch exposes.
+    joined = " ".join(misses)
+    if re.search(r"ability(?:water|volt)absorb", joined):
+        engine_side_absorb = any(
+            re.search(r"ability(?:water|volt)absorb", miss.partition("engine")[2])
+            for miss in misses)
+        blocked_or_missed = ("Protect" in proto and "-activate" in proto) or \
+            "|-miss|" in proto or "[miss]" in proto
+        if engine_side_absorb and blocked_or_missed:
+            return ("UNATTRIBUTED",
+                    "engine-only absorb heal on a Protect-blocked or missed "
+                    "move (sweep NEW absorb mechanism; capped variant)")
+
+    if "|-boost|" in proto or "|-unboost|" in proto or "|-status|" in proto:
+        for miss in misses:
+            miss_obs, miss_eng = _miss_pairs(miss)
+            if len(miss_obs) == 1 and len(miss_eng) == 1 and miss_eng[0][1] != 0:
+                miss_ratio = abs(miss_obs[0][1]) / max(1, abs(miss_eng[0][1]))
+                if 0.70 <= miss_ratio <= 0.96:
+                    return ("UNATTRIBUTED",
+                            f"majority magnitude ratio {miss_ratio:.2f} on a same-turn "
+                            "boost/status boundary (WHAT-level candidate, WHY open)")
+
+    if cls == "roll_scaled_component":
+        for miss in misses:
+            miss_obs, miss_eng = _miss_pairs(miss)
+            if len(miss_obs) != len(miss_eng):
+                if _sibling_arm_carries_observed_components(misses, miss, miss_obs):
+                    return ("LS_structural_arm_echo",
+                            "component count differs against an engine arm, but a sibling "
+                            "engine arm exactly carries the observed components (branch-set accounting)")
+                return ("UNATTRIBUTED",
+                        "structural component-count mismatch without a sibling engine arm "
+                        "carrying the observed components (WHAT-level candidate, WHY open)")
+
+    known_class = cls in ("roll_scaled_component", "mapper_lossy", "no_usable_branch") or cls.startswith(
+        ("limit:", "component_missing_in_engine:", "component_extra_in_engine:",
+         "component_mismatch:", "component_magnitude:", "movepainsplit")
+    )
+    if not known_class:
+        return "UNATTRIBUTED", f"no documented signature matched (unknown class {cls})"
+
     # Best-branch echo: when the missing MASS is a small minority, the
     # engine's majority branch reproduced the observed transition and the
     # misses are sibling branches that are CORRECTLY different (a crit arm
@@ -230,24 +256,6 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     if "[from] Sleep Talk" in proto or any("sleeptalk" in str(m) for m in misses) \
             or cls in ("mapper_lossy", "no_usable_branch"):
         return "I6_sleeptalk_callee_union", "Sleep Talk callee boundary / lossy callee-union rendering"
-
-    # ABSORB-SHAPE EXCLUSION — ordered AHEAD of the I1 _to_full rule
-    # deliberately (#969 review): an absorb-ability heal that happens to CAP
-    # renders as `abilitywaterabsorb_to_full` and satisfied the I1 signature,
-    # hiding ~38 sweep rows of the NEW absorb mechanisms inside a documented
-    # family. The 103/103 validation could not catch this: c13 contains zero
-    # absorb rows, so the signature was never exercised there.
-    joined = " ".join(misses)
-    if re.search(r"ability(?:water|volt)absorb", joined):
-        engine_side_absorb = any(
-            re.search(r"ability(?:water|volt)absorb", miss.partition("engine")[2])
-            for miss in misses)
-        blocked_or_missed = ("Protect" in proto and "-activate" in proto) or \
-            "|-miss|" in proto or "[miss]" in proto
-        if engine_side_absorb and blocked_or_missed:
-            return ("UNATTRIBUTED",
-                    "engine-only absorb heal on a Protect-blocked or missed "
-                    "move (sweep NEW absorb mechanism; capped variant)")
 
     # I1: cap-state shape (_to_full on either side of the majority miss)
     if "_to_full" in majority:
@@ -332,33 +340,6 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
         return ("LS_crit_arm_pairing_echo",
                 "observed crit outcome paired against the non-crit majority "
                 "arm (branch-set accounting; the crit arm carries the shape)")
-
-    # Same-turn stat/status boundary with a sub-window magnitude ratio —
-    # WHAT-level candidate, surfaced not absorbed (validation: s2000261/31,
-    # ratio 0.87 after a same-turn Calm Mind).
-    if ratio is not None and 0.70 <= ratio <= 0.96 and (
-            "|-boost|" in proto or "|-unboost|" in proto or "|-status|" in proto):
-        return ("UNATTRIBUTED",
-                f"majority magnitude ratio {ratio:.2f} on a same-turn "
-                "boost/status boundary (WHAT-level candidate, WHY open)")
-
-    # Structural-arm echo — deliberately LAST before the fallback: the
-    # broadest rule, safe only because every narrower mechanism above has
-    # already had its chance (the absorb-ordering lesson). A component-count
-    # mismatch is only an echo when an actual sibling engine arm carries the
-    # full observed component multiset. The prior s2000561/67 citation was
-    # stale: its sibling arms do not carry the observed hit. The c14 archive
-    # re-run therefore treats unsupported structural shapes as named WHAT
-    # candidates rather than allowing this rule to absorb them.
-    if obs_c is not None and eng_c is not None and len(obs_c) != len(eng_c) \
-            and cls == "roll_scaled_component":
-        if _sibling_arm_carries_observed_components(misses, majority, obs_c):
-            return ("LS_structural_arm_echo",
-                    "component count differs against the majority arm, but a sibling "
-                    "engine arm exactly carries the observed components (branch-set accounting)")
-        return ("UNATTRIBUTED",
-                "structural component-count mismatch without a sibling engine arm "
-                "carrying the observed components (WHAT-level candidate, WHY open)")
 
     return "UNATTRIBUTED", f"no documented signature matched (class {cls}; majority: {majority[:120]})"
 
@@ -479,17 +460,29 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _non_overlapping_seed_total(
+    blocks: Sequence[Mapping[str, int]], *, label: str, failures: list[str]
+) -> int:
+    """Reject overlap before treating per-block counts as a global seed total."""
+
+    total = 0
+    previous_max: int | None = None
+    for block in sorted(blocks, key=lambda item: item["start"]):
+        start, games = block["start"], block["games"]
+        maximum = start + games - 1
+        if previous_max is not None and start <= previous_max:
+            failures.append(
+                f"{label} seed blocks overlap at {start}..{maximum} after {previous_max}"
+            )
+        total += games
+        previous_max = max(previous_max, maximum) if previous_max is not None else maximum
+    return total
+
+
 def _current_runtime_provenance() -> dict[str, Any]:
     """Evidence from the checkout executing this readout, not a contract field."""
 
-    try:
-        source_commit = subprocess.check_output(
-            ("git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"),
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip().lower()
-    except (OSError, subprocess.CalledProcessError):
-        source_commit = None
+    source_commit = public_repo_commit(REPO_ROOT)
     return {
         "source_commit": source_commit if _is_lower_hex(source_commit, 40) else None,
         "checkout": str(REPO_ROOT.resolve()),
@@ -499,15 +492,7 @@ def _current_runtime_provenance() -> dict[str, Any]:
 
 
 def _checkout_commit(path: Path) -> str | None:
-    try:
-        commit = subprocess.check_output(
-            ("git", "-C", str(path), "rev-parse", "HEAD"),
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip().lower()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return commit if _is_lower_hex(commit, 40) else None
+    return public_repo_commit(path)
 
 
 def _file_evidence(
@@ -580,12 +565,17 @@ def _checkpoint_provenance(
     required_fingerprint: str,
     required_image: str,
     expected_seed_range: tuple[int, int],
+    expected_records: int,
+    expected_distinct_seeds: int,
+    report: Mapping[str, Any],
 ) -> None:
     evidence = _file_evidence(value, label=label, failures=failures)
     if evidence is None:
         return
     path = Path(str(evidence["path"]))
     records = 0
+    seeds: set[int] = set()
+    checkpoint_rows: list[Mapping[str, Any]] = []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -602,9 +592,19 @@ def _checkpoint_provenance(
         if not isinstance(record, Mapping):
             failures.append(f"{label} has a non-object record {number}")
             continue
+        if record.get("schema") != CHECKPOINT_SCHEMA:
+            failures.append(
+                f"{label} record {number} does not use checkpoint schema {CHECKPOINT_SCHEMA}"
+            )
+            continue
+        checkpoint_rows.append(record)
         seed = _strict_int(record.get("seed"))
         if seed is None or not expected_seed_range[0] <= seed <= expected_seed_range[1]:
             failures.append(f"{label} record {number} has a seed outside its shard band")
+        elif seed in seeds:
+            failures.append(f"{label} contains duplicate checkpoint seed {seed}")
+        else:
+            seeds.add(seed)
         provenance = record.get("provenance")
         if not isinstance(provenance, Mapping):
             failures.append(f"{label} record {number} has no resume provenance")
@@ -617,6 +617,17 @@ def _checkpoint_provenance(
         records += 1
     if records == 0:
         failures.append(f"{label} contains no completed-game records")
+    if records != expected_records:
+        failures.append(
+            f"{label} has {records} checkpoint records, expected {expected_records} for its shard"
+        )
+    if len(seeds) != expected_distinct_seeds:
+        failures.append(
+            f"{label} has {len(seeds)} distinct checkpoint seeds, expected "
+            f"{expected_distinct_seeds} for its shard"
+        )
+    for failure in checkpoint_report_binding_failures(checkpoint_rows, report):
+        failures.append(f"{label}: {failure}")
 
 
 def _contract_gates(
@@ -635,12 +646,17 @@ def _contract_gates(
 
     gates = contract.get("certification_gates")
     registered = contract.get("registered_before_launch") is True
-    final = registered or contract.get("requires_execution_contract") is True or isinstance(gates, Mapping)
+    final = (
+        registered
+        or contract.get("requires_execution_contract") is True
+        or "certification_gates" in contract
+    )
     explicit_legacy = (
         legacy_opt_out
         and contract.get("legacy_contract_opt_out") is True
         and not registered
         and contract.get("requires_execution_contract") is not True
+        and "certification_gates" not in contract
     )
     if not isinstance(gates, Mapping):
         if explicit_legacy:
@@ -657,6 +673,8 @@ def _contract_gates(
 
     failures: list[str] = []
     evidence: dict[str, Any] = {"enforced": True, "enforcement_status": "enforced"}
+    for error in validate_final_contract_schema(contract):
+        failures.append(f"final contract schema violation: {error}")
     if not registered:
         failures.append("contract was not registered before launch")
     if contract.get("requires_execution_contract") is not True:
@@ -696,6 +714,17 @@ def _contract_gates(
                 continue
             expected_blocks.append({"start": start, "games": games})
     expected_blocks.sort(key=lambda block: block["start"])
+    expected_seed_total = _non_overlapping_seed_total(
+        expected_blocks, label="registered", failures=failures
+    )
+    if len(expected_blocks) != expected_shards:
+        failures.append(
+            f"registered seed blocks contain {len(expected_blocks)} blocks, expected {expected_shards}"
+        )
+    if expected_seed_total != expected_games:
+        failures.append(
+            f"registered seed blocks contain {expected_seed_total} games, expected {expected_games}"
+        )
     if len(paths) != expected_shards:
         failures.append(f"expected {expected_shards} shard reports, found {len(paths)}")
     if aggregate.get("games") != expected_games:
@@ -713,6 +742,7 @@ def _contract_gates(
         failures.append("required_keep_repro must be a non-negative integer")
 
     actual_blocks: list[dict[str, int]] = []
+    actual_shards: dict[int, tuple[Path, Mapping[str, Any], dict[str, int]]] = {}
     distinct_seed_total = 0
     for path, shard in zip(paths, shards):
         seeds = shard.get("seeds") if isinstance(shard, Mapping) else None
@@ -729,7 +759,10 @@ def _contract_gates(
         assert start is not None and games is not None and maximum is not None and distinct is not None
         block = {"start": start, "games": games, "max": maximum, "distinct": distinct}
         actual_blocks.append(block)
-        distinct_seed_total += max(0, distinct)
+        if start in actual_shards:
+            failures.append(f"{path.name}: repeats shard seed start {start}")
+        else:
+            actual_shards[start] = (path, shard, block)
         if games <= 0:
             failures.append(f"{path.name}: non-positive game count")
         expected_max = start + games - 1
@@ -758,6 +791,9 @@ def _contract_gates(
         ({"start": block["start"], "games": block["games"]} for block in actual_blocks),
         key=lambda block: block["start"],
     )
+    distinct_seed_total = _non_overlapping_seed_total(
+        normalized_actual_blocks, label="observed", failures=failures
+    )
     if normalized_actual_blocks != expected_blocks:
         failures.append("observed seed blocks do not exactly match the registered blocks")
     if distinct_seed_total != expected_games:
@@ -767,12 +803,14 @@ def _contract_gates(
     required_fingerprint = gates.get("required_engine_fingerprint")
     required_readout_sha = gates.get("required_readout_sha256")
     required_image = gates.get("required_image_commit")
+    required_producer_sha = gates.get("required_execution_manifest_producer_sha256")
     required_probe_passes = _strict_int(gates.get("required_behavioral_probe_passes"))
     for field, value, length in (
         ("required_source_commit", required_source, 40),
         ("required_engine_fingerprint", required_fingerprint, 64),
         ("required_readout_sha256", required_readout_sha, 64),
         ("required_image_commit", required_image, 40),
+        ("required_execution_manifest_producer_sha256", required_producer_sha, 64),
     ):
         if not _is_lower_hex(value, length):
             failures.append(f"{field} is not a valid lowercase hash")
@@ -790,7 +828,10 @@ def _contract_gates(
     if not isinstance(launch_registration, Mapping):
         failures.append("contract has no launch_registration provenance")
     else:
-        if launch_registration.get("fresh_measurements_inspected_before_registration") != 0:
+        fresh_measurements = launch_registration.get(
+            "fresh_measurements_inspected_before_registration"
+        )
+        if type(fresh_measurements) is not int or fresh_measurements != 0:
             failures.append("contract does not prove zero fresh measurements inspected before registration")
         if launch_registration.get("coordinator_go") is not True:
             failures.append("contract has no explicit coordinator go")
@@ -814,11 +855,13 @@ def _contract_gates(
     if execution_manifest.get("schema") != "engine-cert-execution-manifest/2":
         failures.append("execution manifest schema is not engine-cert-execution-manifest/2")
         return failures, evidence
+    for error in validate_execution_manifest_schema(execution_manifest):
+        failures.append(f"execution manifest schema violation: {error}")
 
     producer = _file_evidence(
         execution_manifest.get("producer"), label="execution manifest producer",
         failures=failures,
-        required_sha256=_sha256(REPO_ROOT / "scripts" / "cert_execution_manifest.py"),
+        required_sha256=required_producer_sha if isinstance(required_producer_sha, str) else None,
     )
     if producer is not None and Path(str(producer["path"])).resolve() != (
             REPO_ROOT / "scripts" / "cert_execution_manifest.py").resolve():
@@ -902,10 +945,11 @@ def _contract_gates(
             f"execution manifest contains {len(manifest_by_seed_start)} unique shard entries, "
             f"expected {expected_shards}"
         )
-    actual_seed_starts = {block["start"] for block in actual_blocks}
+    actual_seed_starts = set(actual_shards)
     if set(manifest_by_seed_start) != actual_seed_starts:
         failures.append("execution manifest seed-start set does not match supplied shard reports")
-    for path, block in zip(paths, actual_blocks):
+    for seed_start in sorted(actual_shards):
+        path, shard, block = actual_shards[seed_start]
         entry = manifest_by_seed_start.get(block["start"])
         if entry is None:
             continue
@@ -928,7 +972,19 @@ def _contract_gates(
             required_source=str(required_source), required_fingerprint=str(required_fingerprint),
             required_image=str(required_image),
             expected_seed_range=(block["start"], block["max"]),
+            expected_records=block["games"], expected_distinct_seeds=block["distinct"],
+            report=shard,
         )
+        report_provenance = shard.get("checkpoint_provenance")
+        if not isinstance(report_provenance, Mapping):
+            failures.append(f"{path.name}: missing checkpoint_provenance")
+        elif report_provenance.get("complete") is not True:
+            failures.append(f"{path.name}: checkpoint_provenance is not complete")
+        elif _strict_int(report_provenance.get("records_with_provenance")) != block["games"]:
+            failures.append(
+                f"{path.name}: checkpoint_provenance records_with_provenance "
+                "does not match games"
+            )
     return failures, evidence
 
 
@@ -939,10 +995,21 @@ def _family_rate_gates(
     boundaries_measured: int,
     exclusion_counts: Mapping[str, int] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """Enforce every registered family interval and emitted zero counter."""
+    """Bind registered upper rates and predicted-zero counters.
+
+    Wilson lower bounds estimated from the calibration corpus are descriptive,
+    not a prediction that a fresh corpus must reproduce at the same minimum
+    rate. A separately declared ``prediction_interval_rate`` is the opt-in
+    route for a genuinely pre-registered two-sided prediction interval.
+    """
 
     if not isinstance(contract.get("certification_gates"), Mapping):
-        return [], {"enforced": False, "enforcement_status": "legacy-opt-out"}
+        status = (
+            "refused-final-contract"
+            if "certification_gates" in contract
+            else "legacy-opt-out"
+        )
+        return [], {"enforced": False, "enforcement_status": status}
     table = contract.get("pre_registered_family_rate_table")
     failures: list[str] = []
     evidence: dict[str, Any] = {"enforced": True, "families": {}}
@@ -971,11 +1038,7 @@ def _family_rate_gates(
             failures.append(f"registered family {family!r} has no prediction object")
             continue
         rate_interval = prediction.get("wilson95_rate")
-        if not (
-            isinstance(rate_interval, list)
-            and len(rate_interval) == 2
-            and all(_finite_number(value) is not None for value in rate_interval)
-        ):
+        if rate_interval is None:
             count_interval = prediction.get("wilson95")
             if (
                 isinstance(count_interval, list)
@@ -987,6 +1050,15 @@ def _family_rate_gates(
                     float(count_interval[0]) / calibration_boundaries,
                     float(count_interval[1]) / calibration_boundaries,
                 ]
+        elif not (
+            isinstance(rate_interval, list)
+            and len(rate_interval) == 2
+            and all(_finite_number(value) is not None for value in rate_interval)
+        ):
+            failures.append(
+                f"registered family {family!r} has an invalid wilson95_rate interval"
+            )
+            continue
         if not (
             isinstance(rate_interval, list)
             and len(rate_interval) == 2
@@ -1004,6 +1076,16 @@ def _family_rate_gates(
             )
             continue
         lower_rate, upper_rate = float(rate_interval[0]), float(rate_interval[1])
+        prediction_interval = prediction.get("prediction_interval_rate")
+        has_prediction_interval = (
+            isinstance(prediction_interval, list)
+            and len(prediction_interval) == 2
+            and all(_finite_number(value) is not None for value in prediction_interval)
+            and 0.0 <= float(prediction_interval[0]) <= float(prediction_interval[1]) <= 1.0
+        )
+        if prediction_interval is not None and not has_prediction_interval:
+            failures.append(f"registered family {family!r} has an invalid prediction interval")
+            continue
         count = _strict_int(family_counts.get(family, 0))
         if count is None or count < 0:
             failures.append(f"family {family!r} has a malformed observed count")
@@ -1013,13 +1095,19 @@ def _family_rate_gates(
             "observed": int(count),
             "observed_rate_per_measured_boundary": observed_rate,
             "registered_wilson95_rate": rate_interval,
-            "lower_rate_enforced": lower_rate,
+            "lower_rate_advisory": lower_rate,
             "upper_rate_enforced": upper_rate,
+            "prediction_interval_rate": prediction_interval if has_prediction_interval else None,
         }
-        if observed_rate < lower_rate:
+        if has_prediction_interval and observed_rate < float(prediction_interval[0]):
             failures.append(
                 f"registered family {family!r} rate {observed_rate:.8g} is below "
-                f"registered lower rate {lower_rate:.8g}"
+                f"pre-registered prediction lower rate {float(prediction_interval[0]):.8g}"
+            )
+        if has_prediction_interval and observed_rate > float(prediction_interval[1]):
+            failures.append(
+                f"registered family {family!r} rate {observed_rate:.8g} exceeds "
+                f"pre-registered prediction upper rate {float(prediction_interval[1]):.8g}"
             )
         if observed_rate > upper_rate:
             failures.append(
@@ -1149,9 +1237,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         shard = loaded
         shards.append(shard)
         for k in agg:
-            value = _strict_int(shard.get(k, 0))
+            value = _strict_int(shard.get(k))
             if value is None or value < 0:
-                input_failures.append(f"{Path(p).name}: {k} must be a non-negative integer")
+                input_failures.append(
+                    f"{Path(p).name}: missing or malformed aggregate scalar {k!r}"
+                )
                 continue
             agg[k] += value
         counters = shard.get("counters")
@@ -1225,7 +1315,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_manifest = candidate
             else:
                 input_failures.append("execution manifest root is not an object")
-    pred_classes = pred.get("predicted_class_rates_10k") or {}
+    predicted_classes_value = pred.get("predicted_class_rates_10k")
+    for error in validate_predicted_class_rates(predicted_classes_value):
+        input_failures.append(error)
+    pred_classes = predicted_classes_value or {}
     if not isinstance(pred_classes, Mapping):
         input_failures.append("predicted_class_rates_10k is not an object")
         pred_classes = {}

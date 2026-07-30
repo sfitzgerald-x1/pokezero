@@ -1,0 +1,19 @@
+{
+  "scope": "Additional independent Opus 5 cross-repo findings added after c17_cert_contract_opus5_followup_prediction.json was committed. This artifact is committed before implementing these newly scoped changes.",
+  "predictions": {
+    "no_git_provenance": {
+      "producer": "A producer run from an image without .git succeeds only when pokezero.audit_provenance.public_repo_commit or an explicit injected public commit resolves to a valid SHA; it fails closed when neither source is available.",
+      "readout": "Runtime and checkout provenance use the same public commit resolver; a resolved commit that differs from the final contract remains a gate failure.",
+      "test": "Mocking raw git failure while injecting a valid public commit permits valid producer/readout provenance; no injected commit produces an explicit failure."
+    },
+    "final_contract_schema": {
+      "producer": "The bounded v2 manifest producer rejects a final contract missing or malformed requires_execution_contract, required_image_commit, rate tables, predicted class rates, or a producer-script hash when the contract declares one.",
+      "consumer": "The readout validates the same final-contract field set and rejects a manifest whose producer hash differs from the contract's declared producer hash.",
+      "agreement": "A valid final-contract fixture passes both producer-side and readout-side validation without introducing private-only fields."
+    }
+  },
+  "non_goals": [
+    "No private deployment metadata or family-table format is added to the public schema.",
+    "No existing zero-unattributed, predicted-zero, or upper-rate gate is weakened."
+  ]
+}
