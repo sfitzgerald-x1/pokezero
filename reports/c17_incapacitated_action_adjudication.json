@@ -1,0 +1,385 @@
+{
+  "artifact": "c17_incapacitated_action_adjudication/v1",
+  "status": "complete_evidence_only",
+  "date": "2026-07-30",
+  "scope": {
+    "archive": "<local-evidence-archive>/cert-sweep-20260730",
+    "readout": "reports/c14_cert_sweep_readout.json",
+    "prediction": "reports/c17_incapacitated_action_prediction.json",
+    "related_prior_prediction": "reports/c15_hiddenpower_thaw_prediction.json",
+    "rows": [
+      [2200051, 80],
+      [2500224, 70],
+      [2600627, 47],
+      [2700702, 38],
+      [2701204, 52],
+      [2700752, 65]
+    ]
+  },
+  "build_evidence": {
+    "native_engine_fingerprint": "0fd05522647f5af2670bd32630a5d994111d2758fef5f15b5e693bcd4fda3a10",
+    "native_engine_patch_count": 45,
+    "freshness_check": "current",
+    "replay_method": "Retained engine_state replayed with the native Rust instruction generator; controlled state-only counterfactuals are evidence, not production changes."
+  },
+  "prediction_outcome": {
+    "H1_fresh_incapacitation_action_order": "falsified: no row has an engine branch that first applies the observed fresh incapacitation and then incorrectly lets that newly incapacitated Pokemon act. The five sleep rows suppress the fresh status altogether; the freeze row suppresses freeze altogether.",
+    "H2_no_typed_hiddenpower_thaw_conflation": "confirmed: the five status moves are Sleep Powder or Hypnosis, and the freeze move is Ice Beam. No typed Hidden Power Fire thaw is involved.",
+    "H3_no_rest_provenance_conflation": "falsified for the five sleep rows and not applicable to the freeze row. Each sleep row retains a benched asleep Rest/Sleep Talk set with an impossible-or-unrepresented zero Rest counter, which activates the engine Sleep Clause incorrectly."
+  },
+  "rows": [
+    {
+      "identity": [2200051, 80],
+      "observed_protocol": [
+        "p2 Venomoth uses Sleep Powder on p1 Altaria",
+        "Altaria receives slp",
+        "Altaria emits |cant| slp and does not use Dragon Claw"
+      ],
+      "action_order_evidence": {
+        "first": "p2 Venomoth / Sleep Powder / speed 206",
+        "second": "p1 Altaria / Dragon Claw / speed 185",
+        "selected_choices": {"p1": "dragonclaw", "p2": "sleeppowder"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "benched_sleeper": "p1 Azumarill, Rest + Sleep Talk, SLEEP/rest_turns=0/sleep_turns=0",
+        "fresh_sleep_branch": "absent",
+        "branch_population": [
+          {
+            "mass_percent": 93.75,
+            "instructions": ["Damage SideTwo: 75", "Heal SideTwo: 16", "Heal SideOne: 16"]
+          },
+          {
+            "mass_percent": 6.25,
+            "instructions": ["Damage SideTwo: 152", "Heal SideTwo: 16", "Heal SideOne: 16"]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "first serialized SLEEP,0,0 -> SLEEP,3,0 (Azumarill only)",
+        "branch_count": 3,
+        "fresh_sleep_branch": {
+          "mass_percent": 75.0,
+          "instructions": [
+            "ChangeStatus SideOne-P5: NONE -> SLEEP",
+            "SetSleepTurns SideOne-P5: 0 -> 1",
+            "Heal SideOne: 16"
+          ]
+        },
+        "selected_move_damage_absent": true
+      },
+      "why": "The stale zero Rest counter makes has_alive_non_rested_sleeping_pkmn() true, so the Rust Sleep Clause rejects the real opposing Sleep Powder. This is not a post-status action-order defect.",
+      "route": "fix_already_landed_rest_provenance",
+      "follow_up": "PR #975's bench-Rest provenance repair is the production remedy. A current full-game replay of seed 2200051 reaches step 80 without retaining this divergence; do not use the pre-fix archive state as a current-engine regression assertion."
+    },
+    {
+      "identity": [2500224, 70],
+      "observed_protocol": [
+        "p2 Butterfree uses Sleep Powder on p1 Beautifly",
+        "Beautifly receives slp",
+        "Beautifly emits |cant| slp and does not use Hidden Power Fire"
+      ],
+      "action_order_evidence": {
+        "first": "p2 Butterfree / Sleep Powder / speed 191",
+        "second": "p1 Beautifly / Hidden Power Fire / speed 186",
+        "selected_choices": {"p1": "hiddenpowerfire70", "p2": "sleeppowder"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "benched_sleeper": "p1 Walrein, Rest + Sleep Talk, SLEEP/rest_turns=0/sleep_turns=0",
+        "fresh_sleep_branch": "absent",
+        "branch_population": [
+          {
+            "mass_percent": 93.75,
+            "instructions": ["Damage SideTwo: 125", "Heal SideTwo: 17", "Heal SideOne: 17"]
+          },
+          {
+            "mass_percent": 6.25,
+            "instructions": ["Damage SideTwo: 165", "ToggleSideTwoForceSwitch"]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "first serialized SLEEP,0,0 -> SLEEP,3,0 (Walrein only)",
+        "branch_count": 3,
+        "fresh_sleep_branch": {
+          "mass_percent": 97.5,
+          "instructions": [
+            "ChangeStatus SideOne-P1: NONE -> SLEEP",
+            "SetSleepTurns SideOne-P1: 0 -> 1",
+            "Heal SideTwo: 17",
+            "Heal SideOne: 17"
+          ]
+        },
+        "selected_move_damage_absent": true
+      },
+      "why": "The same stale benched-Rest counter creates a false Sleep Clause block. The observed result is recovered without changing move order or Hidden Power behavior.",
+      "route": "fix_already_landed_rest_provenance",
+      "follow_up": "PR #975 is the remedy; a current full-game replay of seed 2500224 reaches step 70 without retaining this divergence."
+    },
+    {
+      "identity": [2600627, 47],
+      "observed_protocol": [
+        "p2 Lunatone uses Hypnosis on p1 Ursaring",
+        "Ursaring receives slp",
+        "Ursaring emits |cant| slp and does not use Return"
+      ],
+      "action_order_evidence": {
+        "first": "p2 Lunatone / Hypnosis / speed 166",
+        "second": "p1 Ursaring / Return / speed 136",
+        "selected_choices": {"p1": "return", "p2": "hypnosis"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "benched_sleeper": "p1 Wailord, Rest + Sleep Talk, SLEEP/rest_turns=0/sleep_turns=0",
+        "fresh_sleep_branch": "absent",
+        "branch_population": [
+          {
+            "mass_percent": 93.75,
+            "instructions": ["Damage SideTwo: 79", "Heal SideTwo: 15"]
+          },
+          {
+            "mass_percent": 6.25,
+            "instructions": ["Damage SideTwo: 120", "ToggleSideTwoForceSwitch"]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "first serialized SLEEP,0,0 -> SLEEP,3,0 (Wailord only)",
+        "branch_count": 3,
+        "fresh_sleep_branch": {
+          "mass_percent": 60.000004,
+          "instructions": [
+            "ChangeStatus SideOne-P1: NONE -> SLEEP",
+            "SetSleepTurns SideOne-P1: 0 -> 1",
+            "Heal SideTwo: 15"
+          ]
+        },
+        "selected_move_damage_absent": true
+      },
+      "why": "The retained benched Rest sleeper is priced as non-Rest and falsely consumes the Sleep Clause. The opposite-side sleeping Suicune already has rest_turns=3 and is not the cause.",
+      "route": "fix_already_landed_rest_provenance",
+      "follow_up": "PR #975 is the remedy; a current full-game replay of seed 2600627 reaches step 47 without retaining this divergence."
+    },
+    {
+      "identity": [2700702, 38],
+      "observed_protocol": [
+        "p1 Butterfree uses Sleep Powder on p2 Swalot",
+        "Swalot receives slp",
+        "Swalot emits |cant| slp and does not use Sludge Bomb"
+      ],
+      "action_order_evidence": {
+        "first": "p1 Butterfree / Sleep Powder / speed 190",
+        "second": "p2 Swalot / Sludge Bomb / speed 145",
+        "selected_choices": {"p1": "sleeppowder", "p2": "sludgebomb"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "benched_sleeper": "p2 Registeel, Rest + Sleep Talk, SLEEP/rest_turns=0/sleep_turns=0",
+        "fresh_sleep_branch": "absent",
+        "branch_population": [
+          {
+            "mass_percent": 65.625,
+            "instructions": ["Damage SideOne: 106", "Heal SideOne: 17"]
+          },
+          {
+            "mass_percent": 28.125002,
+            "instructions": [
+              "Damage SideOne: 106",
+              "ChangeStatus SideOne-P2: NONE -> POISON",
+              "Heal SideOne: 17",
+              "Damage SideOne: 34"
+            ]
+          },
+          {
+            "mass_percent": 4.375,
+            "instructions": ["Damage SideOne: 213", "Heal SideOne: 17"]
+          },
+          {
+            "mass_percent": 1.875,
+            "instructions": [
+              "Damage SideOne: 213",
+              "ChangeStatus SideOne-P2: NONE -> POISON",
+              "Heal SideOne: 17",
+              "Damage SideOne: 19"
+            ]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "first serialized SLEEP,0,0 -> SLEEP,3,0 (Registeel only)",
+        "branch_count": 5,
+        "fresh_sleep_branch": {
+          "mass_percent": 97.5,
+          "instructions": [
+            "ChangeStatus SideTwo-P0: NONE -> SLEEP",
+            "SetSleepTurns SideTwo-P0: 0 -> 1",
+            "Heal SideOne: 17"
+          ]
+        },
+        "selected_move_damage_absent": true
+      },
+      "why": "The pre-existing poison-secondary branches are unrelated. The observed fresh sleep is excluded only because the retained opponent Rest sleeper is incorrectly non-Rest for Sleep Clause purposes.",
+      "route": "fix_already_landed_rest_provenance",
+      "follow_up": "PR #975 is the remedy; a current full-game replay of seed 2700702 reaches step 38 without retaining this divergence."
+    },
+    {
+      "identity": [2701204, 52],
+      "observed_protocol": [
+        "p2 Bellossom uses Sleep Powder on p1 Exeggutor",
+        "Exeggutor receives slp",
+        "Exeggutor emits |cant| slp and does not use Hidden Power Fire"
+      ],
+      "action_order_evidence": {
+        "first": "p2 Bellossom / Sleep Powder / speed 146",
+        "second": "p1 Exeggutor / Hidden Power Fire / speed 138",
+        "selected_choices": {"p1": "hiddenpowerfire70", "p2": "sleeppowder"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "benched_sleeper": "p1 Hariyama, Rest + Sleep Talk, SLEEP/rest_turns=0/sleep_turns=0",
+        "fresh_sleep_branch": "absent",
+        "branch_population": [
+          {
+            "mass_percent": 93.75,
+            "instructions": [
+              "Damage SideTwo: 49",
+              "ChangeDamageDealtDamage SideOne: 49",
+              "Heal SideTwo: 18",
+              "Heal SideOne: 18"
+            ]
+          },
+          {
+            "mass_percent": 6.25,
+            "instructions": [
+              "Damage SideTwo: 99",
+              "ChangeDamageDealtDamage SideOne: 99",
+              "Heal SideTwo: 18",
+              "Heal SideOne: 18"
+            ]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "first serialized SLEEP,0,0 -> SLEEP,3,0 (Hariyama only)",
+        "branch_count": 3,
+        "fresh_sleep_branch": {
+          "mass_percent": 75.0,
+          "instructions": [
+            "ChangeStatus SideOne-P2: NONE -> SLEEP",
+            "SetSleepTurns SideOne-P2: 0 -> 1",
+            "Heal SideTwo: 18",
+            "Heal SideOne: 18"
+          ]
+        },
+        "selected_move_damage_absent": true
+      },
+      "why": "The stale benched-Rest counter, not typed Hidden Power behavior, creates the false Sleep Clause result.",
+      "route": "fix_already_landed_rest_provenance",
+      "follow_up": "PR #975 is the remedy; a current full-game replay of seed 2701204 reaches step 52 without retaining this divergence."
+    },
+    {
+      "identity": [2700752, 65],
+      "observed_protocol": [
+        "p2 Seaking uses Ice Beam on p1 Kecleon",
+        "Kecleon receives frz before Color Change",
+        "Kecleon emits |cant| frz and does not use Brick Break"
+      ],
+      "action_order_evidence": {
+        "first": "p2 Seaking / Ice Beam / speed 174",
+        "second": "p1 Kecleon / Brick Break / speed 126",
+        "selected_choices": {"p1": "brickbreak", "p2": "icebeam"}
+      },
+      "retained_engine_replay": {
+        "candidate_states": 1,
+        "active_target": "p1 Kecleon, Normal, Color Change, no status",
+        "fresh_freeze_branch": "absent from all four Ice Beam damage branches",
+        "branch_population": [
+          {
+            "mass_percent": 87.890625,
+            "instructions": [
+              "Damage SideOne: 42",
+              "ChangeType SideOne: (NORMAL, TYPELESS) -> (ICE, TYPELESS)",
+              "Damage SideTwo: 69",
+              "DecrementWeatherTurnsRemaining",
+              "Heal SideOne: 16"
+            ]
+          },
+          {
+            "mass_percent": 5.859375,
+            "instructions": [
+              "Damage SideOne: 42",
+              "ChangeType SideOne: (NORMAL, TYPELESS) -> (ICE, TYPELESS)",
+              "Damage SideTwo: 138",
+              "DecrementWeatherTurnsRemaining",
+              "Boost SideTwo SpecialAttack: 1",
+              "ChangeItem SideTwo: PETAYABERRY -> NONE",
+              "Heal SideOne: 16"
+            ]
+          },
+          {
+            "mass_percent": 5.859375,
+            "instructions": [
+              "Damage SideOne: 85",
+              "ChangeType SideOne: (NORMAL, TYPELESS) -> (ICE, TYPELESS)",
+              "Damage SideTwo: 69",
+              "DecrementWeatherTurnsRemaining",
+              "Heal SideOne: 16"
+            ]
+          },
+          {
+            "mass_percent": 0.390625,
+            "instructions": [
+              "Damage SideOne: 85",
+              "ChangeType SideOne: (NORMAL, TYPELESS) -> (ICE, TYPELESS)",
+              "Damage SideTwo: 138",
+              "DecrementWeatherTurnsRemaining",
+              "Boost SideTwo SpecialAttack: 1",
+              "ChangeItem SideTwo: PETAYABERRY -> NONE",
+              "Heal SideOne: 16"
+            ]
+          }
+        ]
+      },
+      "controlled_counterfactual": {
+        "mutation": "active Kecleon COLORCHANGE,COLORCHANGE -> NONE,NONE",
+        "branch_count": 10,
+        "fresh_freeze_total_mass_percent": 10.0,
+        "representative_no-action_branch": {
+          "mass_percent": 7.5,
+          "instructions": [
+            "Damage SideOne: 42",
+            "ChangeStatus SideOne-P2: NONE -> FREEZE",
+            "DecrementWeatherTurnsRemaining",
+            "Heal SideOne: 16"
+          ]
+        },
+        "selected_move_damage_absent": true,
+        "coverage_note": "All six freeze branches were replayed; four thaw-and-act sub-branches account for the remaining 2.5% and do not falsify the freeze-before-action mechanism."
+      },
+      "why": "gen3/abilities.rs applies Color Change in ability_after_damage_hit before gen3/generate_instructions.rs applies move secondaries. The later freeze status check sees the target as Ice-type and rejects freeze. Showdown's retained protocol applies Ice Beam freeze before Color Change, so the target must be allowed to freeze before its type changes.",
+      "route": "engine_fix_required",
+      "follow_up": "Move the relevant Color Change state effect after opponent status secondaries, or otherwise preserve the pre-Color-Change type for the same-hit secondary immunity check. Add a focused Gen 3 Ice Beam -> Color Change freeze-order regression before changing defaults."
+    }
+  ],
+  "conclusion": {
+    "routed_rows": 6,
+    "new_engine_fixes_required": [[2700752, 65]],
+    "already_landed_fix_rows": [[2200051, 80], [2500224, 70], [2600627, 47], [2700702, 38], [2701204, 52]],
+    "documented_comparison_limits": [],
+    "unresolved_rows": [],
+    "honesty_boundary": "The five sleep conclusions establish why the retained pre-#975 snapshots diverge and the one-game current replays confirm that their named retained boundaries no longer diverge. This is targeted verification, not a fresh certification-sweep aggregate claim. The freeze conclusion is a current Rust instruction-order defect demonstrated on the current 45-patch native build."
+  },
+  "verification": {
+    "retained_rows_replayed": "6/6",
+    "retained_branch_populations_embedded": "6/6 rows include every candidate branch mass and instruction sequence from the retained state",
+    "selected_action_order_embedded": "6/6 rows include both active speeds, selected choices, and the resulting move order",
+    "sleep_counterfactuals": "5/5 restore an observed fresh-status branch when only the benched Rest counter is corrected",
+    "color_change_counterfactual": "1/1 restores Ice Beam freeze branches when only Color Change is removed",
+    "current_full_game_replays": "5/5 historical sleep seeds reach their named boundary without retaining the former fresh-status divergence after the merged Rest-provenance repair",
+    "production_changes": "none",
+    "matcher_changes": "none",
+    "resweep_spec_changes": "none",
+    "docs_ledger_changes": "none"
+  }
+}
