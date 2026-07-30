@@ -752,7 +752,7 @@ def ability_present(g, gp, seat, abilities, activation_key, require_exact=False)
     return False if require_exact else gp.ev[seat][activation_key] > 0
 
 
-def extract(files, lineage=None, milestone=None):
+def extract(files, lineage=None, milestone=None, measure_seat="bot"):
     manifest = None
     seats_behavioral = None
     games = []
@@ -771,8 +771,16 @@ def extract(files, lineage=None, milestone=None):
             skipped += 1
             print(f"WARN: skipped rest of {path} ({type(e).__name__})", file=sys.stderr)
     opponent = (manifest or {}).get("opponent", "self")
-    # in self-play both seats are the bot; in foulplay only p1 (bot) is behavioral
+    # in self-play both seats are the bot; in foulplay only p1 (bot) is behavioral.
+    # measure_seat="opponent" flips that to p2 — i.e. profile FOUL-PLAY's own play from the same
+    # stored games. The omniscient protocol already contains both seats, so this needs no re-run;
+    # it yields the search bot's trait profile as a contrast line for the bot's own trajectory.
     behav_seats = ("p1", "p2") if opponent == "self" else ("p1",)
+    if measure_seat == "opponent":
+        if opponent == "self":
+            raise SystemExit("--measure-seat opponent is meaningless in self-play: both seats are "
+                             "the same policy. Use it on foul-play events.")
+        behav_seats = ("p2",)
 
     n = len(games)
     # the observation unit for behavioral rates is the (game, behavioral-seat): a "seat-game".
@@ -1221,12 +1229,16 @@ def main():
     ap.add_argument("--events", nargs="+", required=True, help="events-*.jsonl.gz (globs ok)")
     ap.add_argument("--lineage", default=None)
     ap.add_argument("--milestone", type=int, default=None)
+    ap.add_argument("--measure-seat", choices=["bot", "opponent"], default="bot",
+                    help="which seat to profile. 'opponent' reads FoulPlay's own play out of "
+                         "stored foul-play games (no re-run needed) for a contrast line.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     files = []
     for e in args.events:
         files.extend(sorted(glob.glob(e)) or [e])
-    metrics = extract(files, lineage=args.lineage, milestone=args.milestone)
+    metrics = extract(files, lineage=args.lineage, milestone=args.milestone,
+                      measure_seat=args.measure_seat)
     json.dump(metrics, open(args.out, "w"), indent=1)
     print(f"WROTE {args.out} n_games={metrics['n_games']} opponent={metrics['opponent']}")
     print("top5:", [(m["move"], m["share"]) for m in metrics["top5_moves"]])
