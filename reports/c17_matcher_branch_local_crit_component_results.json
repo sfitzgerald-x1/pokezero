@@ -23,6 +23,29 @@
     "previous_false_matches_rejected_with_observed_critical_marker": 96,
     "remaining_matches_with_observed_critical_marker": 5
   },
+  "event_local_followup": {
+    "implementation_commit": "01e4298",
+    "prediction_control": "A critical marker for another hit cannot select support for the chosen direct event.",
+    "pre_fix_regression": "The first-hit-critical/second-hit-noncritical control failed because the second hit inherited the first hit's marker.",
+    "post_fix_controls": [
+      "first hit critical, second hit noncritical",
+      "first hit noncritical, second hit critical"
+    ],
+    "retained_population_reread": {
+      "after_followup": {
+        "diverged": 3655,
+        "matched": 166
+      },
+      "before_followup": {
+        "diverged": 3655,
+        "matched": 166
+      },
+      "identity_or_detail_changes": 0,
+      "output_byte_identical": true,
+      "output_sha256": "177bc4f9a408f68e6a7beb77550063510356c4d693d2cd18aefcc22146558e9e"
+    },
+    "interpretation": "The multi-hit leakage was a real uncovered matcher path but latent in the 3,821 retained rows. The follow-up closes the pre-registered control without changing any retained verdict or detail."
+  },
   "identity_changes": {
     "false_matches_rejected": [
       {
@@ -935,9 +958,13 @@
     ]
   },
   "implementation_after_prediction": true,
-  "implementation_commit": "9029800",
+  "implementation_commit": "01e4298",
+  "implementation_commits": [
+    "9029800",
+    "01e4298"
+  ],
   "method": {
-    "after_matcher_commit": "9029800",
+    "after_matcher_commit": "01e4298",
     "after_output_sha256": "177bc4f9a408f68e6a7beb77550063510356c4d693d2cd18aefcc22146558e9e",
     "before_matcher_commit": "5c08dc9",
     "before_output_sha256": "77f3c943d76f567e963c06679b9451b1d8edd4526d8297afe744e26de17c5e2a",
@@ -974,7 +1001,7 @@
   "scope": "Strict matcher branch-local roll support only. The engine, world constructor, branch renderer, retained archive, and acceptance denominator were not changed.",
   "verification": {
     "diff_check": "git diff --check: pass",
-    "focused_python": "PYTHONPATH=src .venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_public_invariant: pass, 51 tests",
+    "focused_python": "PYTHONPATH=src .venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_public_invariant: pass, 53 tests",
     "python_compile": "PYTHONPATH=src .venv/bin/python -m py_compile scripts/engine_transition_differential.py: pass",
     "rust_events": "cargo test --manifest-path rust/pokezero-search/Cargo.toml events::tests --release: pass, 21 tests"
   }
