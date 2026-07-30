@@ -1,0 +1,15 @@
+{
+  "schema": "pokezero.cert-contract-boolean-zero-prediction.v1",
+  "recorded_at": "2026-07-30",
+  "review_source": "fresh-independent-codex-review",
+  "prediction": {
+    "id": "boolean-zero-launch-attestation",
+    "current_behavior": "Python equality allows JSON false to satisfy the zero fresh-measurement launch attestation at producer and readout seams.",
+    "expected_fix": "Both seams require an exact integer zero; booleans and every other JSON type fail closed.",
+    "required_regression": "A complete otherwise-valid final contract with fresh_measurements_inspected_before_registration=false is rejected before manifest production and cannot produce a PASS readout."
+  },
+  "verification_plan": {
+    "focused_tests": "Run producer, readout, schema, provenance, and public-invariant tests.",
+    "review": "Require a fresh independent adversarial PASS."
+  }
+}
