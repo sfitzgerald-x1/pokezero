@@ -6023,20 +6023,21 @@ the restart); class-rate table pre-registered in its own commit before launch
 
 ## Z12.2 VERDICT: **FAIL** under the pre-registered zero-unattributed criterion
 
-3517 of 3821 rows attribute mechanically to documented families (readout
+3479 of 3821 rows attribute mechanically to documented families (readout
 instrument validated 103/103 on the c13 population before any fresh row was
-read): 1552 documented limit classes, 559 I1, 507 LS shapes, 240 I3, 215 I6,
-166 I5, 166 I4, 112 I2. **304 rows do not attribute** — and per the
-pre-registration they are reported, not absorbed:
+read — a validation that, per Z12.6, was structurally blind to absorb shapes):
+1552 documented limit classes, 524 I1, 505 LS shapes, 240 I3, 215 I6, 165 I5,
+166 I4, 112 I2. **342 rows do not attribute** (as amended by the #969 review,
+Z12.6) — and per the pre-registration they are reported, not absorbed:
 
-**Four NEW named mechanisms (143 rows, samples replayed per family):**
+**Four NEW named mechanisms (183 rows as amended, samples replayed per family):**
 
 | rows | mechanism |
 |---|---|
 | 56 | **recharge-turn residual gap** — on a `\|cant\|<mon>\|recharge` boundary (choice `none`), the engine's branch emits NO end-of-turn residuals; Showdown runs the block (Leftovers, psn tick observed-only at 100%) |
 | 48 | **Truant loaf-phase drift** — Slaking boundaries where the engine's branch loafs when the sim attacked (engine=[] vs observed damage) or vice versa: the world's truant phase is mis-seeded |
-| 26 | **absorb-ability heal fires through Protect** — Vaporeon/Jolteon protects, Showdown blocks the move entirely; the engine emits the Water/Volt Absorb quarter heal anyway (the #944 Protect-gate class, one dispatcher arm wider) |
-| 13 | absorb-ability variants (incl. missing absorb heal on Sleep-Talk-called water moves) |
+| 45 | **absorb-ability heal fires through Protect** (26 uncapped + 19 capped `_to_full`, per Z12.6) — Showdown blocks the move entirely; the engine emits the Water/Volt Absorb quarter heal anyway (the #944 Protect-gate class, one dispatcher arm wider) |
+| 34 | absorb-ability variants (15 incl. Sleep-Talk-callee misses + 19 heals applied on MISSED moves, per Z12.6) |
 
 **161 rows PENDING replay-first triage** (next cycle's brief, sub-shapes
 counted mechanically): magnitude pairs in the majority miss (74), engine-only
