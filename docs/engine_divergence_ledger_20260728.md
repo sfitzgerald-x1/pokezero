@@ -6280,3 +6280,32 @@ engine and sim agree on who loafed and disagree on whether the end-of-turn block
 recharge-residual-gap family is therefore **broader than `|cant| recharge`** — it is any
 `|cant|` boundary. My signature filter mis-bucketed them, which also explains part of the
 44-vs-48 gap.
+
+---
+
+# Appendix Z14 — Certification instrument correction before the second sweep
+
+Review of the re-sweep preparation found two attribution rules that were too broad to support
+the zero-unattributed gate. Both corrections are intentionally conservative: a row returns to a
+named WHAT-level candidate unless its documented comparison basis is present in the same row.
+
+* **I4 mapper ties:** an equal-magnitude, different-label tie now attributes only when it is in
+  the majority arm. A minority-arm tie cannot explain an unexplained majority-arm mismatch.
+* **LS structural-arm echoes:** a component-count mismatch now attributes only when a sibling
+  engine arm exactly carries the full observed nonempty component multiset. The former
+  `s2000561/67` citation was stale: its sibling arms do not carry the observed hit. Unsupported
+  count mismatches remain named-unattributed instead of being treated as branch-set accounting.
+
+The associated re-sweep specification also records the corrected #972 map: recoil-versus-
+Substitute is a world/knowledge-limit disposition, while the incapacitated-arm family requires
+both the engine typed-HP thaw exclusion and world bench-Rest provenance fixes. The Truant class
+table now carries the same explicit nonzero regression failure condition as its sibling
+post-fix mechanisms.
+
+The immutable c14 archive was hash-verified (17/17) and regenerated twice under the amended
+instrument with byte-identical output. The c13 regression population remains **103/103 PASS**.
+The honest c14 accounting is **324/3821 unattributed** (was 277): I4 drops 176 -> 166,
+structural echoes drop 41 -> 0 because no archived row satisfies the new sibling proof, and six
+minority-only I4 rows fall back to the generic pool. This changes generic fallback rows 54 ->
+60 and named coverage **98.59% -> 98.43%**. The zero-unattributed certification gate is
+unchanged; the returned rows are the required WHY-adjudication work, not a pass condition.

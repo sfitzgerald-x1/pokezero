@@ -13,7 +13,7 @@ Attribution is by MECHANISM SIGNATURE, not row identity (fresh seeds):
   Sleep Talk callee union              -> I6 (LOSSY flag / [from] Sleep Talk + fan)
   cap-state / _to_full shape           -> I1 (avg-roll world evolution; Z7.3/Z10.1)
   capped-lethal roll-divergence shape  -> documented limit-shape family (X-walk class)
-  equal-magnitude label tie            -> I4 (mapper attribution, #908/I.2 lineage)
+  majority-arm equal-magnitude tie     -> I4 (mapper attribution, #908/I.2 lineage)
   slice ends pre-upkeep / battle end   -> I5 (measurement-boundary truncation, #876)
   Pain Split / drain-cap inheritance   -> I3 (roll-inherited exact components)
   observed roll in engine's legal set  -> I2 (matcher accounting / legal-set gap)
@@ -80,6 +80,29 @@ def _miss_pairs(miss: str) -> tuple[list[tuple[str, int]], list[tuple[str, int]]
     obs = [(s, int(v)) for s, v in _PAIR_RE.findall(obs_part)]
     eng = [(s, int(v)) for s, v in _PAIR_RE.findall(eng_part)]
     return obs, eng
+
+
+def _sibling_arm_carries_observed_components(
+    misses: Sequence[str], majority: str, observed: Sequence[tuple[str, int]]
+) -> bool:
+    """Whether a non-majority engine arm exactly reproduces the observed components.
+
+    A count mismatch alone says nothing about why the majority arm differs.  The
+    structural-echo family is valid only when another engine arm actually
+    carries the full observed component multiset.  Empty observations are not
+    evidence of a carried shape.
+    """
+
+    observed_components = Counter(observed)
+    if not observed_components:
+        return False
+    for miss in misses:
+        if miss == majority:
+            continue
+        _, sibling_engine_components = _miss_pairs(miss)
+        if Counter(sibling_engine_components) == observed_components:
+            return True
+    return False
 
 
 def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
@@ -188,16 +211,12 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
     if "_to_full" in majority:
         return "I1_cap_state_shape", "capped-heal component shape in the majority miss (avg-roll world evolution)"
 
-    # I4: equal-magnitude label tie — in the majority miss OR any arm
-    # (sweep-scale variant; validation: s2000655/126, tie sits in the 15%
-    # arm at a multi-residual boundary — c13's I4 rows only ever showed the
-    # tie in the majority, so the any-arm form could not be validated there).
-    for miss in misses:
-        o2, e2 = _miss_pairs(miss)
-        if o2 and e2 and len(o2) == len(e2) \
-                and sorted(abs(v) for _, v in o2) == sorted(abs(v) for _, v in e2) \
-                and sorted(s for s, _ in o2) != sorted(s for s, _ in e2):
-            return "I4_attribution_tie", "identical magnitudes, different source labels (mapper attribution; any-arm variant)"
+    # I4: equal-magnitude label tie in the majority arm only. A tie confined
+    # to a minority arm cannot explain the majority-arm complaint.
+    if obs_c and eng_c and len(obs_c) == len(eng_c) \
+            and sorted(abs(v) for _, v in obs_c) == sorted(abs(v) for _, v in eng_c) \
+            and sorted(s for s, _ in obs_c) != sorted(s for s, _ in eng_c):
+        return "I4_attribution_tie", "identical magnitudes, different source labels in the majority arm (mapper attribution)"
 
     # I5: measurement boundary — slice ends before upkeep, or battle ends
     engine_only_residuals = (not obs_c) and eng_c and all(
@@ -283,15 +302,21 @@ def attribute_row(row: Mapping[str, Any]) -> tuple[str, str]:
 
     # Structural-arm echo — deliberately LAST before the fallback: the
     # broadest rule, safe only because every narrower mechanism above has
-    # already had its chance (the absorb-ordering lesson). Component COUNTS
-    # differ against the majority arm while a sibling arm carries the
-    # observed shape (validation: s2000561/67 — 25% arm carries the
-    # observed hit; majority complains on count).
+    # already had its chance (the absorb-ordering lesson). A component-count
+    # mismatch is only an echo when an actual sibling engine arm carries the
+    # full observed component multiset. The prior s2000561/67 citation was
+    # stale: its sibling arms do not carry the observed hit. The c14 archive
+    # re-run therefore treats unsupported structural shapes as named WHAT
+    # candidates rather than allowing this rule to absorb them.
     if obs_c is not None and eng_c is not None and len(obs_c) != len(eng_c) \
             and cls == "roll_scaled_component":
-        return ("LS_structural_arm_echo",
-                "component count differs against the majority arm; the "
-                "observed shape lives in a sibling arm (branch-set accounting)")
+        if _sibling_arm_carries_observed_components(misses, majority, obs_c):
+            return ("LS_structural_arm_echo",
+                    "component count differs against the majority arm, but a sibling "
+                    "engine arm exactly carries the observed components (branch-set accounting)")
+        return ("UNATTRIBUTED",
+                "structural component-count mismatch without a sibling engine arm "
+                "carrying the observed components (WHAT-level candidate, WHY open)")
 
     return "UNATTRIBUTED", f"no documented signature matched (class {cls}; majority: {majority[:120]})"
 
