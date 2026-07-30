@@ -1,0 +1,123 @@
+{
+  "schema": "c16-substitute-depletion-results/1",
+  "disposition": "proven_public_information_limit",
+  "limit_family": "limit:world_substitute_health_unknown",
+  "prediction_score": {
+    "preregistered_rows": 12,
+    "post_instrument_rows": 13,
+    "predicted_identities_recovered": 12,
+    "prediction_misses": 1,
+    "missed_identity": {
+      "seed": 2000140,
+      "step": 48,
+      "explanation": "The stricter PR #973 instrument exposed this archived Substitute-breaking row after the 12-row prediction was committed."
+    }
+  },
+  "identity_cutoff_method": {
+    "description": "For each identity, compare a deterministic one-game replay ending immediately before the archived step with the same replay including that step.",
+    "before_max_steps": "step - 1",
+    "at_max_steps": "step",
+    "required_delta": 1,
+    "generic_skip_required": 0
+  },
+  "identities": [
+    {
+      "seed": 2000031,
+      "step": 60,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2000140,
+      "step": 48,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2100227,
+      "step": 35,
+      "named_limit_before": 3,
+      "named_limit_at": 4,
+      "delta": 1
+    },
+    {
+      "seed": 2100568,
+      "step": 48,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2101125,
+      "step": 47,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    },
+    {
+      "seed": 2200232,
+      "step": 51,
+      "named_limit_before": 3,
+      "named_limit_at": 4,
+      "delta": 1
+    },
+    {
+      "seed": 2400009,
+      "step": 83,
+      "named_limit_before": 4,
+      "named_limit_at": 5,
+      "delta": 1
+    },
+    {
+      "seed": 2400484,
+      "step": 36,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2400719,
+      "step": 68,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2401166,
+      "step": 75,
+      "named_limit_before": 2,
+      "named_limit_at": 3,
+      "delta": 1
+    },
+    {
+      "seed": 2600222,
+      "step": 44,
+      "named_limit_before": 0,
+      "named_limit_at": 1,
+      "delta": 1
+    },
+    {
+      "seed": 2601023,
+      "step": 51,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    },
+    {
+      "seed": 2701047,
+      "step": 47,
+      "named_limit_before": 1,
+      "named_limit_at": 2,
+      "delta": 1
+    }
+  ],
+  "verification": {
+    "identity_cutoffs": "13/13 named-limit deltas equal 1",
+    "generic_substitute_health_skips": 0,
+    "focused_tests": "196 passed",
+    "repros_complete": true
+  },
+  "coverage_boundary": "This proves the 13 archived identities are routed to a named public-information limit. It does not claim transition fidelity for an unknowable Substitute HP state; the fresh certification sweep is the global recurrence and regression bound."
+}

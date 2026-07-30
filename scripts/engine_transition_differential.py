@@ -742,6 +742,18 @@ def world_construction_limit(error: EngineWorldUnsupported) -> str | None:
     return None
 
 
+def count_world_construction_limit(
+    counts: Counter[str], error: EngineWorldUnsupported
+) -> bool:
+    """Count a public-information limit and report whether it was handled."""
+
+    limit = world_construction_limit(error)
+    if limit is None:
+        return False
+    counts[limit] += 1
+    return True
+
+
 # ---------------------------------------------------------------------------------------------
 # Per-boundary evaluation.
 # ---------------------------------------------------------------------------------------------
@@ -1468,8 +1480,7 @@ def _prepare_boundary(
         world = _build(approximate_sleep_turns=approximate_sleep, hidden_volatiles=False)
         specs = [world.spec]
     except EngineWorldUnsupported as error:
-        if limit := world_construction_limit(error):
-            counts[limit] += 1
+        if count_world_construction_limit(counts, error):
             return None
         mechanic = hidden_counter_recovery(error) if hidden_counter_support else None
         if mechanic is None:
@@ -1486,6 +1497,8 @@ def _prepare_boundary(
                 )
                 specs = _confusion_counter_variants(world.spec)
         except EngineWorldUnsupported as inner:
+            if count_world_construction_limit(counts, inner):
+                return None
             counts[f"skip:world_unsupported:{inner.reason}"] += 1
             return None
         gating = "support"
