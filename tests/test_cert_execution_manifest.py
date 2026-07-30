@@ -793,30 +793,49 @@ class ExecutionManifestProducerTests(unittest.TestCase):
                 lifecycle["schema_version"],
                 "pokezero.engine-cert-contract-lifecycle/v1",
             )
-            self.assertEqual(lifecycle["stage"], "build_source")
             self.assertIs(lifecycle["launchable"], False)
             for relative in lifecycle["required_absent_artifacts"]:
                 self.assertFalse((ROOT / relative).exists(), relative)
-            identity = lifecycle["source_code_identity"]
-            self.assertEqual(
-                identity["readout_sha256"],
-                _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
-            )
-            self.assertEqual(
-                identity["execution_manifest_producer_sha256"],
-                _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
-            )
-            fingerprint = json.loads(
-                subprocess.check_output(
-                    [sys.executable, "scripts/engine_build_fingerprint.py", "--print"],
-                    cwd=ROOT,
-                    text=True,
+            if lifecycle["stage"] == "build_source":
+                identity = lifecycle["source_code_identity"]
+                self.assertEqual(
+                    identity["readout_sha256"],
+                    _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
                 )
+                self.assertEqual(
+                    identity["execution_manifest_producer_sha256"],
+                    _sha256(ROOT / "scripts" / "cert_execution_manifest.py"),
+                )
+                fingerprint = json.loads(
+                    subprocess.check_output(
+                        [
+                            sys.executable,
+                            "scripts/engine_build_fingerprint.py",
+                            "--print",
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                    )
+                )
+                self.assertEqual(
+                    identity["engine_fingerprint"], fingerprint["fingerprint"]
+                )
+                return
+            self.assertEqual(
+                lifecycle["stage"], "contract_registered_attestation_pending"
             )
             self.assertEqual(
-                identity["engine_fingerprint"], fingerprint["fingerprint"]
+                lifecycle["registered_contract_path"],
+                "reports/c15_resweep_spec.json",
             )
-            return
+            self.assertEqual(
+                lifecycle["registered_contract_sha256"],
+                _sha256(ROOT / lifecycle["registered_contract_path"]),
+            )
+            self.assertEqual(
+                lifecycle["registered_calibration_path"],
+                "reports/c24_final_classifier_c14_calibration.json",
+            )
 
         contract = json.loads(
             (ROOT / "reports" / "c15_resweep_spec.json").read_text(encoding="utf-8")
@@ -838,6 +857,64 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         self.assertEqual(manifest.validate_final_contract_schema(contract), [])
         gates = contract["certification_gates"]
+        self.assertEqual(
+            gates["required_source_commit"],
+            contract["launch_registration"]["public_source_parent_commit"],
+        )
+        self.assertEqual(
+            calibration["source_evidence"]["current_classifier_source_commit"],
+            gates["required_source_commit"],
+        )
+        source_lifecycle = json.loads(
+            subprocess.check_output(
+                (
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "show",
+                    f"{gates['required_source_commit']}:"
+                    "reports/certification_contract_lifecycle.json",
+                ),
+                text=True,
+            )
+        )
+        self.assertEqual(source_lifecycle["stage"], "build_source")
+        self.assertIs(source_lifecycle["launchable"], False)
+        for relative in source_lifecycle["required_absent_artifacts"]:
+            absent = subprocess.run(
+                (
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "cat-file",
+                    "-e",
+                    f"{gates['required_source_commit']}:{relative}",
+                ),
+                capture_output=True,
+            )
+            self.assertNotEqual(absent.returncode, 0, relative)
+        for relative, registered_hash in (
+            (
+                "scripts/cert_sweep_readout.py",
+                gates["required_readout_sha256"],
+            ),
+            (
+                "scripts/cert_execution_manifest.py",
+                gates["required_execution_manifest_producer_sha256"],
+            ),
+        ):
+            source_bytes = subprocess.check_output(
+                (
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "show",
+                    f"{gates['required_source_commit']}:{relative}",
+                )
+            )
+            self.assertEqual(
+                hashlib.sha256(source_bytes).hexdigest(), registered_hash
+            )
         self.assertEqual(
             gates["required_readout_sha256"],
             _sha256(ROOT / "scripts" / "cert_sweep_readout.py"),
@@ -949,6 +1026,31 @@ class ExecutionManifestProducerTests(unittest.TestCase):
             substitute["upper_full_round_rate"],
             1.0 - gates["minimum_coverage_measured_fraction"],
         )
+        anchor = substitute_evidence["nearest_historical_anchor"]
+        _, anchor_upper = readout.wilson(
+            anchor["identities"], anchor["boundaries_full_round"]
+        )
+        self.assertAlmostEqual(
+            anchor["wilson95_upper_rate"], anchor_upper, places=10
+        )
+        self.assertAlmostEqual(
+            anchor["observed_rate"],
+            anchor["identities"] / anchor["boundaries_full_round"],
+            places=10,
+        )
+        self.assertAlmostEqual(
+            anchor["registered_to_wilson_upper_multiple"],
+            substitute["upper_full_round_rate"] / anchor_upper,
+            places=3,
+        )
+        self.assertLessEqual(substitute["upper_full_round_rate"], 0.0001)
+        self.assertEqual(
+            substitute_evidence["maximum_at_registered_minimum_boundaries"],
+            round(
+                substitute["upper_full_round_rate"]
+                * gates["minimum_boundaries_full_round"]
+            ),
+        )
         self.assertEqual(c17["summary"]["identities"], 13)
         self.assertEqual(
             sum(row["at_limit"] - row["before_limit"] for row in c17["identities"]),
@@ -977,9 +1079,12 @@ class ExecutionManifestProducerTests(unittest.TestCase):
         )
         if lifecycle_path.is_file():
             lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
-            self.assertEqual(lifecycle["stage"], "build_source")
             self.assertFalse(
                 (ROOT / "reports" / "c25_cert_contract_attestation.json").exists()
+            )
+            self.assertIn(
+                lifecycle["stage"],
+                {"build_source", "contract_registered_attestation_pending"},
             )
             return
 
