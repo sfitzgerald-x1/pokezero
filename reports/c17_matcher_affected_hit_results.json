@@ -6,7 +6,7 @@
   "scope": "Classifier correction within strict branch-local legal-roll selection only. No mapper behavior, support widening, attribution, residual logic, or divergence routing changed.",
   "verification": {
     "pre_implementation_regression": {
-      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_uses_the_first_opponent_hit_affected_by_a_stat_event",
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_uses_the_first_opponent_hit_affected_by_a_stat_event",
       "exit_code": 1,
       "result": "Expected failure: the helper returned None at the earlier unaffected Aurora Beam hit instead of repricing the later Tackle."
     },
@@ -16,7 +16,7 @@
         "result": "pass, 21 tests"
       },
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
         "result": "pass, 54 tests"
       },
       {

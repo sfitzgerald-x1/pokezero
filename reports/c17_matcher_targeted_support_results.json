@@ -6,13 +6,13 @@
   "scope": "Strict matcher support scoping only. No engine behavior, mapper snapshot generation, attribution, residual comparison, divergence classes, or acceptance rules changed.",
   "verification": {
     "pre_implementation_regression": {
-      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality",
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality",
       "exit_code": 1,
       "result": "Expected failure: branch_event_legal_rolls returned an unscoped set, so tests requiring target_side raised AttributeError."
     },
     "post_implementation_tests": [
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
         "result": "pass, 55 tests"
       },
       {

@@ -6,7 +6,7 @@
   "scope": "Classifier correction within the strict matcher only. No mapper behavior, support widening, attribution, residual logic, or divergence routing changed.",
   "verification": {
     "pre_implementation_regression": {
-      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_capped_stat_event_before_an_opponent_hit",
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_capped_stat_event_before_an_opponent_hit",
       "exit_code": 1,
       "result": "Expected failure: a rendered |-boost|...|0 required a missing legal_roll_state before an opponent hit."
     },
@@ -16,7 +16,7 @@
         "result": "pass, 21 tests"
       },
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
         "result": "pass, 53 tests"
       },
       {

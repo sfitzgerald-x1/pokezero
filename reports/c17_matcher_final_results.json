@@ -6,21 +6,21 @@
   "scope": "Event-aware strict-matcher legal-roll support only. No engine behavior, exact-component comparison, divergence attribution, or class-routing rule changed.",
   "verification": {
     "pre_implementation_test": {
-      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher",
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher",
       "exit_code": 1,
       "result": "Expected failure: ImportError for the not-yet-implemented branch_event_legal_rolls helper."
     },
     "post_implementation_tests": [
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher",
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher",
         "result": "pass, 40 tests"
       },
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m py_compile scripts/engine_transition_differential.py tests/test_transition_differential_matcher.py",
+        "command": ".venv/bin/python -m py_compile scripts/engine_transition_differential.py tests/test_transition_differential_matcher.py",
         "result": "pass"
       },
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_public_invariant",
+        "command": ".venv/bin/python -m unittest tests.test_public_invariant",
         "result": "pass, 1 test"
       }
     ]

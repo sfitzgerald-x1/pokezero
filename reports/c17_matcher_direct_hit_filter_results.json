@@ -6,7 +6,7 @@
   "scope": "Classifier correction within the strict matcher only. No mapper behavior, attribution, support widening, residual logic, or divergence routing changed.",
   "verification": {
     "pre_implementation_regression": {
-      "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_self_hp_cost_after_a_same_turn_stat_boost",
+      "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher.EventAwareBranchLegality.test_ignores_a_self_hp_cost_after_a_same_turn_stat_boost",
       "exit_code": 1,
       "result": "Expected failure: Substitute's same-side bare HP cost was mistaken for a direct defender hit and raised BranchLegalRollError."
     },
@@ -16,7 +16,7 @@
         "result": "pass, 21 tests"
       },
       {
-        "command": "/Users/scott/workspace/agents/pokezero-codex-agent/pokezero/.venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
+        "command": ".venv/bin/python -m unittest tests.test_transition_differential_matcher tests.test_instruction_event_mapping tests.test_public_invariant",
         "result": "pass, 52 tests"
       },
       {

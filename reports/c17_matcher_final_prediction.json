@@ -3,7 +3,7 @@
   "prediction_id": "c17-event-aware-branch-legality-2026-07-30",
   "scope": "Only the retained strict-matcher defects where legal roll support is priced from the pre-state despite a same-turn state change before direct damage.",
   "retained_archive": {
-    "path": "/Users/scott/workspace/agents/pokezero-agent/cert-sweep-20260730",
+    "path": "<local-evidence-archive>/cert-sweep-20260730",
     "replay_method": "scripts/cert_sweep_reread.py::reread_row with the current installed poke_engine build and current branch matcher"
   },
   "predictions": [
